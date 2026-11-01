@@ -39,6 +39,7 @@ jmethodID g_bb_allocate_direct = nullptr;
 jmethodID g_bb_clear = nullptr;
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t g_method_cache_mu = PTHREAD_MUTEX_INITIALIZER;
 
 JNIEnv *env_for_current_thread() {
     JNIEnv *env = nullptr;
@@ -51,39 +52,56 @@ JNIEnv *env_for_current_thread() {
 }
 
 int ensure_method_cache(JNIEnv *env) {
-    if (g_read_mid)
+    pthread_mutex_lock(&g_method_cache_mu);
+    if (g_read_mid) {
+        pthread_mutex_unlock(&g_method_cache_mu);
         return 0;
+    }
     jclass dev_cls = env->FindClass("usb/device/BlockDevice");
     if (!dev_cls) {
         if (env->ExceptionCheck())
             env->ExceptionClear();
+        pthread_mutex_unlock(&g_method_cache_mu);
         return -ENOENT;
     }
     /* Stable JVM names: BlockDevice.read/write take Long LBA, not ULong. */
-    g_read_mid = env->GetMethodID(dev_cls, "read", "(JLjava/nio/ByteBuffer;)V");
-    g_write_mid = env->GetMethodID(dev_cls, "write", "(JLjava/nio/ByteBuffer;)V");
-    g_sync_mid = env->GetMethodID(dev_cls, "sync", "()V");
+    jmethodID read_mid = env->GetMethodID(dev_cls, "read", "(JLjava/nio/ByteBuffer;)V");
+    jmethodID write_mid = env->GetMethodID(dev_cls, "write", "(JLjava/nio/ByteBuffer;)V");
+    jmethodID sync_mid = env->GetMethodID(dev_cls, "sync", "()V");
     env->DeleteLocalRef(dev_cls);
     if (env->ExceptionCheck())
         env->ExceptionClear();
-    if (!g_read_mid || !g_write_mid || !g_sync_mid)
+    if (!read_mid || !write_mid || !sync_mid) {
+        pthread_mutex_unlock(&g_method_cache_mu);
         return -ENOENT;
+    }
 
     jclass bb = env->FindClass("java/nio/ByteBuffer");
     if (!bb) {
         if (env->ExceptionCheck())
             env->ExceptionClear();
+        pthread_mutex_unlock(&g_method_cache_mu);
         return -ENOENT;
     }
-    g_bytebuffer_cls = reinterpret_cast<jclass>(env->NewGlobalRef(bb));
+    jclass bytebuffer_cls = reinterpret_cast<jclass>(env->NewGlobalRef(bb));
     env->DeleteLocalRef(bb);
-    g_bb_allocate_direct = env->GetStaticMethodID(
-        g_bytebuffer_cls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
-    g_bb_clear = env->GetMethodID(g_bytebuffer_cls, "clear", "()Ljava/nio/Buffer;");
+    jmethodID bb_allocate_direct = env->GetStaticMethodID(
+        bytebuffer_cls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+    jmethodID bb_clear = env->GetMethodID(bytebuffer_cls, "clear", "()Ljava/nio/Buffer;");
     if (env->ExceptionCheck())
         env->ExceptionClear();
-    if (!g_bb_allocate_direct || !g_bb_clear)
+    if (!bb_allocate_direct || !bb_clear) {
+        env->DeleteGlobalRef(bytebuffer_cls);
+        pthread_mutex_unlock(&g_method_cache_mu);
         return -ENOENT;
+    }
+    g_bytebuffer_cls = bytebuffer_cls;
+    g_bb_allocate_direct = bb_allocate_direct;
+    g_bb_clear = bb_clear;
+    g_write_mid = write_mid;
+    g_sync_mid = sync_mid;
+    g_read_mid = read_mid;
+    pthread_mutex_unlock(&g_method_cache_mu);
     return 0;
 }
 
