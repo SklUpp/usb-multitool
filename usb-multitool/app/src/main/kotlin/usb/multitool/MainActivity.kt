@@ -364,6 +364,16 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { /* result handled by state */ }
 
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.onIntent(UiIntent.SetImage(uri.toString()))
+    }
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
@@ -405,6 +415,16 @@ class MainActivity : ComponentActivity() {
                 state = viewModel.state,
                 onIntent = { intent ->
                     viewModel.onIntent(intent)
+                },
+                onPickImage = {
+                    imagePickerLauncher.launch(
+                        arrayOf(
+                            "application/octet-stream",
+                            "application/x-iso9660-image",
+                            "application/gzip",
+                            "application/x-xz",
+                        ),
+                    )
                 },
             )
         }

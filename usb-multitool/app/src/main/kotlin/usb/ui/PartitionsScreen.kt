@@ -15,6 +15,7 @@ fun PartitionsScreen(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onPickImage: () -> Unit = {},
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -77,8 +78,23 @@ fun PartitionsScreen(
             Text("Repair GPT backup")
         }
 
+        Text(state.imageUri?.let { "Image: ${it.substringAfterLast('/')}" } ?: "No image selected")
+
+        OutlinedButton(
+            onClick = onPickImage,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Choose ISO / IMG / GZ / XZ")
+        }
+
         Button(
-            onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE)) },
+            onClick = {
+                if (state.imageUri == null) {
+                    onPickImage()
+                } else {
+                    onIntent(UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE))
+                }
+            },
             enabled = state.actionsEnabled,
             modifier = Modifier.fillMaxWidth(),
         ) {
