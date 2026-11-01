@@ -21,6 +21,20 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
+                fun flag(prop: String, cmake: String) {
+                    if (project.findProperty(prop) == "true") {
+                        arguments += "-D$cmake=ON"
+                    }
+                }
+                flag("usbWithFatfs", "USB_WITH_FATFS")
+                flag("usbWithNtfs", "USB_WITH_NTFS")
+                flag("usbWithLwext4", "USB_WITH_LWEXT4")
+                flag("usbWithVentoy", "USB_WITH_VENTOY")
+                flag("usbWithF3", "USB_WITH_F3")
+                flag("usbWithDdrescue", "USB_WITH_DDRESCUE")
+                if (project.findProperty("usbRequireEngines") == "true") {
+                    arguments += "-DUSB_REQUIRE_ENGINES=ON"
+                }
             }
         }
     }
@@ -71,6 +85,8 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.commons.compress)
+    implementation(libs.tukaani.xz)
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)

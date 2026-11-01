@@ -17,8 +17,9 @@ Host FatFs image tests may run locally with plain `gcc`/`make` (no Android SDK).
 Exact commands executed by `.github/workflows/android-debug.yml`:
 
 ```bash
+bash scripts/fetch-third-party.sh
 ./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug -PusbRequireEngines=true -PusbWithFatfs=true -PusbWithNtfs=true -PusbWithLwext4=true -PusbWithVentoy=true -PusbWithF3=true -PusbWithDdrescue=true
 ./gradlew :app:lintDebug
 ./gradlew :app:compileDebugKotlin
 ```
