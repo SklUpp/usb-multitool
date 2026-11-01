@@ -29,7 +29,16 @@ object Recovery {
 }
 
 sealed class DiskException(message: String) : Exception(message) {
-    class Disconnected : DiskException("USB mass-storage device disconnected")
-    class IoFailure(message: String) : DiskException(message)
-    class Closed : DiskException("disk session closed")
+    class Disconnected : DiskException("USB mass-storage device disconnected") {
+        override fun equals(other: Any?) = other is Disconnected
+        override fun hashCode() = javaClass.hashCode()
+    }
+    class IoFailure(message: String) : DiskException(message) {
+        override fun equals(other: Any?) = other is IoFailure && other.message == message
+        override fun hashCode() = message.hashCode()
+    }
+    class Closed : DiskException("disk session closed") {
+        override fun equals(other: Any?) = other is Closed
+        override fun hashCode() = javaClass.hashCode()
+    }
 }
