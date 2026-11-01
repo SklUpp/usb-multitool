@@ -18,6 +18,9 @@ class UnsupportedSectorSizeException(message: String) : Exception(message)
 
 class EngineMissingException(message: String) : Exception(message)
 
+/** The release payload does not fit the existing partition; writing would truncate it. */
+class VentoyPayloadTooLargeException(message: String) : Exception(message)
+
 data class VentoyProbeResult(
     val isVentoy: Boolean,
     val scheme: TableScheme,
@@ -384,7 +387,16 @@ object VentoyInstaller {
         val decompressedCore = assets.decompressCoreImg()
         val decompressedEfi = assets.decompressEfiPartImg()
 
-        // 1. Write new VTOYEFI partition image at part2Start
+        // 1. Write new VTOYEFI partition image at part2Start. Refuse first: a short
+        // partition would silently truncate the boot payload inside writeBufferToDisk.
+        val efiSectors =
+            (decompressedEfi.size.toLong() + VentoyLayout.SECTOR_SIZE - 1) / VentoyLayout.SECTOR_SIZE
+        if (efiSectors > probe.part2SectorCount.toLong()) {
+            throw VentoyPayloadTooLargeException(
+                "EFI payload needs $efiSectors sectors but the VTOYEFI partition has only " +
+                    "${probe.part2SectorCount}; update would truncate the boot image",
+            )
+        }
         val payloadBytes = probe.part2SectorCount.toLong() * VentoyLayout.SECTOR_SIZE
         writeBufferToDisk(disk, part2Start, decompressedEfi, probe.part2SectorCount.toLong()) { done ->
             onProgress(done, payloadBytes)

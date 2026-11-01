@@ -66,7 +66,13 @@ data class PartitionTable(
                 PartitionTable(
                     scheme = TableScheme.MBR,
                     partitions = emptyList(),
-                    freeRegions = listOf(FreeRegion(0UL, disk.sectorCount)),
+                    // Never offer LBA 0: a partition there would overwrite the MBR/GPT
+                    // metadata written by commit as soon as its filesystem is formatted.
+                    freeRegions = recomputeFree(
+                        emptyList(),
+                        disk.sectorCount,
+                        alignmentSectors(disk.sectorSize),
+                    ),
                     diskSectorCount = disk.sectorCount,
                     sectorSize = disk.sectorSize,
                 )

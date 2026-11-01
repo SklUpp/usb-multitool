@@ -60,6 +60,33 @@ class PartitionEditorTest {
         assertEquals(before.partitions, after.partitions)
     }
 
+    @Test
+    fun createAfterDeletingLastGptPartitionLandsInsideUsableRange() {
+        val disk = SyntheticGpt.build(sectorCount = 16384UL)
+        val table = PartitionTable.read(disk)
+        val header = table.gptHeader!!
+        val afterDelete = PartitionEditor.delete(table, table.partitions.lastIndex)
+
+        // Same derivation as the CREATE_PARTITION caller: fill the whole free region.
+        val region = afterDelete.freeRegions.single()
+        assertTrue(
+            "free region ${region.startLba}+${region.sectorCount} must stop at usable end " +
+                "(lastUsable ${header.lastUsable})",
+            region.startLba + region.sectorCount <= header.lastUsable + 1UL,
+        )
+
+        val align = PartitionTable.alignmentSectors(afterDelete.sectorSize)
+        val alignedStart = ((region.startLba + align - 1UL) / align) * align
+        val size = region.sectorCount - (alignedStart - region.startLba)
+        val created = PartitionEditor.create(afterDelete, size = size, type = PartitionType.BASIC)
+        val committed = PartitionWriter.commit(disk, created)
+
+        val newPartition = committed.partitions.last()
+        assertEquals(size, newPartition.sectorCount)
+        assertTrue(newPartition.startLba >= header.firstUsable)
+        assertTrue(newPartition.startLba + newPartition.sectorCount - 1UL <= header.lastUsable)
+    }
+
     private fun fixture(name: String): PartitionTable {
         val diskSectors = 16384UL // 8 MiB at 512-byte sectors
         val align = 2048UL // 1 MiB

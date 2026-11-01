@@ -311,6 +311,54 @@ class VentoyLayoutTest {
         assertTrue(xml.contains("BypassNRO"))
     }
 
+    @Test
+    fun updateRefusesToTruncateAnUndersizedVtoyefi() {
+        val disk = syntheticStick(part1Sectors = 8192, part2Sectors = 2048)
+        val probe = VentoyLayout.probe(disk)
+        assertNotNull("synthetic stick must probe as Ventoy", probe)
+        assertEquals(2048UL, probe!!.part2SectorCount)
+
+        val bytesBefore = disk.bytes.toSortedMap().mapValues { it.value.toList() }
+        disk.resetStats()
+
+        // 65536-sector release image into a 2048-sector partition.
+        try {
+            VentoyInstaller.update(disk, syntheticVentoyAssets(efiPartSectors = 65536))
+            fail("Expected VentoyPayloadTooLargeException instead of a silent truncation")
+        } catch (e: VentoyPayloadTooLargeException) {
+            assertTrue("message must name the needed sectors: ${e.message}", e.message!!.contains("65536"))
+            assertTrue("message must name the available sectors: ${e.message}", e.message!!.contains("2048"))
+        }
+
+        assertEquals("update must not write when the payload cannot fit", 0, disk.writeCount)
+        assertEquals(bytesBefore, disk.bytes.toSortedMap().mapValues { it.value.toList() })
+    }
+
+    private fun syntheticStick(part1Sectors: Long, part2Sectors: Long): RecordingDisk {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        val mbr = ByteArray(512)
+        mbr[510] = 0x55.toByte()
+        mbr[511] = 0xAA.toByte()
+        // Partition 0: Ventoy data volume starting at LBA 2048.
+        mbr[446] = 0x00
+        mbr[446 + 4] = 0x07
+        putLe32(mbr, 446 + 8, 2048)
+        putLe32(mbr, 446 + 12, part1Sectors.toInt())
+        // Partition 1: VTOYEFI immediately after partition 0.
+        mbr[462] = 0x00
+        mbr[462 + 4] = 0xEF.toByte()
+        putLe32(mbr, 462 + 8, (2048 + part1Sectors).toInt())
+        putLe32(mbr, 462 + 12, part2Sectors.toInt())
+        disk.write(0L, ByteBuffer.wrap(mbr))
+        return disk
+    }
+
+    private fun putLe32(bytes: ByteArray, offset: Int, value: Int) {
+        for (i in 0 until 4) {
+            bytes[offset + i] = ((value shr (8 * i)) and 0xFF).toByte()
+        }
+    }
+
     private fun compressXz(data: ByteArray): ByteArray {
         val baos = ByteArrayOutputStream()
         val xzOut = XZOutputStream(baos, LZMA2Options())

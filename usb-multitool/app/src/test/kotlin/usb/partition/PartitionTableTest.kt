@@ -1,9 +1,12 @@
 package usb.partition
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.device.BlockDevice
 
 class PartitionTableTest {
     @Test
@@ -68,6 +71,51 @@ class PartitionTableTest {
         val table = PartitionTable.read(hybrid)
         assertTrue(table.hybridAmbiguous)
         assertEquals(TableScheme.HYBRID, table.scheme)
+    }
+
+    @Test
+    fun blankDiskNeverOffersLbaZero() {
+        val disk = DiskFixture.empty(sectorCount = 4096UL)
+        val table = PartitionTable.read(disk)
+        assertEquals(TableScheme.MBR, table.scheme)
+        assertEquals(2048UL, table.freeRegions.single().startLba)
+
+        val created = PartitionEditor.create(table, size = 1024UL, type = PartitionType.BASIC)
+        assertEquals(2048UL, created.partitions.single().startLba)
+        val committed = PartitionWriter.commit(disk, created)
+
+        assertEquals(2048UL, committed.partitions.single().startLba)
+        val mbr = sector(disk, 0UL)
+        assertEquals(0x55, mbr[510].toInt() and 0xFF)
+        assertEquals(0xAA, mbr[511].toInt() and 0xFF)
+        assertEquals(0x83, mbr[446 + 4].toInt() and 0xFF)
+        assertEquals(2048L, ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong())
+    }
+
+    @Test
+    fun blankGptStartsWithPartitionAtOneMiB() {
+        val disk = SyntheticGpt.build(sectorCount = 16384UL)
+        var table = PartitionTable.read(disk)
+        while (table.partitions.isNotEmpty()) table = PartitionEditor.delete(table, 0)
+        val blank = PartitionWriter.commit(disk, table)
+        assertEquals(emptyList<Partition>(), blank.partitions)
+
+        val created = PartitionEditor.create(blank, size = 1024UL, type = PartitionType.BASIC)
+        assertEquals(2048UL, created.partitions.single().startLba)
+        val committed = PartitionWriter.commit(disk, created)
+
+        assertEquals(2048UL, committed.partitions.single().startLba)
+        val protectiveMbr = sector(disk, 0UL)
+        assertEquals(0x55, protectiveMbr[510].toInt() and 0xFF)
+        assertEquals(0xAA, protectiveMbr[511].toInt() and 0xFF)
+        assertEquals(0xEE, protectiveMbr[446 + 4].toInt() and 0xFF)
+        assertEquals(TableScheme.GPT, committed.scheme)
+    }
+
+    private fun sector(disk: BlockDevice, lba: ULong): ByteArray {
+        val buffer = ByteBuffer.allocate(disk.sectorSize)
+        disk.read(lba, buffer)
+        return buffer.array()
     }
 
     private fun putLeInt(bytes: ByteArray, offset: Int, value: Int) {

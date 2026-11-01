@@ -16,6 +16,9 @@ object VentoySetup {
     const val VENTOY_DIR = "ventoy"
     const val CONFIG_PATH = "/ventoy/ventoy.json"
 
+    /** Volume-relative key [WindowsSetup.write] reads; a leading slash hides the seed. */
+    internal const val CONFIG_KEY = VENTOY_DIR + "/ventoy.json"
+
     /** ISO file names present in `/ISO` on the Ventoy partition. */
     fun listIsos(disk: BlockDevice): List<String> =
         withVolume(disk) { volume ->
@@ -46,8 +49,7 @@ object VentoySetup {
                     "ISO \"$wanted\" is not in /$ISO_DIR on the Ventoy partition; copy it there first",
                 )
 
-            val root = linkedMapOf<String, Any?>()
-            readText(volume, CONFIG_PATH)?.let { root[CONFIG_PATH] = it }
+            val root = configRoot(readText(volume, CONFIG_PATH))
 
             val json = WindowsSetup.write(root, iso.name, options, overwrite)
             val xmlName = iso.name.substringBeforeLast('.') + ".xml"
@@ -63,6 +65,15 @@ object VentoySetup {
         }
 
     class IsoNotOnVentoyPartitionException(message: String) : Exception(message)
+
+    /**
+     * Root map handed to [WindowsSetup.write]. Seeded under the same volume-relative
+     * key it reads, so an existing `/ventoy/ventoy.json` is merged, never replaced.
+     */
+    internal fun configRoot(existingJson: String?): MutableMap<String, Any?> =
+        linkedMapOf<String, Any?>().also { root ->
+            if (existingJson != null) root[CONFIG_KEY] = existingJson
+        }
 
     private inline fun <T> withVolume(disk: BlockDevice, block: (FatVolume) -> T): T {
         val probe =

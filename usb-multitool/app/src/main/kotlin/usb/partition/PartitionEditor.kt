@@ -26,7 +26,7 @@ object PartitionEditor {
         val partitions = table.partitions + created
         return table.copy(
             partitions = partitions,
-            freeRegions = recomputeFree(partitions, table.diskSectorCount, align),
+            freeRegions = recomputeFree(partitions, table, align),
         )
     }
 
@@ -36,7 +36,7 @@ object PartitionEditor {
         val align = alignmentSectors(table.sectorSize)
         return table.copy(
             partitions = partitions,
-            freeRegions = recomputeFree(partitions, table.diskSectorCount, align),
+            freeRegions = recomputeFree(partitions, table, align),
         )
     }
 
@@ -65,7 +65,7 @@ object PartitionEditor {
         // Backup header + entries relocate to current disk end; CRC recomputed by writer.
         return table.copy(
             // Marker field: free trailing sectors reserved for backup structures stay free.
-            freeRegions = recomputeFree(
+            freeRegions = PartitionTable.recomputeFree(
                 table.partitions,
                 table.diskSectorCount,
                 alignmentSectors(table.sectorSize),
@@ -87,22 +87,20 @@ object PartitionEditor {
 
     private fun recomputeFree(
         partitions: List<Partition>,
-        diskSectorCount: ULong,
+        table: PartitionTable,
         align: ULong,
     ): List<FreeRegion> {
-        val ordered = partitions.sortedBy { it.startLba }
-        val free = mutableListOf<FreeRegion>()
-        var cursor = align // leave leading alignment gap like common USB layouts
-        for (p in ordered) {
-            if (p.startLba > cursor) {
-                free += FreeRegion(cursor, p.startLba - cursor)
-            }
-            cursor = maxOf(cursor, p.startLba + p.sectorCount)
-        }
-        if (cursor < diskSectorCount) {
-            free += FreeRegion(cursor, diskSectorCount - cursor)
-        }
-        return free.filter { it.sectorCount > 0UL }
+        // GPT owns metadata outside the usable range (backup header + entries at the
+        // disk end, primary entries at the front); offering it as free space makes
+        // CREATE_PARTITION produce entries commitGpt must reject.
+        val header = table.gptHeader
+        return PartitionTable.recomputeFree(
+            partitions,
+            table.diskSectorCount,
+            align,
+            firstUsable = header?.firstUsable ?: align,
+            lastUsableExclusive = header?.let { it.lastUsable + 1UL } ?: table.diskSectorCount,
+        )
     }
 }
 
