@@ -259,8 +259,9 @@
 /* #undef HAVE_SYS_DISK_H */
 
 /* Define to 1 if you have the <sys/endian.h> header file. */
+#if defined(__ANDROID__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #define HAVE_SYS_ENDIAN_H 1
-
+#endif
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #define HAVE_SYS_IOCTL_H 1
 
