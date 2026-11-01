@@ -98,6 +98,7 @@ class OperationExecutorTest {
             }
         })
         assertEquals(OperationState.Completed, done.await())
+        service.awaitStop(1)
         assertEquals(1, service.startCount)
         assertEquals(1, service.stopCount)
     }
@@ -124,6 +125,7 @@ class OperationExecutorTest {
                 override suspend fun run() = Unit
             })
             assertEquals(OperationState.Completed, first.await())
+            service.awaitStop(1)
             assertEquals(1, service.stopCount)
 
             // Idle stop must not kill controller — later submit still runs.
@@ -131,6 +133,7 @@ class OperationExecutorTest {
                 override suspend fun run() = Unit
             })
             assertEquals(OperationState.Completed, second.await())
+            service.awaitStop(2)
             assertEquals(2, service.startCount)
             assertEquals(2, service.stopCount)
             assertSame(controller, DiskController.get())
