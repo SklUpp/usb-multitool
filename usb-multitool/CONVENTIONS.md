@@ -43,3 +43,13 @@ git grep -n "actions/setup-java" -- .github/workflows/android-debug.yml
 - Gradle wrapper: 8.13 (`gradle/wrapper/gradle-wrapper.properties`)
 - AGP / Kotlin / NDK versions: `gradle/libs.versions.toml`
 - `compileSdk = 36`, `targetSdk = 36`, `minSdk = 28`
+
+## Host native checks (CI)
+
+exFAT fsck repair path is verified on the Actions runner (not the phone) by:
+
+```bash
+./scripts/run-exfat-fsck-host-test.sh
+```
+
+This builds a host binary against vendored `third_party/exfatprogs` and the shared `usb_block_*` relative-LBA callback. No root, `/dev`, or FUSE.

@@ -1,9 +1,14 @@
-/* Shared relative-LBA block backend for FatFs, exFAT fsck, and host tests.
- * VirtualPartition (or image file) adds the partition start offset exactly once.
- * FatFs disk_* must not add a second offset.
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/*
+ * Shared relative-LBA block contract for filesystem engines.
+ * Partition start is applied exactly once by VirtualPartition / BlockDevice.
+ * Engines must not add a second offset.
+ *
+ * Return 0 on success, negative errno on failure.
+ * Bounds: return -ERANGE before any overflow or out-of-bounds access.
  */
-#ifndef USB_BLOCK_H
-#define USB_BLOCK_H
+#ifndef USB_MULTITOOL_USB_BLOCK_H
+#define USB_MULTITOOL_USB_BLOCK_H
 
 #include <stdint.h>
 
@@ -11,26 +16,23 @@
 extern "C" {
 #endif
 
-/* Return 0 on success, non-zero on I/O or parameter error. */
 int usb_block_read(uint64_t handle, uint64_t lba, void *buf, uint32_t sectors);
 int usb_block_write(uint64_t handle, uint64_t lba, const void *buf, uint32_t sectors);
 int usb_block_sync(uint64_t handle);
 
-/* Optional ops table behind a handle (host tests / JNI adapters). */
-typedef struct UsbBlockOps {
-	int (*read)(void *ctx, uint64_t lba, void *buf, uint32_t sectors);
-	int (*write)(void *ctx, uint64_t lba, const void *buf, uint32_t sectors);
-	int (*sync)(void *ctx);
-	void *ctx;
-	uint32_t sector_size;
-	uint64_t sector_count;
-} UsbBlockOps;
-
-uint64_t usb_block_register(UsbBlockOps *ops);
-UsbBlockOps *usb_block_ops(uint64_t handle);
+/* Register a backend for handle (1..N). Host tests and JNI use this. */
+int usb_block_register(
+        uint64_t handle,
+        uint64_t sector_size,
+        uint64_t sector_count,
+        int (*read_fn)(void *ctx, uint64_t lba, void *buf, uint32_t sectors),
+        int (*write_fn)(void *ctx, uint64_t lba, const void *buf, uint32_t sectors),
+        int (*sync_fn)(void *ctx),
+        void *ctx);
+void usb_block_unregister(uint64_t handle);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* USB_BLOCK_H */
+#endif /* USB_MULTITOOL_USB_BLOCK_H */
