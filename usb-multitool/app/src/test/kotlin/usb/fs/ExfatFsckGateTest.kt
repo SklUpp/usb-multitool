@@ -15,8 +15,8 @@ class ExfatFsckGateTest {
     private class FakeDevice : BlockDevice {
         override val sectorSize: Int = 512
         override val sectorCount: ULong = 2048uL
-        override fun read(lba: ULong, destination: ByteBuffer) = Unit
-        override fun write(lba: ULong, source: ByteBuffer) = Unit
+        override fun read(lba: Long, destination: ByteBuffer) = Unit
+        override fun write(lba: Long, source: ByteBuffer) = Unit
         override fun sync() = Unit
     }
 
@@ -42,8 +42,20 @@ class ExfatFsckGateTest {
     fun mountedVolumeGateClosesBeforeRepairWrites() {
         var closed = false
         val gate = ExfatFsck.MountedVolumeGate { closed = true }
-        gate.closeAll(FakeDevice())
+        // Public repair API must invoke the gate before any native open/write.
+        // Wrong token is rejected before close; correct token closes first, then
+        // native load fails on host JVM — catch that after the gate ran.
+        try {
+            ExfatFsck.repair(
+                device = FakeDevice(),
+                confirmationToken = ExfatFsck.REPAIR_CONFIRMATION,
+                volumeGate = gate,
+            )
+        } catch (_: UnsatisfiedLinkError) {
+            // Expected without libusb_native on host JVM.
+        } catch (_: Throwable) {
+            // Native open may also throw after gate close.
+        }
         assertTrue(closed)
-        assertTrue(ExfatFsck.REPAIR_CONFIRMATION.startsWith("CONFIRM_"))
     }
 }

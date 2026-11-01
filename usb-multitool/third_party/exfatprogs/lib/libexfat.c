@@ -146,21 +146,25 @@ static int exfat_block_transfer(struct exfat_blk_dev *bd, int writing,
 		uint32_t sectors;
 		size_t chunk;
 
-		if (lba >= bd->num_sectors)
-			return -ERANGE;
+		if (lba >= bd->num_sectors) {
+			ret = -ERANGE;
+			goto out;
+		}
 
 		if (head == 0 && (rem % (off_t)ss) == 0) {
 			sectors = (uint32_t)((uint64_t)rem / ss);
 			if (sectors > (64 * 1024u / ss))
 				sectors = 64 * 1024u / ss;
-			if (sectors > bd->num_sectors - lba)
-				return -ERANGE;
+			if (sectors > bd->num_sectors - lba) {
+				ret = -ERANGE;
+				goto out;
+			}
 			if (writing)
 				ret = bd->block_ops->write(bd->block_handle, lba, cm, sectors);
 			else
 				ret = bd->block_ops->read(bd->block_handle, lba, m, sectors);
 			if (ret < 0)
-				return ret;
+				goto out;
 			chunk = (size_t)sectors * ss;
 		} else {
 			unsigned int take = ss - head;
@@ -168,8 +172,10 @@ static int exfat_block_transfer(struct exfat_blk_dev *bd, int writing,
 				take = (unsigned int)rem;
 			if (!sector) {
 				sector = malloc(ss);
-				if (!sector)
-					return -ENOMEM;
+				if (!sector) {
+					ret = -ENOMEM;
+					goto out;
+				}
 			}
 			ret = bd->block_ops->read(bd->block_handle, lba, sector, 1);
 			if (ret < 0)

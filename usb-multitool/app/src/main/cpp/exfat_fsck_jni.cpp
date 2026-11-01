@@ -36,7 +36,6 @@ jmethodID g_write_mid = nullptr;
 jmethodID g_sync_mid = nullptr;
 jclass g_bytebuffer_cls = nullptr;
 jmethodID g_bb_allocate_direct = nullptr;
-jmethodID g_bb_position = nullptr;
 jmethodID g_bb_clear = nullptr;
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -55,29 +54,35 @@ int ensure_method_cache(JNIEnv *env) {
     if (g_read_mid)
         return 0;
     jclass dev_cls = env->FindClass("usb/device/BlockDevice");
-    if (!dev_cls)
+    if (!dev_cls) {
+        if (env->ExceptionCheck())
+            env->ExceptionClear();
         return -ENOENT;
-    /* Kotlin ULong mangling for interface methods. */
-    g_read_mid = env->GetMethodID(dev_cls, "read-WZ4Q5Ns",
-                                  "(JLjava/nio/ByteBuffer;)V");
-    g_write_mid = env->GetMethodID(dev_cls, "write-WZ4Q5Ns",
-                                   "(JLjava/nio/ByteBuffer;)V");
+    }
+    /* Stable JVM names: BlockDevice.read/write take Long LBA, not ULong. */
+    g_read_mid = env->GetMethodID(dev_cls, "read", "(JLjava/nio/ByteBuffer;)V");
+    g_write_mid = env->GetMethodID(dev_cls, "write", "(JLjava/nio/ByteBuffer;)V");
     g_sync_mid = env->GetMethodID(dev_cls, "sync", "()V");
     env->DeleteLocalRef(dev_cls);
+    if (env->ExceptionCheck())
+        env->ExceptionClear();
     if (!g_read_mid || !g_write_mid || !g_sync_mid)
         return -ENOENT;
 
     jclass bb = env->FindClass("java/nio/ByteBuffer");
-    if (!bb)
+    if (!bb) {
+        if (env->ExceptionCheck())
+            env->ExceptionClear();
         return -ENOENT;
+    }
     g_bytebuffer_cls = reinterpret_cast<jclass>(env->NewGlobalRef(bb));
     env->DeleteLocalRef(bb);
     g_bb_allocate_direct = env->GetStaticMethodID(
         g_bytebuffer_cls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
-    g_bb_position =
-        env->GetMethodID(g_bytebuffer_cls, "position", "(I)Ljava/nio/Buffer;");
     g_bb_clear = env->GetMethodID(g_bytebuffer_cls, "clear", "()Ljava/nio/Buffer;");
-    if (!g_bb_allocate_direct || !g_bb_position || !g_bb_clear)
+    if (env->ExceptionCheck())
+        env->ExceptionClear();
+    if (!g_bb_allocate_direct || !g_bb_clear)
         return -ENOENT;
     return 0;
 }
@@ -258,8 +263,7 @@ Java_usb_fs_ExfatFsck_nativeCheck(JNIEnv *, jclass, jlong handle) {
         pthread_mutex_unlock(&g_mu);
         return EXFAT_FSCK_EXIT_OPERATION_ERROR;
     }
-    HandleRec h = g_handles[handle - 1];
-    pthread_mutex_unlock(&g_mu);
+    HandleRec &h = g_handles[handle - 1];
 
     struct exfat_blk_dev bd;
     int rc = exfat_setup_block_dev(
@@ -268,10 +272,12 @@ Java_usb_fs_ExfatFsck_nativeCheck(JNIEnv *, jclass, jlong handle) {
         &kUsbBlockOps,
         static_cast<unsigned int>(h.sector_size),
         h.sector_count);
-    if (rc < 0)
-        return EXFAT_FSCK_EXIT_OPERATION_ERROR;
-    int exit_code = exfat_fsck_on_blk_dev(&bd, /*repair_yes=*/0);
-    exfat_deinit_blk_dev_info(&bd);
+    int exit_code = EXFAT_FSCK_EXIT_OPERATION_ERROR;
+    if (rc == 0) {
+        exit_code = exfat_fsck_on_blk_dev(&bd, /*repair_yes=*/0);
+        exfat_deinit_blk_dev_info(&bd);
+    }
+    pthread_mutex_unlock(&g_mu);
     return exit_code;
 }
 
@@ -299,8 +305,7 @@ Java_usb_fs_ExfatFsck_nativeRepair(
         pthread_mutex_unlock(&g_mu);
         return EXFAT_FSCK_EXIT_OPERATION_ERROR;
     }
-    HandleRec h = g_handles[handle - 1];
-    pthread_mutex_unlock(&g_mu);
+    HandleRec &h = g_handles[handle - 1];
 
     struct exfat_blk_dev bd;
     int rc = exfat_setup_block_dev(
@@ -309,10 +314,11 @@ Java_usb_fs_ExfatFsck_nativeRepair(
         &kUsbBlockOps,
         static_cast<unsigned int>(h.sector_size),
         h.sector_count);
-    if (rc < 0)
-        return EXFAT_FSCK_EXIT_OPERATION_ERROR;
-
-    int exit_code = exfat_fsck_on_blk_dev(&bd, /*repair_yes=*/1);
-    exfat_deinit_blk_dev_info(&bd);
+    int exit_code = EXFAT_FSCK_EXIT_OPERATION_ERROR;
+    if (rc == 0) {
+        exit_code = exfat_fsck_on_blk_dev(&bd, /*repair_yes=*/1);
+        exfat_deinit_blk_dev_info(&bd);
+    }
+    pthread_mutex_unlock(&g_mu);
     return exit_code;
 }

@@ -23,6 +23,7 @@ typedef struct {
     int fd;
     uint64_t sector_size;
     uint64_t sector_count;
+    uint64_t write_count;
 } file_backend;
 
 static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors) {
@@ -48,6 +49,7 @@ static int file_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors
     size_t bytes = (size_t)sectors * (size_t)b->sector_size;
     off_t off = (off_t)(lba * b->sector_size);
     const uint8_t *p = buf;
+    b->write_count += sectors;
     while (bytes > 0) {
         ssize_t n = pwrite(b->fd, p, bytes, off);
         if (n < 0)
@@ -97,6 +99,7 @@ static int open_image(const char *path, file_backend *b) {
     b->fd = fd;
     b->sector_size = 512;
     b->sector_count = (uint64_t)st.st_size / b->sector_size;
+    b->write_count = 0;
     return 0;
 }
 
@@ -115,11 +118,12 @@ static int run_fsck(uint64_t handle, const file_backend *b, int repair) {
     return exit_code;
 }
 
-static int read_oem(const file_backend *b, char out[9]) {
+static int read_oem(uint64_t handle, char out[9]) {
     unsigned char sector[512];
     struct pbr *bs = (struct pbr *)sector;
-    if (pread(b->fd, sector, 512, 0) != 512)
-        return -EIO;
+    int rc = usb_block_read(handle, 0, sector, 1);
+    if (rc != 0)
+        return rc;
     memcpy(out, bs->bpb.oem_name, 8);
     out[8] = '\0';
     return 0;
@@ -143,6 +147,7 @@ int main(int argc, char **argv) {
     int check_clean;
     char oem[9];
     unsigned char buf[512];
+    uint64_t writes_before_check;
 
     if (extract_fixture(archive, image) != 0) {
         fprintf(stderr, "failed to extract %s\n", archive);
@@ -173,10 +178,19 @@ int main(int argc, char **argv) {
     printf("bounds -ERANGE ok (sectors=%llu)\n",
            (unsigned long long)backend.sector_count);
 
+    writes_before_check = backend.write_count;
     check_corrupt = run_fsck(handle, &backend, 0);
-    printf("check(corrupt) exit=%d\n", check_corrupt);
+    printf("check(corrupt) exit=%d writes=%llu\n", check_corrupt,
+           (unsigned long long)(backend.write_count - writes_before_check));
     if (check_corrupt == EXFAT_FSCK_EXIT_NO_ERRORS) {
         fprintf(stderr, "expected corruption detection\n");
+        usb_block_unregister(handle);
+        close(backend.fd);
+        return 1;
+    }
+    if (backend.write_count != writes_before_check) {
+        fprintf(stderr, "read-only check wrote %llu sectors\n",
+                (unsigned long long)(backend.write_count - writes_before_check));
         usb_block_unregister(handle);
         close(backend.fd);
         return 1;
@@ -192,17 +206,26 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    writes_before_check = backend.write_count;
     check_clean = run_fsck(handle, &backend, 0);
-    printf("check(repaired) exit=%d\n", check_clean);
+    printf("check(repaired) exit=%d writes=%llu\n", check_clean,
+           (unsigned long long)(backend.write_count - writes_before_check));
     if (check_clean != EXFAT_FSCK_EXIT_NO_ERRORS) {
         fprintf(stderr, "re-check failed: %d\n", check_clean);
         usb_block_unregister(handle);
         close(backend.fd);
         return 1;
     }
+    if (backend.write_count != writes_before_check) {
+        fprintf(stderr, "read-only re-check wrote %llu sectors\n",
+                (unsigned long long)(backend.write_count - writes_before_check));
+        usb_block_unregister(handle);
+        close(backend.fd);
+        return 1;
+    }
 
-    if (read_oem(&backend, oem) != 0) {
-        fprintf(stderr, "read OEM failed\n");
+    if (read_oem(handle, oem) != 0) {
+        fprintf(stderr, "read OEM via usb_block_read failed\n");
         usb_block_unregister(handle);
         close(backend.fd);
         return 1;
