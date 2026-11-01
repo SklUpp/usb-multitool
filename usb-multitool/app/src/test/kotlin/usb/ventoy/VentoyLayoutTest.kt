@@ -1,6 +1,11 @@
 package usb.ventoy
 
 import java.nio.ByteBuffer
+import java.io.ByteArrayOutputStream
+import java.nio.ByteOrder
+import java.security.MessageDigest
+import org.tukaani.xz.LZMA2Options
+import org.tukaani.xz.XZOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -201,5 +206,181 @@ class VentoyLayoutTest {
         assertTrue(xml.contains("BypassTPMCheck"))
         assertTrue(xml.contains("BypassRAMCheck"))
         assertTrue(xml.contains("BypassNRO"))
+    }
+
+    private fun compressXz(data: ByteArray): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val xzOut = XZOutputStream(baos, LZMA2Options())
+        xzOut.write(data)
+        xzOut.close()
+        return baos.toByteArray()
+    }
+
+    private fun sha256Hex(data: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        return digest.digest(data).joinToString("") { "%02x".format(it) }
+    }
+
+    @Test
+    fun testDecompressXzAssetsAndPatchByte500() {
+        val boot = ByteArray(512) { 0x90.toByte() }
+        boot[510] = 0x55.toByte()
+        boot[511] = 0xAA.toByte()
+
+        val rawCore = ByteArray(2048) { 0xCC.toByte() }
+        rawCore[500] = 1
+
+        val rawEfi = ByteArray(2048 * 512)
+        rawEfi[0] = 0xEB.toByte()
+        rawEfi[1] = 0x3C.toByte()
+        rawEfi[2] = 0x90.toByte()
+        "MSDOS5.0".toByteArray().copyInto(rawEfi, 3)
+        rawEfi[510] = 0x55.toByte()
+        rawEfi[511] = 0xAA.toByte()
+
+        val compressedCore = compressXz(rawCore)
+        val compressedEfi = compressXz(rawEfi)
+
+        assertTrue(VentoyAssets.isXz(compressedCore))
+        assertTrue(VentoyAssets.isXz(compressedEfi))
+
+        val assets = VentoyAssets(
+            bootImg = boot,
+            coreImg = compressedCore,
+            efiPartImg = compressedEfi,
+            bootImgSha256 = sha256Hex(boot),
+            coreImgSha256 = sha256Hex(compressedCore),
+            diskImgSha256 = sha256Hex(compressedEfi),
+        )
+
+        assets.validateChecksums(strict = true)
+
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        val table = VentoyInstaller.install(disk, assets, gpt = true)
+
+        // Read core.img at LBA 34
+        val coreBuf = ByteBuffer.allocate(2048)
+        disk.read(34L, coreBuf)
+        val writtenCore = coreBuf.array()
+
+        // Must NOT be XZ compressed on disk
+        assertFalse("Core image on disk must not be XZ compressed", VentoyAssets.isXz(writtenCore))
+        assertEquals(0xCC.toByte(), writtenCore[0])
+        assertEquals("Byte 500 must be patched to 35 for GPT", 35.toByte(), writtenCore[500])
+
+        // Read EFI partition at part2Start
+        val p2 = table.partitions[1]
+        val efiBuf = ByteBuffer.allocate(512)
+        disk.read(p2.startLba.toLong(), efiBuf)
+        val writtenEfi = efiBuf.array()
+        assertFalse("EFI partition on disk must not be XZ compressed", VentoyAssets.isXz(writtenEfi))
+        assertEquals(0xEB.toByte(), writtenEfi[0])
+        assertEquals(0x3C.toByte(), writtenEfi[1])
+        assertEquals("MSDOS5.0", String(writtenEfi, 3, 8))
+    }
+
+    @Test
+    fun testMbrProbeDisksGe1TiB() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 2500000000UL)
+        val mbrBuf = ByteBuffer.allocate(512).order(ByteOrder.LITTLE_ENDIAN)
+        val mbr = mbrBuf.array()
+        mbr[510] = 0x55.toByte()
+        mbr[511] = 0xAA.toByte()
+
+        val p0Start = 2048L
+        val p0Count = 2200000000L // > 2^31 sectors (~1.12 TB), bit 31 set
+        val p1Start = p0Start + p0Count // 2200002048L, bit 31 set
+        val p1Count = 65536L
+
+        // Partition 0
+        mbr[446] = 0x80.toByte()
+        mbr[450] = 0x07.toByte()
+        ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt((p0Start and 0xFFFFFFFFL).toInt())
+        ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt((p0Count and 0xFFFFFFFFL).toInt())
+
+        // Partition 1
+        mbr[462] = 0x00.toByte()
+        mbr[462 + 4] = 0xEF.toByte()
+        ByteBuffer.wrap(mbr, 462 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt((p1Start and 0xFFFFFFFFL).toInt())
+        ByteBuffer.wrap(mbr, 462 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt((p1Count and 0xFFFFFFFFL).toInt())
+
+        disk.write(0L, ByteBuffer.wrap(mbr))
+
+        // Write reserved data at 2040
+        val rsv = ByteBuffer.allocate(8 * 512)
+        disk.write(2040L, rsv)
+
+        val probe = VentoyLayout.probe(disk)
+        assertNotNull("Probe must succeed on disks >= 1 TiB without sign extension corruption", probe)
+        assertTrue(probe!!.isVentoy)
+        assertEquals(TableScheme.MBR, probe.scheme)
+        assertEquals(p0Start.toULong(), probe.part1StartLba)
+        assertEquals(p0Count.toULong(), probe.part1SectorCount)
+        assertEquals(p1Start.toULong(), probe.part2StartLba)
+        assertEquals(p1Count.toULong(), probe.part2SectorCount)
+    }
+
+    @Test
+    fun testVentoyJsonMergePreservesThemeAndControl() {
+        val volumeRoot = mutableMapOf<String, Any?>()
+        val existingJson = """
+        {
+          "theme": {
+            "file": "/ventoy/theme/custom.txt",
+            "gfxmode": "1920x1080"
+          },
+          "control": [
+            { "VTOY_DEFAULT_SEARCH_ROOT": "/MY_ISOS" },
+            { "VTOY_SECONDARY_BOOT": "1" },
+            { "VTOY_WIN11_BYPASS_TPM": "0" }
+          ],
+          "auto_install": [
+            { "image": "/ubuntu-24.04.iso", "template": "/ventoy/ubuntu.xml" }
+          ]
+        }
+        """.trimIndent()
+        volumeRoot["ventoy/ventoy.json"] = existingJson
+
+        val options = SetupOptions(tpmBypass = true, bypassRamCheck = true, localAccount = true)
+        val resultJson = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = true)
+
+        assertTrue("Theme file must be preserved", resultJson.contains("/ventoy/theme/custom.txt"))
+        assertTrue("Theme gfxmode must be preserved", resultJson.contains("1920x1080"))
+        assertTrue("Custom search root must be preserved", resultJson.contains("/MY_ISOS"))
+        assertTrue("Secondary boot control must be preserved", resultJson.contains("VTOY_SECONDARY_BOOT"))
+        assertTrue("Existing Linux ISO must be preserved", resultJson.contains("ubuntu-24.04.iso"))
+        assertTrue("New Windows ISO must be added", resultJson.contains("Windows11_Pro.iso"))
+        assertTrue("VTOY_WIN11_BYPASS_TPM must be updated to 1", resultJson.contains("\"VTOY_WIN11_BYPASS_TPM\": \"1\""))
+        assertTrue("VTOY_WIN11_BYPASS_RAM must be set to 1", resultJson.contains("\"VTOY_WIN11_BYPASS_RAM\": \"1\""))
+        assertTrue("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT must be set to 1", resultJson.contains("\"VTOY_WIN11_BYPASS_LOCAL_ACCOUNT\": \"1\""))
+    }
+
+    @Test
+    fun testAutounattendBypassNroInOobeSystem() {
+        val volumeRoot = mutableMapOf<String, Any?>()
+        val options = SetupOptions(tpmBypass = true, bypassRamCheck = false, localAccount = true)
+        WindowsSetup.write(volumeRoot, "Win11.iso", options, overwrite = true)
+
+        val xml = volumeRoot["ventoy/Win11.xml"] as String
+        assertTrue("Must declare oobeSystem settings pass", xml.contains("<settings pass=\"oobeSystem\">"))
+        assertTrue("Must contain BypassNRO command", xml.contains("BypassNRO"))
+
+        // Ensure BypassNRO is NOT inside windowsPE pass
+        val peSection = xml.substringAfter("<settings pass=\"windowsPE\">").substringBefore("</settings>")
+        assertFalse("BypassNRO must NOT be in windowsPE pass", peSection.contains("BypassNRO"))
+        assertTrue("BypassTPMCheck must be in windowsPE pass", peSection.contains("BypassTPMCheck"))
+
+        // Ensure BypassNRO IS inside oobeSystem pass
+        val oobeSection = xml.substringAfter("<settings pass=\"oobeSystem\">").substringBefore("</settings>")
+        assertTrue("BypassNRO must be in oobeSystem pass", oobeSection.contains("BypassNRO"))
+    }
+
+    @Test
+    fun testVentoyNativeDeclarations() {
+        val methods = VentoyNative::class.java.declaredMethods.map { it.name }
+        assertTrue(methods.contains("nativeEngineLinked"))
+        assertTrue(methods.contains("nativeProbe"))
+        assertTrue(methods.contains("nativeInstall"))
+        assertTrue(methods.contains("nativeUpdate"))
     }
 }

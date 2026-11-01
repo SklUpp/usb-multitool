@@ -71,6 +71,8 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.commons.compress)
+    implementation(libs.xz)
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)

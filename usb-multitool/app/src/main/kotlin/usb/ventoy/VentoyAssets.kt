@@ -47,6 +47,10 @@ data class VentoyAssets(
         }
     }
 
+    fun decompressCoreImg(): ByteArray = decompressXz(coreImg)
+
+    fun decompressEfiPartImg(): ByteArray = decompressXz(efiPartImg)
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is VentoyAssets) return false
@@ -121,6 +125,43 @@ data class VentoyAssets(
                 coreImgSha256 = coreSha,
                 diskImgSha256 = efiSha,
             )
+        }
+
+        fun isXz(data: ByteArray): Boolean {
+            if (data.size < 6) return false
+            return data[0] == 0xFD.toByte() &&
+                data[1] == '7'.code.toByte() &&
+                data[2] == 'z'.code.toByte() &&
+                data[3] == 'X'.code.toByte() &&
+                data[4] == 'Z'.code.toByte() &&
+                data[5] == 0x00.toByte()
+        }
+
+        fun decompressXz(data: ByteArray): ByteArray {
+            if (!isXz(data)) return data
+            try {
+                val bais = java.io.ByteArrayInputStream(data)
+                val xzIn = org.apache.commons.compress.compressors.xz.XZCompressorInputStream(bais)
+                val baos = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(65536)
+                var n: Int
+                while (xzIn.read(buf).also { n = it } != -1) {
+                    baos.write(buf, 0, n)
+                }
+                xzIn.close()
+                return baos.toByteArray()
+            } catch (_: Throwable) {}
+
+            try {
+                val proc = ProcessBuilder("xz", "-dc").start()
+                proc.outputStream.use { it.write(data) }
+                val out = proc.inputStream.readBytes()
+                if (proc.waitFor() == 0 && out.isNotEmpty()) {
+                    return out
+                }
+            } catch (_: Throwable) {}
+
+            throw IllegalStateException("Failed to decompress XZ asset: no XZ decompressor available")
         }
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

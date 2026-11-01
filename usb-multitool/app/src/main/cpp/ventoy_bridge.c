@@ -19,6 +19,9 @@ Java_usb_ventoy_VentoyNative_nativeInstall(JNIEnv *env, jclass clazz,
                                           jint sectorSize,
                                           jlong sectorCount,
                                           jstring release,
+                                          jbyteArray bootImg,
+                                          jbyteArray coreImg,
+                                          jbyteArray efiPartImg,
                                           jint gpt,
                                           jlong reserveBytes,
                                           jint align4k) {
@@ -36,24 +39,43 @@ Java_usb_ventoy_VentoyNative_nativeInstall(JNIEnv *env, jclass clazz,
         return -EINVAL;
     }
 
-    /* When called with a real block handle, invoke ventoy_engine_install */
+    if (!bootImg || !coreImg || !efiPartImg) {
+        (*env)->ReleaseStringUTFChars(env, release, rel);
+        return -EINVAL;
+    }
+
+    jsize boot_len = (*env)->GetArrayLength(env, bootImg);
+    jsize core_len = (*env)->GetArrayLength(env, coreImg);
+    jsize efi_len = (*env)->GetArrayLength(env, efiPartImg);
+
+    if (boot_len < 446 || core_len == 0 || efi_len == 0) {
+        (*env)->ReleaseStringUTFChars(env, release, rel);
+        return -EINVAL;
+    }
+
+    jbyte *boot_bytes = (*env)->GetByteArrayElements(env, bootImg, NULL);
+    jbyte *core_bytes = (*env)->GetByteArrayElements(env, coreImg, NULL);
+    jbyte *efi_bytes = (*env)->GetByteArrayElements(env, efiPartImg, NULL);
+
     int ret = 0;
     if (blockHandle != 0) {
         ventoy_asset_set assets;
         memset(&assets, 0, sizeof(assets));
         assets.release = rel;
-        assets.boot_img = g_mbr_template;
-        assets.boot_img_len = sizeof(g_mbr_template);
-        /* In test environments without preloaded buffers, minimal non-zero lengths */
-        assets.core_img = (const uint8_t *)"VENTOY_CORE";
-        assets.core_img_len = 11;
-        assets.efi_part_img = (const uint8_t *)"VENTOY_EFI";
-        assets.efi_part_img_len = 10;
+        assets.boot_img = (const uint8_t *)boot_bytes;
+        assets.boot_img_len = (size_t)boot_len;
+        assets.core_img = (const uint8_t *)core_bytes;
+        assets.core_img_len = (size_t)core_len;
+        assets.efi_part_img = (const uint8_t *)efi_bytes;
+        assets.efi_part_img_len = (size_t)efi_len;
         assets.supports_4kn = 0;
 
         ret = ventoy_engine_install((uint64_t)blockHandle, &assets, gpt, (uint64_t)reserveBytes, align4k);
     }
 
+    (*env)->ReleaseByteArrayElements(env, efiPartImg, efi_bytes, JNI_ABORT);
+    (*env)->ReleaseByteArrayElements(env, coreImg, core_bytes, JNI_ABORT);
+    (*env)->ReleaseByteArrayElements(env, bootImg, boot_bytes, JNI_ABORT);
     (*env)->ReleaseStringUTFChars(env, release, rel);
     return ret;
 }
@@ -63,7 +85,10 @@ Java_usb_ventoy_VentoyNative_nativeUpdate(JNIEnv *env, jclass clazz,
                                          jlong blockHandle,
                                          jint sectorSize,
                                          jlong sectorCount,
-                                         jstring release) {
+                                         jstring release,
+                                         jbyteArray bootImg,
+                                         jbyteArray coreImg,
+                                         jbyteArray efiPartImg) {
     (void)clazz;
     (void)sectorCount;
 
@@ -77,22 +102,43 @@ Java_usb_ventoy_VentoyNative_nativeUpdate(JNIEnv *env, jclass clazz,
         return -EINVAL;
     }
 
+    if (!bootImg || !coreImg || !efiPartImg) {
+        (*env)->ReleaseStringUTFChars(env, release, rel);
+        return -EINVAL;
+    }
+
+    jsize boot_len = (*env)->GetArrayLength(env, bootImg);
+    jsize core_len = (*env)->GetArrayLength(env, coreImg);
+    jsize efi_len = (*env)->GetArrayLength(env, efiPartImg);
+
+    if (boot_len < 446 || core_len == 0 || efi_len == 0) {
+        (*env)->ReleaseStringUTFChars(env, release, rel);
+        return -EINVAL;
+    }
+
+    jbyte *boot_bytes = (*env)->GetByteArrayElements(env, bootImg, NULL);
+    jbyte *core_bytes = (*env)->GetByteArrayElements(env, coreImg, NULL);
+    jbyte *efi_bytes = (*env)->GetByteArrayElements(env, efiPartImg, NULL);
+
     int ret = 0;
     if (blockHandle != 0) {
         ventoy_asset_set assets;
         memset(&assets, 0, sizeof(assets));
         assets.release = rel;
-        assets.boot_img = g_mbr_template;
-        assets.boot_img_len = sizeof(g_mbr_template);
-        assets.core_img = (const uint8_t *)"VENTOY_CORE";
-        assets.core_img_len = 11;
-        assets.efi_part_img = (const uint8_t *)"VENTOY_EFI";
-        assets.efi_part_img_len = 10;
+        assets.boot_img = (const uint8_t *)boot_bytes;
+        assets.boot_img_len = (size_t)boot_len;
+        assets.core_img = (const uint8_t *)core_bytes;
+        assets.core_img_len = (size_t)core_len;
+        assets.efi_part_img = (const uint8_t *)efi_bytes;
+        assets.efi_part_img_len = (size_t)efi_len;
         assets.supports_4kn = 0;
 
         ret = ventoy_engine_update((uint64_t)blockHandle, &assets);
     }
 
+    (*env)->ReleaseByteArrayElements(env, efiPartImg, efi_bytes, JNI_ABORT);
+    (*env)->ReleaseByteArrayElements(env, coreImg, core_bytes, JNI_ABORT);
+    (*env)->ReleaseByteArrayElements(env, bootImg, boot_bytes, JNI_ABORT);
     (*env)->ReleaseStringUTFChars(env, release, rel);
     return ret;
 }

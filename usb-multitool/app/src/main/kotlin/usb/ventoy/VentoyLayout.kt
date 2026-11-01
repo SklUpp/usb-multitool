@@ -111,11 +111,11 @@ object VentoyLayout {
                 version = VentoyAssets.PINNED_RELEASE,
             )
         } else {
-            val p0Start = ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong().toULong()
-            val p0Count = ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong().toULong()
+            val p0Start = (ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
+            val p0Count = (ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
             val p1Flag = mbr[462 + 4].toInt() and 0xFF
-            val p1Start = ByteBuffer.wrap(mbr, 462 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong().toULong()
-            val p1Count = ByteBuffer.wrap(mbr, 462 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong().toULong()
+            val p1Start = (ByteBuffer.wrap(mbr, 462 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
+            val p1Count = (ByteBuffer.wrap(mbr, 462 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
 
             if (p0Start != PART1_START_SECTOR.toULong() || (p0Start + p0Count) != p1Start) return null
             if (p1Count != EFI_PART_SECTORS.toULong() || p1Flag != 0xEF) return null
@@ -193,14 +193,17 @@ object VentoyInstaller {
             }
         }
 
+        val decompressedCore = assets.decompressCoreImg()
+        val decompressedEfi = assets.decompressEfiPartImg()
+
         // Write VTOYEFI partition data
-        writeBufferToDisk(disk, part2Start, assets.efiPartImg, VentoyLayout.EFI_PART_SECTORS)
+        writeBufferToDisk(disk, part2Start, decompressedEfi, VentoyLayout.EFI_PART_SECTORS)
 
         if (gpt) {
             // Write legacy GRUB stage1 at LBA 34
             val coreBuf = ByteBuffer.allocate(2014 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(assets.coreImg.size, 2014 * VentoyLayout.SECTOR_SIZE)
-            coreBuf.put(assets.coreImg, 0, copyLen)
+            val copyLen = minOf(decompressedCore.size, 2014 * VentoyLayout.SECTOR_SIZE)
+            coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.array()[500] = 35 // Blocklist marker
             coreBuf.flip()
             disk.write(34L, coreBuf)
@@ -266,6 +269,10 @@ object VentoyInstaller {
             mbr[92] = 0x22
             mbr[446] = 0x00 // Not active
             mbr[450] = 0xEE.toByte() // Protective MBR
+            val rng = java.util.Random()
+            val randUuid = ByteArray(16).apply { rng.nextBytes(this) }
+            randUuid.copyInto(mbr, 0x180)
+            ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(rng.nextInt())
             ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(1)
             val protSectors = minOf(diskSectors - 1L, 0xFFFFFFFFL).toInt()
             ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(protSectors)
@@ -281,8 +288,8 @@ object VentoyInstaller {
         } else {
             // Write legacy GRUB stage1 at LBA 1
             val coreBuf = ByteBuffer.allocate(2047 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(assets.coreImg.size, 2047 * VentoyLayout.SECTOR_SIZE)
-            coreBuf.put(assets.coreImg, 0, copyLen)
+            val copyLen = minOf(decompressedCore.size, 2047 * VentoyLayout.SECTOR_SIZE)
+            coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.flip()
             disk.write(1L, coreBuf)
 
@@ -293,6 +300,10 @@ object VentoyInstaller {
             // Partition 1
             mbr[446] = 0x80.toByte() // Active bootable
             mbr[450] = 0x07.toByte() // exFAT/NTFS
+            val rng = java.util.Random()
+            val randUuid = ByteArray(16).apply { rng.nextBytes(this) }
+            randUuid.copyInto(mbr, 0x180)
+            ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(rng.nextInt())
             ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part1Start.toInt())
             ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part1Count.toInt())
 
@@ -354,25 +365,27 @@ object VentoyInstaller {
         val part2Start = probe.part2StartLba.toLong()
         val diskSectors = disk.sectorCount.toLong()
 
+        val decompressedCore = assets.decompressCoreImg()
+        val decompressedEfi = assets.decompressEfiPartImg()
+
         // 1. Write new VTOYEFI partition image at part2Start
-        writeBufferToDisk(disk, part2Start, assets.efiPartImg, VentoyLayout.EFI_PART_SECTORS)
+        writeBufferToDisk(disk, part2Start, decompressedEfi, VentoyLayout.EFI_PART_SECTORS)
 
         // 2. Write new core.img in boot gap
         if (probe.scheme == TableScheme.GPT) {
             val coreBuf = ByteBuffer.allocate(2014 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(assets.coreImg.size, 2014 * VentoyLayout.SECTOR_SIZE)
-            coreBuf.put(assets.coreImg, 0, copyLen)
+            val copyLen = minOf(decompressedCore.size, 2014 * VentoyLayout.SECTOR_SIZE)
+            coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.array()[500] = 35
             coreBuf.flip()
             disk.write(34L, coreBuf)
         } else {
             val coreBuf = ByteBuffer.allocate(2047 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(assets.coreImg.size, 2047 * VentoyLayout.SECTOR_SIZE)
-            coreBuf.put(assets.coreImg, 0, copyLen)
+            val copyLen = minOf(decompressedCore.size, 2047 * VentoyLayout.SECTOR_SIZE)
+            coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.flip()
             disk.write(1L, coreBuf)
         }
-
         // 3. Restore reserved data at LBA 2040
         val rsvBuf = ByteBuffer.wrap(probe.rsvData)
         disk.write(2040L, rsvBuf)
@@ -529,11 +542,95 @@ object WindowsSetup {
         volumeRoot[xmlName] = xmlContent
 
         // Build or merge ventoy.json linking ISO to XML
-        val jsonContent = buildVentoyJson(isoName, xmlName, options)
+        val existingJson = (volumeRoot[jsonPath] ?: volumeRoot["ventoy.json"]) as? String
+        val jsonContent = mergeVentoyJson(existingJson, isoName, xmlName, options)
         volumeRoot[jsonPath] = jsonContent
         volumeRoot["ventoy.json"] = jsonContent
 
         return jsonContent
+    }
+
+    fun mergeVentoyJson(
+        existingJson: String?,
+        isoName: String,
+        xmlName: String,
+        options: SetupOptions,
+    ): String {
+        val rootMap: MutableMap<String, Any?> = if (!existingJson.isNullOrBlank()) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                (MiniJson.parse(existingJson) as? MutableMap<String, Any?>) ?: linkedMapOf()
+            } catch (_: Throwable) {
+                linkedMapOf()
+            }
+        } else {
+            linkedMapOf()
+        }
+
+        val controlList: MutableList<Any?> = ((rootMap["control"] as? List<*>)?.toMutableList()) ?: mutableListOf()
+
+        fun setControlFlag(key: String, value: String) {
+            for (i in controlList.indices) {
+                val item = controlList[i]
+                if (item is MutableMap<*, *> && item.containsKey(key)) {
+                    @Suppress("UNCHECKED_CAST")
+                    (item as MutableMap<String, Any?>)[key] = value
+                    return
+                } else if (item is Map<*, *> && item.containsKey(key)) {
+                    val newMap = linkedMapOf<String, Any?>()
+                    for ((k, v) in item) newMap[k.toString()] = v
+                    newMap[key] = value
+                    controlList[i] = newMap
+                    return
+                }
+            }
+            controlList.add(linkedMapOf(key to value))
+        }
+
+        var hasSearchRoot = false
+        for (item in controlList) {
+            if (item is Map<*, *> && item.containsKey("VTOY_DEFAULT_SEARCH_ROOT")) {
+                hasSearchRoot = true
+                break
+            }
+        }
+        if (!hasSearchRoot) {
+            controlList.add(linkedMapOf("VTOY_DEFAULT_SEARCH_ROOT" to "/ISO"))
+        }
+
+        setControlFlag("VTOY_WIN11_BYPASS_TPM", if (options.tpmBypass) "1" else "0")
+        setControlFlag("VTOY_WIN11_BYPASS_RAM", if (options.bypassRamCheck) "1" else "0")
+        setControlFlag("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT", if (options.localAccount) "1" else "0")
+
+        rootMap["control"] = controlList
+
+        val autoInstallList: MutableList<Any?> = ((rootMap["auto_install"] as? List<*>)?.toMutableList()) ?: mutableListOf()
+        val targetImage = "/$isoName"
+        val targetTemplate = "/ventoy/$xmlName"
+        var matched = false
+
+        for (i in autoInstallList.indices) {
+            val item = autoInstallList[i]
+            if (item is Map<*, *>) {
+                val img = item["image"]?.toString()
+                if (img == targetImage || img == isoName) {
+                    val newEntry = linkedMapOf<String, Any?>()
+                    for ((k, v) in item) newEntry[k.toString()] = v
+                    newEntry["image"] = targetImage
+                    newEntry["template"] = targetTemplate
+                    autoInstallList[i] = newEntry
+                    matched = true
+                    break
+                }
+            }
+        }
+        if (!matched) {
+            autoInstallList.add(linkedMapOf("image" to targetImage, "template" to targetTemplate))
+        }
+
+        rootMap["auto_install"] = autoInstallList
+
+        return MiniJson.stringify(rootMap)
     }
 
     private fun buildXmlTemplate(name: String, options: SetupOptions): String = buildString {
@@ -545,54 +642,179 @@ object WindowsSetup {
         appendLine("        <AcceptEula>true</AcceptEula>")
         appendLine("        <FullName>$name</FullName>")
         appendLine("      </UserData>")
-        appendLine("      <RunSynchronous>")
-        var order = 1
-        if (options.tpmBypass) {
-            appendLine("        <RunSynchronousCommand>")
-            appendLine("          <Order>$order</Order>")
-            appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>")
-            appendLine("        </RunSynchronousCommand>")
-            order++
-            appendLine("        <RunSynchronousCommand>")
-            appendLine("          <Order>$order</Order>")
-            appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>")
-            appendLine("        </RunSynchronousCommand>")
-            order++
+        if (options.tpmBypass || options.bypassRamCheck) {
+            appendLine("      <RunSynchronous>")
+            var order = 1
+            if (options.tpmBypass) {
+                appendLine("        <RunSynchronousCommand>")
+                appendLine("          <Order>$order</Order>")
+                appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>")
+                appendLine("        </RunSynchronousCommand>")
+                order++
+                appendLine("        <RunSynchronousCommand>")
+                appendLine("          <Order>$order</Order>")
+                appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>")
+                appendLine("        </RunSynchronousCommand>")
+                order++
+            }
+            if (options.bypassRamCheck) {
+                appendLine("        <RunSynchronousCommand>")
+                appendLine("          <Order>$order</Order>")
+                appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>")
+                appendLine("        </RunSynchronousCommand>")
+                order++
+            }
+            appendLine("      </RunSynchronous>")
         }
-        if (options.bypassRamCheck) {
-            appendLine("        <RunSynchronousCommand>")
-            appendLine("          <Order>$order</Order>")
-            appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>")
-            appendLine("        </RunSynchronousCommand>")
-            order++
-        }
-        if (options.localAccount) {
-            appendLine("        <RunSynchronousCommand>")
-            appendLine("          <Order>$order</Order>")
-            appendLine("          <Path>reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>")
-            appendLine("        </RunSynchronousCommand>")
-            order++
-        }
-        appendLine("      </RunSynchronous>")
         appendLine("    </component>")
         appendLine("  </settings>")
+        if (options.localAccount) {
+            appendLine("  <settings pass=\"oobeSystem\">")
+            appendLine("    <component name=\"Microsoft-Windows-Shell-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">")
+            appendLine("      <OOBE>")
+            appendLine("        <ProtectYourPC>3</ProtectYourPC>")
+            appendLine("      </OOBE>")
+            appendLine("      <FirstLogonCommands>")
+            appendLine("        <SynchronousCommand>")
+            appendLine("          <Order>1</Order>")
+            appendLine("          <CommandLine>reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</CommandLine>")
+            appendLine("          <Description>Bypass Network Requirement for Local Account</Description>")
+            appendLine("        </SynchronousCommand>")
+            appendLine("      </FirstLogonCommands>")
+            appendLine("    </component>")
+            appendLine("  </settings>")
+        }
         appendLine("</unattend>")
     }
+}
 
-    private fun buildVentoyJson(isoName: String, xmlName: String, options: SetupOptions): String = buildString {
-        appendLine("{")
-        appendLine("  \"control\": [")
-        appendLine("    { \"VTOY_DEFAULT_SEARCH_ROOT\": \"/ISO\" },")
-        appendLine("    { \"VTOY_WIN11_BYPASS_TPM\": \"${if (options.tpmBypass) "1" else "0"}\" },")
-        appendLine("    { \"VTOY_WIN11_BYPASS_RAM\": \"${if (options.bypassRamCheck) "1" else "0"}\" },")
-        appendLine("    { \"VTOY_WIN11_BYPASS_LOCAL_ACCOUNT\": \"${if (options.localAccount) "1" else "0"}\" }")
-        appendLine("  ],")
-        appendLine("  \"auto_install\": [")
-        appendLine("    {")
-        appendLine("      \"image\": \"/$isoName\",")
-        appendLine("      \"template\": \"/ventoy/$xmlName\"")
-        appendLine("    }")
-        appendLine("  ]")
-        append("}")
+internal object MiniJson {
+    fun parse(input: String): Any? = Parser(input.trim()).parseValue()
+
+    private class Parser(private val s: String) {
+        private var pos = 0
+
+        private fun skipWhitespace() {
+            while (pos < s.length && s[pos].isWhitespace()) pos++
+        }
+
+        fun parseString(): String {
+            pos++
+            val sb = StringBuilder()
+            while (pos < s.length) {
+                val c = s[pos++]
+                if (c == '"') return sb.toString()
+                if (c == '\\' && pos < s.length) {
+                    when (val esc = s[pos++]) {
+                        '"' -> sb.append('"')
+                        '\\' -> sb.append('\\')
+                        '/' -> sb.append('/')
+                        'b' -> sb.append('\b')
+                        'f' -> sb.append('\u000C')
+                        'n' -> sb.append('\n')
+                        'r' -> sb.append('\r')
+                        't' -> sb.append('\t')
+                        'u' -> {
+                            val hex = s.substring(pos, pos + 4)
+                            pos += 4
+                            sb.append(hex.toInt(16).toChar())
+                        }
+                        else -> sb.append(esc)
+                    }
+                } else {
+                    sb.append(c)
+                }
+            }
+            return sb.toString()
+        }
+
+        fun parseObject(): MutableMap<String, Any?> {
+            pos++
+            val map = linkedMapOf<String, Any?>()
+            skipWhitespace()
+            if (pos < s.length && s[pos] == '}') { pos++; return map }
+            while (pos < s.length) {
+                skipWhitespace()
+                val key = parseString()
+                skipWhitespace()
+                if (pos < s.length && s[pos] == ':') pos++
+                val value = parseValue()
+                map[key] = value
+                skipWhitespace()
+                if (pos < s.length && s[pos] == ',') { pos++; continue }
+                if (pos < s.length && s[pos] == '}') { pos++; break }
+            }
+            return map
+        }
+
+        fun parseArray(): MutableList<Any?> {
+            pos++
+            val list = mutableListOf<Any?>()
+            skipWhitespace()
+            if (pos < s.length && s[pos] == ']') { pos++; return list }
+            while (pos < s.length) {
+                val value = parseValue()
+                list.add(value)
+                skipWhitespace()
+                if (pos < s.length && s[pos] == ',') { pos++; continue }
+                if (pos < s.length && s[pos] == ']') { pos++; break }
+            }
+            return list
+        }
+
+        fun parseValue(): Any? {
+            skipWhitespace()
+            if (pos >= s.length) return null
+            return when (val c = s[pos]) {
+                '{' -> parseObject()
+                '[' -> parseArray()
+                '"' -> parseString()
+                't', 'f' -> {
+                    if (s.startsWith("true", pos)) { pos += 4; true }
+                    else if (s.startsWith("false", pos)) { pos += 5; false }
+                    else throw IllegalArgumentException("Unexpected token at $pos")
+                }
+                'n' -> {
+                    if (s.startsWith("null", pos)) { pos += 4; null }
+                    else throw IllegalArgumentException("Unexpected token at $pos")
+                }
+                else -> {
+                    val start = pos
+                    if (c == '-') pos++
+                    while (pos < s.length && (s[pos].isDigit() || s[pos] == '.' || s[pos] == 'e' || s[pos] == 'E' || s[pos] == '+' || s[pos] == '-')) pos++
+                    s.substring(start, pos)
+                }
+            }
+        }
+    }
+
+    fun stringify(value: Any?, indent: Int = 0): String {
+        val spaces = "  ".repeat(indent)
+        val innerSpaces = "  ".repeat(indent + 1)
+        return when (value) {
+            null -> "null"
+            is String -> "\"${value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")}\""
+            is Boolean -> value.toString()
+            is Number -> value.toString()
+            is Map<*, *> -> {
+                if (value.isEmpty()) "{}"
+                else {
+                    val entries = value.entries.joinToString(",\n") { (k, v) ->
+                        "$innerSpaces\"$k\": ${stringify(v, indent + 1)}"
+                    }
+                    "{\n$entries\n$spaces}"
+                }
+            }
+            is List<*> -> {
+                if (value.isEmpty()) "[]"
+                else {
+                    val items = value.joinToString(",\n") { item ->
+                        "$innerSpaces${stringify(item, indent + 1)}"
+                    }
+                    "[\n$items\n$spaces]"
+                }
+            }
+            else -> "\"$value\""
+        }
     }
 }
