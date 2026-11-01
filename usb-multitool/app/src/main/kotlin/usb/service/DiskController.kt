@@ -25,9 +25,21 @@ class DiskController(
 
     /** Rebind Android wake/service control without replacing the executor. */
     fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {
-        executor.wakeLock = wakeLock
-        executor.serviceControl = serviceControl
+        executor.bind(wakeLock, serviceControl)
     }
+
+    /**
+     * Reset binding only if [serviceControl] still owns it.
+     * Idle onDestroy of an older service must leave a newer binding intact.
+     */
+    fun unbind(
+        serviceControl: ServiceControl,
+        fallbackWakeLock: OperationWakeLock,
+        fallbackServiceControl: ServiceControl,
+    ) {
+        executor.unbind(serviceControl, fallbackWakeLock, fallbackServiceControl)
+    }
+
 
     /** Terminal teardown only (process/app shutdown). Not used on idle service stop. */
     fun shutdown() {

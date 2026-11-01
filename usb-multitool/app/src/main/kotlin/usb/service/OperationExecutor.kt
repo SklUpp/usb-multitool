@@ -79,6 +79,28 @@ class OperationExecutor(
     private var running = false
     @Volatile private var current: QueuedOp? = null
 
+    /** Rebind Android wake/service control without replacing the executor. */
+    fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {
+        this.wakeLock = wakeLock
+        this.serviceControl = serviceControl
+    }
+
+    /**
+     * Reset wake/service binding only when [expectedServiceControl] is still active.
+     * A destroyed service must not replace a newer service's binding or WakeLock.
+     */
+    fun unbind(
+        expectedServiceControl: ServiceControl,
+        fallbackWakeLock: OperationWakeLock,
+        fallbackServiceControl: ServiceControl,
+    ) {
+        if (this.serviceControl === expectedServiceControl) {
+            this.wakeLock = fallbackWakeLock
+            this.serviceControl = fallbackServiceControl
+        }
+    }
+
+
     fun submit(operation: DiskOperation): OperationHandle {
         val handle = QueuedOp(operation)
         scope.launch {

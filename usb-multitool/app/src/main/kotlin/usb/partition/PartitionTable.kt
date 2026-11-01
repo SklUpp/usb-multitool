@@ -21,6 +21,17 @@ data class PartitionTable(
         fun read(disk: BlockDevice): PartitionTable {
             val mbr = MbrTable.read(disk)
             if (mbr.protective) {
+                // 0xEE plus any other real MBR partition is hybrid-ambiguous.
+                if (mbr.partitions.isNotEmpty()) {
+                    return PartitionTable(
+                        scheme = TableScheme.HYBRID,
+                        partitions = mbr.partitions,
+                        freeRegions = emptyList(),
+                        diskSectorCount = disk.sectorCount,
+                        sectorSize = disk.sectorSize,
+                        hybridAmbiguous = true,
+                    )
+                }
                 val gpt = GptTable.read(disk)
                 return fromGpt(disk, gpt)
             }
@@ -67,8 +78,8 @@ data class PartitionTable(
                 (gpt.header.entryCount.toLong() * gpt.header.entrySize.toLong() +
                     disk.sectorSize - 1) / disk.sectorSize
                 ).toULong()
-            // Backup entries sit immediately before the backup header at the disk end.
-            val backupEntriesLba = gpt.header.backupLba - entrySectors + 1UL
+            // Backup entries occupy [backupLba-entrySectors, backupLba-1]; header is exclusive.
+            val backupEntriesLba = gpt.header.backupLba - entrySectors
             return PartitionTable(
                 scheme = TableScheme.GPT,
                 partitions = gpt.partitions,

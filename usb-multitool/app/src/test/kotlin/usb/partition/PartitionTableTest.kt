@@ -51,5 +51,29 @@ class PartitionTableTest {
         assertEquals(TableScheme.GPT, table.scheme)
         assertTrue(table.gptBackupHeaderLba != null)
         assertEquals(disk.sectorCount - 1UL, table.gptBackupHeaderLba)
+        // 32 entry sectors end at headerLba-1 — never overlap the header.
+        assertEquals(disk.sectorCount - 1UL - 32UL, table.gptBackupEntriesLba)
+    }
+
+    @Test
+    fun protectiveEePlusRealPartitionIsHybridAmbiguous() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+        val bytes = disk.snapshot()
+        // Keep protective 0xEE in slot 0; plant a real partition in slot 1.
+        val slot1 = 446 + 16
+        bytes[slot1 + 4] = 0x83.toByte()
+        putLeInt(bytes, slot1 + 8, 100)
+        putLeInt(bytes, slot1 + 12, 50)
+        val hybrid = ImageBlockDevice(bytes, disk.sectorSize, disk.sectorCount)
+        val table = PartitionTable.read(hybrid)
+        assertTrue(table.hybridAmbiguous)
+        assertEquals(TableScheme.HYBRID, table.scheme)
+    }
+
+    private fun putLeInt(bytes: ByteArray, offset: Int, value: Int) {
+        bytes[offset] = (value and 0xFF).toByte()
+        bytes[offset + 1] = ((value shr 8) and 0xFF).toByte()
+        bytes[offset + 2] = ((value shr 16) and 0xFF).toByte()
+        bytes[offset + 3] = ((value shr 24) and 0xFF).toByte()
     }
 }

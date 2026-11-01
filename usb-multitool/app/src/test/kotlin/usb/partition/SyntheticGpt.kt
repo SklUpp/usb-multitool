@@ -20,7 +20,7 @@ object SyntheticGpt {
         val primaryEntryLba = 2UL
         val firstUsable = primaryEntryLba + entrySectors
         val backupHeaderLba = sectorCount - 1UL
-        val backupEntriesLba = backupHeaderLba - entrySectors + 1UL
+        val backupEntriesLba = backupHeaderLba - entrySectors
         val lastUsable = backupEntriesLba - 1UL
         require(lastUsable > firstUsable + 10UL)
 

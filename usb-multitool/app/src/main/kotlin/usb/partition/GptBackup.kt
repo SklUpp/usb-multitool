@@ -50,7 +50,7 @@ object GptBackup {
         }
 
         val newBackupHeaderLba = newDiskSectorCount - 1UL
-        val newBackupEntriesLba = newBackupHeaderLba - entrySectors + 1UL
+        val newBackupEntriesLba = newBackupHeaderLba - entrySectors
         val newLastUsable = newBackupEntriesLba - 1UL
         require(newLastUsable >= header.firstUsable) { "no usable space after relocate" }
 

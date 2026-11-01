@@ -149,6 +149,51 @@ class OperationExecutorTest {
         assertFalse(methods.contains("startForegroundService"))
         assertFalse(methods.contains("startForeground"))
     }
+
+    @Test
+    fun destroyedServiceUnbindLeavesNewerBindingActive() = runTest {
+        // Mimic DiskService: old instance destroys after newer instance already bound.
+        val oldWake = RecordingWakeLock()
+        val oldLifecycle = RecordingServiceControl()
+        val newWake = RecordingWakeLock()
+        val newLifecycle = RecordingServiceControl()
+        val fallback = RecordingServiceControl()
+        val controller = DiskController(
+            dispatcher = Dispatchers.Default.limitedParallelism(1),
+        )
+
+        controller.bind(oldWake, oldLifecycle)
+        controller.bind(newWake, newLifecycle)
+
+        // Stale onDestroy must not clobber the active binding / WakeLock.
+        controller.unbind(oldLifecycle, NoOpWakeLock, fallback)
+
+        val done = controller.submit(object : DiskOperation() {
+            override suspend fun run() {
+                assertTrue(newWake.held)
+            }
+        })
+        assertEquals(OperationState.Completed, done.await())
+        assertEquals(1, newLifecycle.startCount)
+        assertEquals(1, newLifecycle.stopCount)
+        assertEquals(0, oldLifecycle.startCount)
+        assertEquals(0, fallback.startCount)
+        assertEquals(1, newWake.acquireCount)
+        assertEquals(1, newWake.releaseCount)
+        assertEquals(0, oldWake.acquireCount)
+
+        // Own unbind still resets when identity matches.
+        controller.unbind(newLifecycle, NoOpWakeLock, fallback)
+        val after = controller.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, after.await())
+        assertEquals(1, newLifecycle.startCount)
+        assertEquals(1, newLifecycle.stopCount)
+        assertEquals(1, fallback.startCount)
+        assertEquals(1, fallback.stopCount)
+        controller.shutdown()
+    }
 }
 
 class RecordingWakeLock : OperationWakeLock {

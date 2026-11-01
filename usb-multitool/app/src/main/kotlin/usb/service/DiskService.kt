@@ -21,6 +21,8 @@ import android.os.PowerManager
  */
 class DiskService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var boundServiceControl: ServiceControl? = null
+
 
     override fun onCreate() {
         super.onCreate()
@@ -39,18 +41,20 @@ class DiskService : Service() {
             }
         }
         // In-service control: never call startForegroundService from here.
+        val control = object : ServiceControl {
+            override fun requestStart() {
+                startForegroundInternal()
+            }
+
+            override fun stopWhenIdle() {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
+        boundServiceControl = control
         DiskController.get().bind(
             wakeLock = lock,
-            serviceControl = object : ServiceControl {
-                override fun requestStart() {
-                    startForegroundInternal()
-                }
-
-                override fun stopWhenIdle() {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
-            },
+            serviceControl = control,
         )
     }
 
@@ -63,15 +67,21 @@ class DiskService : Service() {
 
     override fun onDestroy() {
         // Idle teardown must leave DiskController / OperationExecutor alive.
-        // Rebind external starter so later submits can startForegroundService again.
-        DiskController.get().bind(
-            wakeLock = NoOpWakeLock,
-            serviceControl = ContextServiceControl(applicationContext),
-        )
+        // Reset external starter only when this instance still owns the binding.
+        val owned = boundServiceControl
+        if (owned != null) {
+            DiskController.get().unbind(
+                serviceControl = owned,
+                fallbackWakeLock = NoOpWakeLock,
+                fallbackServiceControl = ContextServiceControl(applicationContext),
+            )
+        }
+        boundServiceControl = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         super.onDestroy()
     }
+
 
     private fun startForegroundInternal() {
         val notification = Notification.Builder(this, CHANNEL_ID)

@@ -45,6 +45,39 @@ class GptBackupTest {
     }
 
     @Test
+    fun backupEntriesOccupySectorsImmediatelyBeforeHeader() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+        val table = PartitionTable.read(disk)
+        val headerLba = requireNotNull(table.gptBackupHeaderLba)
+        val entriesLba = requireNotNull(table.gptBackupEntriesLba)
+        // 128 entries * 128 bytes / 512 = 32 sectors: headerLba-32 .. headerLba-1.
+        assertEquals(headerLba - 32UL, entriesLba)
+        assertTrue(
+            "entries must not overlap backup header",
+            entriesLba + 32UL == headerLba,
+        )
+    }
+
+    @Test
+    fun relocateWritesBackupEntryLbaWithoutHeaderOverlap() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+        val after = GptBackup.relocateBackup(disk, disk.sectorCount)
+        val headerLba = requireNotNull(after.gptBackupHeaderLba)
+        assertEquals(disk.sectorCount - 1UL, headerLba)
+        assertEquals(headerLba - 32UL, after.gptBackupEntriesLba)
+
+        // Backup header on disk must advertise the non-overlapping entry LBA.
+        val buf = ByteBuffer.allocate(disk.sectorSize).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        disk.read(headerLba, buf)
+        buf.flip()
+        val entryLba = buf.getLong(72).toULong()
+        assertEquals(headerLba - 32UL, entryLba)
+        // CRC-valid reread after relocate.
+        assertEquals(TableScheme.GPT, PartitionTable.read(disk).scheme)
+    }
+
+
+    @Test
     fun relocateShrinksBackupToSmallerDiskEnd() {
         val disk = SyntheticGpt.build(sectorCount = 4096UL)
         GptBackup.relocateBackup(disk, 4096UL)
