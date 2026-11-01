@@ -212,8 +212,8 @@ Java_usb_fs_ExfatFsck_nativeOpen(
     g_handle_used[slot] = true;
     const uint64_t handle = static_cast<uint64_t>(slot + 1);
 
-    int rc = usb_block_register(handle, h.sector_size, h.sector_count,
-                                java_read, java_write, java_sync, &h);
+    int rc = usb_block_register_raw(handle, h.sector_size, h.sector_count,
+                                    java_read, java_write, java_sync, &h);
     if (rc != 0) {
         env->DeleteGlobalRef(global);
         g_handle_used[slot] = false;

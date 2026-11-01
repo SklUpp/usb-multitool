@@ -159,8 +159,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    rc = usb_block_register(handle, backend.sector_size, backend.sector_count,
-                            file_read, file_write, file_sync, &backend);
+    rc = usb_block_register_raw(handle, backend.sector_size, backend.sector_count,
+                                file_read, file_write, file_sync, &backend);
     if (rc != 0) {
         fprintf(stderr, "usb_block_register: %d\n", rc);
         close(backend.fd);
