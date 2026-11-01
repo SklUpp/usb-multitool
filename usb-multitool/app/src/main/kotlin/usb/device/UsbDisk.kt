@@ -2,7 +2,7 @@ package usb.device
 
 import java.nio.ByteBuffer
 
-class UsbDisk(
+open class UsbDisk(
     private val transport: BlockTransport,
     val geometry: BlockGeometry,
 ) {
@@ -10,7 +10,7 @@ class UsbDisk(
     var isClosed: Boolean = false
         private set
 
-    fun read(lba: ULong, destination: ByteBuffer) {
+    open fun read(lba: ULong, destination: ByteBuffer) {
         ensureOpen()
         val bytes = destination.remaining()
         require(bytes % geometry.sectorSize == 0) {
@@ -31,7 +31,7 @@ class UsbDisk(
         }
     }
 
-    fun write(lba: ULong, source: ByteBuffer) {
+    open fun write(lba: ULong, source: ByteBuffer) {
         ensureOpen()
         val bytes = source.remaining()
         require(bytes % geometry.sectorSize == 0) {
