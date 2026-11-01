@@ -15,9 +15,13 @@ import android.os.PowerManager
  * Foreground connectedDevice owner for serialized USB disk work.
  * Starts on first queued operation; stops when the executor goes idle.
  * Idle stop does not cancel [DiskController] — later submits still run.
+ *
+ * [ServiceControl.startForeground] only requests service start once.
+ * [onStartCommand] promotes the notification synchronously via [Service.startForeground].
  */
-class DiskService : Service(), ServiceControl {
+class DiskService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var lifecycle: DiskServiceLifecycle? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -35,17 +39,35 @@ class DiskService : Service(), ServiceControl {
                 wakeLock?.let { if (it.isHeld) it.release() }
             }
         }
-        DiskController.get().bind(wakeLock = lock, serviceControl = this)
+        val controller = DiskController.get()
+        val policy = DiskServiceLifecycle(
+            requestStart = { requestServiceStart() },
+            stopService = {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            },
+            hasOutstandingWork = { controller.executor.hasOutstandingWork() },
+        )
+        lifecycle = policy
+        controller.bind(wakeLock = lock, serviceControl = policy)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Synchronous promotion — never call startForegroundService from here.
         startForegroundInternal()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun startForeground() {
+    override fun onDestroy() {
+        // Idle teardown must leave DiskController / OperationExecutor alive.
+        wakeLock?.let { if (it.isHeld) it.release() }
+        lifecycle = null
+        super.onDestroy()
+    }
+
+    private fun requestServiceStart() {
         val intent = Intent(this, DiskService::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             startForegroundService(intent)
@@ -53,18 +75,6 @@ class DiskService : Service(), ServiceControl {
             @Suppress("DEPRECATION")
             startService(intent)
         }
-        startForegroundInternal()
-    }
-
-    override fun stopWhenIdle() {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-    }
-
-    override fun onDestroy() {
-        // Idle teardown must leave DiskController / OperationExecutor alive.
-        wakeLock?.let { if (it.isHeld) it.release() }
-        super.onDestroy()
     }
 
     private fun startForegroundInternal() {

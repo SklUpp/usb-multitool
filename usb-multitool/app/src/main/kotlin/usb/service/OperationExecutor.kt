@@ -2,6 +2,7 @@ package usb.service
 
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -64,17 +65,30 @@ interface OperationHandle {
 
 class OperationExecutor(
     private val scope: CoroutineScope,
-    @Volatile var wakeLock: OperationWakeLock = NoOpWakeLock,
-    @Volatile var serviceControl: ServiceControl = NoOpServiceControl,
+    @Volatile private var wakeLock: OperationWakeLock = NoOpWakeLock,
+    @Volatile private var serviceControl: ServiceControl = NoOpServiceControl,
 ) {
     private val mutex = Mutex()
     private val queue = ArrayDeque<QueuedOp>()
     private var disconnected = false
     private var running = false
     @Volatile private var current: QueuedOp? = null
+    private val outstanding = AtomicInteger(0)
 
+    /** Rebind wake/service control. Not a public field write. */
+    fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {
+        this.wakeLock = wakeLock
+        this.serviceControl = serviceControl
+    }
+
+    /** Queued or running operations remain. Safe for stopWhenIdle re-entry. */
+    fun hasOutstandingWork(): Boolean = outstanding.get() > 0
     fun submit(operation: DiskOperation): OperationHandle {
         val handle = QueuedOp(operation)
+        // Count before async enqueue so a second submit cannot lose a race
+        // against the first op's idle stopWhenIdle check.
+        handle.markCounted()
+        outstanding.incrementAndGet()
         scope.launch {
             val startWorker = mutex.withLock {
                 if (disconnected) {
@@ -115,8 +129,13 @@ class OperationExecutor(
         while (true) {
             val op = mutex.withLock {
                 if (running) return
-                val next = queue.pollFirst() ?: run {
-                    serviceControl.stopWhenIdle()
+                val next = queue.pollFirst()
+                if (next == null) {
+                    // Outstanding counted but not yet enqueued: leave worker stopped;
+                    // that submit's launch will restart drain after enqueue.
+                    if (outstanding.get() == 0) {
+                        serviceControl.stopWhenIdle()
+                    }
                     return
                 }
                 if (disconnected) {
@@ -134,7 +153,11 @@ class OperationExecutor(
                 running = false
                 current = null
                 if (queue.isEmpty()) {
-                    serviceControl.stopWhenIdle()
+                    if (outstanding.get() == 0) {
+                        serviceControl.stopWhenIdle()
+                        return
+                    }
+                    // Counted submit still pending enqueue — exit; it restarts drain.
                     return
                 }
             }
@@ -185,18 +208,24 @@ class OperationExecutor(
         }
     }
 
-    private class QueuedOp(
+    private inner class QueuedOp(
         val operation: DiskOperation,
     ) : OperationHandle {
         private val result = CompletableDeferred<OperationState>()
         val cancelled = AtomicBoolean(false)
         @Volatile var state: OperationState = OperationState.Queued
+        private val counted = AtomicBoolean(false)
 
         fun isDone(): Boolean = result.isCompleted
+
+        fun markCounted() {
+            counted.set(true)
+        }
 
         fun complete(state: OperationState) {
             if (result.complete(state)) {
                 this.state = state
+                if (counted.get()) outstanding.decrementAndGet()
             }
         }
 

@@ -3,6 +3,7 @@ package usb.service
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -136,6 +137,112 @@ class OperationExecutorTest {
             controller.shutdown()
         }
     }
+
+    @Test fun noRecursiveServiceStartFromLifecycle() = runTest {
+        var requestStarts = 0
+        var promoteCalls = 0
+        var stopCalls = 0
+        val executor = OperationExecutor(this)
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = {
+                requestStarts++
+                // Mimic DiskService.onStartCommand: promote only, never re-enter startForegroundService.
+                promoteCalls++
+            },
+            stopService = { stopCalls++ },
+            hasOutstandingWork = { executor.hasOutstandingWork() },
+        )
+        executor.bind(NoOpWakeLock, lifecycle)
+
+        val done = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                assertEquals(1, requestStarts)
+                assertEquals(1, promoteCalls)
+                assertTrue(lifecycle.hasRequestedStart())
+            }
+        })
+        assertEquals(OperationState.Completed, done.await())
+        assertEquals(1, requestStarts)
+        assertEquals(1, promoteCalls)
+        assertEquals(1, stopCalls)
+        assertFalse(lifecycle.hasRequestedStart())
+    }
+
+    @Test fun queuedSecondOperationSurvivesFirstCompletion() = runTest {
+        var stopCalls = 0
+        val executor = OperationExecutor(this)
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = {},
+            stopService = {
+                assertFalse(
+                    "stopWhenIdle while work outstanding",
+                    executor.hasOutstandingWork(),
+                )
+                stopCalls++
+            },
+            hasOutstandingWork = { executor.hasOutstandingWork() },
+        )
+        executor.bind(NoOpWakeLock, lifecycle)
+
+        val gate = CompletableDeferred<Unit>()
+        val firstStarted = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                firstStarted.complete(Unit)
+                gate.await()
+            }
+        })
+        firstStarted.await()
+        val second = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                // Survived first completion — service must still be up.
+                assertEquals(0, stopCalls)
+                secondStarted.complete(Unit)
+            }
+        })
+        advanceUntilIdle()
+        assertTrue(executor.hasOutstandingWork())
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, first.await())
+        assertEquals(OperationState.Completed, second.await())
+        secondStarted.await()
+        assertEquals(1, stopCalls)
+        assertFalse(executor.hasOutstandingWork())
+    }
+
+    @Test fun controllerBindIsolatesFromPublicFieldClobber() = runTest {
+        val testService = RecordingServiceControl()
+        val controller = DiskController(
+            serviceControl = testService,
+            dispatcher = Dispatchers.Default.limitedParallelism(1),
+        )
+        // Public fields gone — only bind API can rebind. Service cannot clobber via field write.
+        val clobber = RecordingServiceControl()
+        // Attempting field assignment must not compile; verify bind isolation instead:
+        // after service-like bind, original RecordingServiceControl is replaced only via bind.
+        controller.bind(NoOpWakeLock, clobber)
+        val done = controller.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, done.await())
+        assertEquals(0, testService.startCount)
+        assertEquals(0, testService.stopCount)
+        assertEquals(1, clobber.startCount)
+        assertEquals(1, clobber.stopCount)
+
+        // Rebind back to test controller — service cannot leave stale control unexpectedly.
+        controller.bind(NoOpWakeLock, testService)
+        val again = controller.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, again.await())
+        assertEquals(1, testService.startCount)
+        assertEquals(1, testService.stopCount)
+        assertEquals(1, clobber.startCount)
+        controller.shutdown()
+    }
+
 }
 
 class RecordingWakeLock : OperationWakeLock {

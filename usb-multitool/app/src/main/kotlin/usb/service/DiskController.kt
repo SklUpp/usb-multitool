@@ -25,8 +25,7 @@ class DiskController(
 
     /** Rebind Android wake/service control without replacing the executor. */
     fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {
-        executor.wakeLock = wakeLock
-        executor.serviceControl = serviceControl
+        executor.bind(wakeLock, serviceControl)
     }
 
     /** Terminal teardown only (process/app shutdown). Not used on idle service stop. */
