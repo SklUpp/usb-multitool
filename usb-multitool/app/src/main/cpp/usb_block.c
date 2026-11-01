@@ -7,6 +7,12 @@
  * usb_block_read/write/sync may re-enter the usb_block_* API on the same
  * thread, so a non-recursive lock would self-deadlock.
  */
+/* PTHREAD_MUTEX_RECURSIVE needs _GNU_SOURCE on glibc when the build does not set it
+ * (host test makefiles); the Android CMake target defines it already. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "usb_block.h"
 
 #include <errno.h>
@@ -14,6 +20,16 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+/* Glibc/NDK expose the enum name; Bionic header stubs on some host toolchains do
+ * not, where the value is 1 on Bionic, glibc, musl and Darwin alike. */
+#if defined(PTHREAD_MUTEX_RECURSIVE)
+#define USB_BLOCK_RECURSIVE_MUTEX PTHREAD_MUTEX_RECURSIVE
+#elif defined(PTHREAD_MUTEX_RECURSIVE_NP)
+#define USB_BLOCK_RECURSIVE_MUTEX PTHREAD_MUTEX_RECURSIVE_NP
+#else
+#define USB_BLOCK_RECURSIVE_MUTEX 1
+#endif
 
 #define USB_BLOCK_SLOTS 64
 static UsbBlockOps g_slots[USB_BLOCK_SLOTS];
@@ -27,7 +43,7 @@ static void init_lock(void)
 	pthread_mutexattr_t attr;
 
 	pthread_mutexattr_init(&attr);
-	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutexattr_settype(&attr, USB_BLOCK_RECURSIVE_MUTEX);
 	pthread_mutex_init(&g_lock, &attr);
 	pthread_mutexattr_destroy(&attr);
 }
