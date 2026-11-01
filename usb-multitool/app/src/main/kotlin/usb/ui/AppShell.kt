@@ -32,6 +32,7 @@ fun AppShell(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickImage: () -> Unit = {},
+    onRequestDownload: (String) -> Unit = {},
 ) {
     MaterialTheme {
         Scaffold(
@@ -60,7 +61,7 @@ fun AppShell(
                 DeviceBanner(state)
                 OperationBanner(state, onIntent)
                 when (state.tab) {
-                    ShellTab.Files -> FilesScreen(state, onIntent)
+                    ShellTab.Files -> FilesScreen(state, onIntent, onRequestDownload = onRequestDownload)
                     ShellTab.Ventoy -> VentoyScreen(state, onIntent)
                     ShellTab.Partitions -> PartitionsScreen(state, onIntent, onPickImage = onPickImage)
                     ShellTab.Diagnostics -> DiagnosticsScreen(state, onIntent)

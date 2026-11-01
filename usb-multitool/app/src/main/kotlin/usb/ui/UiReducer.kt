@@ -37,11 +37,41 @@ sealed class UiIntent {
 
     data object CancelOperation : UiIntent()
 
-    data class AddFile(val entry: FileEntry) : UiIntent()
+    /**
+     * Enter the absolute FAT directory [path]. Clears [AppUiState.files] and emits a
+     * [UiEffect.Kind.LoadFiles] effect, so nothing is displayed for an unlisted path.
+     */
+    data class OpenDirectory(val path: String) : UiIntent()
 
-    data class DeleteFile(val entry: FileEntry) : UiIntent()
+    /** Go to the parent of [AppUiState.currentPath]; no-op at the root. */
+    data object NavigateUp : UiIntent()
 
-    data class UpdateFiles(val files: List<FileEntry>) : UiIntent()
+    /** Create a real folder named [name] inside [AppUiState.currentPath]. */
+    data class CreateFolder(val name: String) : UiIntent()
+
+    /** Delete entry [name] from [AppUiState.currentPath] on the volume. */
+    data class DeleteEntry(val name: String) : UiIntent()
+
+    /** Stream the SAF [uri] into [AppUiState.currentPath] in chunks. */
+    data class UploadFile(val uri: String) : UiIntent()
+
+    /** Copy entry [name] from [AppUiState.currentPath] to the SAF destination [uri]. */
+    data class DownloadFile(
+        val name: String,
+        val uri: String,
+    ) : UiIntent()
+
+    /** Result of a real FAT list of [path]; applied only while that path is displayed. */
+    data class FilesListed(
+        val path: String,
+        val files: List<FileEntry>,
+    ) : UiIntent()
+
+    /** Real list failure for [path]; displayed entries are voided, never faked. */
+    data class FilesListFailed(
+        val path: String,
+        val message: String,
+    ) : UiIntent()
 }
 
 data class UiEffect(
@@ -49,12 +79,20 @@ data class UiEffect(
     val action: DestructiveAction? = null,
     val isoName: String? = null,
     val isoAction: IsoAction? = null,
+    val path: String? = null,
+    val name: String? = null,
+    val uri: String? = null,
 ) {
     enum class Kind {
         SubmitDestructive,
         CancelOperation,
         LinkXml,
         SendToRawWriter,
+        LoadFiles,
+        CreateFolder,
+        DeleteEntry,
+        UploadFile,
+        DownloadFile,
     }
 }
 
@@ -70,7 +108,14 @@ object UiReducer {
                 ReduceResult(state.copy(tab = intent.tab, statusMessage = null))
 
             is UiIntent.SelectPartition ->
-                ReduceResult(state.copy(selectedPartitionId = intent.partitionId))
+                ReduceResult(
+                    state.copy(
+                        selectedPartitionId = intent.partitionId,
+                        currentPath = "/",
+                        files = emptyList(),
+                    ),
+                    effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
+                )
 
             is UiIntent.SetVtoyEfiWritable ->
                 ReduceResult(state.copy(vtoyEfiWriteEnabled = intent.enabled))
@@ -87,6 +132,7 @@ object UiReducer {
                         device = intent.device,
                         partitions = intent.partitions,
                         selectedPartitionId = selected,
+                        currentPath = "/",
                         files = intent.files,
                         pendingConfirmation =
                             if (intent.presence == DevicePresence.Disconnected ||
@@ -257,38 +303,123 @@ object UiReducer {
                     effects = listOf(UiEffect(UiEffect.Kind.CancelOperation)),
                 )
 
-            is UiIntent.AddFile -> {
-                val updated = state.files.filterNot { it.name == intent.entry.name } + intent.entry
-                val baseName = intent.entry.name.substringAfterLast('/')
-                val status =
-                    if (intent.entry.isDirectory) {
-                        "Created folder $baseName"
-                    } else {
-                        "Uploaded $baseName"
-                    }
+            is UiIntent.OpenDirectory -> {
+                val target = normalizeFatPath(intent.path)
                 ReduceResult(
-                    state.copy(
-                        files = updated,
-                        statusMessage = status,
-                    ),
+                    state.copy(currentPath = target, files = emptyList()),
+                    effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
                 )
             }
 
-            is UiIntent.DeleteFile -> {
-                val updated = state.files.filterNot { it.name == intent.entry.name }
-                val baseName = intent.entry.name.substringAfterLast('/')
-                ReduceResult(
-                    state.copy(
-                        files = updated,
-                        statusMessage = "Deleted $baseName",
-                    ),
-                )
+            UiIntent.NavigateUp -> {
+                val target = fatParentPath(state.currentPath)
+                if (target == state.currentPath) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(currentPath = target, files = emptyList()),
+                        effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
+                    )
+                }
             }
 
-            is UiIntent.UpdateFiles ->
-                ReduceResult(
-                    state.copy(files = intent.files),
-                )
+            is UiIntent.CreateFolder -> {
+                val name = intent.name.trim()
+                when {
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    !validEntryName(name) ->
+                        ReduceResult(state.copy(statusMessage = "Enter a folder name without / or \\"))
+                    else ->
+                        ReduceResult(
+                            state,
+                            effects =
+                                listOf(
+                                    UiEffect(
+                                        UiEffect.Kind.CreateFolder,
+                                        path = state.currentPath,
+                                        name = name,
+                                    ),
+                                ),
+                        )
+                }
+            }
+
+            is UiIntent.DeleteEntry -> {
+                when {
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    !validEntryName(intent.name) ->
+                        ReduceResult(state.copy(statusMessage = "Select a valid entry to delete"))
+                    else ->
+                        ReduceResult(
+                            state,
+                            effects =
+                                listOf(
+                                    UiEffect(
+                                        UiEffect.Kind.DeleteEntry,
+                                        path = state.currentPath,
+                                        name = intent.name,
+                                    ),
+                                ),
+                        )
+                }
+            }
+
+            is UiIntent.UploadFile ->
+                if (!state.actionsEnabled) {
+                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                } else {
+                    ReduceResult(
+                        state,
+                        effects =
+                            listOf(
+                                UiEffect(
+                                    UiEffect.Kind.UploadFile,
+                                    path = state.currentPath,
+                                    uri = intent.uri,
+                                ),
+                            ),
+                    )
+                }
+
+            is UiIntent.DownloadFile ->
+                when {
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    !validEntryName(intent.name) ->
+                        ReduceResult(state.copy(statusMessage = "Select a file to download"))
+                    else ->
+                        ReduceResult(
+                            state,
+                            effects =
+                                listOf(
+                                    UiEffect(
+                                        UiEffect.Kind.DownloadFile,
+                                        path = state.currentPath,
+                                        name = intent.name,
+                                        uri = intent.uri,
+                                    ),
+                                ),
+                        )
+                }
+
+            is UiIntent.FilesListed ->
+                if (intent.path != state.currentPath) {
+                    // Late result for a directory the user already left.
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(state.copy(files = intent.files))
+                }
+
+            is UiIntent.FilesListFailed ->
+                if (intent.path != state.currentPath) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(files = emptyList(), statusMessage = intent.message),
+                    )
+                }
         }
 
     fun presenceMessage(presence: DevicePresence): String =
@@ -299,4 +430,12 @@ object UiReducer {
             DevicePresence.Disconnected -> "Device disconnected"
             DevicePresence.Ready -> "Ready"
         }
+
+    /** A single FAT entry name: no separators, no dot entries. */
+    private fun validEntryName(name: String): Boolean =
+        name.isNotBlank() &&
+            name != "." &&
+            name != ".." &&
+            '/' !in name &&
+            '\\' !in name
 }

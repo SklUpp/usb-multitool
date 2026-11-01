@@ -150,6 +150,8 @@ data class AppUiState(
     val partitions: List<PartitionTab> = emptyList(),
     val selectedPartitionId: String? = null,
     val vtoyEfiWriteEnabled: Boolean = false,
+    /** Absolute FAT path currently displayed; [files] are the entries of this directory. */
+    val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
     val operation: OperationProgress? = null,
     val pendingConfirmation: DestructiveConfirmation? = null,
@@ -169,4 +171,28 @@ data class AppUiState(
 
     fun selectedPartition(): PartitionTab? =
         partitions.firstOrNull { it.id == selectedPartitionId } ?: partitions.firstOrNull()
+}
+
+/** Normalize a FAT path: leading slash, no trailing slash, root is "/". */
+fun normalizeFatPath(path: String): String {
+    val trimmed = path.trim().trim('/')
+    return if (trimmed.isEmpty()) "/" else "/$trimmed"
+}
+
+/** Absolute FAT path of [name] inside directory [parent]; root is "/". */
+fun fatChildPath(parent: String, name: String): String {
+    val base = parent.trim().trim('/')
+    val leaf = name.trim().trim('/')
+    return when {
+        leaf.isEmpty() -> if (base.isEmpty()) "/" else "/$base"
+        base.isEmpty() -> "/$leaf"
+        else -> "/$base/$leaf"
+    }
+}
+
+/** Parent directory of absolute [path]; the root has no parent. */
+fun fatParentPath(path: String): String {
+    val trimmed = path.trim().trim('/')
+    val cut = trimmed.lastIndexOf('/')
+    return if (cut <= 0) "/" else "/" + trimmed.substring(0, cut)
 }
