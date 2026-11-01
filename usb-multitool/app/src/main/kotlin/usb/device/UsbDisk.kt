@@ -28,6 +28,7 @@ open class UsbDisk(
     @Synchronized
     override fun read(lba: ULong, destination: ByteBuffer) {
         ensureOpen()
+        if (destination.remaining() == 0) return
         val bytes = destination.remaining()
         requireAligned(bytes)
         val blocks = bytes / sectorSize
@@ -46,6 +47,7 @@ open class UsbDisk(
     @Synchronized
     override fun write(lba: ULong, source: ByteBuffer) {
         ensureOpen()
+        if (source.remaining() == 0) return
         val bytes = source.remaining()
         requireAligned(bytes)
         val blocks = bytes / sectorSize
@@ -125,19 +127,27 @@ open class UsbDisk(
                 buffer.limit(oldLimit)
             }
 
+            if (result.status == CswStatus.PHASE_ERROR) {
+                session.bulkOnlyReset()
+                closeSession()
+                throw DiskException.IoFailure("BOT phase error")
+            }
+            if (result.residue !in 0..cdb.transferLength) {
+                throw DiskException.IoFailure("phase error: invalid residue")
+            }
             when (result.status) {
-                CswStatus.PASSED -> return
+                CswStatus.PASSED -> {
+                    if (result.residue > 0) {
+                        throw DiskException.IoFailure("short transfer residue=${result.residue}")
+                    }
+                    return
+                }
                 CswStatus.FAILED -> {
-                    // CSW status 1: REQUEST SENSE, then surface. No silent retry.
+                    // CSW status 1: REQUEST SENSE, then surface without closing session.
                     val sense = requestSense()
-                    closeSession()
                     throw sense
                 }
-                CswStatus.PHASE_ERROR -> {
-                    session.bulkOnlyReset()
-                    closeSession()
-                    throw DiskException.IoFailure("BOT phase error")
-                }
+                CswStatus.PHASE_ERROR -> error("unreachable")
             }
         }
     }

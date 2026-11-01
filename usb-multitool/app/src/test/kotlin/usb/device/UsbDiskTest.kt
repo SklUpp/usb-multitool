@@ -3,6 +3,7 @@ package usb.device
 import java.nio.ByteBuffer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -73,15 +74,18 @@ class UsbDiskTest {
     }
 
     @Test
-    fun botFailClosesSessionAfterSense() {
-        val session = FakeBotSession(failAlways = true)
+    fun botFailPreservesSessionAfterSense() {
+        val sense = DiskException.SenseError(0x70, 0x03, 0x11, 0x00)
+        val session = FakeBotSession(failAlways = true, syncSense = sense)
         val disk = UsbDisk(session, BlockGeometry(512, 100UL))
         val out = ByteBuffer.allocate(512)
         try {
             disk.read(0UL, out)
-            fail("expected sense/io failure")
-        } catch (e: DiskException) {
-            assertTrue(disk.isClosed)
+            fail("expected sense error")
+        } catch (e: DiskException.SenseError) {
+            assertEquals(sense, e)
+            assertFalse(disk.isClosed)
+            assertTrue(session.isConnected())
         }
     }
 
@@ -164,6 +168,67 @@ class UsbDiskTest {
         val out = ByteBuffer.allocate(512)
         disk.read(7UL, out)
         assertArrayEquals(pattern, out.array())
+    }
+
+    @Test
+    fun cswPassedWithResidueThrowsShortTransfer() {
+        val session = FakeBotSession(residue = 128)
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+        val ex = assertThrows(DiskException.IoFailure::class.java) {
+            disk.read(0UL, out)
+        }
+        assertEquals("short transfer residue=128", ex.message)
+    }
+
+    @Test
+    fun cswResidueGreaterThanTransferLengthThrowsPhaseError() {
+        val session = FakeBotSession(residue = 1024)
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+        val ex = assertThrows(DiskException.IoFailure::class.java) {
+            disk.read(0UL, out)
+        }
+        assertEquals("phase error: invalid residue", ex.message)
+    }
+
+    @Test
+    fun cswNegativeResidueThrowsPhaseError() {
+        val session = FakeBotSession(residue = -1)
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+        val ex = assertThrows(DiskException.IoFailure::class.java) {
+            disk.read(0UL, out)
+        }
+        assertEquals("phase error: invalid residue", ex.message)
+    }
+
+    @Test
+    fun boundaryLbaWrapAroundAvoidsCdb10() {
+        val session = FakeBotSession(
+            capacityLastLba10 = 0xFFFF_FFFFUL,
+            capacity16LastLba = 0x1_0000_0005UL,
+        )
+        val disk = UsbDisk(session, BlockGeometry(512, 0x1_0000_0006UL))
+        val out = ByteBuffer.allocate(1024)
+        disk.read(0xFFFF_FFFFUL, out)
+        assertTrue(session.commands.contains(ScsiCommand.OP_READ16))
+        assertFalse(session.commands.contains(ScsiCommand.OP_READ10))
+    }
+
+    @Test
+    fun zeroRemainingBufferReturnsImmediately() {
+        val session = FakeBotSession()
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val emptyBuf = ByteBuffer.allocate(0)
+        disk.read(0UL, emptyBuf)
+        disk.write(0UL, emptyBuf)
+        assertEquals(0, session.commands.size)
+    }
+
+    @Test
+    fun synchronizeCacheTimeoutIs30000Ms() {
+        assertEquals(30_000, BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS)
     }
 }
 

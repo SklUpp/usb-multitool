@@ -37,5 +37,17 @@ sealed class DiskException(message: String, cause: Throwable? = null) : Exceptio
     ) {
         val isIllegalRequest: Boolean get() = senseKey == 0x05
         val isUnitAttention: Boolean get() = senseKey == 0x06
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is SenseError) return false
+            return responseCode == other.responseCode &&
+                senseKey == other.senseKey &&
+                asc == other.asc &&
+                ascq == other.ascq
+        }
+
+        override fun hashCode(): Int =
+            31 * (31 * (31 * responseCode + senseKey) + asc) + ascq
     }
 }
