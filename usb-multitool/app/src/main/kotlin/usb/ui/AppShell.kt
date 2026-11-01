@@ -320,7 +320,7 @@ private fun OperationBanner(
                         )
                     }
 
-                    if (op.state == OperationState.Completed || op.state is OperationState.Failed || op.state == OperationState.Cancelled) {
+                    if (op.state == OperationState.Completed || op.state == OperationState.Failed || op.state == OperationState.Cancelled) {
                         TextButton(onClick = { onIntent(UiIntent.OperationUpdated(null)) }) {
                             Text("Dismiss")
                         }
