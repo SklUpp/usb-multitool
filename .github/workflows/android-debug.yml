@@ -62,6 +62,9 @@ jobs:
       - name: Host NTFS test
         run: ./scripts/run-ntfs-host-test.sh
 
+      - name: Host usb_block registry test
+        run: ./scripts/run-usb-block-host-test.sh
+
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon
 

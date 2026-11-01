@@ -75,6 +75,10 @@ class FakeBotSession(
     private val syncSense: DiskException.SenseError? = null,
     private val phaseErrorOnOps: Set<Int> = emptySet(),
     private val stallOnOps: Set<Int> = emptySet(),
+    private val failOnOps: Set<Int> = emptySet(),
+    private val unitAttentionBeforeSuccess: Int = 0,
+    private val unitAttentionOnOps: Set<Int> = emptySet(),
+    private val stickyUnitAttention: Boolean = false,
     private val residue: Int = 0,
 ) : BotSession {
     var resetCount: Int = 0
@@ -84,6 +88,8 @@ class FakeBotSession(
     val timeouts = mutableListOf<Int>()
 
     private var connected = true
+    private var pendingUnitAttention =
+        if (stickyUnitAttention) Int.MAX_VALUE else unitAttentionBeforeSuccess
     private val media = HashMap<ULong, ByteArray>()
 
     fun putSector(lba: ULong, data: ByteArray) {
@@ -113,6 +119,12 @@ class FakeBotSession(
             stallsBeforeSuccess--
             throw DiskException.IoFailure("simulated STALL")
         }
+        if (op != ScsiCommand.OP_REQUEST_SENSE && unitAttentionPending(op)) {
+            return CswResult(CswStatus.FAILED, 0, 0)
+        }
+        if (op in failOnOps) {
+            return CswResult(CswStatus.FAILED, 0, 0)
+        }
 
         return when (op) {
             ScsiCommand.OP_READ_CAPACITY10 -> {
@@ -136,7 +148,14 @@ class FakeBotSession(
             }
             ScsiCommand.OP_REQUEST_SENSE -> {
                 val buf = requireNotNull(data)
-                val sense = syncSense ?: DiskException.SenseError(0x70, 0x00, 0x00, 0x00)
+                val sense = if (pendingUnitAttention > 0) {
+                    if (!stickyUnitAttention) {
+                        pendingUnitAttention--
+                    }
+                    DiskException.SenseError(0x70, 0x06, 0x29, 0x00)
+                } else {
+                    syncSense ?: DiskException.SenseError(0x70, 0x00, 0x00, 0x00)
+                }
                 val start = buf.position()
                 for (i in 0 until cdb.transferLength) {
                     buf.put(0)
@@ -180,6 +199,10 @@ class FakeBotSession(
     override fun close() {
         connected = false
     }
+
+    private fun unitAttentionPending(op: Int): Boolean =
+        pendingUnitAttention > 0 &&
+            (unitAttentionOnOps.isEmpty() || op in unitAttentionOnOps)
 
     private fun fillRead(destination: ByteBuffer, lba: ULong, blocks: Int) {
         var cur = lba

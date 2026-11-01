@@ -31,7 +31,16 @@ typedef struct UsbBlockOps {
 uint64_t usb_block_register(UsbBlockOps *ops);
 UsbBlockOps *usb_block_ops(uint64_t handle);
 
-/* Slot-based register for exFAT fsck */
+/*
+ * Slot-based register for exFAT fsck (handles 1..64).
+ *
+ * Thread-safe: the slot tables and callback dispatch are guarded by a
+ * recursive mutex, so callbacks may call back into usb_block_read/write/sync
+ * on the same thread. Registering a handle that is already in use returns
+ * -EBUSY; call usb_block_unregister() first. Unregistering does not wait for
+ * an in-flight callback on another thread beyond the call already dispatched,
+ * so the owner must not free the callback context while a transfer is running.
+ */
 int usb_block_register_raw(
         uint64_t handle,
         uint64_t sector_size,

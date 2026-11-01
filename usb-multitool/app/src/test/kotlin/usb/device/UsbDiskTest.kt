@@ -247,6 +247,122 @@ class UsbDiskTest {
         assertEquals(BotConstants.TRANSFER_TIMEOUT_MS, session.timeouts.first())
         assertEquals(BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS, session.timeouts.last())
     }
+
+    @Test
+    fun stallThenUnitAttentionRetriesSameCommandOnceAndReads() {
+        // Real path: STALL -> reset recovery -> retried command fails with a
+        // pending UNIT ATTENTION -> REQUEST SENSE clears it -> retry succeeds.
+        val session = FakeBotSession(
+            stallsBeforeSuccess = 1,
+            unitAttentionBeforeSuccess = 1,
+        )
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+
+        disk.read(4UL, out)
+
+        assertEquals(1, session.resetCount)
+        assertEquals(512, out.position())
+        assertEquals(
+            listOf(
+                ScsiCommand.OP_READ10,
+                ScsiCommand.OP_READ10,
+                ScsiCommand.OP_REQUEST_SENSE,
+                ScsiCommand.OP_READ10,
+            ),
+            session.commands,
+        )
+    }
+
+    @Test
+    fun unitAttentionBeyondOneRetryIsSurfaced() {
+        val session = FakeBotSession(
+            unitAttentionBeforeSuccess = 1,
+            stickyUnitAttention = true,
+        )
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+
+        val ex = assertThrows(DiskException.SenseError::class.java) {
+            disk.read(0UL, out)
+        }
+
+        assertEquals(0x06, ex.senseKey)
+        assertEquals(
+            listOf(
+                ScsiCommand.OP_READ10,
+                ScsiCommand.OP_REQUEST_SENSE,
+                ScsiCommand.OP_READ10,
+                ScsiCommand.OP_REQUEST_SENSE,
+            ),
+            session.commands,
+        )
+        assertEquals(0, session.resetCount)
+        assertFalse(disk.isClosed)
+    }
+
+    @Test
+    fun capacityProbeSurvivesPendingUnitAttention() {
+        // CAPACITY(16) is deliberately unconfigured: falling back fails the test.
+        val session = FakeBotSession(unitAttentionBeforeSuccess = 1)
+
+        val geometry = UsbDisk.probeCapacity(session)
+
+        assertEquals(512, geometry.sectorSize)
+        assertEquals(100UL, geometry.sectorCount)
+        assertEquals(0, session.resetCount)
+        assertEquals(
+            listOf(
+                ScsiCommand.OP_READ_CAPACITY10,
+                ScsiCommand.OP_REQUEST_SENSE,
+                ScsiCommand.OP_READ_CAPACITY10,
+            ),
+            session.commands,
+        )
+    }
+
+    @Test
+    fun capacity10FailureFetchesSenseBeforeFallingBack() {
+        val session = FakeBotSession(
+            failOnOps = setOf(ScsiCommand.OP_READ_CAPACITY10),
+            capacity16LastLba = 2047UL,
+        )
+
+        val geometry = UsbDisk.probeCapacity(session)
+
+        assertEquals(2048UL, geometry.sectorCount)
+        assertEquals(
+            listOf(
+                ScsiCommand.OP_READ_CAPACITY10,
+                ScsiCommand.OP_REQUEST_SENSE,
+                ScsiCommand.OP_READ_CAPACITY16,
+            ),
+            session.commands,
+        )
+    }
+
+    @Test
+    fun capacity16RetriesOnceAfterUnitAttention() {
+        val session = FakeBotSession(
+            capacityLastLba10 = 0xFFFF_FFFFUL,
+            capacity16LastLba = 2047UL,
+            unitAttentionBeforeSuccess = 1,
+            unitAttentionOnOps = setOf(ScsiCommand.OP_READ_CAPACITY16),
+        )
+
+        val geometry = UsbDisk.probeCapacity(session)
+
+        assertEquals(2048UL, geometry.sectorCount)
+        assertEquals(
+            listOf(
+                ScsiCommand.OP_READ_CAPACITY10,
+                ScsiCommand.OP_READ_CAPACITY16,
+                ScsiCommand.OP_REQUEST_SENSE,
+                ScsiCommand.OP_READ_CAPACITY16,
+            ),
+            session.commands,
+        )
+    }
 }
 
 class RecoveryOrderTest {

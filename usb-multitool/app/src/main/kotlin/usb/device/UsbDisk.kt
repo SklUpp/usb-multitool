@@ -107,6 +107,7 @@ open class UsbDisk(
         val oldLimit = buffer.limit()
         val sliceLimit = mark + length
         var attempt = 0
+        var uaRetried = false
         while (true) {
             buffer.position(mark)
             buffer.limit(sliceLimit)
@@ -149,6 +150,13 @@ open class UsbDisk(
                 CswStatus.FAILED -> {
                     // CSW status 1: REQUEST SENSE, then surface without closing session.
                     val sense = requestSense()
+                    if (sense.isUnitAttention && !uaRetried) {
+                        // Reset Recovery / media change leaves a one-shot UNIT
+                        // ATTENTION pending; REQUEST SENSE cleared it, so the
+                        // next identical attempt is expected to pass.
+                        uaRetried = true
+                        continue
+                    }
                     throw sense
                 }
                 CswStatus.PHASE_ERROR -> error("unreachable")
@@ -170,15 +178,7 @@ open class UsbDisk(
         }
     }
 
-    private fun requestSense(): DiskException.SenseError {
-        val buf = ByteBuffer.allocate(18)
-        val result = session.transfer(ScsiCommand.requestSense(18), buf)
-        if (result.status != CswStatus.PASSED) {
-            throw DiskException.IoFailure("REQUEST SENSE failed with status ${result.status}")
-        }
-        buf.flip()
-        return parseSense(buf)
-    }
+    private fun requestSense(): DiskException.SenseError = senseOf(session)
 
     private fun ensureOpen() {
         if (closed) throw DiskException.Closed()
@@ -212,55 +212,87 @@ open class UsbDisk(
     companion object {
         /**
          * READ CAPACITY(10); if last LBA is 0xFFFFFFFF, fall back to READ CAPACITY(16).
+         * A CSW FAILED always gets a REQUEST SENSE (BOT requirement); a pending
+         * UNIT ATTENTION is cleared and the same command retried once.
          */
         fun probeCapacity(session: BotSession): BlockGeometry {
             val buf10 = ByteBuffer.allocate(8)
-            val status10 = try {
-                session.transfer(ScsiCommand.readCapacity10(), buf10)
-            } catch (e: DiskException.IoFailure) {
-                session.bulkOnlyReset()
-                return readCapacity16(session)
+            var uaRetried = false
+            while (true) {
+                val status10 = try {
+                    session.transfer(ScsiCommand.readCapacity10(), buf10)
+                } catch (e: DiskException.IoFailure) {
+                    session.bulkOnlyReset()
+                    return readCapacity16(session)
+                }
+                if (status10.status == CswStatus.PHASE_ERROR) {
+                    session.bulkOnlyReset()
+                    throw DiskException.IoFailure("phase error on READ CAPACITY(10)")
+                }
+                if (status10.status == CswStatus.FAILED) {
+                    val sense = senseOf(session)
+                    if (sense.isUnitAttention && !uaRetried) {
+                        // Stale UNIT ATTENTION from an earlier reset recovery.
+                        uaRetried = true
+                        continue
+                    }
+                    // Some devices only speak CAPACITY(16).
+                    return readCapacity16(session)
+                }
+                buf10.flip()
+                buf10.order(ByteOrder.BIG_ENDIAN)
+                val lastLba = buf10.int.toUInt().toULong()
+                val blockLength = buf10.int
+                if (lastLba == 0xFFFF_FFFFUL) {
+                    return readCapacity16(session)
+                }
+                require(blockLength in 512..4096 && blockLength.countOneBits() == 1) {
+                    "illegal block length $blockLength"
+                }
+                return BlockGeometry(blockLength, lastLba + 1UL)
             }
-            if (status10.status == CswStatus.PHASE_ERROR) {
-                session.bulkOnlyReset()
-                throw DiskException.IoFailure("phase error on READ CAPACITY(10)")
-            }
-            if (status10.status == CswStatus.FAILED) {
-                // Some devices only speak CAPACITY(16).
-                return readCapacity16(session)
-            }
-            buf10.flip()
-            buf10.order(ByteOrder.BIG_ENDIAN)
-            val lastLba = buf10.int.toUInt().toULong()
-            val blockLength = buf10.int
-            if (lastLba == 0xFFFF_FFFFUL) {
-                return readCapacity16(session)
-            }
-            require(blockLength in 512..4096 && blockLength.countOneBits() == 1) {
-                "illegal block length $blockLength"
-            }
-            return BlockGeometry(blockLength, lastLba + 1UL)
         }
 
         private fun readCapacity16(session: BotSession): BlockGeometry {
-            val buf = ByteBuffer.allocate(32)
-            val status = session.transfer(ScsiCommand.readCapacity16(32), buf)
-            when (status.status) {
-                CswStatus.PASSED -> Unit
-                CswStatus.FAILED -> throw DiskException.IoFailure("READ CAPACITY(16) failed")
-                CswStatus.PHASE_ERROR -> {
-                    session.bulkOnlyReset()
-                    throw DiskException.IoFailure("phase error on READ CAPACITY(16)")
+            var uaRetried = false
+            while (true) {
+                val buf = ByteBuffer.allocate(32)
+                val status = session.transfer(ScsiCommand.readCapacity16(32), buf)
+                when (status.status) {
+                    CswStatus.PASSED -> {
+                        buf.flip()
+                        buf.order(ByteOrder.BIG_ENDIAN)
+                        val lastLba = buf.long.toULong()
+                        val blockLength = buf.int
+                        require(blockLength in 512..4096 && blockLength.countOneBits() == 1) {
+                            "illegal block length $blockLength"
+                        }
+                        return BlockGeometry(blockLength, lastLba + 1UL)
+                    }
+                    CswStatus.FAILED -> {
+                        val sense = senseOf(session)
+                        if (sense.isUnitAttention && !uaRetried) {
+                            uaRetried = true
+                            continue
+                        }
+                        throw DiskException.IoFailure("READ CAPACITY(16) failed")
+                    }
+                    CswStatus.PHASE_ERROR -> {
+                        session.bulkOnlyReset()
+                        throw DiskException.IoFailure("phase error on READ CAPACITY(16)")
+                    }
                 }
             }
-            buf.flip()
-            buf.order(ByteOrder.BIG_ENDIAN)
-            val lastLba = buf.long.toULong()
-            val blockLength = buf.int
-            require(blockLength in 512..4096 && blockLength.countOneBits() == 1) {
-                "illegal block length $blockLength"
+        }
+
+        private fun senseOf(session: BotSession): DiskException.SenseError {
+            val buf = ByteBuffer.allocate(18)
+            val result = session.transfer(ScsiCommand.requestSense(18), buf)
+            if (result.status != CswStatus.PASSED) {
+                throw DiskException.IoFailure("REQUEST SENSE failed with status ${result.status}")
             }
-            return BlockGeometry(blockLength, lastLba + 1UL)
+            buf.flip()
+            return parseSense(buf)
         }
 
         fun parseSense(buffer: ByteBuffer): DiskException.SenseError {
