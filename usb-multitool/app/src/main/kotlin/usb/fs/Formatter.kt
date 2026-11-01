@@ -31,13 +31,16 @@ object Formatter {
 
 internal object FormatNative {
     fun fat(partition: VirtualPartition, id: FilesystemId) {
-        // Upstream: FatFs f_mkfs with FM_FAT/FM_FAT32/FM_EXFAT.
-        // Never invent success when engines are absent.
         if (FormatProbe.testMode) {
             FormatProbe.record(partition, id)
             return
         }
-        throw EngineMissingException(if (id == FilesystemId.EXFAT) "FatFs/exFAT" else "FatFs")
+        FatFs.mkfs(
+            callback = BlockDeviceFatCallback(partition),
+            sectorSize = partition.sectorSize,
+            sectorCount = partition.sectorCount.toLong(),
+            type = fatMkfsType(id),
+        )
     }
 
     fun ntfs(partition: VirtualPartition) {
@@ -55,6 +58,13 @@ internal object FormatNative {
         }
         throw EngineMissingException("lwext4")
     }
+}
+
+/** FatFs mkfs flavour for a FAT-family [FilesystemId]. */
+internal fun fatMkfsType(id: FilesystemId): FatMkfsType = when (id) {
+    FilesystemId.FAT -> FatMkfsType.FAT
+    FilesystemId.EXFAT -> FatMkfsType.EXFAT
+    else -> throw IllegalArgumentException("$id is not a FAT-family filesystem")
 }
 
 /** Test seam recording last format request. Production keeps testMode=false. */

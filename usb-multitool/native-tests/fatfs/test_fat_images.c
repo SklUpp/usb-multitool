@@ -206,6 +206,60 @@ static void test_short_write(void)
 	printf("OK short-write surfaced as error\n");
 }
 
+/* FORMAT_PARTITION over a partition that already holds a filesystem: format
+ * must produce a mountable FAT volume with no stale entries, and the result
+ * must accept a write/read round trip. */
+static void test_format_over_existing_content(void)
+{
+	const char *img = "reformat.img";
+	const uint32_t ss = 512;
+	const uint64_t sc = (32ull * 1024 * 1024) / ss;
+	uint64_t block, vol = 0;
+	FatFsKind kind = FAT_KIND_UNKNOWN;
+	FatStat st;
+	size_t wrote = 0, got = 0;
+	char buf[32];
+	int rc;
+
+	unlink(img);
+	block = image_block_open(img, ss, sc, 1);
+	if (!block) fail("reformat open", -1);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT);
+	if (rc != 0) fail("reformat initial mkfs", rc);
+	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
+	if (rc != 0) fail("reformat initial mount", rc);
+	rc = fat_engine_write_file(vol, "stale.txt", 0, "old", 3, &wrote, 3, 1);
+	if (rc != 0 || wrote != 3) fail("reformat stale write", rc);
+	rc = fat_engine_umount(vol);
+	if (rc != 0) fail("reformat initial umount", rc);
+	image_block_close(block);
+
+	/* Re-open without create: format over the existing content in place. */
+	block = image_block_open(img, ss, sc, 0);
+	if (!block) fail("reformat reopen", -1);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT); /* Formatter: FilesystemId.FAT */
+	if (rc != 0) fail("reformat mkfs", rc);
+	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
+	if (rc != 0) fail("reformat mount", rc);
+	if (kind != FAT_KIND_FAT12 && kind != FAT_KIND_FAT16) {
+		fprintf(stderr, "FAIL: reformat produced kind %d\n", (int)kind);
+		exit(1);
+	}
+	if (fat_engine_stat(vol, "stale.txt", &st) == 0) fail("stale.txt survived format", 0);
+
+	rc = fat_engine_write_file(vol, "hello.txt", 0, "hello", 5, &wrote, 5, 1);
+	if (rc != 0 || wrote != 5) fail("reformat write", rc);
+	memset(buf, 0, sizeof(buf));
+	rc = fat_engine_read_file(vol, "hello.txt", 0, buf, sizeof(buf), &got);
+	if (rc != 0 || got != 5 || memcmp(buf, "hello", 5) != 0) fail("reformat read", rc);
+
+	rc = fat_engine_umount(vol);
+	if (rc != 0) fail("reformat umount", rc);
+	image_block_close(block);
+	unlink(img);
+	printf("OK format over existing content (kind=%d)\n", (int)kind);
+}
+
 int main(void)
 {
 	const uint32_t ss = 512;
@@ -221,6 +275,7 @@ int main(void)
 
 	test_list_over_256();
 	test_short_write();
+	test_format_over_existing_content();
 
 	printf("all fat image tests passed\n");
 	return 0;

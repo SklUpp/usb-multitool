@@ -425,13 +425,25 @@ static int list_filldir(void *dirent, const ntfschar *name, const int name_len,
 
     char *mbs = NULL;
     int mbs_len = ntfs_ucstombs(name, name_len, &mbs, 0);
-    if (mbs_len <= 0 || !mbs) return 0;
+    /* A name we cannot represent is an error, never a silently skipped entry. */
+    if (mbs_len <= 0 || !mbs) {
+        free(mbs);
+        return -1;
+    }
+    if ((size_t)mbs_len >= sizeof(((NtfsDirEntry *)0)->name)) {
+        free(mbs);
+        return -1;
+    }
 
-    if (!list_reserve(ctx)) return -1;
+    if (!list_reserve(ctx)) {
+        free(mbs);
+        return -1;
+    }
 
     NtfsDirEntry *e = &ctx->entries[ctx->count];
     memset(e, 0, sizeof(*e));
-    strncpy(e->name, mbs, sizeof(e->name) - 1);
+    memcpy(e->name, mbs, (size_t)mbs_len);
+    e->name[mbs_len] = '\0';
     free(mbs);
 
     e->is_directory = (dt_type == 4);
@@ -473,12 +485,17 @@ int ntfs_engine_list(uint64_t vol_handle, const char *path,
     };
 
     s64 pos = 0;
-    ntfs_readdir(dir_ni, &pos, &ctx, list_filldir);
+    int rc = ntfs_readdir(dir_ni, &pos, &ctx, list_filldir);
     ntfs_inode_close(dir_ni);
 
     if (ctx.overflow) {
         free(ctx.entries);
         return -EOVERFLOW;
+    }
+    if (rc < 0) {
+        /* Corrupt or unreadable directory: a short listing is not a listing. */
+        free(ctx.entries);
+        return -EIO;
     }
     *out_entries = ctx.entries;
     *out_count = ctx.count;
@@ -553,6 +570,10 @@ int ntfs_engine_write(uint64_t vol_handle, const char *path,
     if (!v || !v->vol || !path || !buf || !out_written) return -EINVAL;
 
     *out_written = 0;
+    /* libntfs-3g silently skips the device write under NVolReadOnly() yet
+     * reports the full length as written; refuse instead of faking success. */
+    if (NVolReadOnly(v->vol)) return -EROFS;
+
     ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
     if (!ni && create) {
         char parent[512];

@@ -10,8 +10,12 @@
 extern "C" {
 #endif
 
+/* Max UTF-8 bytes for a 255 UTF-16-unit NTFS name is 765 (3 bytes/unit);
+ * the field must hold the whole thing or names are truncated mid-sequence. */
+#define NTFS_DIR_ENTRY_NAME_MAX 768
+
 typedef struct NtfsDirEntry {
-    char name[256];
+    char name[NTFS_DIR_ENTRY_NAME_MAX];
     bool is_directory;
     uint64_t size;
 } NtfsDirEntry;
@@ -40,7 +44,9 @@ int ntfs_engine_sync(uint64_t vol_handle);
 /* List directory entries under path (e.g. "/" or "/dir").
  * On success *out_entries points at a malloc'd array the caller must free(),
  * and *out_count holds the entry count.
- * Returns -EOVERFLOW when the directory holds more than NTFS_LIST_MAX_ENTRIES.
+ * Returns -EOVERFLOW when the directory holds more than NTFS_LIST_MAX_ENTRIES,
+ * and -EIO when the directory index cannot be read or an entry name cannot be
+ * converted to UTF-8. A failure never yields a short listing.
  */
 int ntfs_engine_list(uint64_t vol_handle, const char *path,
                      NtfsDirEntry **out_entries, size_t *out_count);
@@ -58,6 +64,8 @@ int ntfs_engine_read(uint64_t vol_handle, const char *path,
 /* Write to file at byte offset.
  * If create is true, creates file if it doesn't exist.
  * *out_written is set to bytes written. Returns 0 on success.
+ * Returns -EROFS when the volume is mounted read-only; libntfs-3g would
+ * otherwise report the full length as written without touching the device.
  */
 int ntfs_engine_write(uint64_t vol_handle, const char *path,
                       uint64_t offset, const void *buf, size_t count,

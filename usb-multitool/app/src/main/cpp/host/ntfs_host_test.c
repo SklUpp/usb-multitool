@@ -18,16 +18,27 @@
 #include "ntfs-3g/layout.h"
 #include "ntfs-3g/device.h"
 #include "ntfs-3g/volume.h"
+#include "ntfs-3g/attrib.h"
+#include "ntfs-3g/dir.h"
 
 typedef struct FileBlockCtx {
     int fd;
     uint32_t sector_size;
     uint64_t sector_count;
+    /* Read-failure injection over an LBA range (fail_lba_to == 0 disables).
+     * Used to prove that a failing directory-index read is reported instead of
+     * returning a short listing. */
+    uint64_t fail_lba_from;
+    uint64_t fail_lba_to;
 } FileBlockCtx;
 
 static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 {
     FileBlockCtx *f = (FileBlockCtx *)ctx;
+    if (f->fail_lba_to > f->fail_lba_from && lba >= f->fail_lba_from &&
+        lba < f->fail_lba_to) {
+        return -1;
+    }
     off_t off = (off_t)(lba * f->sector_size);
     size_t bytes = (size_t)sectors * f->sector_size;
     ssize_t n = pread(f->fd, buf, bytes, off);
@@ -47,6 +58,26 @@ static int file_sync(void *ctx)
 {
     FileBlockCtx *f = (FileBlockCtx *)ctx;
     return fsync(f->fd);
+}
+
+/* FNV-1a over the whole image, to prove a rejected write changed no bytes. */
+static uint64_t hash_image(int fd, uint64_t size)
+{
+    uint64_t h = 1469598103934665603ULL;
+    unsigned char buf[65536];
+    uint64_t off = 0;
+    while (off < size) {
+        size_t want = sizeof(buf);
+        if (size - off < want) want = (size_t)(size - off);
+        ssize_t n = pread(fd, buf, want, (off_t)off);
+        if (n <= 0) break;
+        for (ssize_t i = 0; i < n; i++) {
+            h ^= buf[i];
+            h *= 1099511628211ULL;
+        }
+        off += (uint64_t)n;
+    }
+    return h;
 }
 
 /* Decompress fixture xz archive to temporary disk image */
@@ -184,6 +215,92 @@ int main(int argc, char **argv)
     free(entries);
     entries = NULL;
 
+    /* 7b. A maximal non-ASCII name must survive listing byte-for-byte.
+     * 255 Cyrillic units = 510 UTF-8 bytes, which a 256-byte field truncates. */
+    {
+        char long_name[1 + 255 * 2 + 1];
+        long_name[0] = '/';
+        for (int i = 0; i < 255; i++) {
+            long_name[1 + i * 2] = (char)0xD1;      /* U+044F in UTF-8 */
+            long_name[2 + i * 2] = (char)0x8F;
+        }
+        long_name[1 + 255 * 2] = '\0';
+        assert(strlen(long_name) == 1 + 510);
+
+        written = 0;
+        rc = ntfs_engine_write(vol, long_name, 0, "u", 1, true, &written);
+        assert(rc == 0);
+        assert(written == 1);
+
+        entries = NULL;
+        count = 0;
+        rc = ntfs_engine_list(vol, "/", &entries, &count);
+        assert(rc == 0);
+        bool long_found = false;
+        for (size_t i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, long_name + 1) == 0) long_found = true;
+        }
+        assert(long_found);
+        free(entries);
+        entries = NULL;
+        printf("PASS: 510-byte UTF-8 name listed without truncation\n");
+    }
+
+    /* 7c. A directory whose index cannot be read must fail, never list short.
+     * Enough long entries force the $I30 index into INDX blocks so readdir
+     * has to hit the device; fail exactly that (last) read. */
+    {
+        const int n_files = 60;
+        char name[300];
+        for (int i = 0; i < n_files; i++) {
+            memset(name, 0, sizeof(name));
+            snprintf(name, sizeof(name), "/f%03d_", i);
+            size_t cur = strlen(name);
+            for (size_t j = 0; j < 180; j++) name[cur + j] = 'x';
+            name[cur + 180] = '\0';
+            written = 0;
+            rc = ntfs_engine_write(vol, name, 0, "x", 1, true, &written);
+            assert(rc == 0);
+        }
+        rc = ntfs_engine_sync(vol);
+        assert(rc == 0);
+
+        NtfsDirEntry *big = NULL;
+        size_t big_count = 0;
+        rc = ntfs_engine_list(vol, "/", &big, &big_count);
+        assert(rc == 0);
+        assert(big_count >= (size_t)n_files + 2);
+        free(big);
+        big = NULL;
+
+        /* Fail reads of the root directory's non-resident $I30 index blocks:
+         * pathname resolution and the per-entry stat reads stay intact. */
+        NtfsVolumeContext *vctx_dir = (NtfsVolumeContext *)(uintptr_t)vol;
+        ntfs_inode *root_ni = ntfs_pathname_to_inode(vctx_dir->vol, NULL, "/");
+        assert(root_ni != NULL);
+        ntfs_attr *ia = ntfs_attr_open(root_ni, AT_INDEX_ALLOCATION, NTFS_INDEX_I30, 4);
+        assert(ia != NULL); /* directory entries must have spilled out of the index root */
+        assert(ntfs_attr_map_runlist(ia, 0) == 0);
+        LCN lcn = ntfs_rl_vcn_to_lcn(ia->rl, 0);
+        assert(lcn >= 0);
+        uint64_t idx_lba = (uint64_t)lcn * vctx_dir->vol->cluster_size / sector_size;
+        fctx.fail_lba_from = idx_lba;
+        fctx.fail_lba_to = idx_lba + (uint64_t)(ia->data_size / (s64)sector_size);
+        assert(fctx.fail_lba_to > fctx.fail_lba_from);
+        ntfs_attr_close(ia);
+        ntfs_inode_close(root_ni);
+
+        big = (NtfsDirEntry *)0x1;
+        big_count = 99;
+        rc = ntfs_engine_list(vol, "/", &big, &big_count);
+        fctx.fail_lba_from = 0;
+        fctx.fail_lba_to = 0;
+        assert(rc == -EIO);
+        assert(big == NULL);
+        assert(big_count == 0);
+        printf("PASS: unreadable directory index reports -EIO instead of a short listing\n");
+    }
+
     /* 8. Mark volume dirty and close */
     NtfsVolumeContext *vctx = (NtfsVolumeContext *)(uintptr_t)vol;
     vctx->vol->flags |= VOLUME_IS_DIRTY;
@@ -225,6 +342,39 @@ int main(int argc, char **argv)
     rc = ntfs_engine_close(vol);
     assert(rc == 0);
     printf("PASS: re-mounted and verified file data integrity\n");
+
+    /* 14. Read-only mount must refuse writes with -EROFS and touch no bytes.
+     * libntfs-3g skips the device write but reports the full length as written,
+     * so this can only be caught by the engine returning -EROFS itself. */
+    {
+        uint64_t ro = ntfs_engine_mount(bhandle, true);
+        assert(ro != 0);
+
+        uint64_t hash_before = hash_image(fd, (uint64_t)st.st_size);
+        size_t ro_written = 123;
+        rc = ntfs_engine_write(ro, "/test_file.txt", 0, "overwrite", 9, false, &ro_written);
+        assert(rc == -EROFS);
+        assert(ro_written == 0);
+
+        ro_written = 123;
+        rc = ntfs_engine_write(ro, "/ro_new_file.txt", 0, "x", 1, true, &ro_written);
+        assert(rc == -EROFS);
+        assert(ro_written == 0);
+
+        /* Reads still work on a read-only mount. */
+        memset(read_buf, 0, sizeof(read_buf));
+        read_bytes = 0;
+        rc = ntfs_engine_read(ro, "/test_file.txt", 0, read_buf, sizeof(read_buf) - 1, &read_bytes);
+        assert(rc == 0);
+        assert(strcmp(read_buf, payload) == 0);
+
+        rc = ntfs_engine_close(ro);
+        assert(rc == 0);
+
+        uint64_t hash_after = hash_image(fd, (uint64_t)st.st_size);
+        assert(hash_after == hash_before);
+        printf("PASS: read-only mount rejected writes with -EROFS, image unchanged\n");
+    }
 
     close(fd);
     unlink(tmp_img);

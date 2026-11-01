@@ -148,6 +148,40 @@ std::string jstring_to_string(JNIEnv *env, jstring js)
     return s;
 }
 
+/* ntfs_ucstombs emits standard UTF-8, while NewStringUTF expects modified UTF-8,
+ * which cannot carry the 4-byte sequences used by astral names. Decode to UTF-16
+ * instead: the C layer already rejected unconvertible names, so this input is
+ * always valid UTF-8 and the resulting jstring matches the NTFS name exactly. */
+std::u16string utf8_to_utf16(const char *s)
+{
+    std::u16string out;
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(s);
+    while (*p) {
+        unsigned cp;
+        size_t extra;
+        if (p[0] < 0x80) { cp = p[0]; extra = 0; }
+        else if ((p[0] & 0xE0) == 0xC0) { cp = p[0] & 0x1Fu; extra = 1; }
+        else if ((p[0] & 0xF0) == 0xE0) { cp = p[0] & 0x0Fu; extra = 2; }
+        else if ((p[0] & 0xF8) == 0xF0) { cp = p[0] & 0x07u; extra = 3; }
+        else break;
+        p++;
+        bool valid = true;
+        for (size_t i = 0; i < extra; i++, p++) {
+            if ((*p & 0xC0) != 0x80) { valid = false; break; }
+            cp = (cp << 6) | (*p & 0x3Fu);
+        }
+        if (!valid) break;
+        if (cp >= 0x10000u) {
+            cp -= 0x10000u;
+            out.push_back(static_cast<char16_t>(0xD800u + (cp >> 10)));
+            out.push_back(static_cast<char16_t>(0xDC00u + (cp & 0x3FFu)));
+        } else {
+            out.push_back(static_cast<char16_t>(cp));
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 extern "C" {
@@ -206,9 +240,10 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
     if (rc != 0) {
         jclass exCls = env->FindClass("usb/fs/NtfsException");
         if (exCls) {
-            env->ThrowNew(exCls, rc == -EOVERFLOW
-                ? "directory listing exceeds the supported entry count"
-                : "directory listing failed");
+            const char *msg = "directory listing failed";
+            if (rc == -EOVERFLOW) msg = "directory listing exceeds the supported entry count";
+            else if (rc == -EIO) msg = "directory listing failed: unreadable directory";
+            env->ThrowNew(exCls, msg);
         }
         return nullptr;
     }
@@ -221,7 +256,9 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
 
     jobjectArray arr = env->NewObjectArray(static_cast<jsize>(count), entryCls, nullptr);
     for (size_t i = 0; i < count; i++) {
-        jstring name = env->NewStringUTF(entries[i].name);
+        std::u16string u16 = utf8_to_utf16(entries[i].name);
+        jstring name = env->NewString(reinterpret_cast<const jchar *>(u16.data()),
+                                      static_cast<jsize>(u16.size()));
         jobject obj = env->NewObject(entryCls, ctor, name,
                                      static_cast<jboolean>(entries[i].is_directory),
                                      static_cast<jlong>(entries[i].size));
@@ -292,7 +329,16 @@ Java_usb_fs_NtfsFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
     int rc = ntfs_engine_write(wrapper->vol_handle, p.c_str(), static_cast<uint64_t>(offset),
                                buf.data(), static_cast<size_t>(len),
                                create != JNI_FALSE, &out_written);
-    if (rc != 0) return -1;
+    if (rc != 0) {
+        /* Never report a failed write as success: surface errno as an exception. */
+        jclass exCls = env->FindClass("usb/fs/NtfsException");
+        if (exCls) {
+            env->ThrowNew(exCls, rc == -EROFS
+                ? "write rejected: NTFS volume is mounted read-only"
+                : "write failed");
+        }
+        return -1;
+    }
     return static_cast<jint>(out_written);
 }
 
