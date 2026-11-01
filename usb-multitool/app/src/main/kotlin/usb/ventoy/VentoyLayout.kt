@@ -357,7 +357,10 @@ object VentoyInstaller {
     fun update(
         disk: BlockDevice,
         assets: VentoyAssets,
+        isActive: () -> Boolean = { true },
+        onProgress: (done: Long, total: Long) -> Unit = { _, _ -> },
     ): PartitionTable {
+        checkActive(isActive, "Ventoy update")
         if (disk.sectorSize == 4096) {
             throw UnsupportedSectorSizeException("Upstream Ventoy does not support 4K native devices")
         }
@@ -366,9 +369,12 @@ object VentoyInstaller {
         }
         assets.validateChecksums(strict = true)
 
+        // Refuse anything that is not an existing Ventoy layout: update never formats.
         val probe = VentoyLayout.probe(disk)
         if (probe == null || !probe.isVentoy) {
-            throw IncompatibleVentoyException("Disk is not a recognized Ventoy layout; refusing update")
+            throw IncompatibleVentoyException(
+                "Disk is not a recognized Ventoy layout; refusing update (use install to create one)",
+            )
         }
 
         // CRITICAL CONTRACT: Partition 1 (from 2048 to part2StartLba - 1) is NEVER touched!
@@ -379,7 +385,11 @@ object VentoyInstaller {
         val decompressedEfi = assets.decompressEfiPartImg()
 
         // 1. Write new VTOYEFI partition image at part2Start
-        writeBufferToDisk(disk, part2Start, decompressedEfi, probe.part2SectorCount.toLong())
+        val payloadBytes = probe.part2SectorCount.toLong() * VentoyLayout.SECTOR_SIZE
+        writeBufferToDisk(disk, part2Start, decompressedEfi, probe.part2SectorCount.toLong()) { done ->
+            onProgress(done, payloadBytes)
+        }
+        checkActive(isActive, "Ventoy update")
 
         // 2. Write new core.img in boot gap
         if (probe.scheme == TableScheme.GPT) {
@@ -471,13 +481,20 @@ object VentoyInstaller {
         )
     }
 
-    private fun writeBufferToDisk(disk: BlockDevice, startLba: Long, data: ByteArray, totalSectors: Long) {
+    private fun writeBufferToDisk(
+        disk: BlockDevice,
+        startLba: Long,
+        data: ByteArray,
+        totalSectors: Long,
+        onWritten: (Long) -> Unit = {},
+    ) {
         val chunkSectors = 64
         val chunkBytes = chunkSectors * VentoyLayout.SECTOR_SIZE
         val buf = ByteBuffer.allocate(chunkBytes).order(ByteOrder.LITTLE_ENDIAN)
         var remSectors = totalSectors
         var curLba = startLba
         var offset = 0
+        var written = 0L
 
         while (remSectors > 0L) {
             val count = minOf(remSectors, chunkSectors.toLong()).toInt()
@@ -497,6 +514,18 @@ object VentoyInstaller {
             disk.write(curLba, buf)
             curLba += count.toLong()
             remSectors -= count.toLong()
+            written += bytesToWrite.toLong()
+            onWritten(written)
+        }
+    }
+
+    /**
+     * Cancellation is honoured between payload phases, never inside one, so a
+     * cancelled run leaves a disk that re-running the same action repairs.
+     */
+    private fun checkActive(isActive: () -> Boolean, action: String) {
+        if (!isActive()) {
+            throw java.util.concurrent.CancellationException("$action cancelled")
         }
     }
 
@@ -537,10 +566,11 @@ object WindowsSetup {
         val xmlPath = "ventoy/$xmlName"
         val jsonPath = "ventoy/ventoy.json"
 
-        val hasExistingJson = volumeRoot.containsKey("ventoy.json") || volumeRoot.containsKey(jsonPath)
+        val existingJson = (volumeRoot[jsonPath] ?: volumeRoot["ventoy.json"]) as? String
         val hasExistingXml = volumeRoot.containsKey(xmlName) || volumeRoot.containsKey(xmlPath)
 
-        if (!overwrite && (hasExistingJson || hasExistingXml)) {
+        // Linking a different ISO onto a configured volume is a merge, not an overwrite.
+        if (!overwrite && (hasExistingXml || hasLinkForIso(existingJson, isoName))) {
             throw VentoyOverwriteRequiredException(
                 "Existing configuration for $isoName requires explicit overwrite permission"
             )
@@ -552,7 +582,6 @@ object WindowsSetup {
         volumeRoot[xmlName] = xmlContent
 
         // Build or merge ventoy.json linking ISO to XML
-        val existingJson = (volumeRoot[jsonPath] ?: volumeRoot["ventoy.json"]) as? String
         val jsonContent = mergeVentoyJson(existingJson, isoName, xmlName, options)
         volumeRoot[jsonPath] = jsonContent
         volumeRoot["ventoy.json"] = jsonContent
@@ -641,6 +670,22 @@ object WindowsSetup {
         rootMap["auto_install"] = autoInstallList
 
         return MiniJson.stringify(rootMap)
+    }
+
+    /** True when ventoy.json already carries an auto_install entry for [isoName]. */
+    private fun hasLinkForIso(existingJson: String?, isoName: String): Boolean {
+        if (existingJson.isNullOrBlank()) return false
+        val root =
+            try {
+                MiniJson.parse(existingJson) as? Map<*, *>
+            } catch (_: Throwable) {
+                null
+            } ?: return false
+        val entries = root["auto_install"] as? List<*> ?: return false
+        return entries.any { entry ->
+            val image = (entry as? Map<*, *>)?.get("image")?.toString()
+            image == "/$isoName" || image == isoName
+        }
     }
 
     private fun buildXmlTemplate(name: String, options: SetupOptions): String = buildString {

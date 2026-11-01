@@ -27,12 +27,15 @@ object VentoySetup {
     /**
      * Writes `/ventoy/<iso base name>.xml` and merges the ISO → XML link into
      * `/ventoy/ventoy.json`, preserving unrelated keys. Returns the JSON written.
-     * An existing XML for the same ISO is replaced (that ISO's own configuration).
+     *
+     * [overwrite] must be true to replace configuration that already exists for this
+     * volume; the caller owns that explicit choice (the UI asks per ISO).
      */
     fun linkXml(
         disk: BlockDevice,
         isoName: String,
         options: SetupOptions = SetupOptions(),
+        overwrite: Boolean = false,
     ): String =
         withVolume(disk) { volume ->
             val wanted = isoName.substringAfterLast('/')
@@ -46,7 +49,7 @@ object VentoySetup {
             val root = linkedMapOf<String, Any?>()
             readText(volume, CONFIG_PATH)?.let { root[CONFIG_PATH] = it }
 
-            val json = WindowsSetup.write(root, iso.name, options, overwrite = true)
+            val json = WindowsSetup.write(root, iso.name, options, overwrite)
             val xmlName = iso.name.substringBeforeLast('.') + ".xml"
             val xml =
                 root["$VENTOY_DIR/$xmlName"] as? String

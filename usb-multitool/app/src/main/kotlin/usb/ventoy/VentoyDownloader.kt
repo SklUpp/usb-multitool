@@ -4,7 +4,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
-import kotlinx.coroutines.CancellationException
+import java.util.concurrent.CancellationException
 
 /**
  * Acquires official Ventoy release files. Every path either yields assets whose
@@ -206,7 +206,7 @@ object VentoyDownloader {
                 }
             }
             if (written == 0L) throw VentoyAssetsMissingException("Empty download from $url")
-            return digest.digest().toHex()
+            return digest.digest().joinToString("") { "%02x".format(it) }
         } finally {
             connection.disconnect()
         }

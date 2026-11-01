@@ -17,7 +17,7 @@ import usb.testutil.RecordingDisk
 
 class VentoyLayoutTest {
 
-    private val fakeAssets = VentoyAssets.fake(efiPartSectors = 2048)
+    private val fakeAssets = syntheticVentoyAssets(efiPartSectors = 2048)
 
     @Test
     fun installRefuses4KnWhenUnsupported() {
@@ -137,61 +137,79 @@ class VentoyLayoutTest {
     }
 
     @Test
-    fun loadBundledAssetsFromAssetsDirectoryWithChecksumValidation() {
-        val assetDir = java.io.File("app/src/main/assets/ventoy")
-        val assets = VentoyAssets.loadFromDirectory(assetDir, strict = true)
-        assertEquals("1.1.05", assets.release)
-        assertEquals(512, assets.bootImg.size)
-        assertTrue(assets.coreImg.isNotEmpty())
-        assertTrue(assets.efiPartImg.isNotEmpty())
-        assertTrue(VentoyAssets.isXz(assets.coreImg))
-        assertTrue(VentoyAssets.isXz(assets.efiPartImg))
-        assets.validateChecksums(strict = true)
-    }
-    @Test
-    fun hardcodedHashesTableUsedWhenSha256FileIsMissing() {
-        val srcDir = java.io.File("app/src/main/assets/ventoy")
-        val tempDir = java.io.File(System.getProperty("java.io.tmpdir"), "ventoy-test-" + System.nanoTime())
-        tempDir.mkdirs()
+    fun pinnedHashesRejectAssetsThatAreNotFromTheRelease() {
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "ventoy-pinned-" + System.nanoTime())
         try {
-            java.io.File(srcDir, "boot.img").copyTo(java.io.File(tempDir, "boot.img"))
-            java.io.File(srcDir, "core.img.xz").copyTo(java.io.File(tempDir, "core.img.xz"))
-            java.io.File(srcDir, "ventoy.disk.img.xz").copyTo(java.io.File(tempDir, "ventoy.disk.img.xz"))
-            java.io.File(srcDir, "version").copyTo(java.io.File(tempDir, "version"))
+            // Synthetic files without a local sha256.txt must be judged against the pinned table.
+            writeSyntheticRelease(dir, withSha256File = false)
+            try {
+                VentoyAssets.loadFromDirectory(dir, strict = true)
+                fail("Synthetic assets must not pass the pinned release digests")
+            } catch (e: IllegalStateException) {
+                assertTrue(e.message?.contains("boot.img SHA-256 mismatch") == true)
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 
-            // No sha256.txt in tempDir - must use RELEASE_1_1_05_HASHES
-            val assets = VentoyAssets.loadFromDirectory(tempDir, strict = true)
+    @Test
+    fun sha256FileOverridesThePinnedTableAndDetectsTampering() {
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "ventoy-sha-" + System.nanoTime())
+        try {
+            writeSyntheticRelease(dir, withSha256File = true)
+            val assets = VentoyAssets.loadFromDirectory(dir, strict = true)
             assertEquals(VentoyAssets.RELEASE_1_1_05, assets.release)
-            assertEquals(VentoyAssets.RELEASE_1_1_05_HASHES["boot.img"], assets.bootImgSha256)
-            assertEquals(VentoyAssets.RELEASE_1_1_05_HASHES["core.img.xz"], assets.coreImgSha256)
-            assertEquals(VentoyAssets.RELEASE_1_1_05_HASHES["ventoy.disk.img.xz"], assets.diskImgSha256)
             assets.validateChecksums(strict = true)
 
-            // Tampering with boot.img without sha256.txt must FAIL checksum validation (not a tautology)
-            val tamperedBoot = java.io.File(tempDir, "boot.img").readBytes()
+            val tamperedBoot = java.io.File(dir, "boot.img").readBytes()
             tamperedBoot[10] = (tamperedBoot[10].toInt() xor 0xFF).toByte()
-            java.io.File(tempDir, "boot.img").writeBytes(tamperedBoot)
+            java.io.File(dir, "boot.img").writeBytes(tamperedBoot)
 
             try {
-                VentoyAssets.loadFromDirectory(tempDir, strict = true)
+                VentoyAssets.loadFromDirectory(dir, strict = true)
                 fail("Expected IllegalStateException due to checksum mismatch on tampered boot.img")
             } catch (e: IllegalStateException) {
                 assertTrue(e.message?.contains("boot.img SHA-256 mismatch") == true)
             }
         } finally {
-            tempDir.deleteRecursively()
+            dir.deleteRecursively()
         }
     }
 
     @Test
-    fun ventoyDownloaderExternalAndFallbackLoad() {
-        val assetDir = java.io.File("app/src/main/assets/ventoy")
-        val assets = VentoyDownloader.loadFromExternalStorage(assetDir, strict = true)
-        assertEquals("1.1.05", assets.release)
-        assets.validateChecksums(strict = true)
+    fun externalStorageAndFallbackLoading() {
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "ventoy-ext-" + System.nanoTime())
+        try {
+            writeSyntheticRelease(dir)
+            val assets = VentoyDownloader.loadFromExternalStorage(dir, strict = true)
+            assertEquals(VentoyAssets.RELEASE_1_1_05, assets.release)
+            assets.validateChecksums(strict = true)
 
-        val fallbackAssets = VentoyDownloader.loadWithFallback(externalDir = assetDir, strict = true)
-        assertEquals("1.1.05", fallbackAssets.release)
+            val fallbackAssets = VentoyDownloader.loadWithFallback(externalDir = dir)
+            assertEquals(VentoyAssets.RELEASE_1_1_05, fallbackAssets.release)
+
+            try {
+                VentoyDownloader.loadWithFallback(externalDir = null, assetManager = null)
+                fail("Expected VentoyAssetsMissingException when no local release source exists")
+            } catch (e: VentoyAssetsMissingException) {
+                assertTrue(e.message?.contains("boot.img") == true)
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun installHonoursCancellationBeforeWriting() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        try {
+            VentoyInstaller.install(disk, fakeAssets, isActive = { false })
+            fail("Expected CancellationException")
+        } catch (_: java.util.concurrent.CancellationException) {
+            // Expected
+        }
+        assertEquals("Cancelled install must not touch the disk", 0, disk.writeCount)
     }
 
 
@@ -212,7 +230,7 @@ class VentoyLayoutTest {
         disk.resetStats()
 
         // Run update with new asset set
-        val updatedAssets = VentoyAssets.fake(release = "1.1.18", efiPartSectors = 2048)
+        val updatedAssets = syntheticVentoyAssets(release = "1.1.18", efiPartSectors = 2048)
         val updatedTable = VentoyInstaller.update(disk, updatedAssets)
 
         // 1. Verify partition geometry is identical
@@ -258,6 +276,18 @@ class VentoyLayoutTest {
         // With overwrite = true, write succeeds
         val json2 = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = true)
         assertTrue(json2.contains("Windows11_Pro.iso"))
+    }
+
+    @Test
+    fun linkingASecondIsoMergesWithoutOverwrite() {
+        val volumeRoot = mutableMapOf<String, Any?>()
+        WindowsSetup.write(volumeRoot, "Ubuntu.iso", SetupOptions(), overwrite = false)
+
+        // A different ISO on a configured volume is a merge, not an overwrite.
+        val json = WindowsSetup.write(volumeRoot, "Windows11.iso", SetupOptions(), overwrite = false)
+        assertTrue(json.contains("/Ubuntu.iso"))
+        assertTrue(json.contains("/Windows11.iso"))
+        assertTrue(volumeRoot.containsKey("ventoy/Windows11.xml"))
     }
 
     @Test

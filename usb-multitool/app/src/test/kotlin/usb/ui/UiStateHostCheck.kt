@@ -47,6 +47,7 @@ object UiStateHostCheck {
                     listOf(
                         FileEntry("win11.iso", isDirectory = false, sizeBytes = 5_000_000_000uL),
                     ),
+                imageUri = "content://test/win11.iso",
             )
         require(ready.actionsEnabled)
 

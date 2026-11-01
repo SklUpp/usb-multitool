@@ -50,6 +50,8 @@ enum class DevicePresence {
 enum class DestructiveAction {
     WIPE,
     VENTOY_INSTALL,
+    VENTOY_UPDATE,
+    VENTOY_DOWNLOAD_INSTALL,
     RAW_WRITE,
     FORMAT_PARTITION,
     DELETE_PARTITION,
@@ -84,6 +86,8 @@ fun DestructiveAction.displayName(): String =
     when (this) {
         DestructiveAction.WIPE -> "wipe"
         DestructiveAction.VENTOY_INSTALL -> "Ventoy install"
+        DestructiveAction.VENTOY_UPDATE -> "Ventoy update (keeps the ISO partition)"
+        DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> "Ventoy download and install"
         DestructiveAction.RAW_WRITE -> "raw image write"
         DestructiveAction.FORMAT_PARTITION -> "format partition"
         DestructiveAction.DELETE_PARTITION -> "delete partition"

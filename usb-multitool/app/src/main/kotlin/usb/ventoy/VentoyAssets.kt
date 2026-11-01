@@ -271,18 +271,9 @@ data class VentoyAssets(
                 }
                 xzIn.close()
                 return baos.toByteArray()
-            } catch (_: Throwable) {}
-
-            try {
-                val proc = ProcessBuilder("xz", "-dc").start()
-                proc.outputStream.use { it.write(data) }
-                val out = proc.inputStream.readBytes()
-                if (proc.waitFor() == 0 && out.isNotEmpty()) {
-                    return out
-                }
-            } catch (_: Throwable) {}
-
-            throw IllegalStateException("Failed to decompress XZ asset: no XZ decompressor available")
+            } catch (e: Throwable) {
+                throw IllegalStateException("Failed to decompress XZ asset: ${e.message}", e)
+            }
         }
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

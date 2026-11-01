@@ -230,7 +230,11 @@ object UiReducer {
                                 statusMessage = "Send ${intent.fileName} to raw writer",
                             )
                         } else {
-                            state.copy(statusMessage = "Link XML for ${intent.fileName}")
+                            state.copy(
+                                statusMessage =
+                                    "Writing autounattend.xml and ventoy.json for " +
+                                        "${intent.fileName.substringAfterLast('/')}…",
+                            )
                         }
                     ReduceResult(next, listOf(effect))
                 }

@@ -41,7 +41,7 @@ kotlinc \
     $APP_DIR/src/main/kotlin/usb/ventoy/*.kt \
     $APP_DIR/src/test/kotlin/usb/device/FakeBotSession.kt \
     $APP_DIR/src/test/kotlin/usb/testutil/RecordingDisk.kt \
-    $APP_DIR/src/test/kotlin/usb/ventoy/VentoyLayoutTest.kt
+    $APP_DIR/src/test/kotlin/usb/ventoy/*.kt
 
 echo "Running Ventoy JUnit tests..."
-java -cp "$BUILD_DIR:$TEST_CP" org.junit.runner.JUnitCore usb.ventoy.VentoyLayoutTest
+java -cp "$BUILD_DIR:$TEST_CP" org.junit.runner.JUnitCore usb.ventoy.VentoyLayoutTest usb.ventoy.VentoyReleaseArchiveTest
