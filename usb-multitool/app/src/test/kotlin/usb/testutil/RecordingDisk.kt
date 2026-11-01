@@ -33,6 +33,13 @@ class RecordingDisk private constructor(
             val sectors = (image.size / sectorSize).toULong()
             return RecordingDisk(sectorCount = sectors, sectorSize = sectorSize, initial = image)
         }
+
+        fun fromAsset(path: String, sectorSize: Int = 512): RecordingDisk {
+            val stream = checkNotNull(
+                RecordingDisk::class.java.classLoader!!.getResourceAsStream(path),
+            ) { "missing test asset $path" }
+            return fromBytes(stream.use { it.readBytes() }, sectorSize)
+        }
     }
 }
 

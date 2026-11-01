@@ -50,3 +50,10 @@ curl -L https://github.com/gkostka/lwext4/archive/58bcf89a121b72d4fb66334f1693d3
 
 Then enable `-DUSB_WITH_FATFS=ON -DUSB_WITH_NTFS=ON -DUSB_WITH_LWEXT4=ON` in the
 app `externalNativeBuild` CMake arguments.
+
+## Ventoy
+
+- See `ventoy/README.md`
+- URL: https://github.com/ventoy/Ventoy/archive/refs/tags/v1.1.18.tar.gz
+- Revision: tag **v1.1.18** / commit `6116894ab8abdf3ef8d43411a6732d34ee19214e`
+- Bridge: `app/src/main/cpp/ventoy_bridge.c`

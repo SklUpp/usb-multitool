@@ -6,6 +6,7 @@ add_library(
     SHARED
     native-lib.cpp
     fs_bridge.c
+    ventoy_bridge.c
 )
 
 # Upstream engines are recorded in third_party/*/README.md with exact URLs
@@ -13,6 +14,7 @@ add_library(
 option(USB_WITH_FATFS "Link vendored FatFs" OFF)
 option(USB_WITH_NTFS "Link vendored ntfs-3g" OFF)
 option(USB_WITH_LWEXT4 "Link vendored lwext4" OFF)
+option(USB_WITH_VENTOY "Link vendored Ventoy installer" OFF)
 
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party)
 
@@ -36,6 +38,11 @@ endif()
 if(USB_WITH_LWEXT4)
     target_include_directories(usb_native PRIVATE ${THIRD_PARTY_DIR}/lwext4/include)
     target_compile_definitions(usb_native PRIVATE USB_WITH_LWEXT4=1)
+endif()
+
+if(USB_WITH_VENTOY)
+    target_include_directories(usb_native PRIVATE ${THIRD_PARTY_DIR}/ventoy)
+    target_compile_definitions(usb_native PRIVATE USB_WITH_VENTOY=1)
 endif()
 
 find_library(log-lib log)
