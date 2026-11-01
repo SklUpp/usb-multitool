@@ -87,9 +87,9 @@ object VentoyLayout {
             val p2Start = ByteBuffer.wrap(tbl, 128 + 32, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
             val p2Last = ByteBuffer.wrap(tbl, 128 + 40, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
 
+            val p2Count = p2Last - p2Start + 1UL
             if (p1Start != PART1_START_SECTOR.toULong() || p2Start != (p1Last + 1UL)) return null
-            if ((p2Last - p2Start + 1UL) != EFI_PART_SECTORS.toULong()) return null
-
+            if (p2Count < 2048UL) return null
             // Check VTOYEFI name
             val nameBytes = tbl.copyOfRange(128 + 56, 128 + 56 + 14)
             val nameStr = String(nameBytes, Charsets.UTF_16LE)
@@ -104,7 +104,7 @@ object VentoyLayout {
                 part1StartLba = p1Start,
                 part1SectorCount = p1Last - p1Start + 1UL,
                 part2StartLba = p2Start,
-                part2SectorCount = EFI_PART_SECTORS.toULong(),
+                part2SectorCount = p2Count,
                 diskUuid = uuid,
                 diskSignature = sig,
                 rsvData = rsv.array(),
@@ -118,7 +118,7 @@ object VentoyLayout {
             val p1Count = (ByteBuffer.wrap(mbr, 462 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
 
             if (p0Start != PART1_START_SECTOR.toULong() || (p0Start + p0Count) != p1Start) return null
-            if (p1Count != EFI_PART_SECTORS.toULong() || p1Flag != 0xEF) return null
+            if (p1Count < 2048UL || p1Flag != 0xEF) return null
 
             val rsv = ByteBuffer.allocate(8 * SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
             disk.read(2040L, rsv)
@@ -369,7 +369,7 @@ object VentoyInstaller {
         val decompressedEfi = assets.decompressEfiPartImg()
 
         // 1. Write new VTOYEFI partition image at part2Start
-        writeBufferToDisk(disk, part2Start, decompressedEfi, VentoyLayout.EFI_PART_SECTORS)
+        writeBufferToDisk(disk, part2Start, decompressedEfi, probe.part2SectorCount.toLong())
 
         // 2. Write new core.img in boot gap
         if (probe.scheme == TableScheme.GPT) {

@@ -25,7 +25,7 @@ class ScsiCommandTest {
 
     @Test
     fun transferPlanStartsAt64KiBAndAlignsRemainder() {
-        val parts = TransferPlan.plan(bytes = 70L * 1024L, sectorSize = 4096)
+        val parts = TransferPlan.plan(bytes = 70L * 1024L, sectorSize = 2048)
         assertEquals(listOf(64 * 1024, 6 * 1024), parts)
     }
 

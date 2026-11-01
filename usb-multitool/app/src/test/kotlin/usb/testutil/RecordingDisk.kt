@@ -23,7 +23,7 @@ class RecordingDisk(
         private set
     var syncCount: Long = 0
         private set
-    var bytesWritten: Long = 0
+    var bytesWritten: Int = 0
         private set
 
     fun resetStats() {
@@ -66,7 +66,7 @@ class RecordingDisk(
         val count = source.remaining() / sectorSize
         writtenRanges.add(Pair(lba.toLong(), count))
         val n = source.remaining()
-        bytesWritten += n.toLong()
+        bytesWritten += n
 
         for (i in 0 until count) {
             val cur = lba + i.toULong()

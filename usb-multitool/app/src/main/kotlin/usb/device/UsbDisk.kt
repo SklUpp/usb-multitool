@@ -105,23 +105,10 @@ open class UsbDisk(
             buffer.position(mark)
             buffer.limit(sliceLimit)
             ensureConnected()
-            try {
-                val result = session.transfer(cdb, buffer)
+            val result = try {
+                val res = session.transfer(cdb, buffer)
                 buffer.limit(oldLimit)
-                when (result.status) {
-                    CswStatus.PASSED -> return
-                    CswStatus.FAILED -> {
-                        // CSW status 1: REQUEST SENSE, then surface. No silent retry.
-                        val sense = requestSense()
-                        closeSession()
-                        throw sense
-                    }
-                    CswStatus.PHASE_ERROR -> {
-                        session.bulkOnlyReset()
-                        closeSession()
-                        throw DiskException.IoFailure("BOT phase error")
-                    }
-                }
+                res
             } catch (e: DiskException.IoFailure) {
                 // STALL / short-pipe: Mass Storage Reset once, then retry once.
                 if (attempt >= 1) {
@@ -130,11 +117,27 @@ open class UsbDisk(
                 }
                 session.bulkOnlyReset()
                 attempt++
+                continue
             } catch (e: DiskException.Disconnected) {
                 closeSession()
                 throw e
             } finally {
                 buffer.limit(oldLimit)
+            }
+
+            when (result.status) {
+                CswStatus.PASSED -> return
+                CswStatus.FAILED -> {
+                    // CSW status 1: REQUEST SENSE, then surface. No silent retry.
+                    val sense = requestSense()
+                    closeSession()
+                    throw sense
+                }
+                CswStatus.PHASE_ERROR -> {
+                    session.bulkOnlyReset()
+                    closeSession()
+                    throw DiskException.IoFailure("BOT phase error")
+                }
             }
         }
     }
