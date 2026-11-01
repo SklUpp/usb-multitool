@@ -103,7 +103,7 @@ fun DiagnosticsScreen(
                 }
 
                 OutlinedButton(
-                    onClick = { onIntent(UiIntent.RescueWholeDisk) },
+                    onClick = { onIntent(UiIntent.StartRescueBackup) },
                     enabled = state.actionsEnabled,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
