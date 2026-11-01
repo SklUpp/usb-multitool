@@ -357,10 +357,14 @@ object UiReducer {
             }
 
             UiIntent.RunSelfTest ->
-                ReduceResult(
-                    state.copy(statusMessage = "Starting automated self-test..."),
-                    effects = listOf(UiEffect(UiEffect.Kind.RunSelfTest)),
-                )
+                if (state.isRunning) {
+                    ReduceResult(state.copy(statusMessage = "Operation already in progress"))
+                } else {
+                    ReduceResult(
+                        state.copy(statusMessage = "Starting automated self-test..."),
+                        effects = listOf(UiEffect(UiEffect.Kind.RunSelfTest)),
+                    )
+                }
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 

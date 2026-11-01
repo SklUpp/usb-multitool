@@ -269,11 +269,19 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
         std::u16string u16 = utf8_to_utf16(entries[i].name);
         jstring name = env->NewString(reinterpret_cast<const jchar *>(u16.data()),
                                       static_cast<jsize>(u16.size()));
+        if (!name || env->ExceptionCheck()) {
+            free(entries);
+            return nullptr;
+        }
         jobject obj = env->NewObject(entryCls, ctor, name,
                                      static_cast<jboolean>(entries[i].is_directory),
                                      static_cast<jlong>(entries[i].size));
-        env->SetObjectArrayElement(arr, static_cast<jsize>(i), obj);
         env->DeleteLocalRef(name);
+        if (!obj || env->ExceptionCheck()) {
+            free(entries);
+            return nullptr;
+        }
+        env->SetObjectArrayElement(arr, static_cast<jsize>(i), obj);
         env->DeleteLocalRef(obj);
     }
     free(entries);

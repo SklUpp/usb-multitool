@@ -208,6 +208,9 @@ object UiStateHostCheck {
         val selfTest = UiReducer.reduce(ready, UiIntent.RunSelfTest)
         require(selfTest.effects.single().kind == UiEffect.Kind.RunSelfTest)
         require(selfTest.state.statusMessage?.contains("self-test") == true)
+        val blockedSelfTest = UiReducer.reduce(running, UiIntent.RunSelfTest)
+        require(blockedSelfTest.effects.isEmpty()) { "self-test while running must be blocked" }
+        require(blockedSelfTest.state.statusMessage?.contains("progress") == true)
 
         println("UiStateHostCheck PASS")
     }

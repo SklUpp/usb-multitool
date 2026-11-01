@@ -32,6 +32,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import usb.device.DiskException
 import usb.device.MassStorageDiscovery
 import usb.device.UsbDisk
@@ -519,17 +520,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
             submitReadOnlyDiskOperation("Self-test") { disk, _ ->
                 val report = usb.diagnostics.SelfTestRunner.runAll(disk)
+                check(report.allPassed) { report.summary() }
                 report.summary()
             }
         } else {
-            scope.launch(Dispatchers.IO) {
+            scope.launch {
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(state = OperationState.Running, label = "Self-test: running..."),
                     ),
                 )
                 try {
-                    val report = usb.diagnostics.SelfTestRunner.runAll(disk = null)
+                    val report = withContext(Dispatchers.Default) {
+                        usb.diagnostics.SelfTestRunner.runAll(disk = null)
+                    }
                     val summary = report.summary()
                     val targetState = if (report.allPassed) OperationState.Completed else OperationState.Failed
                     onIntent(
@@ -537,18 +541,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             OperationProgress(
                                 state = targetState,
                                 label = "Self-test",
-                                resultMessage = summary,
+                                resultMessage = if (report.allPassed) summary else null,
+                                errorMessage = if (!report.allPassed) summary else null,
                             ),
                         ),
                     )
                     onIntent(UiIntent.Status(summary))
-                } catch (e: Exception) {
+                } catch (t: Throwable) {
                     onIntent(
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Failed,
                                 label = "Self-test",
-                                errorMessage = e.message ?: "Self-test failed",
+                                errorMessage = t.message ?: "Self-test failed",
                             ),
                         ),
                     )
