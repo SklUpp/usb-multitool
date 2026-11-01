@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - feature/android-usb-multitool
-      - feature/usb-native
+
 
 concurrency:
   group: android-debug-${{ github.ref }}
@@ -62,6 +62,9 @@ jobs:
 
       - name: Host exFAT fsck repair test
         run: ./scripts/run-exfat-fsck-host-test.sh
+
+      - name: Host NTFS test
+        run: ./scripts/run-ntfs-host-test.sh
 
       - name: Install fetch helpers
         working-directory: ${{ github.workspace }}

@@ -54,3 +54,10 @@ exFAT fsck repair path is verified on the Actions runner (not the phone) by:
 ```
 
 This builds a host binary against vendored `third_party/exfatprogs` and the shared `usb_block_*` relative-LBA callback. No root, `/dev`, or FUSE.
+NTFS engine and dirty-flag repair are verified on the Actions runner by:
+
+```bash
+./scripts/run-ntfs-host-test.sh
+```
+
+This builds a host binary against vendored `third_party/ntfs-3g` and the shared `usb_block_*` relative-LBA callback. No root, `/dev`, or FUSE.

@@ -5,6 +5,7 @@ set(CMAKE_C_EXTENSIONS ON)
 
 set(FATFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/fatfs/source)
 set(EXFAT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/exfatprogs)
+set(NTFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/ntfs-3g)
 
 add_library(exfatprogs_fsck STATIC
     ${EXFAT_ROOT}/lib/libexfat.c
@@ -27,6 +28,9 @@ target_compile_options(exfatprogs_fsck PRIVATE
     -Wno-unused-function
 )
 
+file(GLOB NTFS_SOURCES ${NTFS_DIR}/libntfs-3g/*.c)
+list(FILTER NTFS_SOURCES EXCLUDE REGEX ".*win32_io\\.c$")
+
 add_library(usb_native SHARED
     native-lib.cpp
     usb_block.c
@@ -37,6 +41,9 @@ add_library(usb_native SHARED
     ${FATFS_DIR}/ffsystem.c
     ${FATFS_DIR}/diskio.c
     exfat_fsck_jni.cpp
+    ntfs_engine.c
+    ntfs_jni.cpp
+    ${NTFS_SOURCES}
 )
 
 target_include_directories(usb_native PRIVATE
@@ -44,6 +51,13 @@ target_include_directories(usb_native PRIVATE
     ${FATFS_DIR}
     ${EXFAT_ROOT}/include
     ${EXFAT_ROOT}/fsck
+    ${NTFS_DIR}/include
+    ${NTFS_DIR}/include/ntfs-3g
+)
+
+target_compile_definitions(usb_native PRIVATE
+    HAVE_CONFIG_H=1
+    _FILE_OFFSET_BITS=64
 )
 
 find_package(Threads REQUIRED)
@@ -55,6 +69,7 @@ if(ANDROID)
         ${log-lib}
         Threads::Threads
     )
+    target_link_options(usb_native PRIVATE "-Wl,-z,max-page-size=16384")
 else()
     target_link_libraries(usb_native
         exfatprogs_fsck
