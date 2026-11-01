@@ -81,6 +81,18 @@ class OperationExecutor(
         this.serviceControl = serviceControl
     }
 
+    /**
+     * Drop wake/service binding only when [expectedServiceControl] is still active.
+     * A destroyed service must not reset a newer service's binding.
+     */
+    fun unbind(expectedServiceControl: ServiceControl) {
+        if (this.serviceControl === expectedServiceControl) {
+            this.wakeLock = NoOpWakeLock
+            this.serviceControl = NoOpServiceControl
+        }
+    }
+
+
     /** Queued or running operations remain. Safe for stopWhenIdle re-entry. */
     fun hasOutstandingWork(): Boolean = outstanding.get() > 0
     fun submit(operation: DiskOperation): OperationHandle {

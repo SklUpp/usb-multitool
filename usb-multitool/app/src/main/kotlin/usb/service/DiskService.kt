@@ -62,7 +62,9 @@ class DiskService : Service() {
 
     override fun onDestroy() {
         // Idle teardown must leave DiskController / OperationExecutor alive.
+        // Unbind only this instance so a newer service binding stays intact.
         wakeLock?.let { if (it.isHeld) it.release() }
+        lifecycle?.let { DiskController.get().unbind(it) }
         lifecycle = null
         super.onDestroy()
     }

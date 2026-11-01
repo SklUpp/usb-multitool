@@ -243,6 +243,49 @@ class OperationExecutorTest {
         controller.shutdown()
     }
 
+    @Test fun destroyedServiceUnbindLeavesNewerBindingActive() = runTest {
+        // Mimic DiskService: old instance destroys after newer instance already bound.
+        val oldWake = RecordingWakeLock()
+        val oldLifecycle = RecordingServiceControl()
+        val newWake = RecordingWakeLock()
+        val newLifecycle = RecordingServiceControl()
+        val controller = DiskController(
+            dispatcher = Dispatchers.Default.limitedParallelism(1),
+        )
+
+        controller.bind(oldWake, oldLifecycle)
+        controller.bind(newWake, newLifecycle)
+
+        // Stale onDestroy must not clobber the active binding.
+        controller.unbind(oldLifecycle)
+
+        val done = controller.submit(object : DiskOperation() {
+            override suspend fun run() {
+                assertTrue(newWake.held)
+            }
+        })
+        assertEquals(OperationState.Completed, done.await())
+        assertEquals(1, newLifecycle.startCount)
+        assertEquals(1, newLifecycle.stopCount)
+        assertEquals(0, oldLifecycle.startCount)
+        assertEquals(0, oldLifecycle.stopCount)
+        assertEquals(1, newWake.acquireCount)
+        assertEquals(1, newWake.releaseCount)
+        assertEquals(0, oldWake.acquireCount)
+
+        // Own unbind still clears when identity matches.
+        controller.unbind(newLifecycle)
+        val after = controller.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, after.await())
+        // NoOpServiceControl after matching unbind — counts stay frozen on newLifecycle.
+        assertEquals(1, newLifecycle.startCount)
+        assertEquals(1, newLifecycle.stopCount)
+        controller.shutdown()
+    }
+
+
 }
 
 class RecordingWakeLock : OperationWakeLock {

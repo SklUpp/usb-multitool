@@ -28,6 +28,12 @@ class DiskController(
         executor.bind(wakeLock, serviceControl)
     }
 
+    /** Unbind only if [serviceControl] is still the active binding. */
+    fun unbind(serviceControl: ServiceControl) {
+        executor.unbind(serviceControl)
+    }
+
+
     /** Terminal teardown only (process/app shutdown). Not used on idle service stop. */
     fun shutdown() {
         scope.cancel()
