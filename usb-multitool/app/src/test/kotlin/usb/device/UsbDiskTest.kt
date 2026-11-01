@@ -227,8 +227,25 @@ class UsbDiskTest {
     }
 
     @Test
-    fun synchronizeCacheTimeoutIs30000Ms() {
-        assertEquals(30_000, BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS)
+    fun stalledCapacity10FallsBackToCapacity16() {
+        val session = FakeBotSession(
+            capacity16LastLba = 2047UL,
+            stallOnOps = setOf(ScsiCommand.OP_READ_CAPACITY10),
+        )
+        val geometry = UsbDisk.probeCapacity(session)
+        assertEquals(2048UL, geometry.sectorCount)
+        assertEquals(1, session.resetCount)
+    }
+
+    @Test
+    fun syncUsesTheLongFlushTimeoutWhileReadsKeepTheShortOne() {
+        val session = FakeBotSession()
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        disk.read(0UL, ByteBuffer.allocate(512))
+        disk.sync()
+
+        assertEquals(BotConstants.TRANSFER_TIMEOUT_MS, session.timeouts.first())
+        assertEquals(BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS, session.timeouts.last())
     }
 }
 

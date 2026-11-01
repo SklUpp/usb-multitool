@@ -60,11 +60,11 @@ class AndroidUsbBulkChannel private constructor(
 
     override val interfaceId: Int get() = usbInterface.id
 
-    override fun bulkIn(destination: ByteBuffer, length: Int): Int =
-        bulkTransfer(inEndpoint, destination, length)
+    override fun bulkIn(destination: ByteBuffer, length: Int, timeoutMs: Int): Int =
+        bulkTransfer(inEndpoint, destination, length, timeoutMs)
 
-    override fun bulkOut(source: ByteBuffer, length: Int): Int =
-        bulkTransfer(outEndpoint, source, length)
+    override fun bulkOut(source: ByteBuffer, length: Int, timeoutMs: Int): Int =
+        bulkTransfer(outEndpoint, source, length, timeoutMs)
 
     override fun controlTransfer(
         requestType: Int,
@@ -116,7 +116,12 @@ class AndroidUsbBulkChannel private constructor(
         }
     }
 
-    private fun bulkTransfer(endpoint: UsbEndpoint, buffer: ByteBuffer, length: Int): Int {
+    private fun bulkTransfer(
+        endpoint: UsbEndpoint,
+        buffer: ByteBuffer,
+        length: Int,
+        timeoutMs: Int,
+    ): Int {
         ensureOpen()
         require(length >= 0)
         require(buffer.remaining() >= length) {
@@ -147,7 +152,7 @@ class AndroidUsbBulkChannel private constructor(
                 array,
                 baseOffset + transferred,
                 chunk,
-                BotConstants.TRANSFER_TIMEOUT_MS,
+                timeoutMs,
             )
             if (n < 0) {
                 throw DiskException.IoFailure(

@@ -1,9 +1,9 @@
 package usb.partition
 
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class PartitionWriterTest {
     private fun gptDisk(): ImageBlockDevice {
@@ -73,7 +73,9 @@ class PartitionWriterTest {
         val table = PartitionTable.read(disk)
         val hybrid = table.copy(scheme = TableScheme.HYBRID)
 
-        assertFailsWith<HybridAmbiguityException> { PartitionWriter.commit(disk, hybrid) }
+        assertThrows(HybridAmbiguityException::class.java) {
+            PartitionWriter.commit(disk, hybrid)
+        }
     }
 
     private fun PartitionTable.partitionGuids(): List<String> =

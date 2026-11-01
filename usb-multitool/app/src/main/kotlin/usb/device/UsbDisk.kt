@@ -69,7 +69,11 @@ open class UsbDisk(
     @Synchronized
     override fun sync() {
         ensureOpen()
-        val result = execute(ScsiCommand.synchronizeCache10(), null)
+        val result = execute(
+            ScsiCommand.synchronizeCache10(),
+            null,
+            timeoutMs = BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS,
+        )
         when (result.status) {
             CswStatus.PASSED -> return
             CswStatus.FAILED -> {
@@ -152,10 +156,14 @@ open class UsbDisk(
         }
     }
 
-    private fun execute(cdb: ScsiCdb, data: ByteBuffer?): CswResult {
+    private fun execute(
+        cdb: ScsiCdb,
+        data: ByteBuffer?,
+        timeoutMs: Int = BotConstants.TRANSFER_TIMEOUT_MS,
+    ): CswResult {
         ensureConnected()
         return try {
-            session.transfer(cdb, data)
+            session.transfer(cdb, data, timeoutMs)
         } catch (e: DiskException.Disconnected) {
             closeSession()
             throw e

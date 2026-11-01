@@ -33,14 +33,17 @@ int ntfs_engine_close(uint64_t vol_handle);
 /* Flush dirty metadata/data to underlying block device. Returns 0 on success. */
 int ntfs_engine_sync(uint64_t vol_handle);
 
+/* Hard ceiling for a single directory listing; exceeding it is an error, never a
+ * silent truncation. */
+#define NTFS_LIST_MAX_ENTRIES 65536u
+
 /* List directory entries under path (e.g. "/" or "/dir").
- * out_entries is filled up to max_entries.
- * *out_count is set to actual entries filled.
- * Returns 0 on success.
+ * On success *out_entries points at a malloc'd array the caller must free(),
+ * and *out_count holds the entry count.
+ * Returns -EOVERFLOW when the directory holds more than NTFS_LIST_MAX_ENTRIES.
  */
 int ntfs_engine_list(uint64_t vol_handle, const char *path,
-                     NtfsDirEntry *out_entries, size_t max_entries,
-                     size_t *out_count);
+                     NtfsDirEntry **out_entries, size_t *out_count);
 
 /* Stat a file or directory. Returns 0 on success. */
 int ntfs_engine_stat(uint64_t vol_handle, const char *path, NtfsStat *out_stat);

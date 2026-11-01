@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <jni.h>
+#include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -197,12 +199,19 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
     if (!wrapper) return nullptr;
 
     std::string p = jstring_to_string(env, path);
-    const size_t max_entries = 1024;
-    std::vector<NtfsDirEntry> entries(max_entries);
+    NtfsDirEntry *entries = nullptr;
     size_t count = 0;
 
-    int rc = ntfs_engine_list(wrapper->vol_handle, p.c_str(), entries.data(), max_entries, &count);
-    if (rc != 0) return nullptr;
+    int rc = ntfs_engine_list(wrapper->vol_handle, p.c_str(), &entries, &count);
+    if (rc != 0) {
+        jclass exCls = env->FindClass("usb/fs/NtfsException");
+        if (exCls) {
+            env->ThrowNew(exCls, rc == -EOVERFLOW
+                ? "directory listing exceeds the supported entry count"
+                : "directory listing failed");
+        }
+        return nullptr;
+    }
 
     jclass entryCls = env->FindClass("usb/fs/NtfsDirEntry");
     if (!entryCls) return nullptr;
@@ -220,6 +229,7 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
         env->DeleteLocalRef(name);
         env->DeleteLocalRef(obj);
     }
+    free(entries);
     return arr;
 }
 

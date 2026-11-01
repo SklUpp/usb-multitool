@@ -17,7 +17,11 @@ class BotSessionImpl(
     private val cswBuffer = ByteBuffer.allocate(BotConstants.CSW_SIZE)
 
     @Synchronized
-    override fun transfer(cdb: ScsiCdb, data: ByteBuffer?): CswResult {
+    override fun transfer(
+        cdb: ScsiCdb,
+        data: ByteBuffer?,
+        timeoutMs: Int,
+    ): CswResult {
         if (!channel.isConnected()) throw DiskException.Disconnected()
         require(cdb.bytes.size in 1..16) { "CDB length ${cdb.bytes.size} out of range" }
         when (cdb.direction) {
@@ -41,7 +45,7 @@ class BotSessionImpl(
                 val oldLimit = dest.limit()
                 try {
                     dest.limit(mark + cdb.transferLength)
-                    transferExactIn(dest, cdb.transferLength)
+                    transferExactIn(dest, cdb.transferLength, timeoutMs)
                 } finally {
                     dest.limit(oldLimit)
                 }
@@ -52,7 +56,7 @@ class BotSessionImpl(
                 val oldLimit = src.limit()
                 try {
                     src.limit(mark + cdb.transferLength)
-                    transferExactOut(src, cdb.transferLength)
+                    transferExactOut(src, cdb.transferLength, timeoutMs)
                 } finally {
                     src.limit(oldLimit)
                 }
@@ -60,7 +64,7 @@ class BotSessionImpl(
             ScsiDirection.NONE -> Unit
         }
 
-        return readCsw(tag)
+        return readCsw(tag, timeoutMs)
     }
 
     @Synchronized
@@ -93,12 +97,12 @@ class BotSessionImpl(
             cbwBuffer.put(0)
         }
         cbwBuffer.flip()
-        transferExactOut(cbwBuffer, BotConstants.CBW_SIZE)
+        transferExactOut(cbwBuffer, BotConstants.CBW_SIZE, BotConstants.TRANSFER_TIMEOUT_MS)
     }
 
-    private fun readCsw(expectedTag: Int): CswResult {
+    private fun readCsw(expectedTag: Int, timeoutMs: Int): CswResult {
         cswBuffer.clear()
-        transferExactIn(cswBuffer, BotConstants.CSW_SIZE)
+        transferExactIn(cswBuffer, BotConstants.CSW_SIZE, timeoutMs)
         cswBuffer.flip()
         cswBuffer.order(ByteOrder.LITTLE_ENDIAN)
         val signature = cswBuffer.int
@@ -114,21 +118,21 @@ class BotSessionImpl(
         return CswResult(status, tag, residue)
     }
 
-    private fun transferExactIn(destination: ByteBuffer, length: Int) {
+    private fun transferExactIn(destination: ByteBuffer, length: Int, timeoutMs: Int) {
         var remaining = length
         while (remaining > 0) {
             if (!channel.isConnected()) throw DiskException.Disconnected()
-            val n = channel.bulkIn(destination, remaining)
+            val n = channel.bulkIn(destination, remaining, timeoutMs)
             if (n <= 0) throw DiskException.IoFailure("short bulk IN returned $n")
             remaining -= n
         }
     }
 
-    private fun transferExactOut(source: ByteBuffer, length: Int) {
+    private fun transferExactOut(source: ByteBuffer, length: Int, timeoutMs: Int) {
         var remaining = length
         while (remaining > 0) {
             if (!channel.isConnected()) throw DiskException.Disconnected()
-            val n = channel.bulkOut(source, remaining)
+            val n = channel.bulkOut(source, remaining, timeoutMs)
             if (n <= 0) throw DiskException.IoFailure("short bulk OUT returned $n")
             remaining -= n
         }

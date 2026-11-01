@@ -10,14 +10,14 @@ class RecordingChannel(
     val events = mutableListOf<String>()
     override val interfaceId: Int = 0
 
-    override fun bulkIn(destination: ByteBuffer, length: Int): Int {
-        events += "bulkIn:$length"
+    override fun bulkIn(destination: ByteBuffer, length: Int, timeoutMs: Int): Int {
+        events += "bulkIn:$length@$timeoutMs"
         destination.position(destination.position() + length)
         return length
     }
 
-    override fun bulkOut(source: ByteBuffer, length: Int): Int {
-        events += "bulkOut:$length"
+    override fun bulkOut(source: ByteBuffer, length: Int, timeoutMs: Int): Int {
+        events += "bulkOut:$length@$timeoutMs"
         source.position(source.position() + length)
         return length
     }
@@ -74,12 +74,14 @@ class FakeBotSession(
     private val capacity16LastLba: ULong? = null,
     private val syncSense: DiskException.SenseError? = null,
     private val phaseErrorOnOps: Set<Int> = emptySet(),
+    private val stallOnOps: Set<Int> = emptySet(),
     private val residue: Int = 0,
 ) : BotSession {
     var resetCount: Int = 0
         private set
     val resetOrders = mutableListOf<List<String>>()
     val commands = mutableListOf<Int>()
+    val timeouts = mutableListOf<Int>()
 
     private var connected = true
     private val media = HashMap<ULong, ByteArray>()
@@ -89,7 +91,8 @@ class FakeBotSession(
         media[lba] = data.copyOf()
     }
 
-    override fun transfer(cdb: ScsiCdb, data: ByteBuffer?): CswResult {
+    override fun transfer(cdb: ScsiCdb, data: ByteBuffer?, timeoutMs: Int): CswResult {
+        timeouts += timeoutMs
         if (disconnectOnCommand || !connected) {
             connected = false
             throw DiskException.Disconnected()
@@ -99,6 +102,9 @@ class FakeBotSession(
 
         if (op in phaseErrorOnOps) {
             return CswResult(CswStatus.PHASE_ERROR, 0, 0)
+        }
+        if (op in stallOnOps) {
+            throw DiskException.IoFailure("simulated STALL on op $op")
         }
         if (failAlways && op != ScsiCommand.OP_REQUEST_SENSE) {
             return CswResult(CswStatus.FAILED, 0, residue)

@@ -6,9 +6,17 @@ import java.nio.ByteBuffer
 interface UsbBulkChannel {
     val interfaceId: Int
 
-    fun bulkIn(destination: ByteBuffer, length: Int): Int
+    fun bulkIn(
+        destination: ByteBuffer,
+        length: Int,
+        timeoutMs: Int = BotConstants.TRANSFER_TIMEOUT_MS,
+    ): Int
 
-    fun bulkOut(source: ByteBuffer, length: Int): Int
+    fun bulkOut(
+        source: ByteBuffer,
+        length: Int,
+        timeoutMs: Int = BotConstants.TRANSFER_TIMEOUT_MS,
+    ): Int
 
     /**
      * Endpoint-zero control transfer.
@@ -61,6 +69,7 @@ interface BotSession {
     fun transfer(
         cdb: ScsiCdb,
         data: ByteBuffer?,
+        timeoutMs: Int = BotConstants.TRANSFER_TIMEOUT_MS,
     ): CswResult
 
     /** Spec reset recovery: Mass Storage Reset, Clear Halt IN, Clear Halt OUT. */

@@ -166,9 +166,9 @@ int main(int argc, char **argv)
            (unsigned long long)nstat.size, nstat.is_directory);
 
     /* 7. List root directory */
-    NtfsDirEntry entries[16];
+    NtfsDirEntry *entries = NULL;
     size_t count = 0;
-    rc = ntfs_engine_list(vol, "/", entries, 16, &count);
+    rc = ntfs_engine_list(vol, "/", &entries, &count);
     assert(rc == 0);
     assert(count >= 1);
     bool found = false;
@@ -181,6 +181,8 @@ int main(int argc, char **argv)
     }
     assert(found);
     printf("PASS: list directory found test_file.txt (total %zu entries)\n", count);
+    free(entries);
+    entries = NULL;
 
     /* 8. Mark volume dirty and close */
     NtfsVolumeContext *vctx = (NtfsVolumeContext *)(uintptr_t)vol;

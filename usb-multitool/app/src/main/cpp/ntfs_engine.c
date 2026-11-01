@@ -385,11 +385,31 @@ int ntfs_engine_sync(uint64_t vol_handle)
 }
 
 typedef struct ListContext {
-    NtfsDirEntry *entries;
+    NtfsDirEntry *entries; /* grown with realloc; owned by the caller on success */
     size_t max_entries;
     size_t count;
+    bool overflow;
     ntfs_volume *vol;
 } ListContext;
+
+static bool list_reserve(ListContext *ctx)
+{
+    if (ctx->count < ctx->max_entries) return true;
+    size_t next = ctx->max_entries ? ctx->max_entries * 2 : 64;
+    if (next > NTFS_LIST_MAX_ENTRIES) next = NTFS_LIST_MAX_ENTRIES;
+    if (next <= ctx->max_entries) {
+        ctx->overflow = true;
+        return false;
+    }
+    NtfsDirEntry *grown = realloc(ctx->entries, next * sizeof(NtfsDirEntry));
+    if (!grown) {
+        ctx->overflow = true;
+        return false;
+    }
+    ctx->entries = grown;
+    ctx->max_entries = next;
+    return true;
+}
 
 static int list_filldir(void *dirent, const ntfschar *name, const int name_len,
                         const int name_type, const s64 pos, const MFT_REF mref,
@@ -397,7 +417,6 @@ static int list_filldir(void *dirent, const ntfschar *name, const int name_len,
 {
     (void)pos;
     ListContext *ctx = (ListContext *)dirent;
-    if (ctx->count >= ctx->max_entries) return -1;
     if (name_type == FILE_NAME_DOS) return 0;
 
     /* Skip "." and ".." */
@@ -407,6 +426,8 @@ static int list_filldir(void *dirent, const ntfschar *name, const int name_len,
     char *mbs = NULL;
     int mbs_len = ntfs_ucstombs(name, name_len, &mbs, 0);
     if (mbs_len <= 0 || !mbs) return 0;
+
+    if (!list_reserve(ctx)) return -1;
 
     NtfsDirEntry *e = &ctx->entries[ctx->count];
     memset(e, 0, sizeof(*e));
@@ -428,12 +449,12 @@ static int list_filldir(void *dirent, const ntfschar *name, const int name_len,
 }
 
 int ntfs_engine_list(uint64_t vol_handle, const char *path,
-                     NtfsDirEntry *out_entries, size_t max_entries,
-                     size_t *out_count)
+                     NtfsDirEntry **out_entries, size_t *out_count)
 {
     NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
-    if (!v || !v->vol || !path || !out_count) return -EINVAL;
+    if (!v || !v->vol || !path || !out_entries || !out_count) return -EINVAL;
 
+    *out_entries = NULL;
     *out_count = 0;
     ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, path);
     if (!dir_ni) return -ENOENT;
@@ -444,9 +465,10 @@ int ntfs_engine_list(uint64_t vol_handle, const char *path,
     }
 
     ListContext ctx = {
-        .entries = out_entries,
-        .max_entries = max_entries,
+        .entries = NULL,
+        .max_entries = 0,
         .count = 0,
+        .overflow = false,
         .vol = v->vol,
     };
 
@@ -454,6 +476,11 @@ int ntfs_engine_list(uint64_t vol_handle, const char *path,
     ntfs_readdir(dir_ni, &pos, &ctx, list_filldir);
     ntfs_inode_close(dir_ni);
 
+    if (ctx.overflow) {
+        free(ctx.entries);
+        return -EOVERFLOW;
+    }
+    *out_entries = ctx.entries;
     *out_count = ctx.count;
     return 0;
 }
