@@ -1,7 +1,9 @@
 package usb.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,8 +20,10 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -33,9 +37,9 @@ fun DiagnosticsScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Block 1: Automated Self-Test
+        // P1 Block: Automated Engine Self-Test
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -44,7 +48,7 @@ fun DiagnosticsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
                     text = "Automated Engine Self-Test",
@@ -57,7 +61,7 @@ fun DiagnosticsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 Button(
                     onClick = { onIntent(UiIntent.RunSelfTest) },
@@ -69,7 +73,7 @@ fun DiagnosticsScreen(
             }
         }
 
-        // Block 2: Non-Destructive Inspection
+        // P1 Block: Non-Destructive Inspection
         OutlinedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -78,7 +82,7 @@ fun DiagnosticsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
                     text = "Non-Destructive Inspection",
@@ -91,7 +95,7 @@ fun DiagnosticsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 OutlinedButton(
                     onClick = { onIntent(UiIntent.StartReadScan) },
@@ -119,7 +123,7 @@ fun DiagnosticsScreen(
             }
         }
 
-        // Block 3: GPT Backup & Restore
+        // P2 Block: GPT Backup & Recovery
         OutlinedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -128,7 +132,7 @@ fun DiagnosticsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
                     text = "GPT Backup & Recovery",
@@ -141,20 +145,30 @@ fun DiagnosticsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(
-                        text = state.backupUri?.let { it.substringAfterLast('/') }
-                            ?: "No GPT backup selected",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (state.backupUri != null) FontWeight.SemiBold else FontWeight.Normal,
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = state.backupUri?.let { it.substringAfterLast('/') }
+                                ?: "No GPT backup selected",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (state.backupUri != null) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
 
                 Row(
@@ -181,29 +195,37 @@ fun DiagnosticsScreen(
             }
         }
 
-        // Block 4: Dangerous Operations & Wipe
+        // P3 Danger Zone: Benchmarks & Device Wipe
         OutlinedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Danger Zone: Write Tests & Wipe",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text(
-                    text = "Benchmarks & Device Wipe",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "Warning: Write operations alter disk sectors directly and require explicit confirmation.",
+                    text = "Warning: Direct sector write operations modify or erase stored data permanently.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.error.copy(alpha = 0.2f))
 
                 OutlinedButton(
                     onClick = {

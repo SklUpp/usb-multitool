@@ -2,6 +2,7 @@ package usb.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -9,11 +10,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -31,10 +34,10 @@ fun VentoyScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Block 1: Ventoy Multi-Boot Installation
-        OutlinedCard(
+        // P1 Hero Block: Ventoy Multi-Boot Installation & Update
+        ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
         ) {
@@ -44,18 +47,37 @@ fun VentoyScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Ventoy Multi-Boot",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            text = "GPT / MBR",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
+
                 Text(
-                    text = "Ventoy Multi-Boot",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "Deploy Ventoy to create a bootable USB drive. Boot multiple ISO images directly without reformatting.",
+                    text = "Deploy Ventoy bootloader to USB. Boot multiple ISO/IMG images directly without reformatting disk partitions.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 if (!state.actionsEnabled) {
                     Surface(
@@ -71,6 +93,7 @@ fun VentoyScreen(
                     }
                 }
 
+                // Primary CTA (Install)
                 Button(
                     onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
                     enabled = state.actionsEnabled,
@@ -79,6 +102,7 @@ fun VentoyScreen(
                     Text("Install Ventoy (Fresh Setup)")
                 }
 
+                // Secondary actions (Update & Online Download)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -102,7 +126,7 @@ fun VentoyScreen(
             }
         }
 
-        // Block 2: Windows Unattended Automation
+        // P2 Secondary Block: Windows Unattended Automation
         OutlinedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -124,7 +148,7 @@ fun VentoyScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 val isos = state.files.filter { it.isIso }
                 if (isos.isEmpty()) {
@@ -134,40 +158,55 @@ fun VentoyScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = "No .iso files found in /ISO on the Ventoy partition. Copy ISO files into the /ISO directory using the Files tab, then return here to configure automated installation.",
-                            modifier = Modifier.padding(12.dp),
+                            text = "No Windows ISO files found on current partition.",
+                            modifier = Modifier.padding(10.dp),
                             style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         isos.forEach { iso ->
-                            val baseName = iso.name.substringAfterLast('/')
                             Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(12.dp),
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        text = baseName,
+                                        text = iso.name,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.weight(1f),
                                     )
-                                    Button(
-                                        onClick = {
-                                            onIntent(UiIntent.IsoActionRequested(iso.name, IsoAction.LinkXml))
-                                        },
-                                        enabled = state.actionsEnabled,
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
-                                        Text("Link XML")
+                                        Text(
+                                            "Bypass TPM",
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                        Switch(
+                                            checked = true,
+                                            onCheckedChange = {},
+                                            enabled = state.actionsEnabled,
+                                        )
+                                        OutlinedButton(
+                                            onClick = {
+                                                onIntent(UiIntent.IsoActionRequested(iso.name, IsoAction.LinkXml))
+                                            },
+                                            enabled = state.actionsEnabled,
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        ) {
+                                            Text("Link XML", style = MaterialTheme.typography.labelSmall)
+                                        }
                                     }
                                 }
                             }

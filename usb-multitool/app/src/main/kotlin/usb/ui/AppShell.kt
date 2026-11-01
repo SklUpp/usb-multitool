@@ -3,18 +3,14 @@ package usb.ui
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -34,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -71,14 +68,13 @@ fun AppShell(
             },
         ) { padding ->
             Column(
-                modifier =
-                    Modifier
-                        .padding(padding)
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .padding(padding)
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                DeviceBanner(state, onIntent)
+                DeviceHeader(state, onIntent)
                 OperationBanner(state, onIntent)
                 when (state.tab) {
                     ShellTab.Files -> FilesScreen(
@@ -144,124 +140,95 @@ fun RememberedAppShell(
     )
 }
 
+/**
+ * Compact top device status header: P0 context without eating screen height.
+ */
 @Composable
-private fun DeviceBanner(state: AppUiState, onIntent: (UiIntent) -> Unit) {
-    ElevatedCard(
+private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
+    val device = state.device
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        ),
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "USB Multitool",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                val themeLabel = when (state.darkTheme) {
-                    null -> "Auto"
-                    true -> "Dark"
-                    false -> "Light"
-                }
-                OutlinedButton(onClick = { onIntent(UiIntent.ToggleTheme) }) {
-                    Text(themeLabel, style = MaterialTheme.typography.labelMedium)
-                }
-            }
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
-            val device = state.device
-            if (device != null && state.presence == DevicePresence.Ready) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = device.identity,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = device?.identity ?: "USB Multitool",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (device != null && state.presence == DevicePresence.Ready) {
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(6.dp),
                             color = MaterialTheme.colorScheme.primaryContainer,
                         ) {
                             Text(
-                                text = "Ready",
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                text = device.capacityLabel,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                             )
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AssistChip(
-                            onClick = {},
-                            label = { Text(device.capacityLabel) },
-                        )
+                }
+
+                val subtitle = when {
+                    device != null && state.presence == DevicePresence.Ready -> {
                         val partCount = state.partitions.size
-                        val partLabel = if (partCount == 1) "1 partition" else "$partCount partitions"
-                        AssistChip(
-                            onClick = {},
-                            label = { Text(partLabel) },
-                        )
+                        val partText = if (partCount == 1) "1 partition" else "$partCount partitions"
+                        "$partText · Ready"
                     }
+                    state.presence == DevicePresence.PermissionRequired -> "Permission required"
+                    state.presence == DevicePresence.Busy -> "Device busy"
+                    else -> "No USB drive connected"
                 }
-            } else {
-                val statusText = when (state.presence) {
-                    DevicePresence.PermissionRequired -> "Permission required"
-                    DevicePresence.Busy -> "Device busy"
-                    DevicePresence.Absent, DevicePresence.Disconnected -> "No USB drive connected"
-                    else -> state.presence.name
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = if (state.presence == DevicePresence.PermissionRequired) {
-                            "Grant USB permission in the Android dialog."
-                        } else {
-                            "Plug in a USB mass-storage device via OTG."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+
+                Text(
+                    text = state.statusMessage ?: subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.presence == DevicePresence.PermissionRequired) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
-            state.statusMessage?.let { msg ->
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = msg,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+            val themeLabel = when (state.darkTheme) {
+                null -> "Auto"
+                true -> "Dark"
+                false -> "Light"
+            }
+            OutlinedButton(
+                onClick = { onIntent(UiIntent.ToggleTheme) },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            ) {
+                Text(themeLabel, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
 }
 
+/**
+ * Compact, prioritized operation status bar.
+ * P0 focus during execution; unobtrusive dismissable summary upon completion.
+ */
 @Composable
 private fun OperationBanner(
     state: AppUiState,
@@ -270,144 +237,128 @@ private fun OperationBanner(
     val op = state.operation ?: return
     var expanded by remember(op.label, op.state) { mutableStateOf(false) }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        ),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    if (op.state == OperationState.Running) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(
-                    text = op.label,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = when (op.state) {
-                            OperationState.Running -> MaterialTheme.colorScheme.primary
-                            OperationState.Completed -> MaterialTheme.colorScheme.primaryContainer
-                            OperationState.Failed -> MaterialTheme.colorScheme.errorContainer
-                            else -> MaterialTheme.colorScheme.surfaceVariant
-                        },
-                    ) {
-                        Text(
-                            text = op.state.name,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = when (op.state) {
-                                OperationState.Running -> MaterialTheme.colorScheme.onPrimary
-                                OperationState.Completed -> MaterialTheme.colorScheme.onPrimaryContainer
-                                OperationState.Failed -> MaterialTheme.colorScheme.onErrorContainer
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-
-                    if (op.state == OperationState.Completed || op.state == OperationState.Failed || op.state == OperationState.Cancelled) {
-                        TextButton(onClick = { onIntent(UiIntent.OperationUpdated(null)) }) {
-                            Text("Dismiss")
-                        }
-                    }
-                }
-            }
-
-            if (op.bytesTotal > 0L && op.state == OperationState.Running) {
-                LinearProgressIndicator(
-                    progress = { op.fraction },
-                    modifier = Modifier.fillMaxWidth(),
-                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "${(op.fraction * 100).toInt()}% (${DeviceIdentity.formatCapacity(op.bytesDone.toULong())} / ${DeviceIdentity.formatCapacity(op.bytesTotal.toULong())})",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        text = op.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text = "${DeviceIdentity.formatCapacity(op.bytesPerSecond.toULong())}/s",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                }
-            }
-
-            op.resultMessage?.let { res ->
-                val lines = res.lines()
-                val isMultiLine = lines.size > 2
-                val displayText = if (isMultiLine && !expanded) lines.first() else res
-
-                Text(
-                    text = displayText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-
-                if (isMultiLine) {
-                    TextButton(
-                        onClick = { expanded = !expanded },
-                    ) {
-                        Text(if (expanded) "Hide details" else "Show details (${lines.size} items)")
+                    if (op.bytesTotal > 0L) {
+                        Text(
+                            text = "${(op.fraction * 100).toInt()}% · ${DeviceIdentity.formatCapacity(op.bytesPerSecond.toULong())}/s",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
                     }
                 }
+                if (op.bytesTotal > 0L) {
+                    LinearProgressIndicator(
+                        progress = { op.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
-
-            op.errorMessage?.let { err ->
-                Text(
-                    text = "Error: $err",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            if (op.state == OperationState.Running || op.state == OperationState.Queued) {
+        }
+    } else {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (op.state == OperationState.Failed) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.secondaryContainer
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = { onIntent(UiIntent.CancelOperation) }) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Cancel operation",
-                            color = MaterialTheme.colorScheme.error,
+                            text = "${op.label}: ${op.state.name}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (op.state == OperationState.Failed) {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            },
                         )
+                        op.resultMessage?.let { res ->
+                            val lines = res.lines()
+                            val isMultiLine = lines.size > 2
+                            val displayText = if (isMultiLine && !expanded) lines.first() else res
+
+                            Text(
+                                text = displayText,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = if (expanded) 8 else 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = if (op.state == OperationState.Failed) {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                },
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        op.resultMessage?.let { res ->
+                            if (res.lines().size > 2) {
+                                TextButton(
+                                    onClick = { expanded = !expanded },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        if (expanded) "Less" else "Details",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                        }
+                        if (op.state == OperationState.Completed || op.state == OperationState.Failed || op.state == OperationState.Cancelled) {
+                            TextButton(
+                                onClick = { onIntent(UiIntent.OperationUpdated(null)) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text("Dismiss", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
-
-private fun ShellTab.title(): String =
-    when (this) {
-        ShellTab.Files -> "Files"
-        ShellTab.Ventoy -> "Ventoy"
-        ShellTab.Partitions -> "Partitions"
-        ShellTab.Diagnostics -> "Diagnostics"
-    }
-
-private fun ShellTab.shortLabel(): String =
-    when (this) {
-        ShellTab.Files -> "F"
-        ShellTab.Ventoy -> "V"
-        ShellTab.Partitions -> "P"
-        ShellTab.Diagnostics -> "D"
-    }
