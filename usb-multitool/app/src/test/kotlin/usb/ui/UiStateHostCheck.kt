@@ -114,6 +114,40 @@ object UiStateHostCheck {
         require(send.effects.single().kind == UiEffect.Kind.SendToRawWriter)
         require(send.state.tab == ShellTab.Partitions)
 
+        val efi = ready.copy(selectedPartitionId = "2")
+        listOf(
+            UiIntent.CreateFolder("reports"),
+            UiIntent.DeleteEntry("win11.iso"),
+            UiIntent.UploadFile("content://test/new.iso"),
+        ).forEach { intent ->
+            val blocked = UiReducer.reduce(efi, intent)
+            require(blocked.effects.isEmpty()) { "$intent wrote to a read-only partition" }
+            require(blocked.state.statusMessage?.contains("read-only") == true) {
+                "no explicit read-only status for $intent: ${blocked.state.statusMessage}"
+            }
+        }
+        val efiEnabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable(true)).state
+        require(efiEnabled.vtoyEfiWriteEnabled)
+        require(
+            UiReducer.reduce(efiEnabled, UiIntent.UploadFile("content://test/new.iso"))
+                .effects.single().kind == UiEffect.Kind.UploadFile,
+        ) { "enabled VTOYEFI writes must be allowed" }
+        require(
+            UiReducer.reduce(efi, UiIntent.DownloadFile("win11.iso", "content://test/out"))
+                .effects.single().kind == UiEffect.Kind.DownloadFile,
+        ) { "download is a read path and must stay allowed" }
+
+        val running = ready.copy(
+            presence = DevicePresence.Busy,
+            operation = OperationProgress(OperationState.Running, "raw write", bytesTotal = 100),
+        )
+        val switched = UiReducer.reduce(running, UiIntent.SelectPartition("2"))
+        require(switched.effects.isEmpty()) { "partition switch during a write must not list" }
+        require(switched.state.selectedPartitionId == "1") { "partition switched mid-write" }
+        require(switched.state.statusMessage == "Device busy") {
+            "unexpected status: ${switched.state.statusMessage}"
+        }
+
         println("UiStateHostCheck PASS")
     }
 }

@@ -23,6 +23,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,7 @@ import usb.ui.displayName
 import usb.device.UsbDiskSession
 import usb.diagnostics.Diagnostics
 import usb.fs.FatDirEntry
+import usb.fs.FatFsException
 import usb.fs.FatVolume
 import usb.fs.FilesystemId
 import usb.fs.Formatter
@@ -366,6 +368,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val op = object : DiskOperation(name = "autounattend.xml link") {
                     override suspend fun run() {
+                        // The browse volume still holds the USB interface claim; release it
+                        // (as the destructive path does) or UsbDiskSession.open() hits -EBUSY.
+                        // Remount is lazy: volumeForLocked() reopens on the next files operation.
+                        closeFilesVolume()
                         val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
                         val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
                         val disk = UsbDiskSession.open(mgr, dev)
@@ -478,6 +484,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
+        // A mouse, hub or other USB device leaving says nothing about the mass-storage
+        // disk; tearing down here would cancel a live raw write and leave it half-done.
+        if (device != null && device.deviceId != attachedDevice?.deviceId) return
         attachedDevice = null
         activeHandle?.cancel()
         activeHandle = null
@@ -533,6 +542,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Runs [action] with the selected partition, refusing writes it must not take. */
+    private inline fun withWritablePartitionId(action: (String) -> Unit) =
+        withPartitionId { partitionId ->
+            val block = UiReducer.writeBlockMessage(state)
+            if (block == null) action(partitionId) else onIntent(UiIntent.Status(block))
+        }
+
     /** Re-list the displayed directory from the real volume. */
     fun listDirectory(path: String, status: String? = null) = withPartitionId { partitionId ->
         submitFilesOperation(
@@ -547,7 +563,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun createFolder(path: String, name: String) {
         val target = fatChildPath(path, name)
-        withPartitionId { partitionId ->
+        withWritablePartitionId { partitionId ->
             submitFilesOperation(
                 label = "New folder $name",
                 onSuccess = { listDirectory(path, status = "Created folder $target") },
@@ -561,7 +577,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun deleteEntry(path: String, name: String) {
         val target = fatChildPath(path, name)
-        withPartitionId { partitionId ->
+        withWritablePartitionId { partitionId ->
             submitFilesOperation(
                 label = "Delete $name",
                 onSuccess = { listDirectory(path, status = "Deleted $target") },
@@ -577,7 +593,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun uploadFile(path: String, uri: String) {
         val resolver = getApplication<Application>().contentResolver
         var uploaded: String? = null
-        withPartitionId { partitionId ->
+        withWritablePartitionId { partitionId ->
             submitFilesOperation(
                 label = "Upload",
                 onSuccess = { listDirectory(path, status = "Uploaded $uploaded to $path") },
@@ -594,6 +610,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 operation.bytesTotal = reportedSize ?: -1L
 
                 val volume = volumeForLocked(partitionId)
+                // create = true maps to FA_CREATE_ALWAYS, so an existing same-named file
+                // would be truncated before the new copy is complete. Refuse instead.
+                if (fatEntryExists(volume, target)) {
+                    throw IllegalStateException(
+                        "$target already exists: delete it first (delete asks for confirmation)",
+                    )
+                }
                 val input = resolver.openInputStream(document)
                     ?: throw IllegalStateException("cannot open $uri for reading")
                 input.use { stream ->
@@ -617,6 +640,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    /**
+     * Whether [path] exists on [volume]. FatFs reports a missing entry as FR_NO_FILE (4)
+     * through the JNI bridge; any other stat failure is re-thrown, because treating an
+     * unreadable directory as "absent" would let a write truncate a file unseen.
+     */
+    private fun fatEntryExists(volume: FatVolume, path: String): Boolean =
+        try {
+            volume.stat(path)
+            true
+        } catch (failure: FatFsException) {
+            if (failure.message.orEmpty().endsWith("stat failed: $FR_NO_FILE")) {
+                false
+            } else {
+                throw IllegalStateException(
+                    "cannot check whether $path exists: ${failure.message ?: "stat failed"}",
+                    failure,
+                )
+            }
+        }
 
     /** Copy a volume file into a SAF document chosen by the activity. */
     private fun downloadFile(path: String, name: String, uri: String) {
@@ -797,6 +840,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val COPY_CHUNK_BYTES = 64 * 1024
         const val PROGRESS_TICK_MS = 120L
+
+        /** FatFs R0.16 FR_NO_FILE: fat_engine_stat() maps a missing path to this code. */
+        const val FR_NO_FILE = 4
     }
 }
 
@@ -867,6 +913,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A re-delivered CreateDocument result arrives after the activity is recreated
+        // (rotation/process death); without this it would find no pending name and drop it.
+        pendingDownloadName = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD)
         requestPermissionsIfNeeded()
         setContent {
             AppShell(
@@ -892,6 +941,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
+    }
+
     override fun onStart() {
         super.onStart()
         val filter = IntentFilter().apply {
@@ -899,11 +953,14 @@ class MainActivity : ComponentActivity() {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             addAction(ACTION_USB_PERMISSION)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(usbReceiver, filter)
-        }
+        // Only system USB attach/detach and our own PendingIntent broadcast arrive here,
+        // so the receiver is not exported (ContextCompat keeps the 2-arg call below API 33).
+        ContextCompat.registerReceiver(
+            this,
+            usbReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         checkAttachedDevices()
     }
 
@@ -971,5 +1028,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
+        private const val STATE_PENDING_DOWNLOAD = "usb.multitool.PENDING_DOWNLOAD"
     }
 }

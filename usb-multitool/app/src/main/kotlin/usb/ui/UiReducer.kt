@@ -108,14 +108,20 @@ object UiReducer {
                 ReduceResult(state.copy(tab = intent.tab, statusMessage = null))
 
             is UiIntent.SelectPartition ->
-                ReduceResult(
-                    state.copy(
-                        selectedPartitionId = intent.partitionId,
-                        currentPath = "/",
-                        files = emptyList(),
-                    ),
-                    effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
-                )
+                if (!state.actionsEnabled) {
+                    // Switching mid-operation would post a Running LoadFiles over the live
+                    // operation and orphan it from Cancel; report only why nothing changed.
+                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            selectedPartitionId = intent.partitionId,
+                            currentPath = "/",
+                            files = emptyList(),
+                        ),
+                        effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
+                    )
+                }
 
             is UiIntent.SetVtoyEfiWritable ->
                 ReduceResult(state.copy(vtoyEfiWriteEnabled = intent.enabled))
@@ -325,9 +331,12 @@ object UiReducer {
 
             is UiIntent.CreateFolder -> {
                 val name = intent.name.trim()
+                val block = writeBlockMessage(state)
                 when {
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    block != null ->
+                        ReduceResult(state.copy(statusMessage = block))
                     !validEntryName(name) ->
                         ReduceResult(state.copy(statusMessage = "Enter a folder name without / or \\"))
                     else ->
@@ -346,9 +355,12 @@ object UiReducer {
             }
 
             is UiIntent.DeleteEntry -> {
+                val block = writeBlockMessage(state)
                 when {
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    block != null ->
+                        ReduceResult(state.copy(statusMessage = block))
                     !validEntryName(intent.name) ->
                         ReduceResult(state.copy(statusMessage = "Select a valid entry to delete"))
                     else ->
@@ -366,22 +378,27 @@ object UiReducer {
                 }
             }
 
-            is UiIntent.UploadFile ->
-                if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
-                } else {
-                    ReduceResult(
-                        state,
-                        effects =
-                            listOf(
-                                UiEffect(
-                                    UiEffect.Kind.UploadFile,
-                                    path = state.currentPath,
-                                    uri = intent.uri,
+            is UiIntent.UploadFile -> {
+                val block = writeBlockMessage(state)
+                when {
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    block != null ->
+                        ReduceResult(state.copy(statusMessage = block))
+                    else ->
+                        ReduceResult(
+                            state,
+                            effects =
+                                listOf(
+                                    UiEffect(
+                                        UiEffect.Kind.UploadFile,
+                                        path = state.currentPath,
+                                        uri = intent.uri,
+                                    ),
                                 ),
-                            ),
-                    )
+                        )
                 }
+            }
 
             is UiIntent.DownloadFile ->
                 when {
@@ -430,6 +447,16 @@ object UiReducer {
             DevicePresence.Disconnected -> "Device disconnected"
             DevicePresence.Ready -> "Ready"
         }
+
+    /**
+     * Explicit reason writes to the selected partition are refused, or null when allowed.
+     * A read-only partition (VTOYEFI) stays untouched until the user enables writes.
+     */
+    fun writeBlockMessage(state: AppUiState): String? {
+        val partition = state.selectedPartition() ?: return "Select a partition first"
+        if (!partition.readOnly || state.vtoyEfiWriteEnabled) return null
+        return "${partition.name} is read-only: enable VTOYEFI writes first"
+    }
 
     /** A single FAT entry name: no separators, no dot entries. */
     private fun validEntryName(name: String): Boolean =

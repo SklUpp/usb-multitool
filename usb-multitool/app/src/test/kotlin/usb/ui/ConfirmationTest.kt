@@ -308,4 +308,54 @@ class UiStateMachineTest {
         assertTrue(UiReducer.reduce(busy, UiIntent.CreateFolder("x")).effects.isEmpty())
         assertTrue(UiReducer.reduce(busy, UiIntent.DeleteEntry("x")).effects.isEmpty())
     }
+
+    @Test
+    fun readOnlyPartitionRefusesWritesUntilEnabled() {
+        val efi = ready().copy(selectedPartitionId = "2")
+        listOf(
+            UiIntent.CreateFolder("reports"),
+            UiIntent.DeleteEntry("ubuntu.iso"),
+            UiIntent.UploadFile("content://docs/42"),
+        ).forEach { intent ->
+            val result = UiReducer.reduce(efi, intent)
+            assertTrue("$intent must not write to VTOYEFI", result.effects.isEmpty())
+            assertTrue(
+                "explicit reason expected for $intent",
+                result.state.statusMessage!!.contains("read-only"),
+            )
+        }
+
+        val enabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable(true)).state
+        assertEquals(
+            UiEffect.Kind.UploadFile,
+            UiReducer.reduce(enabled, UiIntent.UploadFile("content://docs/42")).effects.single().kind,
+        )
+    }
+
+    @Test
+    fun readOnlyPartitionStillAllowsReads() {
+        val efi = ready().copy(selectedPartitionId = "2")
+        val download = UiReducer.reduce(efi, UiIntent.DownloadFile("ubuntu.iso", "content://out/1"))
+        assertEquals(UiEffect.Kind.DownloadFile, download.effects.single().kind)
+        val listed = UiReducer.reduce(efi, UiIntent.OpenDirectory("/docs"))
+        assertEquals(UiEffect.Kind.LoadFiles, listed.effects.single().kind)
+    }
+
+    @Test
+    fun selectPartitionIsRefusedWhileAnOperationRuns() {
+        val running =
+            ready().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        label = "raw write",
+                        bytesTotal = 100,
+                    ),
+            )
+        val result = UiReducer.reduce(running, UiIntent.SelectPartition("2"))
+        assertTrue(result.effects.isEmpty())
+        assertEquals("1", result.state.selectedPartitionId)
+        assertEquals("Device busy", result.state.statusMessage)
+    }
 }
