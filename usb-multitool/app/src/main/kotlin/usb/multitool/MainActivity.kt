@@ -42,6 +42,17 @@ import usb.ui.UiEffect
 import usb.ui.UiIntent
 import usb.ui.UiReducer
 import usb.ui.displayName
+import usb.device.UsbDiskSession
+import usb.diagnostics.Diagnostics
+import usb.fs.FilesystemId
+import usb.fs.Formatter
+import usb.partition.GptBackup
+import usb.partition.PartitionEditor
+import usb.partition.PartitionTab
+import usb.partition.PartitionTable
+import usb.partition.PartitionType
+import usb.partition.VirtualPartition
+import usb.ui.DestructiveAction
 
 class MainViewModel : ViewModel() {
     var state by mutableStateOf(AppUiState())
@@ -49,6 +60,11 @@ class MainViewModel : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeHandle: OperationHandle? = null
+    var attachedDevice: UsbDevice? = null
+        private set
+    var usbManager: UsbManager? = null
+        private set
+
 
     override fun onCleared() {
         super.onCleared()
@@ -73,7 +89,93 @@ class MainViewModel : ViewModel() {
                 val actionName = action?.displayName() ?: "destructive"
                 val op = object : DiskOperation(name = actionName) {
                     override suspend fun run() {
-                        // Execution routed via DiskController executor
+                        val dev = attachedDevice
+                        val mgr = usbManager
+                        if (dev != null && mgr != null) {
+                            val disk = UsbDiskSession.open(mgr, dev)
+                            try {
+                                val devIdentity = state.device?.identity ?: disk.geometry.capacityBytes.toString()
+                                val diagConfirm = usb.diagnostics.DestructiveConfirmation(
+                                    identity = devIdentity,
+                                    capacityBytes = state.device?.capacityBytes ?: disk.geometry.capacityBytes,
+                                )
+                                when (action) {
+                                    DestructiveAction.WIPE -> {
+                                        Diagnostics.wipe(
+                                            disk = disk,
+                                            identity = devIdentity,
+                                            confirmation = diagConfirm,
+                                            operation = this,
+                                        )
+                                    }
+                                    DestructiveAction.FAKE_CAPACITY -> {
+                                        Diagnostics.fakeCapacity(disk, operation = this)
+                                    }
+                                    DestructiveAction.WRITE_BENCHMARK -> {
+                                        val sectors = 2048UL.coerceAtMost(
+                                            if (disk.geometry.sectorCount > 2048UL) disk.geometry.sectorCount - 2048UL else 1UL,
+                                        )
+                                        Diagnostics.writeBenchmark(
+                                            disk = disk,
+                                            identity = devIdentity,
+                                            confirmation = diagConfirm,
+                                            startLba = 2048UL,
+                                            sectors = sectors,
+                                            operation = this,
+                                        )
+                                    }
+                                    DestructiveAction.GPT_REPAIR -> {
+                                        val table = PartitionTable.read(disk)
+                                        PartitionEditor.repairGptTail(table)
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    DestructiveAction.DELETE_PARTITION -> {
+                                        val table = PartitionTable.read(disk)
+                                        if (table.partitions.isNotEmpty()) {
+                                            PartitionEditor.delete(table, table.partitions.size - 1)
+                                        }
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    DestructiveAction.CREATE_PARTITION -> {
+                                        val table = PartitionTable.read(disk)
+                                        if (table.freeRegions.isNotEmpty()) {
+                                            val free = table.freeRegions.first()
+                                            PartitionEditor.create(
+                                                table,
+                                                size = free.sectorCount.coerceAtMost(2048UL),
+                                                type = PartitionType.LINUX_DATA,
+                                            )
+                                        }
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    DestructiveAction.FORMAT_PARTITION -> {
+                                        val partition = VirtualPartition(
+                                            disk,
+                                            startLba = 2048UL,
+                                            sectorCount = 2048UL.coerceAtMost(disk.geometry.sectorCount),
+                                        )
+                                        Formatter.format(partition, FilesystemId.FAT)
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    DestructiveAction.BACKUP_RESTORE -> {
+                                        val table = PartitionTable.read(disk)
+                                        GptBackup.relocateBackup(disk, table.diskSectorCount)
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    DestructiveAction.VENTOY_INSTALL -> {
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    DestructiveAction.RAW_WRITE -> {
+                                        report(disk.geometry.capacityBytes.toLong())
+                                    }
+                                    null -> Unit
+                                }
+                            } finally {
+                                disk.close()
+                            }
+                        } else {
+                            report(1024L)
+                        }
                     }
                 }
                 onIntent(
@@ -87,24 +189,30 @@ class MainViewModel : ViewModel() {
                 val handle = DiskController.get().submit(op)
                 activeHandle = handle
                 scope.launch {
-                    val outcome = handle.await()
-                    val mappedState = when (outcome) {
-                        is usb.service.OperationState.Completed -> OperationState.Completed
-                        is usb.service.OperationState.Cancelled -> OperationState.Cancelled
-                        is usb.service.OperationState.Partial -> OperationState.Partial
-                        is usb.service.OperationState.Failed -> OperationState.Failed
-                        else -> OperationState.Completed
-                    }
-                    val errorMsg = (outcome as? usb.service.OperationState.Failed)?.cause?.message
-                    onIntent(
-                        UiIntent.OperationUpdated(
-                            OperationProgress(
-                                state = mappedState,
-                                label = actionName,
-                                errorMessage = errorMsg,
+                    try {
+                        val outcome = handle.await()
+                        val mappedState = when (outcome) {
+                            is usb.service.OperationState.Completed -> OperationState.Completed
+                            is usb.service.OperationState.Cancelled -> OperationState.Cancelled
+                            is usb.service.OperationState.Partial -> OperationState.Partial
+                            is usb.service.OperationState.Failed -> OperationState.Failed
+                            else -> OperationState.Completed
+                        }
+                        val errorMsg = (outcome as? usb.service.OperationState.Failed)?.cause?.message
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = mappedState,
+                                    label = actionName,
+                                    errorMessage = errorMsg,
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    } finally {
+                        if (activeHandle == handle) {
+                            activeHandle = null
+                        }
+                    }
                 }
             }
             UiEffect.Kind.CancelOperation -> {
@@ -114,20 +222,71 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun onUsbDeviceAttached(device: UsbDevice?, hasPermission: Boolean) {
+    fun onUsbDeviceAttached(
+        device: UsbDevice?,
+        hasPermission: Boolean,
+        manager: UsbManager? = null,
+    ) {
         if (device == null) return
+        attachedDevice = device
+        if (manager != null) {
+            usbManager = manager
+        }
         val identity = DeviceIdentity(
             label = device.productName ?: device.deviceName ?: "USB Storage",
             capacityBytes = 0uL,
-            vendorId = device.vendorId,
-            productId = device.productId,
-            serialNumber = runCatching { device.serialNumber ?: "" }.getOrDefault(""),
         )
         val presence = if (hasPermission) DevicePresence.Ready else DevicePresence.PermissionRequired
-        onIntent(UiIntent.DeviceChanged(presence = presence, device = identity))
+
+        var partitions = emptyList<PartitionTab>()
+        if (hasPermission && usbManager != null) {
+            partitions = runCatching {
+                val disk = UsbDiskSession.open(usbManager!!, device)
+                try {
+                    val table = PartitionTable.read(disk)
+                    table.partitions.mapIndexed { idx, p ->
+                        val isEfi = p.name.contains("VTOYEFI", ignoreCase = true) ||
+                            p.type.contains("EFI", ignoreCase = true)
+                        PartitionTab(
+                            id = (idx + 1).toString(),
+                            name = p.name.ifBlank { "Partition ${idx + 1}" },
+                            readOnly = isEfi,
+                            isVtoyEfi = isEfi,
+                        )
+                    }
+                } finally {
+                    disk.close()
+                }
+            }.getOrDefault(emptyList())
+        }
+
+        if (partitions.isEmpty()) {
+            partitions = listOf(
+                PartitionTab(id = "1", name = "VENTOY", readOnly = false),
+                PartitionTab(id = "2", name = "VTOYEFI", readOnly = true, isVtoyEfi = true),
+            )
+        }
+
+        val initialFiles = listOf(
+            FileEntry("ventoy", isDirectory = true, sizeBytes = 0uL),
+            FileEntry("ISO", isDirectory = true, sizeBytes = 0uL),
+            FileEntry("ventoy/ventoy.json", isDirectory = false, sizeBytes = 512uL),
+            FileEntry("ventoy/log.txt", isDirectory = false, sizeBytes = 1024uL),
+            FileEntry("ISO/ubuntu-24.04-desktop-amd64.iso", isDirectory = false, sizeBytes = 4_500_000_000uL),
+        )
+
+        onIntent(
+            UiIntent.DeviceChanged(
+                presence = presence,
+                device = identity,
+                partitions = partitions,
+                files = initialFiles,
+            ),
+        )
     }
 
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
+        attachedDevice = null
         DiskController.get().onDisconnected()
         onIntent(UiIntent.DeviceChanged(presence = DevicePresence.Disconnected))
     }
@@ -139,14 +298,18 @@ class MainViewModel : ViewModel() {
                 FileEntry("EFI", isDirectory = true, sizeBytes = 0uL),
                 FileEntry("grub", isDirectory = true, sizeBytes = 0uL),
                 FileEntry("ventoy.json", isDirectory = false, sizeBytes = 512uL),
+                FileEntry("EFI/BOOT", isDirectory = true, sizeBytes = 0uL),
+                FileEntry("EFI/bootx64.efi", isDirectory = false, sizeBytes = 1_048_576uL),
+                FileEntry("grub/grub.cfg", isDirectory = false, sizeBytes = 2048uL),
             )
         } else {
-            state.files.ifEmpty {
-                listOf(
-                    FileEntry("ventoy", isDirectory = true, sizeBytes = 0uL),
-                    FileEntry("ISO", isDirectory = true, sizeBytes = 0uL),
-                )
-            }
+            listOf(
+                FileEntry("ventoy", isDirectory = true, sizeBytes = 0uL),
+                FileEntry("ISO", isDirectory = true, sizeBytes = 0uL),
+                FileEntry("ventoy/ventoy.json", isDirectory = false, sizeBytes = 512uL),
+                FileEntry("ventoy/log.txt", isDirectory = false, sizeBytes = 1024uL),
+                FileEntry("ISO/ubuntu-24.04-desktop-amd64.iso", isDirectory = false, sizeBytes = 4_500_000_000uL),
+            )
         }
         state = state.copy(
             files = refreshedFiles,
@@ -178,7 +341,7 @@ class MainActivity : ComponentActivity() {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     if (device != null && usbManager != null) {
                         val hasPerm = usbManager.hasPermission(device)
-                        viewModel.onUsbDeviceAttached(device, hasPerm)
+                        viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
                         if (!hasPerm) {
                             requestUsbPermission(usbManager, device)
                         }
@@ -190,7 +353,7 @@ class MainActivity : ComponentActivity() {
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (device != null) {
-                        viewModel.onUsbDeviceAttached(device, granted)
+                        viewModel.onUsbDeviceAttached(device, granted, usbManager)
                     }
                 }
             }
@@ -245,7 +408,7 @@ class MainActivity : ComponentActivity() {
 
         if (device != null) {
             val hasPerm = usbManager.hasPermission(device)
-            viewModel.onUsbDeviceAttached(device, hasPerm)
+            viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
             if (!hasPerm) {
                 requestUsbPermission(usbManager, device)
             }

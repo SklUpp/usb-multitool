@@ -233,4 +233,35 @@ class UiStateMachineTest {
         val updated = UiReducer.reduce(state, UiIntent.Status("Uploaded myfile.iso to /"))
         assertEquals("Uploaded myfile.iso to /", updated.state.statusMessage)
     }
+
+    @Test
+    fun addFileMutatesFileListAndShowsStatus() {
+        val state = ready()
+        val newEntry = FileEntry("custom.iso", isDirectory = false, sizeBytes = 100uL)
+        val result = UiReducer.reduce(state, UiIntent.AddFile(newEntry))
+        assertTrue(result.state.files.contains(newEntry))
+        assertEquals("Uploaded custom.iso", result.state.statusMessage)
+
+        val newFolder = FileEntry("custom_dir", isDirectory = true, sizeBytes = 0uL)
+        val folderResult = UiReducer.reduce(state, UiIntent.AddFile(newFolder))
+        assertTrue(folderResult.state.files.contains(newFolder))
+        assertEquals("Created folder custom_dir", folderResult.state.statusMessage)
+    }
+
+    @Test
+    fun deleteFileRemovesEntryAndShowsStatus() {
+        val state = ready()
+        val toDelete = state.files.first()
+        val result = UiReducer.reduce(state, UiIntent.DeleteFile(toDelete))
+        assertFalse(result.state.files.contains(toDelete))
+        assertEquals("Deleted ${toDelete.name}", result.state.statusMessage)
+    }
+
+    @Test
+    fun updateFilesReplacesFileList() {
+        val state = ready()
+        val newFiles = listOf(FileEntry("single.txt", isDirectory = false, sizeBytes = 10uL))
+        val result = UiReducer.reduce(state, UiIntent.UpdateFiles(newFiles))
+        assertEquals(newFiles, result.state.files)
+    }
 }

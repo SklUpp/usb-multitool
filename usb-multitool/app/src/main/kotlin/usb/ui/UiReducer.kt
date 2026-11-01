@@ -34,6 +34,12 @@ sealed class UiIntent {
     data class Status(val message: String?) : UiIntent()
 
     data object CancelOperation : UiIntent()
+
+    data class AddFile(val entry: FileEntry) : UiIntent()
+
+    data class DeleteFile(val entry: FileEntry) : UiIntent()
+
+    data class UpdateFiles(val files: List<FileEntry>) : UiIntent()
 }
 
 data class UiEffect(
@@ -228,6 +234,39 @@ object UiReducer {
                 ReduceResult(
                     state,
                     effects = listOf(UiEffect(UiEffect.Kind.CancelOperation)),
+                )
+
+            is UiIntent.AddFile -> {
+                val updated = state.files.filterNot { it.name == intent.entry.name } + intent.entry
+                val baseName = intent.entry.name.substringAfterLast('/')
+                val status =
+                    if (intent.entry.isDirectory) {
+                        "Created folder $baseName"
+                    } else {
+                        "Uploaded $baseName"
+                    }
+                ReduceResult(
+                    state.copy(
+                        files = updated,
+                        statusMessage = status,
+                    ),
+                )
+            }
+
+            is UiIntent.DeleteFile -> {
+                val updated = state.files.filterNot { it.name == intent.entry.name }
+                val baseName = intent.entry.name.substringAfterLast('/')
+                ReduceResult(
+                    state.copy(
+                        files = updated,
+                        statusMessage = "Deleted $baseName",
+                    ),
+                )
+            }
+
+            is UiIntent.UpdateFiles ->
+                ReduceResult(
+                    state.copy(files = intent.files),
                 )
         }
 
