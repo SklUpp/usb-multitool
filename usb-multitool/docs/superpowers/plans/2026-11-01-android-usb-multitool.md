@@ -35,20 +35,24 @@
 
 ---
 
-### Task 1: Project Skeleton and Verification Commands
+### Task 1: Project Skeleton and GitHub Actions Verification
 
 **Files:**
 - Create: `usb-multitool/settings.gradle.kts`
 - Create: `usb-multitool/build.gradle.kts`
 - Create: `usb-multitool/gradle/libs.versions.toml`
+- Create: `usb-multitool/gradlew`
+- Create: `usb-multitool/gradle/wrapper/gradle-wrapper.properties`
+- Create: `usb-multitool/gradle/wrapper/gradle-wrapper.jar`
 - Create: `usb-multitool/app/build.gradle.kts`
 - Create: `usb-multitool/app/src/main/AndroidManifest.xml`
+- Create: `usb-multitool/.github/workflows/android-debug.yml`
 - Create: `usb-multitool/CONVENTIONS.md`
 - Test: `usb-multitool/app/src/test/kotlin/usb/SkeletonTest.kt`
 
 **Interfaces:**
 - Consumes: approved design specification.
-- Produces: Gradle tasks `:app:testDebugUnitTest`, `:app:assembleDebug`, `:app:lintDebug`, and `:app:compileDebugKotlin`.
+- Produces: GitHub Actions commands `./gradlew :app:testDebugUnitTest`, `./gradlew :app:assembleDebug`, `./gradlew :app:lintDebug`, and `./gradlew :app:compileDebugKotlin`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -65,26 +69,47 @@ class SkeletonTest {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the lightweight local check**
 
-Run: `cd usb-multitool && ./gradlew :app:testDebugUnitTest --tests usb.SkeletonTest`
-Expected: FAIL because the Gradle project and `BuildFacts` do not exist.
+Run: `sh -n gradlew || true`
+Expected: FAIL because `gradlew` does not exist yet. Do not invoke Gradle.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create an Android application module with Kotlin, Compose, JUnit, MockK, coroutines-test, and NDK support. Use `compileSdk = 36`, `targetSdk = 36`, and `minSdk = 28`. Add manifest features and permissions for USB host, notifications, foreground connected device, WakeLock, and all-files access. Put `const val LICENSE = "GPL-3.0-or-later"` in `BuildFacts`. Record the four exact Gradle commands in `CONVENTIONS.md`.
+Create the Android Gradle project and committed wrapper using `compileSdk = 36`, `targetSdk = 36`, and `minSdk = 28`. Add Kotlin, Compose, JUnit, MockK, coroutines-test, and NDK configuration. Declare USB host, notifications, foreground connected device, WakeLock, and all-files access in the manifest. Put `const val LICENSE = "GPL-3.0-or-later"` in `BuildFacts`.
 
-- [ ] **Step 4: Run test to verify it passes**
+Create `.github/workflows/android-debug.yml` on `ubuntu-latest`. It sets up Java 21, enables KVM for an Android emulator, installs the SDK packages required by the Gradle files, and runs:
 
-Run the four commands from `CONVENTIONS.md`.
-Expected: unit test PASS; debug APK builds; lint and Kotlin compilation exit 0.
+```bash
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug
+./gradlew :app:lintDebug
+./gradlew :app:compileDebugKotlin
+```
+
+Upload the debug APK and test reports. In `CONVENTIONS.md`, state that Gradle, NDK, emulator, and instrumentation commands run only in GitHub Actions. Local checks are file, script, and static validation only.
+
+- [ ] **Step 4: Verify without a phone build**
+
+Run:
+
+```bash
+sh -n gradlew
+git grep -n "compileSdk = 36" -- app/build.gradle.kts
+git grep -n "connectedDevice" -- app/src/main/AndroidManifest.xml
+git grep -n "actions/setup-java" -- .github/workflows/android-debug.yml
+```
+
+Expected: shell syntax passes and all three strings are present.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add usb-multitool settings.gradle.kts build.gradle.kts gradle app CONVENTIONS.md
-git commit -m "build: create verified Android project skeleton"
+git add usb-multitool
+git commit -m "build: create Android project and CI verification"
 ```
+
+After commit, the controller starts the workflow with `gh workflow run` or an authenticated push and records its run URL. A CI failure returns to this task and does not authorize a local Gradle fallback.
 
 ### Task 2: Block Geometry and SCSI Command Selection
 
