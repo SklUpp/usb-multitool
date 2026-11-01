@@ -8,6 +8,8 @@ import org.junit.Assert.fail
 import org.junit.Test
 import usb.diagnostics.ConfirmationMismatchException
 import usb.diagnostics.DestructiveConfirmation
+import usb.service.DiskOperation
+import usb.service.OperationState
 import usb.testutil.RecordingDisk
 
 class RawWriterTest {
@@ -90,6 +92,25 @@ class RawWriterTest {
         } catch (_: ConfirmationMismatchException) {
         }
         assertEquals(0, disk.bytesWritten)
+    }
+
+    @Test fun unknownLengthOversizeKeepsCommittedSectorsAndReportsPartial() {
+        // 3 full sectors = 1536 bytes; disk holds 2 sectors = 1024.
+        // decodedSize unknown so early reject cannot fire.
+        val payload = ByteArray(3 * 512) { 7 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = null)
+        val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
+        val op = DiskOperation("raw-write-partial")
+        try {
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
+            fail("expected ImageTooLargeException")
+        } catch (_: ImageTooLargeException) {
+        }
+        // First two sectors fit and stay committed; overflowing third chunk not written.
+        assertEquals(1024, disk.bytesWritten)
+        assertEquals(listOf(0UL, 1UL), disk.writes)
+        assertEquals(OperationState.Partial, op.state)
+        assertEquals(1024L, op.bytesDone)
     }
 
     private fun gzip(data: ByteArray): ByteArray {

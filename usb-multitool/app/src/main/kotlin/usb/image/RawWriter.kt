@@ -6,6 +6,7 @@ import usb.diagnostics.DestructiveConfirmation
 import usb.diagnostics.closeMountedVolumes
 import usb.fs.MountedVolume
 import usb.service.DiskOperation
+import usb.service.OperationState
 
 class ImageTooLargeException(message: String) : Exception(message)
 class ImageCancelledException(message: String = "image write cancelled") : Exception(message)
@@ -55,9 +56,12 @@ object RawWriter {
                 if (n <= 0) break
                 val endBytes = total + n
                 if (endBytes.toULong() > capacity) {
-                    // Size rejection: no sector written for this overflowing chunk.
-                    // Prior full sectors may already be committed; known-size path
-                    // rejects before the loop. Streaming unknown length stops here.
+                    // Do not commit overflowing chunk. Prior sectors may already
+                    // be on disk; report PARTIAL instead of claiming zero writes.
+                    operation.bytesTotal = total
+                    if (total > 0L) {
+                        operation.state = OperationState.Partial
+                    }
                     throw ImageTooLargeException(
                         "decoded stream exceeds disk capacity at byte $endBytes",
                     )
@@ -67,6 +71,10 @@ object RawWriter {
                     sector.fill(0, n, sectorSize)
                 }
                 if (lba >= disk.geometry.sectorCount) {
+                    operation.bytesTotal = total
+                    if (total > 0L) {
+                        operation.state = OperationState.Partial
+                    }
                     throw ImageTooLargeException("no sectors remain")
                 }
                 disk.write(lba, ByteBuffer.wrap(sector))
@@ -76,6 +84,9 @@ object RawWriter {
                 if (n < sectorSize) break
             }
             operation.bytesTotal = total
+            if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
+                operation.state = OperationState.Completed
+            }
         }
     }
 

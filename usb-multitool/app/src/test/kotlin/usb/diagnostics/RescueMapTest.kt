@@ -196,4 +196,32 @@ class RescueMapTest {
         assertEquals(1024, disk.bytesWritten)
         assertEquals(9, disk.bytes()[0].toInt())
     }
+
+    @Test fun restoreConsumesCopiedSectorAtLbaWithoutRewrite() {
+        // Dense image: sector i lives at offset i * sectorSize.
+        // Map: 0 COPIED (skip write), 1 FAILED, 2 NON_TRIED.
+        val sectorSize = 512
+        val s0 = ByteArray(sectorSize) { 0xA0.toByte() }
+        val s1 = ByteArray(sectorSize) { 0xB1.toByte() }
+        val s2 = ByteArray(sectorSize) { 0xC2.toByte() }
+        val image = s0 + s1 + s2
+        val seed = ByteArray(3 * sectorSize) { 0x11 }
+        // Pre-copied sector 0 already matches image; must not be rewritten.
+        System.arraycopy(s0, 0, seed, 0, sectorSize)
+        val disk = RecordingDisk.fromBytes(seed, sectorSize)
+        val map = RescueMap.whole(3UL)
+        map.markCopied(0UL, 1UL)
+        map.markFailed(1UL, 1UL)
+        val source = ImageSource.fromBytes(image, format = ImageFormat.IMG, decodedSize = image.size.toLong())
+
+        Rescue.restore(source, disk, map)
+
+        assertEquals(listOf(1UL, 2UL), disk.writes)
+        assertFalse(disk.writes.contains(0UL))
+        // Sector 1 must come from image offset sectorSize, not stream head after a skip.
+        assertTrue(disk.bytes().copyOfRange(sectorSize, sectorSize * 2).contentEquals(s1))
+        assertTrue(disk.bytes().copyOfRange(sectorSize * 2, sectorSize * 3).contentEquals(s2))
+        assertTrue(disk.bytes().copyOfRange(0, sectorSize).contentEquals(s0))
+        assertEquals(listOf(0UL until 3UL), map.copied)
+    }
 }

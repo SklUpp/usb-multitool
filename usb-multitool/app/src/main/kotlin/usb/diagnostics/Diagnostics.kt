@@ -195,6 +195,8 @@ object Rescue {
             val sector = ByteArray(sectorSize)
             var lba = 0UL
             while (lba < map.sectorCount) {
+                // Always consume the sector at this LBA from the image so
+                // COPIED skips stay aligned; never rewrite a COPIED sector.
                 val n = readFully(input, sector)
                 if (n == 0) break // clean EOF
                 if (n < sectorSize) {
