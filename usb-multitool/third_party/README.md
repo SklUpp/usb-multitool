@@ -3,7 +3,9 @@
 Upstream trees are **not** stored in this commit. Exact URLs and revisions are
 pinned below. CI runs `scripts/fetch-third-party.sh` before enabling
 `USB_WITH_*` and `-DUSB_REQUIRE_ENGINES=ON`. Local builds keep engines OFF and
-must not invent filesystem/Ventoy/F3/ddrescue success.
+must not invent filesystem/Ventoy/F3/ddrescue success. `exfatprogs` is the one
+exception: it is vendored under `third_party/exfatprogs/` with its upstream tag and
+commit recorded in `UPSTREAM.md`.
 
 ## FatFs (FAT12/16/32 + exFAT)
 
@@ -35,6 +37,13 @@ must not invent filesystem/Ventoy/F3/ddrescue success.
 - License: GPL-2.0-or-later
 - Bridge: `ext4_blockdev` callbacks → `usb_partition_read` / `usb_partition_write`
 
+## exfatprogs (exFAT fsck only)
+
+- Vendored in-tree: `third_party/exfatprogs/` (tag `1.4.3`, commit `a37d3273`)
+- URL: https://github.com/exfatprogs/exfatprogs/archive/refs/tags/1.4.3.tar.gz
+- License: GPL-2.0-or-later (compatible with this app's GPL-3.0-or-later)
+- Bridge: `fsck/exfat_fsck.c` driven through `exfat_fsck_jni.cpp`; mkfs comes from FatFs
+
 ## Fetch checklist
 
 ```bash
@@ -53,18 +62,18 @@ app `externalNativeBuild` CMake arguments.
 
 ## Ventoy
 
-- See `ventoy/README.md`
-- URL: https://github.com/ventoy/Ventoy/archive/refs/tags/v1.1.18.tar.gz
-- Revision: tag **v1.1.18** / commit `6116894ab8abdf3ef8d43411a6732d34ee19214e`
-- Bridge: `app/src/main/cpp/ventoy_bridge.c`
+- No upstream tree is vendored or fetched. `usb/ventoy/VentoyLayout.kt` builds the
+  VTOYEFI/partition layout itself and `VentoyAssets` pins the release payloads it
+  installs; `VentoyDownloader` fetches official release archives over HTTPS and
+  verifies them by SHA-256.
+- URL: https://github.com/ventoy/Ventoy/releases
 
 ## F3
 
-- See `f3/README.md`
-- URL: https://github.com/AltraMayor/f3/archive/refs/tags/v10.0.tar.gz
-- Revision: tag **v10.0** / commit `67b8a5d546cbe41b0072c2e62aefe165e4675b61`
-- Bridge: none. No f3probe shim is compiled; `Diagnostics.fakeCapacity` throws
-  `DiskException.UnsupportedCommand` until a real probe is wired.
+- See `f3/README.md`. The tree is fetched by `scripts/fetch-third-party.sh`, but no
+  `f3probe` bridge is compiled: capacity probing needs destructive write patterns
+  with a signed confirmation, so the diagnostics screen offers only a read scan and
+  a ddrescue-style rescue image.
 
 ## GNU ddrescue
 

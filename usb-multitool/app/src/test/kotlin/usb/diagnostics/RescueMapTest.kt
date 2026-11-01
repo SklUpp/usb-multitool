@@ -348,18 +348,6 @@ class RescueMapTest {
         }
     }
 
-    @Test fun fakeCapacityFailsLoudlyInsteadOfFabricatingAVerdict() {
-        val disk = RecordingDisk(sectorCount = 64UL)
-        try {
-            Diagnostics.fakeCapacity(disk)
-            fail("expected DiskException.UnsupportedCommand")
-        } catch (failure: DiskException.UnsupportedCommand) {
-            assertTrue(failure.message.orEmpty().contains("f3probe"))
-        }
-        assertEquals(0, disk.readCount)
-        assertEquals(0, disk.writeCount)
-    }
-
     private class OneBadSectorDisk(
         sectorCount: ULong,
         sectorSize: Int,

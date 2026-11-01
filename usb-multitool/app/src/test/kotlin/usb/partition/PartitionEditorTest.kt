@@ -41,25 +41,6 @@ class PartitionEditorTest {
         assertTrue(esp.partitions[0].esp)
     }
 
-    @Test fun repairGptTailRefusesHybrid() {
-        val hybrid = fixture("between-partitions").copy(
-            scheme = TableScheme.HYBRID,
-            hybridAmbiguous = true,
-        )
-        try {
-            PartitionEditor.repairGptTail(hybrid)
-            fail("expected HybridAmbiguityException")
-        } catch (_: HybridAmbiguityException) {
-        }
-    }
-
-    @Test fun repairGptTailOnGptSucceeds() {
-        val before = fixture("between-partitions")
-        val after = PartitionEditor.repairGptTail(before)
-        assertEquals(TableScheme.GPT, after.scheme)
-        assertEquals(before.partitions, after.partitions)
-    }
-
     @Test
     fun createAfterDeletingLastGptPartitionLandsInsideUsableRange() {
         val disk = SyntheticGpt.build(sectorCount = 16384UL)

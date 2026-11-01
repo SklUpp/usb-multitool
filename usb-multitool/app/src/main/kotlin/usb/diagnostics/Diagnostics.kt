@@ -2,18 +2,11 @@ package usb.diagnostics
 
 import java.io.OutputStream
 import java.nio.ByteBuffer
-import usb.device.DiskException
 import usb.device.UsbDisk
 import usb.fs.MountedVolume
 import usb.image.CountedInputStream
 import usb.image.ImageSource
 import usb.service.DiskOperation
-
-data class FakeCapacityReport(
-    val claimedSectors: ULong,
-    val lastGoodSector: ULong,
-    val consistent: Boolean,
-)
 
 data class ScanReport(
     val sectorsRead: ULong,
@@ -30,25 +23,6 @@ data class BenchmarkReport(
 class UnsafeBenchmarkTargetException(message: String) : Exception(message)
 
 object Diagnostics {
-    /**
-     * f3probe is destructive: it writes pattern sectors and reads them back to
-     * detect wrap-around falsified capacity, so it needs a confirmed target,
-     * not just a [DiskOperation] progress sink.
-     *
-     * No probe is linked into `libusb_native` (third_party/f3 holds fetch
-     * instructions only and the former `f3_bridge.c` shim returned
-     * `sectorCount - 1` without touching the disk). Reporting a verdict we did
-     * not measure would claim a disk is genuine when nothing was tested, so
-     * this fails loudly instead.
-     */
-    fun fakeCapacity(disk: UsbDisk, operation: DiskOperation = DiskOperation("f3probe")): FakeCapacityReport {
-        throw DiskException.UnsupportedCommand(
-            "fake-capacity probe unavailable: f3probe is not built into libusb_native " +
-                "and probing ${disk.geometry.sectorCount} sectors of this device needs " +
-                "destructive write patterns with a signed confirmation",
-        )
-    }
-
     fun readScan(disk: UsbDisk, operation: DiskOperation = DiskOperation("read-scan")): ScanReport {
         val failed = mutableListOf<ULongRange>()
         val buf = ByteBuffer.allocate(disk.geometry.sectorSize)

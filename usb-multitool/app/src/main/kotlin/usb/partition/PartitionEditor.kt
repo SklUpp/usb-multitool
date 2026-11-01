@@ -57,22 +57,6 @@ object PartitionEditor {
         return table.copy(partitions = partitions)
     }
 
-    fun repairGptTail(table: PartitionTable): PartitionTable {
-        if (table.scheme == TableScheme.HYBRID || table.hybridAmbiguous) {
-            throw HybridAmbiguityException("refusing GPT tail repair on hybrid/ambiguous layout")
-        }
-        require(table.scheme == TableScheme.GPT) { "repairGptTail requires GPT" }
-        // Backup header + entries relocate to current disk end; CRC recomputed by writer.
-        return table.copy(
-            // Marker field: free trailing sectors reserved for backup structures stay free.
-            freeRegions = PartitionTable.recomputeFree(
-                table.partitions,
-                table.diskSectorCount,
-                alignmentSectors(table.sectorSize),
-            ),
-        )
-    }
-
     private fun alignmentSectors(sectorSize: Int): ULong {
         val bytes = MIB_BYTES
         require(bytes % sectorSize == 0L) { "sector size does not divide 1 MiB" }
