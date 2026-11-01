@@ -34,7 +34,7 @@ class PartitionWriterTest {
         assertEquals(table.partitions.size + 1, committed.partitions.size)
         val created = committed.partitions.single { it.type == "0FC63DAF-8483-4772-8E79-3D69D8477DE4" }
         assertEquals(8UL, created.sectorCount)
-        assertTrue(created.startLba % 2048UL == 0UL, "created partition must stay 1 MiB aligned")
+        assertTrue("created partition must stay 1 MiB aligned", created.startLba % 2048UL == 0UL)
     }
 
     @Test
