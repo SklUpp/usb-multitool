@@ -37,6 +37,9 @@ typedef struct FatStat {
 	uint8_t attrib;
 } FatStat;
 
+/* Engine-local status outside FatFs FRESULT range. */
+#define FAT_ENGINE_FILE_TOO_LARGE 100
+
 /* Max file size accepted before create. FAT12/16/32: 4GiB-1; exFAT: effectively unlimited here. */
 uint64_t fat_engine_max_file_size(FatFsKind kind);
 

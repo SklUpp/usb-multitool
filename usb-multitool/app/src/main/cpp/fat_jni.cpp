@@ -188,14 +188,20 @@ extern "C" JNIEXPORT jobjectArray JNICALL
 Java_usb_fs_FatFsNative_nativeList(JNIEnv *env, jclass, jlong volume, jstring path)
 {
 	std::string p = from_jstring(env, path);
-	FatDirEnt tmp[256];
 	size_t count = 0;
-	int rc = fat_engine_list(static_cast<uint64_t>(volume), p.c_str(), tmp, 256, &count);
+	int rc = fat_engine_list(static_cast<uint64_t>(volume), p.c_str(), nullptr, 0, &count);
 	if (rc != 0) {
 		throw_fat(env, "usb/fs/FatFsException", ("list failed: " + std::to_string(rc)).c_str());
 		return nullptr;
 	}
-	if (count > 256) count = 256;
+	std::vector<FatDirEnt> tmp(count);
+	if (count > 0) {
+		rc = fat_engine_list(static_cast<uint64_t>(volume), p.c_str(), tmp.data(), tmp.size(), &count);
+		if (rc != 0) {
+			throw_fat(env, "usb/fs/FatFsException", ("list failed: " + std::to_string(rc)).c_str());
+			return nullptr;
+		}
+	}
 	jclass entryCls = env->FindClass("usb/fs/FatDirEntry");
 	jmethodID ctor = env->GetMethodID(entryCls, "<init>", "(Ljava/lang/String;ZJB)V");
 	jobjectArray arr = env->NewObjectArray(static_cast<jsize>(count), entryCls, nullptr);
@@ -210,6 +216,7 @@ Java_usb_fs_FatFsNative_nativeList(JNIEnv *env, jclass, jlong volume, jstring pa
 	}
 	return arr;
 }
+
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_usb_fs_FatFsNative_nativeStat(JNIEnv *env, jclass, jlong volume, jstring path)
@@ -296,10 +303,7 @@ Java_usb_fs_FatFsNative_nativeWrite(JNIEnv *env, jclass, jlong volume, jstring p
 	int rc = fat_engine_write_file(static_cast<uint64_t>(volume), p.c_str(),
 				       static_cast<uint64_t>(offset), buf.data(), buf.size(), &wrote,
 				       static_cast<uint64_t>(plannedTotalSize), create ? 1 : 0);
-	if (rc == FR_INVALID_PARAMETER && plannedTotalSize > 0) {
-		/* Distinguish size rejection: check against known max via kind probe is awkward;
-		 * FatFsNative Kotlin maps this specific path via FileTooLargeException by checking
-		 * planned size before call; still throw typed error here. */
+	if (rc == FAT_ENGINE_FILE_TOO_LARGE) {
 		throw_fat(env, "usb/fs/FileTooLargeException",
 			  "file exceeds filesystem size limit");
 		return -1;
@@ -310,6 +314,7 @@ Java_usb_fs_FatFsNative_nativeWrite(JNIEnv *env, jclass, jlong volume, jstring p
 	}
 	return static_cast<jint>(wrote);
 }
+
 
 extern "C" JNIEXPORT void JNICALL
 Java_usb_fs_FatFsNative_nativeMkfs(JNIEnv *env, jclass, jlong blockHandle, jint sectorSize,

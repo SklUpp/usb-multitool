@@ -21,4 +21,5 @@ target_include_directories(usb_native PRIVATE
 
 
 find_library(log-lib log)
-target_link_libraries(usb_native ${log-lib})
+find_package(Threads REQUIRED)
+target_link_libraries(usb_native ${log-lib} Threads::Threads)

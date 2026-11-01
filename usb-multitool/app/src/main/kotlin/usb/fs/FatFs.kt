@@ -35,6 +35,23 @@ class FatFsException(message: String) : Exception(message)
 
 class FileTooLargeException(message: String) : Exception(message)
 
+/** Pure write-policy helpers (host-testable without JNI). */
+internal fun resolvePlannedTotal(offset: Long, dataSize: Int, plannedTotalSize: Long): Long =
+    maxOf(offset + dataSize.toLong(), plannedTotalSize)
+
+internal fun requireWithinFileLimit(planned: Long, max: Long, kind: FatKind) {
+    if (planned > max) {
+        throw FileTooLargeException("planned size $planned exceeds $kind limit $max")
+    }
+}
+
+internal fun requireFullWrite(wrote: Int, expected: Int) {
+    if (wrote < expected) {
+        throw FatFsException("short write: wrote $wrote of $expected bytes")
+    }
+}
+
+
 /** JNI block backend: relative LBA sector I/O. Return 0 on success. */
 interface FatBlockCallback {
     fun readSectors(lba: Long, buffer: ByteArray): Int
@@ -115,17 +132,21 @@ class FatVolume internal constructor(
         return FatFsNative.nativeRead(volumeHandle, path, offset, length)
     }
 
-    fun write(path: String, data: ByteArray, offset: Long = 0L, create: Boolean = true) {
+    fun write(
+        path: String,
+        data: ByteArray,
+        offset: Long = 0L,
+        create: Boolean = true,
+        plannedTotalSize: Long = offset + data.size.toLong(),
+    ) {
         ensureOpen()
-        val planned = offset + data.size.toLong()
-        val max = FatFsNative.nativeMaxFileSize(kind.code)
-        if (planned > max) {
-            throw FileTooLargeException(
-                "planned size $planned exceeds $kind limit $max",
-            )
-        }
-        FatFsNative.nativeWrite(volumeHandle, path, offset, data, planned, create)
+        val planned = resolvePlannedTotal(offset, data.size, plannedTotalSize)
+        requireWithinFileLimit(planned, FatFsNative.nativeMaxFileSize(kind.code), kind)
+        val wrote = FatFsNative.nativeWrite(volumeHandle, path, offset, data, planned, create)
+        requireFullWrite(wrote, data.size)
     }
+
+
 
     fun sync() {
         ensureOpen()

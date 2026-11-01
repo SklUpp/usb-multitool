@@ -4,6 +4,7 @@
 #include "diskio.h"
 #include "usb_block.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,7 @@ typedef struct FatVolume {
 
 static FatVolume g_vols[FF_VOLUMES];
 static BYTE g_next_pdrv;
+static pthread_mutex_t g_vols_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static int map_fr(FRESULT fr)
 {
@@ -80,7 +82,7 @@ static FatFsKind kind_from_fs(const FATFS *fs)
 	}
 }
 
-static FatVolume *alloc_vol(void)
+static FatVolume *alloc_vol_locked(void)
 {
 	for (int i = 0; i < FF_VOLUMES; i++) {
 		BYTE pdrv = (BYTE)((g_next_pdrv + (BYTE)i) % FF_VOLUMES);
@@ -107,8 +109,12 @@ int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t secto
 		return (int)FR_INVALID_PARAMETER;
 	}
 
-	v = alloc_vol();
-	if (!v) return (int)FR_TOO_MANY_OPEN_FILES;
+	pthread_mutex_lock(&g_vols_mu);
+	v = alloc_vol_locked();
+	if (!v) {
+		pthread_mutex_unlock(&g_vols_mu);
+		return (int)FR_TOO_MANY_OPEN_FILES;
+	}
 
 	v->block_handle = block_handle;
 	v->sector_size = sector_size;
@@ -120,12 +126,14 @@ int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t secto
 	if (fr != FR_OK) {
 		fat_diskio_unbind(v->pdrv);
 		v->in_use = 0;
+		pthread_mutex_unlock(&g_vols_mu);
 		return map_fr(fr);
 	}
 
 	v->kind = kind_from_fs(&v->fs);
 	*out_kind = v->kind;
 	*out_volume = (uint64_t)(uintptr_t)v;
+	pthread_mutex_unlock(&g_vols_mu);
 	return 0;
 }
 
@@ -136,10 +144,12 @@ int fat_engine_umount(uint64_t volume)
 	FRESULT fr;
 
 	if (!v) return (int)FR_INVALID_OBJECT;
+	pthread_mutex_lock(&g_vols_mu);
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	fr = f_mount(NULL, path, 0);
 	fat_diskio_unbind(v->pdrv);
 	memset(v, 0, sizeof(*v));
+	pthread_mutex_unlock(&g_vols_mu);
 	return map_fr(fr);
 }
 
@@ -193,8 +203,23 @@ int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 	FILINFO fno;
 	char full[512];
 	FRESULT fr;
+	const char *p;
 
 	if (!v || !out || !path) return (int)FR_INVALID_PARAMETER;
+
+	/* FatFs f_stat rejects bare drive roots ("0:"); synthesize directory stat. */
+	p = path;
+	while (*p == '/') p++;
+	if (*p == '\0') {
+		memset(out, 0, sizeof(*out));
+		out->name[0] = '/';
+		out->name[1] = '\0';
+		out->is_dir = 1;
+		out->size = 0;
+		out->attrib = AM_DIR;
+		return 0;
+	}
+
 	make_path(full, sizeof(full), v->pdrv, path);
 	fr = f_stat(full, &fno);
 	if (fr != FR_OK) return map_fr(fr);
@@ -277,7 +302,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 
 	/* Reject oversized files before creating destination. */
 	if (planned_total_size > fat_engine_max_file_size(v->kind)) {
-		return (int)FR_INVALID_PARAMETER; /* caller maps to FileTooLarge */
+		return FAT_ENGINE_FILE_TOO_LARGE;
 	}
 
 	make_path(full, sizeof(full), v->pdrv, path);
@@ -299,6 +324,11 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	if (fr == FR_OK) fr = f_sync(&fil);
 	f_close(&fil);
 	*out_written = (size_t)bw;
+	if (fr == FR_OK && bw < len) {
+		/* Disk full / truncated write: surface as disk error so callers do not
+		 * treat partial success as complete. */
+		return (int)FR_DISK_ERR;
+	}
 	return map_fr(fr);
 }
 
@@ -315,8 +345,12 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 		return (int)FR_INVALID_PARAMETER;
 	}
 
-	v = alloc_vol();
-	if (!v) return (int)FR_TOO_MANY_OPEN_FILES;
+	pthread_mutex_lock(&g_vols_mu);
+	v = alloc_vol_locked();
+	if (!v) {
+		pthread_mutex_unlock(&g_vols_mu);
+		return (int)FR_TOO_MANY_OPEN_FILES;
+	}
 
 	v->block_handle = block_handle;
 	v->sector_size = sector_size;
@@ -337,6 +371,7 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 
 	fat_diskio_unbind(v->pdrv);
 	memset(v, 0, sizeof(*v));
+	pthread_mutex_unlock(&g_vols_mu);
 	return map_fr(fr);
 }
 
