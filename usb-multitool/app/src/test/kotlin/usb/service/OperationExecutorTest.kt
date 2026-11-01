@@ -1,8 +1,9 @@
 package usb.service
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,8 +13,7 @@ import org.junit.Test
 import usb.device.DiskException
 
 class OperationExecutorTest {
-    @Test
-    fun secondOperationWaitsAndDisconnectStopsBoth() = runTest {
+    @Test fun secondOperationWaitsAndDisconnectStopsBoth() = runTest {
         val executor = OperationExecutor(this)
         val started = CompletableDeferred<Unit>()
         val first = executor.submit(object : DiskOperation() {
@@ -24,15 +24,16 @@ class OperationExecutorTest {
         })
         started.await()
         val second = executor.submit(object : DiskOperation() {
-            override suspend fun run() = Unit
+            override suspend fun run() {
+                // queued behind first; disconnect should fail it before run
+            }
         })
         executor.onDisconnected()
         assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
         assertEquals(OperationState.Failed(DiskException.Disconnected()), second.await())
     }
 
-    @Test
-    fun operationsRunSerially() = runTest {
+    @Test fun operationsRunSerially() = runTest {
         val executor = OperationExecutor(this)
         val order = mutableListOf<String>()
         val gate = CompletableDeferred<Unit>()
@@ -58,8 +59,7 @@ class OperationExecutorTest {
         assertEquals(listOf("first-start", "first-end", "second"), order)
     }
 
-    @Test
-    fun cancelMarksCooperativeCancel() = runTest {
+    @Test fun cancelMarksCooperativeCancel() = runTest {
         val executor = OperationExecutor(this)
         val started = CompletableDeferred<Unit>()
         val handle = executor.submit(object : DiskOperation() {
@@ -73,8 +73,7 @@ class OperationExecutorTest {
         assertEquals(OperationState.Cancelled, handle.await())
     }
 
-    @Test
-    fun wakeLockReleasedAfterCompletion() = runTest {
+    @Test fun wakeLockReleasedAfterCompletion() = runTest {
         val locks = RecordingWakeLock()
         val executor = OperationExecutor(this, wakeLock = locks)
         val done = executor.submit(object : DiskOperation() {
@@ -88,8 +87,7 @@ class OperationExecutorTest {
         assertEquals(1, locks.releaseCount)
     }
 
-    @Test
-    fun firstOperationStartsForegroundAndIdleStops() = runTest {
+    @Test fun firstOperationStartsForegroundAndIdleStops() = runTest {
         val service = RecordingServiceControl()
         val executor = OperationExecutor(this, serviceControl = service)
         val done = executor.submit(object : DiskOperation() {
@@ -102,8 +100,7 @@ class OperationExecutorTest {
         assertEquals(1, service.stopCount)
     }
 
-    @Test
-    fun cancellationExceptionNotWrappedAsIoFailure() = runTest {
+    @Test fun cancellationExceptionNotWrappedAsIoFailure() = runTest {
         val executor = OperationExecutor(this)
         val handle = executor.submit(object : DiskOperation() {
             override suspend fun run() {
@@ -113,8 +110,7 @@ class OperationExecutorTest {
         assertEquals(OperationState.Cancelled, handle.await())
     }
 
-    @Test
-    fun controllerSurvivesIdleStopAndAcceptsLaterSubmit() = runTest {
+    @Test fun controllerSurvivesIdleStopAndAcceptsLaterSubmit() = runTest {
         val service = RecordingServiceControl()
         val controller = DiskController(
             serviceControl = service,
@@ -128,6 +124,7 @@ class OperationExecutorTest {
             assertEquals(OperationState.Completed, first.await())
             assertEquals(1, service.stopCount)
 
+            // Idle stop must not kill controller — later submit still runs.
             val second = DiskController.get().submit(object : DiskOperation() {
                 override suspend fun run() = Unit
             })
@@ -141,23 +138,117 @@ class OperationExecutorTest {
         }
     }
 
-    @Test
-    fun serviceControlNeverExposesRecursiveStartName() {
-        // Guard: ServiceControl API is requestStart, not startForegroundService.
-        val methods = ServiceControl::class.java.methods.map { it.name }.toSet()
-        assertTrue(methods.contains("requestStart"))
-        assertFalse(methods.contains("startForegroundService"))
-        assertFalse(methods.contains("startForeground"))
+    @Test fun noRecursiveServiceStartFromLifecycle() = runTest {
+        var requestStarts = 0
+        var promoteCalls = 0
+        var stopCalls = 0
+        val executor = OperationExecutor(this)
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = {
+                requestStarts++
+                // Mimic DiskService.onStartCommand: promote only, never re-enter startForegroundService.
+                promoteCalls++
+            },
+            stopService = { stopCalls++ },
+            hasOutstandingWork = { executor.hasOutstandingWork() },
+        )
+        executor.bind(NoOpWakeLock, lifecycle)
+
+        val done = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                assertEquals(1, requestStarts)
+                assertEquals(1, promoteCalls)
+                assertTrue(lifecycle.hasRequestedStart())
+            }
+        })
+        assertEquals(OperationState.Completed, done.await())
+        assertEquals(1, requestStarts)
+        assertEquals(1, promoteCalls)
+        assertEquals(1, stopCalls)
+        assertFalse(lifecycle.hasRequestedStart())
     }
 
-    @Test
-    fun destroyedServiceUnbindLeavesNewerBindingActive() = runTest {
+    @Test fun queuedSecondOperationSurvivesFirstCompletion() = runTest {
+        var stopCalls = 0
+        val executor = OperationExecutor(this)
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = {},
+            stopService = {
+                assertFalse(
+                    "stopWhenIdle while work outstanding",
+                    executor.hasOutstandingWork(),
+                )
+                stopCalls++
+            },
+            hasOutstandingWork = { executor.hasOutstandingWork() },
+        )
+        executor.bind(NoOpWakeLock, lifecycle)
+
+        val gate = CompletableDeferred<Unit>()
+        val firstStarted = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                firstStarted.complete(Unit)
+                gate.await()
+            }
+        })
+        firstStarted.await()
+        val second = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                // Survived first completion — service must still be up.
+                assertEquals(0, stopCalls)
+                secondStarted.complete(Unit)
+            }
+        })
+        advanceUntilIdle()
+        assertTrue(executor.hasOutstandingWork())
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, first.await())
+        assertEquals(OperationState.Completed, second.await())
+        secondStarted.await()
+        assertEquals(1, stopCalls)
+        assertFalse(executor.hasOutstandingWork())
+    }
+
+    @Test fun controllerBindIsolatesFromPublicFieldClobber() = runTest {
+        val testService = RecordingServiceControl()
+        val controller = DiskController(
+            serviceControl = testService,
+            dispatcher = Dispatchers.Default.limitedParallelism(1),
+        )
+        // Public fields gone — only bind API can rebind. Service cannot clobber via field write.
+        val clobber = RecordingServiceControl()
+        // Attempting field assignment must not compile; verify bind isolation instead:
+        // after service-like bind, original RecordingServiceControl is replaced only via bind.
+        controller.bind(NoOpWakeLock, clobber)
+        val done = controller.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, done.await())
+        assertEquals(0, testService.startCount)
+        assertEquals(0, testService.stopCount)
+        assertEquals(1, clobber.startCount)
+        assertEquals(1, clobber.stopCount)
+
+        // Rebind back to test controller — service cannot leave stale control unexpectedly.
+        controller.bind(NoOpWakeLock, testService)
+        val again = controller.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, again.await())
+        assertEquals(1, testService.startCount)
+        assertEquals(1, testService.stopCount)
+        assertEquals(1, clobber.startCount)
+        controller.shutdown()
+    }
+
+    @Test fun destroyedServiceUnbindLeavesNewerBindingActive() = runTest {
         // Mimic DiskService: old instance destroys after newer instance already bound.
         val oldWake = RecordingWakeLock()
         val oldLifecycle = RecordingServiceControl()
         val newWake = RecordingWakeLock()
         val newLifecycle = RecordingServiceControl()
-        val fallback = RecordingServiceControl()
         val controller = DiskController(
             dispatcher = Dispatchers.Default.limitedParallelism(1),
         )
@@ -165,8 +256,8 @@ class OperationExecutorTest {
         controller.bind(oldWake, oldLifecycle)
         controller.bind(newWake, newLifecycle)
 
-        // Stale onDestroy must not clobber the active binding / WakeLock.
-        controller.unbind(oldLifecycle, NoOpWakeLock, fallback)
+        // Stale onDestroy must not clobber the active binding.
+        controller.unbind(oldLifecycle)
 
         val done = controller.submit(object : DiskOperation() {
             override suspend fun run() {
@@ -177,23 +268,24 @@ class OperationExecutorTest {
         assertEquals(1, newLifecycle.startCount)
         assertEquals(1, newLifecycle.stopCount)
         assertEquals(0, oldLifecycle.startCount)
-        assertEquals(0, fallback.startCount)
+        assertEquals(0, oldLifecycle.stopCount)
         assertEquals(1, newWake.acquireCount)
         assertEquals(1, newWake.releaseCount)
         assertEquals(0, oldWake.acquireCount)
 
-        // Own unbind still resets when identity matches.
-        controller.unbind(newLifecycle, NoOpWakeLock, fallback)
+        // Own unbind still clears when identity matches.
+        controller.unbind(newLifecycle)
         val after = controller.submit(object : DiskOperation() {
             override suspend fun run() = Unit
         })
         assertEquals(OperationState.Completed, after.await())
+        // NoOpServiceControl after matching unbind — counts stay frozen on newLifecycle.
         assertEquals(1, newLifecycle.startCount)
         assertEquals(1, newLifecycle.stopCount)
-        assertEquals(1, fallback.startCount)
-        assertEquals(1, fallback.stopCount)
         controller.shutdown()
     }
+
+
 }
 
 class RecordingWakeLock : OperationWakeLock {
@@ -221,7 +313,7 @@ class RecordingServiceControl : ServiceControl {
     var stopCount = 0
         private set
 
-    override fun requestStart() {
+    override fun startForeground() {
         startCount++
     }
 

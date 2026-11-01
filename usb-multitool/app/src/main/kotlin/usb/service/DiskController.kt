@@ -28,16 +28,9 @@ class DiskController(
         executor.bind(wakeLock, serviceControl)
     }
 
-    /**
-     * Reset binding only if [serviceControl] still owns it.
-     * Idle onDestroy of an older service must leave a newer binding intact.
-     */
-    fun unbind(
-        serviceControl: ServiceControl,
-        fallbackWakeLock: OperationWakeLock,
-        fallbackServiceControl: ServiceControl,
-    ) {
-        executor.unbind(serviceControl, fallbackWakeLock, fallbackServiceControl)
+    /** Unbind only if [serviceControl] is still the active binding. */
+    fun unbind(serviceControl: ServiceControl) {
+        executor.unbind(serviceControl)
     }
 
 
@@ -50,6 +43,7 @@ class DiskController(
         @Volatile
         private var shared: DiskController? = null
 
+        /** Process-wide accessor for submitting disk work. */
         fun get(): DiskController {
             val existing = shared
             if (existing != null) return existing
@@ -58,6 +52,7 @@ class DiskController(
             }
         }
 
+        /** Test / service hook to install or clear the shared controller. */
         fun setForTest(controller: DiskController?) {
             synchronized(this) {
                 shared = controller
