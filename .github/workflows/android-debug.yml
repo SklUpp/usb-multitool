@@ -3,13 +3,16 @@ name: android-debug
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "**"
-  pull_request:
+    branches:
+      - feature/android-usb-multitool
 
 concurrency:
   group: android-debug-${{ github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: usb-multitool
 
 jobs:
   verify:
@@ -26,6 +29,7 @@ jobs:
           java-version: "21"
 
       - name: Enable KVM
+        working-directory: ${{ github.workspace }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -35,6 +39,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install SDK packages
+        working-directory: ${{ github.workspace }}
         run: |
           sdkmanager --install \
             "platform-tools" \
@@ -44,19 +49,15 @@ jobs:
             "cmake;3.22.1"
 
       - name: Unit tests
-        working-directory: ${{ github.workspace }}
         run: ./gradlew :app:testDebugUnitTest --no-daemon
 
       - name: Assemble debug APK
-        working-directory: ${{ github.workspace }}
         run: ./gradlew :app:assembleDebug --no-daemon
 
       - name: Lint debug
-        working-directory: ${{ github.workspace }}
         run: ./gradlew :app:lintDebug --no-daemon
 
       - name: Compile debug Kotlin
-        working-directory: ${{ github.workspace }}
         run: ./gradlew :app:compileDebugKotlin --no-daemon
 
       - name: Upload debug APK
@@ -64,7 +65,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: usb-multitool/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
       - name: Upload test reports
@@ -73,6 +74,6 @@ jobs:
         with:
           name: unit-test-reports
           path: |
-            app/build/reports/tests/
-            app/build/test-results/
+            usb-multitool/app/build/reports/tests/
+            usb-multitool/app/build/test-results/
           if-no-files-found: warn
