@@ -195,6 +195,20 @@ object UiStateHostCheck {
             "unexpected status: ${switched.state.statusMessage}"
         }
 
+        // Theme toggle: null -> true -> false -> null
+        val autoTheme = AppUiState()
+        val darkTheme = UiReducer.reduce(autoTheme, UiIntent.ToggleTheme).state
+        require(darkTheme.darkTheme == true) { "expected dark theme true" }
+        val lightTheme = UiReducer.reduce(darkTheme, UiIntent.ToggleTheme).state
+        require(lightTheme.darkTheme == false) { "expected light theme false" }
+        val backToAuto = UiReducer.reduce(lightTheme, UiIntent.ToggleTheme).state
+        require(backToAuto.darkTheme == null) { "expected auto theme null" }
+
+        // RunSelfTest produces effect and updates status
+        val selfTest = UiReducer.reduce(ready, UiIntent.RunSelfTest)
+        require(selfTest.effects.single().kind == UiEffect.Kind.RunSelfTest)
+        require(selfTest.state.statusMessage?.contains("self-test") == true)
+
         println("UiStateHostCheck PASS")
     }
 }

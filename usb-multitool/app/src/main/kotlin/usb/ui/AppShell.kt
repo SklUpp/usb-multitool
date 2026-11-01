@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,6 +11,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -22,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Alignment
 
 /**
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
@@ -35,7 +40,13 @@ fun AppShell(
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
 ) {
-    MaterialTheme {
+    val isDark = when (state.darkTheme) {
+        true -> true
+        false -> false
+        null -> isSystemInDarkTheme()
+    }
+    val colors = if (isDark) darkColorScheme() else lightColorScheme()
+    MaterialTheme(colorScheme = colors) {
         Scaffold(
             modifier = modifier.fillMaxSize(),
             bottomBar = {
@@ -59,7 +70,7 @@ fun AppShell(
                         .fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                DeviceBanner(state)
+                DeviceBanner(state, onIntent)
                 OperationBanner(state, onIntent)
                 when (state.tab) {
                     ShellTab.Files -> FilesScreen(state, onIntent, onRequestDownload = onRequestDownload)
@@ -107,14 +118,28 @@ fun RememberedAppShell(
 }
 
 @Composable
-private fun DeviceBanner(state: AppUiState) {
+private fun DeviceBanner(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     val deviceLine =
         state.device?.let { "${it.identity} · ${it.capacityLabel}" } ?: "—"
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = "USB Multitool",
-            style = MaterialTheme.typography.titleLarge,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "USB Multitool",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            val themeLabel = when (state.darkTheme) {
+                null -> "Theme: Auto"
+                true -> "Theme: Dark"
+                false -> "Theme: Light"
+            }
+            OutlinedButton(onClick = { onIntent(UiIntent.ToggleTheme) }) {
+                Text(themeLabel, style = MaterialTheme.typography.bodySmall)
+            }
+        }
         Text(
             text = "${state.presence.name}: $deviceLine",
             style = MaterialTheme.typography.bodyMedium,

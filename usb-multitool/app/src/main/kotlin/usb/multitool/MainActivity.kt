@@ -508,6 +508,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             UiEffect.Kind.SendToRawWriter -> Unit
+            UiEffect.Kind.RunSelfTest -> {
+                runSelfTest()
+            }
+        }
+    }
+    private fun runSelfTest() {
+        val dev = attachedDevice
+        val mgr = usbManager
+        if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
+            submitReadOnlyDiskOperation("Self-test") { disk, _ ->
+                val report = usb.diagnostics.SelfTestRunner.runAll(disk)
+                report.summary()
+            }
+        } else {
+            scope.launch(Dispatchers.IO) {
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(state = OperationState.Running, label = "Self-test: running..."),
+                    ),
+                )
+                try {
+                    val report = usb.diagnostics.SelfTestRunner.runAll(disk = null)
+                    val summary = report.summary()
+                    val targetState = if (report.allPassed) OperationState.Completed else OperationState.Failed
+                    onIntent(
+                        UiIntent.OperationUpdated(
+                            OperationProgress(
+                                state = targetState,
+                                label = "Self-test",
+                                resultMessage = summary,
+                            ),
+                        ),
+                    )
+                    onIntent(UiIntent.Status(summary))
+                } catch (e: Exception) {
+                    onIntent(
+                        UiIntent.OperationUpdated(
+                            OperationProgress(
+                                state = OperationState.Failed,
+                                label = "Self-test",
+                                errorMessage = e.message ?: "Self-test failed",
+                            ),
+                        ),
+                    )
+                }
+            }
         }
     }
 

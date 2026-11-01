@@ -45,6 +45,12 @@ sealed class UiIntent {
     /** Capture the GPT critical sectors into the app's external files dir. */
     data object CaptureGptBackup : UiIntent()
 
+    /** Cycle dark theme: System (null) -> Dark (true) -> Light (false) -> System (null). */
+    data object ToggleTheme : UiIntent()
+
+    /** Run the automated self-test suite over all functional engines. */
+    data object RunSelfTest : UiIntent()
+
     data class Status(val message: String?) : UiIntent()
 
     data object CancelOperation : UiIntent()
@@ -108,6 +114,7 @@ data class UiEffect(
         ReadScan,
         RescueBackup,
         CaptureGptBackup,
+        RunSelfTest,
     }
 }
 
@@ -339,6 +346,21 @@ object UiReducer {
             UiIntent.StartRescueBackup -> nonDestructiveEffect(state, UiEffect.Kind.RescueBackup)
 
             UiIntent.CaptureGptBackup -> nonDestructiveEffect(state, UiEffect.Kind.CaptureGptBackup)
+
+            UiIntent.ToggleTheme -> {
+                val next = when (state.darkTheme) {
+                    null -> true
+                    true -> false
+                    false -> null
+                }
+                ReduceResult(state.copy(darkTheme = next))
+            }
+
+            UiIntent.RunSelfTest ->
+                ReduceResult(
+                    state.copy(statusMessage = "Starting automated self-test..."),
+                    effects = listOf(UiEffect(UiEffect.Kind.RunSelfTest)),
+                )
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 

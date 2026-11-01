@@ -158,8 +158,9 @@ data class AppUiState(
     val statusMessage: String? = null,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
-    /** SAF URI of the GPT critical-sector backup chosen for the next restore. */
     val backupUri: String? = null,
+    /** Dark theme preference: null = system default, true = dark, false = light. */
+    val darkTheme: Boolean? = null,
 ) {
     val actionsEnabled: Boolean
         get() =

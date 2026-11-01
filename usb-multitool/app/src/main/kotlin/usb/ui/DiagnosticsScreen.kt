@@ -29,6 +29,14 @@ fun DiagnosticsScreen(
                 "partial.",
         )
 
+        Button(
+            onClick = { onIntent(UiIntent.RunSelfTest) },
+            enabled = !state.isRunning,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Run automated self-test")
+        }
+
         if (!state.actionsEnabled) {
             Text(UiReducer.presenceMessage(state.presence))
         }
