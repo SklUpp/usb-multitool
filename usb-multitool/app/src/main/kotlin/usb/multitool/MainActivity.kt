@@ -921,7 +921,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun submitReadOnlyDiskOperation(
         label: String,
-        body: (DiskOperation, UsbDisk) -> String,
+        body: (UsbDisk, DiskOperation) -> String,
     ) {
         val operation = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
@@ -932,7 +932,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val manager = usbManager ?: throw DiskException.Disconnected()
                 val disk = UsbDiskSession.open(manager, device)
                 try {
-                    result = body(this, disk)
+                    result = body(disk, this)
                 } finally {
                     disk.close()
                 }
