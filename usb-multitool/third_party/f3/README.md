@@ -9,4 +9,5 @@ curl -L https://github.com/AltraMayor/f3/archive/refs/tags/v10.0.tar.gz \
   | tar -xz --strip-components=1 -C third_party/f3
 ```
 
-Bridge: `app/src/main/cpp/f3_bridge.c`. Source tree intentionally absent.
+Bridge: none. `f3_bridge.c` was removed because it returned `sectorCount - 1`
+without probing; `Diagnostics.fakeCapacity` reports the missing engine instead.

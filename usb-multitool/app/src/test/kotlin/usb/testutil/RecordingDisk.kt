@@ -5,7 +5,8 @@ import usb.device.BlockGeometry
 import usb.device.FakeBotSession
 import usb.device.UsbDisk
 
-class RecordingDisk(
+/** In-memory disk; subclasses may inject read failures for a chosen LBA. */
+open class RecordingDisk(
     sectorCount: ULong = 262144UL, // 128 MiB default
     sectorSize: Int = 512,
 ) : UsbDisk(

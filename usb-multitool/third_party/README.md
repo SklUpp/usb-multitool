@@ -63,7 +63,8 @@ app `externalNativeBuild` CMake arguments.
 - See `f3/README.md`
 - URL: https://github.com/AltraMayor/f3/archive/refs/tags/v10.0.tar.gz
 - Revision: tag **v10.0** / commit `67b8a5d546cbe41b0072c2e62aefe165e4675b61`
-- Bridge: `app/src/main/cpp/f3_bridge.c`
+- Bridge: none. No f3probe shim is compiled; `Diagnostics.fakeCapacity` throws
+  `DiskException.UnsupportedCommand` until a real probe is wired.
 
 ## GNU ddrescue
 

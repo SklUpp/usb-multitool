@@ -1,11 +1,13 @@
 package usb.diagnostics
 
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.device.DiskException
 import usb.image.ImageFormat
 import usb.image.ImageSource
 import usb.service.DiskOperation
@@ -272,5 +274,100 @@ class RescueMapTest {
         assertEquals(listOf(2UL until 4UL), map.nonTried)
         assertTrue(map.partial)
         assertEquals(2 * sectorSize, disk.bytesWritten)
+    }
+
+    /**
+     * One unreadable sector in the middle must not shift the sectors after it:
+     * the image stays dense with a zero gap, the map records the failure, and
+     * restore puts every good sector back at its own LBA.
+     */
+    @Test fun rescueCopyThenRestoreRoundTripsPastOneFailedSector() {
+        val sectorSize = 512
+        val sectorCount = 8
+        val badLba = 3UL
+        val payload = ByteArray(sectorCount * sectorSize) { i -> ((i / sectorSize) + 1).toByte() }
+        val source = OneBadSectorDisk(sectorCount.toULong(), sectorSize, badLba)
+        for (i in 0 until sectorCount) {
+            source.bytes[i.toULong()] = payload.copyOfRange(i * sectorSize, (i + 1) * sectorSize)
+        }
+
+        val copyMap = RescueMap.whole(sectorCount.toULong())
+        val image = ByteArrayOutputStream()
+        Rescue.copy(source, image.asRescueSink(sectorSize), copyMap)
+
+        val imageBytes = image.toByteArray()
+        assertEquals(sectorCount * sectorSize, imageBytes.size)
+        assertEquals(listOf(3UL until 4UL), copyMap.failed)
+        assertEquals(listOf(0UL until 3UL, 4UL until 8UL), copyMap.copied)
+        assertTrue(copyMap.partial)
+
+        for (i in 0 until sectorCount) {
+            val slice = imageBytes.copyOfRange(i * sectorSize, (i + 1) * sectorSize)
+            if (i.toULong() == badLba) {
+                assertTrue("failed sector must be a zero gap", slice.all { it == 0.toByte() })
+            } else {
+                assertTrue(
+                    "sector $i shifted in the rescue image",
+                    slice.contentEquals(payload.copyOfRange(i * sectorSize, (i + 1) * sectorSize)),
+                )
+            }
+        }
+
+        val target = RecordingDisk(sectorCount = sectorCount.toULong(), sectorSize = sectorSize)
+        val restoreMap = RescueMap.whole(sectorCount.toULong())
+        val restoreSource = ImageSource.fromBytes(
+            imageBytes,
+            format = ImageFormat.IMG,
+            decodedSize = imageBytes.size.toLong(),
+        )
+        Rescue.restore(restoreSource, target, restoreMap)
+
+        assertEquals((0 until sectorCount).map { it.toULong() }, target.writes)
+        assertEquals(listOf(0UL until sectorCount.toULong()), restoreMap.copied)
+        val targetBytes = target.bytes()
+        for (i in 0 until sectorCount) {
+            val slice = targetBytes.copyOfRange(i * sectorSize, (i + 1) * sectorSize)
+            if (i.toULong() == badLba) {
+                assertTrue(slice.all { it == 0.toByte() })
+            } else {
+                assertTrue(
+                    "restored sector $i landed at the wrong LBA",
+                    slice.contentEquals(payload.copyOfRange(i * sectorSize, (i + 1) * sectorSize)),
+                )
+            }
+        }
+    }
+
+    @Test fun rescueSinkRejectsGapInsteadOfShifting() {
+        val sink = ByteArrayOutputStream().asRescueSink(512)
+        sink.writeSector(0UL, ByteArray(512))
+        try {
+            sink.writeSector(2UL, ByteArray(512))
+            fail("expected IllegalStateException for a skipped LBA")
+        } catch (_: IllegalStateException) {
+        }
+    }
+
+    @Test fun fakeCapacityFailsLoudlyInsteadOfFabricatingAVerdict() {
+        val disk = RecordingDisk(sectorCount = 64UL)
+        try {
+            Diagnostics.fakeCapacity(disk)
+            fail("expected DiskException.UnsupportedCommand")
+        } catch (failure: DiskException.UnsupportedCommand) {
+            assertTrue(failure.message.orEmpty().contains("f3probe"))
+        }
+        assertEquals(0, disk.readCount)
+        assertEquals(0, disk.writeCount)
+    }
+
+    private class OneBadSectorDisk(
+        sectorCount: ULong,
+        sectorSize: Int,
+        private val badLba: ULong,
+    ) : RecordingDisk(sectorCount = sectorCount, sectorSize = sectorSize) {
+        override fun read(lba: ULong, destination: ByteBuffer) {
+            if (lba == badLba) throw java.io.IOException("simulated medium error at LBA $lba")
+            super.read(lba, destination)
+        }
     }
 }

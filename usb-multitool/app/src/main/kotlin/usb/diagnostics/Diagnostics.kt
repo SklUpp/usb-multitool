@@ -2,7 +2,7 @@ package usb.diagnostics
 
 import java.io.OutputStream
 import java.nio.ByteBuffer
-import usb.EngineMissingException
+import usb.device.DiskException
 import usb.device.UsbDisk
 import usb.fs.MountedVolume
 import usb.image.CountedInputStream
@@ -30,20 +30,22 @@ data class BenchmarkReport(
 class UnsafeBenchmarkTargetException(message: String) : Exception(message)
 
 object Diagnostics {
+    /**
+     * f3probe is destructive: it writes pattern sectors and reads them back to
+     * detect wrap-around falsified capacity, so it needs a confirmed target,
+     * not just a [DiskOperation] progress sink.
+     *
+     * No probe is linked into `libusb_native` (third_party/f3 holds fetch
+     * instructions only and the former `f3_bridge.c` shim returned
+     * `sectorCount - 1` without touching the disk). Reporting a verdict we did
+     * not measure would claim a disk is genuine when nothing was tested, so
+     * this fails loudly instead.
+     */
     fun fakeCapacity(disk: UsbDisk, operation: DiskOperation = DiskOperation("f3probe")): FakeCapacityReport {
-        // Real F3 probe requires the linked upstream engine; never invent success.
-        if (!F3Native.libraryLoaded || !F3Native.engineLinked) {
-            throw EngineMissingException("F3")
-        }
-        val rc = F3Native.probe(disk)
-        if (rc < 0) {
-            throw EngineMissingException("F3")
-        }
-        operation.report((disk.geometry.capacityBytes).toLong())
-        return FakeCapacityReport(
-            claimedSectors = disk.geometry.sectorCount,
-            lastGoodSector = rc.toULong(),
-            consistent = rc.toULong() + 1UL >= disk.geometry.sectorCount,
+        throw DiskException.UnsupportedCommand(
+            "fake-capacity probe unavailable: f3probe is not built into libusb_native " +
+                "and probing ${disk.geometry.sectorCount} sectors of this device needs " +
+                "destructive write patterns with a signed confirmation",
         )
     }
 
@@ -140,16 +142,31 @@ object Diagnostics {
     }
 }
 
-/** Sector-oriented sink for rescue copies; never buffers a full disk. */
+/**
+ * Sector-oriented sink for rescue copies; never buffers a full disk.
+ * The rescue image is dense and positional: the sector for [lba] lives at
+ * offset `lba * sectorSize`, so a failed sector leaves a zero-filled gap and
+ * [Rescue.restore] can walk the image LBA by LBA without shifting data.
+ */
 fun interface RescueSink {
     /** Write [sector] bytes at absolute [lba]. */
     fun writeSector(lba: ULong, sector: ByteArray)
 }
 
-/** Adapt a sequential [OutputStream] starting at LBA 0. */
-fun OutputStream.asRescueSink(sectorSize: Int): RescueSink = RescueSink { _, sector ->
-    require(sector.size == sectorSize)
-    write(sector)
+/**
+ * Adapt an appending [OutputStream] whose first byte is LBA 0.
+ * A skipped LBA would shift every later sector, so a gap is rejected instead.
+ */
+fun OutputStream.asRescueSink(sectorSize: Int): RescueSink {
+    var next = 0UL
+    return RescueSink { lba, sector ->
+        require(sector.size == sectorSize)
+        check(lba == next) {
+            "rescue image is positional: expected LBA $next, got $lba"
+        }
+        write(sector)
+        next = lba + 1UL
+    }
 }
 
 object Rescue {
@@ -161,6 +178,7 @@ object Rescue {
     ): RescueMap {
         val sectorSize = disk.geometry.sectorSize
         val buf = ByteBuffer.allocate(sectorSize)
+        val zeros = ByteArray(sectorSize)
         for (range in map.nonTried + map.failed) {
             var lba = range.first
             while (lba <= range.last) {
@@ -172,6 +190,10 @@ object Rescue {
                     map.markCopied(lba, 1UL)
                 } catch (_: Exception) {
                     map.markFailed(lba, 1UL)
+                    // Keep the image dense: the unreadable sector becomes a zero
+                    // gap at its own offset so every later sector stays aligned
+                    // with its LBA in the map.
+                    destination.writeSector(lba, zeros)
                 }
                 lba++
                 operation.report((lba * sectorSize.toULong()).toLong())
@@ -229,35 +251,6 @@ object Rescue {
         }
         return off
     }
-}
-
-internal object F3Native {
-    @Volatile var libraryLoaded: Boolean = false
-        private set
-
-    /** True only when CMake linked USB_WITH_F3. */
-    @Volatile var engineLinked: Boolean = false
-        private set
-
-    init {
-        try {
-            System.loadLibrary("usb_native")
-            libraryLoaded = true
-            engineLinked = nativeEngineLinked()
-        } catch (_: UnsatisfiedLinkError) {
-            libraryLoaded = false
-            engineLinked = false
-        }
-    }
-
-    fun probe(disk: UsbDisk): Int {
-        if (!libraryLoaded || !engineLinked) return -1
-        return nativeProbe(disk.geometry.sectorSize, disk.geometry.sectorCount.toLong())
-    }
-
-    @JvmStatic external fun nativeProbe(sectorSize: Int, sectorCount: Long): Int
-
-    @JvmStatic external fun nativeEngineLinked(): Boolean
 }
 
 internal object DdrescueNative {
