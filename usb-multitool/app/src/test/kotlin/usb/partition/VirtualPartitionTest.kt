@@ -15,4 +15,18 @@ class VirtualPartitionTest {
             part.read(3UL, ByteBuffer.allocate(512))
         }
     }
+
+    @Test fun mapLbaRejectsArithmeticOverflow() {
+        val disk = RecordingDisk(sectorCount = ULong.MAX_VALUE)
+        val part = VirtualPartition(0UL, ULong.MAX_VALUE, disk)
+        assertFailsWith<IndexOutOfBoundsException> {
+            part.read(ULong.MAX_VALUE, ByteBuffer.allocate(512))
+        }
+    }
+
+    @Test fun constructorRejectsStartPlusCountOverflow() {
+        assertFailsWith<IllegalArgumentException> {
+            VirtualPartition(ULong.MAX_VALUE, 2UL, RecordingDisk(sectorCount = ULong.MAX_VALUE))
+        }
+    }
 }

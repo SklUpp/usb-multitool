@@ -43,8 +43,9 @@ object GptTable {
         val entryCount = headerBuf.getInt(80)
         val entrySize = headerBuf.getInt(84)
         val entriesCrc = headerBuf.getInt(88)
-        require(entrySize >= 128) { "GPT entry size $entrySize too small" }
-        require(entryCount > 0) { "no GPT entries" }
+        require(entrySize in 128..4096 && entryCount in 1..1024) {
+            "invalid GPT entry geometry"
+        }
 
         val entriesBytes = entryCount * entrySize
         val sectorsNeeded = (entriesBytes + sectorSize - 1) / sectorSize

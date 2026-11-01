@@ -30,6 +30,9 @@ object TransferPlan {
         require(sectorSize > 0 && sectorSize and (sectorSize - 1) == 0) {
             "sectorSize must be a power of two, was $sectorSize"
         }
+        require(bytes % sectorSize.toLong() == 0L) {
+            "bytes $bytes not multiple of sectorSize $sectorSize"
+        }
         if (bytes == 0L) return emptyList()
 
         val parts = ArrayList<Int>()
@@ -39,7 +42,6 @@ object TransferPlan {
             remaining -= CHUNK
         }
         if (remaining > 0) {
-            // Remainder already sector-aligned when bytes and CHUNK are multiples of sectorSize.
             parts.add(remaining.toInt())
         }
         return parts

@@ -6,6 +6,7 @@ class FakeTransport(
     private val stallsBeforeSuccess: Int = 0,
     private val disconnectOnCommand: Boolean = false,
     private val maxTransfer: Int = Int.MAX_VALUE,
+    private val failAlways: Boolean = false,
 ) : BlockTransport {
     var resetCount: Int = 0
         private set
@@ -75,6 +76,7 @@ class FakeTransport(
         transferred = 0
         expected = 0
         pendingLength = 0
+        if (failAlways) return BotStatus.FAIL
         if (remainingStalls > 0) {
             remainingStalls--
             return BotStatus.STALL

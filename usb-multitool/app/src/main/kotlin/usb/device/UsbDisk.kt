@@ -18,7 +18,8 @@ open class UsbDisk(
         }
         val blocks = bytes / geometry.sectorSize
         require(blocks > 0)
-        require(lba + blocks.toULong() <= geometry.sectorCount) {
+        require(blocks.toULong() <= geometry.sectorCount &&
+            lba <= geometry.sectorCount - blocks.toULong()) {
             "read past end: lba=$lba blocks=$blocks capacity=${geometry.sectorCount}"
         }
 
@@ -39,7 +40,8 @@ open class UsbDisk(
         }
         val blocks = bytes / geometry.sectorSize
         require(blocks > 0)
-        require(lba + blocks.toULong() <= geometry.sectorCount) {
+        require(blocks.toULong() <= geometry.sectorCount &&
+            lba <= geometry.sectorCount - blocks.toULong()) {
             "write past end: lba=$lba blocks=$blocks capacity=${geometry.sectorCount}"
         }
 
@@ -71,7 +73,10 @@ open class UsbDisk(
                 when (val status = transport.status()) {
                     BotStatus.OK -> return
                     BotStatus.STALL -> throw StallException()
-                    BotStatus.FAIL -> throw DiskException.IoFailure("BOT status FAIL")
+                    BotStatus.FAIL -> {
+                        closeSession()
+                        throw DiskException.IoFailure("BOT status FAIL")
+                    }
                 }
             } catch (e: StallException) {
                 if (attempt >= 1) {
@@ -106,7 +111,10 @@ open class UsbDisk(
                 when (val status = transport.status()) {
                     BotStatus.OK -> return
                     BotStatus.STALL -> throw StallException()
-                    BotStatus.FAIL -> throw DiskException.IoFailure("BOT status FAIL")
+                    BotStatus.FAIL -> {
+                        closeSession()
+                        throw DiskException.IoFailure("BOT status FAIL")
+                    }
                 }
             } catch (e: StallException) {
                 if (attempt >= 1) {

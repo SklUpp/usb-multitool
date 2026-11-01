@@ -10,22 +10,14 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 
 /**
  * Foreground connectedDevice owner for serialized USB disk work.
  * Starts on first queued operation; stops when the executor goes idle.
+ * Idle stop does not cancel [DiskController] — later submits still run.
  */
 class DiskService : Service(), ServiceControl {
-    private val job = SupervisorJob()
-    private val scope = CoroutineScope(job + Dispatchers.Default)
     private var wakeLock: PowerManager.WakeLock? = null
-
-    lateinit var executor: OperationExecutor
-        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -43,7 +35,7 @@ class DiskService : Service(), ServiceControl {
                 wakeLock?.let { if (it.isHeld) it.release() }
             }
         }
-        executor = OperationExecutor(scope, wakeLock = lock, serviceControl = this)
+        DiskController.get().bind(wakeLock = lock, serviceControl = this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -70,7 +62,7 @@ class DiskService : Service(), ServiceControl {
     }
 
     override fun onDestroy() {
-        scope.cancel()
+        // Idle teardown must leave DiskController / OperationExecutor alive.
         wakeLock?.let { if (it.isHeld) it.release() }
         super.onDestroy()
     }

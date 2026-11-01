@@ -64,8 +64,8 @@ interface OperationHandle {
 
 class OperationExecutor(
     private val scope: CoroutineScope,
-    private val wakeLock: OperationWakeLock = NoOpWakeLock,
-    private val serviceControl: ServiceControl = NoOpServiceControl,
+    @Volatile var wakeLock: OperationWakeLock = NoOpWakeLock,
+    @Volatile var serviceControl: ServiceControl = NoOpServiceControl,
 ) {
     private val mutex = Mutex()
     private val queue = ArrayDeque<QueuedOp>()
@@ -169,6 +169,9 @@ class OperationExecutor(
                 }
             } catch (e: DiskException) {
                 terminal = if (op.isDone()) op.state else OperationState.Failed(e)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Do not wrap cooperative/cancellation as IoFailure.
+                terminal = if (op.isDone()) op.state else OperationState.Cancelled
             } catch (e: Exception) {
                 terminal = if (op.isDone()) {
                     op.state
