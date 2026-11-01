@@ -76,11 +76,23 @@ data class VentoyAssets(
         const val PINNED_RELEASE = "1.1.18"
         const val PINNED_COMMIT = "6116894ab8abdf3ef8d43411a6732d34ee19214e"
         const val RELEASE_1_1_05 = "1.1.05"
+
+        /**
+         * Official `ventoy-1.1.05-linux.tar.gz` member digests (boot/boot.img,
+         * boot/core.img.xz, ventoy/ventoy.disk.img.xz), measured from the release asset.
+         */
         val RELEASE_1_1_05_HASHES: Map<String, String> = mapOf(
-            "boot.img" to "1592e6a5c6faf999a632279777265af591590650e1828f93a46007cf46373b11",
-            "core.img.xz" to "611b6d3f67bf64892f5f54c6ae1ea54069d62614353af8131138097dc11f25bb",
-            "ventoy.disk.img.xz" to "0fedfa5a0d75dd40dd16467009f2cecce0951a20fd4655cca2ea00f59e017ad3",
+            "boot.img" to "c2d400a821134e051764eacace530636e1e76596ca04308dbd122e4708c4455a",
+            "core.img.xz" to "0eeb0e0af219722714faf2011f62f89f1829edc4b8e005e2d15707a89df11f96",
+            "ventoy.disk.img.xz" to "00c75919bd4686ba3315d25403f1d1f38cd170438ca8c4a78ec1ade93260edd8",
         )
+
+        val RELEASE_1_1_18_HASHES: Map<String, String> = mapOf(
+            "boot.img" to OFFICIAL_BOOT_IMG_SHA256,
+            "core.img.xz" to OFFICIAL_CORE_IMG_SHA256,
+            "ventoy.disk.img.xz" to OFFICIAL_DISK_IMG_SHA256,
+        )
+
 
         const val OFFICIAL_BOOT_IMG_SHA256 =
             "85b4b080765738ca96620c32d8182edddbaf6a36149162946d12aa1f9802bc44"
@@ -88,50 +100,6 @@ data class VentoyAssets(
             "97d70bf738a6e8d72fae6eb1a8993ceb4ac8bdc92570f2ff87bcd9aef3723431"
         const val OFFICIAL_DISK_IMG_SHA256 =
             "19174f133c4df8acda4423b1bc40ae69961773ef54e286ffd8c42fefaf6f174f"
-
-        fun fake(
-            release: String = PINNED_RELEASE,
-            commit: String = PINNED_COMMIT,
-            efiPartSectors: Int = 65536,
-            supports4Kn: Boolean = false,
-        ): VentoyAssets {
-            val boot = ByteArray(512) { 0x90.toByte() }
-            boot[510] = 0x55.toByte()
-            boot[511] = 0xAA.toByte()
-
-            val core = ByteArray(2048) { 0xCC.toByte() }
-            core[500] = 1
-
-            // Minimal valid EFI image structure with FAT header
-            val efi = ByteArray(efiPartSectors * 512)
-            efi[0] = 0xEB.toByte()
-            efi[1] = 0x3C.toByte()
-            efi[2] = 0x90.toByte()
-            "MSDOS5.0".toByteArray().copyInto(efi, 3)
-            efi[510] = 0x55.toByte()
-            efi[511] = 0xAA.toByte()
-            val verBytes = "VENTOY_VERSION=\"$release\"".toByteArray()
-            verBytes.copyInto(efi, 1024)
-
-            val digest = MessageDigest.getInstance("SHA-256")
-            val bootSha = digest.digest(boot).toHex()
-            digest.reset()
-            val coreSha = digest.digest(core).toHex()
-            digest.reset()
-            val efiSha = digest.digest(efi).toHex()
-
-            return VentoyAssets(
-                release = release,
-                commit = commit,
-                bootImg = boot,
-                coreImg = core,
-                efiPartImg = efi,
-                supports4Kn = supports4Kn,
-                bootImgSha256 = bootSha,
-                coreImgSha256 = coreSha,
-                diskImgSha256 = efiSha,
-            )
-        }
 
         fun loadFromAssets(
             assetManager: android.content.res.AssetManager,
@@ -278,21 +246,6 @@ data class VentoyAssets(
             )
             assets.validateChecksums(strict = strict)
             return assets
-        }
-
-        fun mockLoader(
-            dir: java.io.File = java.io.File("app/src/main/assets/ventoy"),
-            strict: Boolean = true,
-        ): VentoyAssets {
-            if (dir.exists() && dir.isDirectory) {
-                return loadFromDirectory(dir, strict = strict)
-            }
-            return fake(release = RELEASE_1_1_05)
-        }
-
-        private fun ByteArray.sha256Hex(): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            return digest.digest(this).toHex()
         }
 
         fun isXz(data: ByteArray): Boolean {

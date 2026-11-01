@@ -23,6 +23,15 @@ object PartitionWriter {
     private val SIGNATURE = "EFI PART".toByteArray(StandardCharsets.US_ASCII)
 
     fun commit(disk: BlockDevice, table: PartitionTable): PartitionTable {
+        rejectOverlaps(table.partitions)
+        for (partition in table.partitions) {
+            require(partition.sectorCount > 0UL) {
+                "zero-length partition at LBA ${partition.startLba}"
+            }
+            require(partition.startLba + partition.sectorCount > partition.startLba) {
+                "partition at LBA ${partition.startLba} overflows the address space"
+            }
+        }
         when (table.scheme) {
             TableScheme.GPT -> commitGpt(disk, table)
             TableScheme.MBR -> commitMbr(disk, table)
@@ -49,6 +58,14 @@ object PartitionWriter {
         val backupLba = header.backupLba
         val backupEntriesLba = backupLba - entrySectors.toULong()
         require(entrySectors.toULong() < backupLba) { "GPT backup entries overlap header" }
+
+        for (partition in table.partitions) {
+            val last = partition.startLba + partition.sectorCount - 1UL
+            require(partition.startLba >= header.firstUsable && last <= header.lastUsable) {
+                "partition ${partition.startLba}..$last outside usable GPT range " +
+                    "${header.firstUsable}..${header.lastUsable}"
+            }
+        }
 
         val entries = ByteArray(entryBytes)
         val previous = table.gptEntriesRaw

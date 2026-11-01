@@ -2,14 +2,15 @@ package usb.fs
 
 import java.nio.ByteBuffer
 import usb.device.BlockDevice
+import usb.device.DiskException
 
 /**
  * Bridges the FatFs JNI block backend onto any [BlockDevice].
  *
- * The C engine calls with a sector-aligned byte array and expects `0` on success,
- * a negative errno on failure. Failures are never swallowed silently: exceptions are
- * mapped to negative codes, and a device that stops respecting the geometry is
- * reported as an I/O error rather than corrupting the volume.
+ * The C engine calls with a sector-aligned byte array and needs `0` on success and a
+ * negative errno on failure. Failures are never swallowed: they become the matching
+ * errno so FatFs maps them to [FatFsException]/FR_DISK_ERR instead of silently
+ * returning stale data.
  */
 class BlockDeviceFatCallback(
     private val device: BlockDevice,
@@ -19,11 +20,12 @@ class BlockDeviceFatCallback(
     override fun readSectors(lba: Long, buffer: ByteArray): Int {
         if (!validRequest(lba, buffer.size)) return -EINVAL
         return try {
-            val target = ByteBuffer.wrap(buffer)
-            device.read(lba.toULong(), target)
+            device.read(lba.toULong(), ByteBuffer.wrap(buffer))
             0
-        } catch (_: DiskBackedIoFailure) {
+        } catch (_: DiskException) {
             -EIO
+        } catch (_: IndexOutOfBoundsException) {
+            -EINVAL
         } catch (_: IllegalArgumentException) {
             -EINVAL
         }
@@ -34,8 +36,10 @@ class BlockDeviceFatCallback(
         return try {
             device.write(lba.toULong(), ByteBuffer.wrap(buffer))
             0
-        } catch (_: DiskBackedIoFailure) {
+        } catch (_: DiskException) {
             -EIO
+        } catch (_: IndexOutOfBoundsException) {
+            -EINVAL
         } catch (_: IllegalArgumentException) {
             -EINVAL
         }
@@ -45,7 +49,7 @@ class BlockDeviceFatCallback(
         try {
             device.sync()
             0
-        } catch (_: DiskBackedIoFailure) {
+        } catch (_: DiskException) {
             -EIO
         }
 
@@ -56,6 +60,9 @@ class BlockDeviceFatCallback(
         return blocks <= capacity && lba.toULong() <= capacity - blocks
     }
 
-    /** Device failures surface as [Exception] subtypes; isolate the ones we map. */
-    private class DiskBackedIoFailure : Exception()
+    private companion object {
+        /** Linux errno values the FatFs bridge understands. */
+        const val EIO = 5
+        const val EINVAL = 22
+    }
 }
