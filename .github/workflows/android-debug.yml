@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - feature/android-usb-multitool
-
+      - feature/exfat-repair
 concurrency:
   group: android-debug-${{ github.ref }}
   cancel-in-progress: true
@@ -47,6 +47,10 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;29.0.14206865" \
             "cmake;3.22.1"
+
+
+      - name: Host exFAT fsck repair test
+        run: ./scripts/run-exfat-fsck-host-test.sh
 
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon
