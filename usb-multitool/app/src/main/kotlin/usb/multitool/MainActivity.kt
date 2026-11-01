@@ -51,6 +51,9 @@ import usb.ui.UiReducer
 import usb.ui.displayName
 import usb.device.UsbDiskSession
 import usb.diagnostics.Diagnostics
+import usb.diagnostics.Rescue
+import usb.diagnostics.RescueMap
+import usb.diagnostics.RescueSink
 import usb.fs.FatDirEntry
 import usb.fs.FatFsException
 import usb.fs.FatVolume
@@ -72,6 +75,10 @@ import usb.ventoy.VentoyDownloader
 import usb.ventoy.VentoyInstaller
 import usb.ventoy.VentoySetup
 import java.io.File
+import java.io.RandomAccessFile
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import usb.ui.DestructiveAction
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -126,6 +133,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val actionName = action?.displayName() ?: "destructive"
                 val uiState = state
                 val op = object : DiskOperation(name = actionName) {
+                    /** Concrete outcome surfaced instead of the bare "Success" label. */
+                    @Volatile var result: String? = null
+
                     override suspend fun run() {
                         // Release the FAT session and its USB claim before raw/partition work.
                         closeFilesVolume()
@@ -152,9 +162,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         operation = this,
                                     )
                                 }
-                                DestructiveAction.FAKE_CAPACITY -> {
-                                    Diagnostics.fakeCapacity(disk, operation = this)
-                                }
                                 DestructiveAction.WRITE_BENCHMARK -> {
                                     val startLba = 2048UL.coerceAtMost(disk.geometry.sectorCount - 1UL)
                                     val sectors = 2048UL.coerceAtMost(disk.geometry.sectorCount - startLba)
@@ -168,8 +175,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     )
                                 }
                                 DestructiveAction.GPT_REPAIR -> {
-                                    val current = table ?: throw IllegalStateException("no partition table")
-                                    PartitionWriter.commit(disk, PartitionEditor.repairGptTail(current))
+                                    // Moves the backup entries + header to the current disk end,
+                                    // fixes backupLba/lastUsable and recomputes both CRCs.
+                                    val repaired = GptBackup.relocateBackup(disk, disk.geometry.sectorCount)
+                                    result = "GPT backup relocated to LBA ${disk.geometry.sectorCount - 1UL}: " +
+                                        "${repaired.partitions.size} partitions kept"
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.DELETE_PARTITION -> {
@@ -205,10 +215,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     Formatter.format(partition, FilesystemId.FAT)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
-                                DestructiveAction.BACKUP_RESTORE -> {
-                                    val current = table ?: throw IllegalStateException("no partition table")
-                                    GptBackup.relocateBackup(disk, current.diskSectorCount)
-                                    report(disk.geometry.capacityBytes.toLong())
+                                DestructiveAction.GPT_RESTORE -> {
+                                    val uri = uiState.backupUri
+                                        ?: throw IllegalStateException("no GPT backup file selected")
+                                    val blob = readBackupBlob(uri, GptCriticalBackup.blobSize(
+                                        disk,
+                                        GptBackup.PRIMARY_SECTORS,
+                                        GptBackup.BACKUP_SECTORS,
+                                    ))
+                                    bytesTotal = blob.size.toLong()
+                                    val restored = GptCriticalBackup.restore(
+                                        disk = disk,
+                                        blob = blob,
+                                        primarySectors = GptBackup.PRIMARY_SECTORS,
+                                        backupSectors = GptBackup.BACKUP_SECTORS,
+                                    )
+                                    report(blob.size.toLong())
+                                    result = "Restored ${restored.sectorsRestored} GPT critical " +
+                                        "sectors from ${uri.substringAfterLast('/')}: " +
+                                        "${restored.partitions} partitions, backup at LBA " +
+                                        "${restored.backup.currentLba} verified"
                                 }
                                 DestructiveAction.VENTOY_INSTALL -> {
                                     val assets = VentoyDownloader.loadWithFallback(
@@ -219,7 +245,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
-                                    VentoyInstaller.install(disk, assets)
+                                    VentoyInstaller.install(
+                                        disk = disk,
+                                        assets = assets,
+                                        isActive = { isActive() },
+                                        onProgress = { done, total ->
+                                            bytesTotal = total
+                                            report(done)
+                                        },
+                                    )
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_UPDATE -> {
@@ -314,6 +348,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     state = mappedState,
                                     label = actionName,
                                     errorMessage = errorMsg,
+                                    resultMessage = op.result,
                                 ),
                             ),
                         )
@@ -324,6 +359,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+            UiEffect.Kind.ReadScan ->
+                submitReadOnlyDiskOperation("Read scan") { disk, operation ->
+                    val report = Diagnostics.readScan(disk, operation = operation)
+                    val unreadable = report.failed.sumOf { it.last - it.first + 1UL }
+                    "Read scan: ${report.sectorsRead} of ${disk.geometry.sectorCount} " +
+                        "sectors read, $unreadable unreadable in ${report.failed.size} range(s)"
+                }
+
+            UiEffect.Kind.RescueBackup ->
+                submitReadOnlyDiskOperation("Rescue backup") { disk, operation ->
+                    val stamp = timestamp()
+                    val image = File(backupDirectory(), "rescue-$stamp.img")
+                    val mapFile = File(backupDirectory(), "rescue-$stamp.map")
+                    val sectorSize = disk.geometry.sectorSize
+                    operation.bytesTotal = disk.geometry.capacityBytes.toLong()
+                    // Seek per sector: an unreadable sector must leave a map-marked gap,
+                    // never shift every later sector to the wrong offset.
+                    val map = RandomAccessFile(image, "rw").use { file ->
+                        Rescue.copy(
+                            disk = disk,
+                            destination = RescueSink { lba, sector ->
+                                file.seek((lba * sectorSize.toULong()).toLong())
+                                file.write(sector)
+                            },
+                            map = RescueMap.whole(disk.geometry.sectorCount),
+                            operation = operation,
+                        )
+                    }
+                    mapFile.writeText(map.encode())
+                    val copied = map.copied.sumOf { it.last - it.first + 1UL }
+                    val unreadable = map.failed.sumOf { it.last - it.first + 1UL }
+                    val state = if (map.partial) " (partial map kept for resume)" else ""
+                    "Rescue backup: image ${image.absolutePath}, map ${mapFile.absolutePath}: " +
+                        "$copied copied, $unreadable unreadable of ${map.sectorCount} sectors$state"
+                }
+
+            UiEffect.Kind.CaptureGptBackup ->
+                submitReadOnlyDiskOperation("GPT critical backup") { disk, operation ->
+                    val blob = GptBackup.backupCriticalSectors(disk)
+                    val info = GptCriticalBackup.inspectCaptured(
+                        blob = blob,
+                        disk = disk,
+                        primarySectors = GptBackup.PRIMARY_SECTORS,
+                        backupSectors = GptBackup.BACKUP_SECTORS,
+                    )
+                    val file = File(backupDirectory(), "gpt-critical-${timestamp()}.bin")
+                    file.writeBytes(blob)
+                    operation.bytesTotal = blob.size.toLong()
+                    operation.report(blob.size.toLong())
+                    "GPT critical backup saved: ${file.absolutePath} (${blob.size} bytes, " +
+                        "${info.partitions} partitions, backup header at LBA " +
+                        "${info.backup.currentLba})"
+                }
+
             UiEffect.Kind.CancelOperation -> {
                 activeHandle?.cancel()
             }
@@ -825,6 +914,133 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Read-only disk work. The mounted FAT volume is closed first because it holds the
+     * USB claim; [body] then runs on the shared disk thread and returns the summary shown
+     * to the user. Nothing here writes to the stick.
+     */
+    private fun submitReadOnlyDiskOperation(
+        label: String,
+        body: (DiskOperation, UsbDisk) -> String,
+    ) {
+        val operation = object : DiskOperation(name = label) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                closeFilesVolume()
+                val device = attachedDevice ?: throw DiskException.Disconnected()
+                val manager = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(manager, device)
+                try {
+                    result = body(this, disk)
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Running, label = label),
+            ),
+        )
+        val handle = DiskController.get().submit(operation)
+        activeHandle = handle
+        scope.launch {
+            val ticker = launch {
+                while (true) {
+                    delay(PROGRESS_TICK_MS)
+                    onIntent(
+                        UiIntent.OperationUpdated(
+                            OperationProgress(
+                                state = OperationState.Running,
+                                label = label,
+                                bytesDone = operation.bytesDone,
+                                bytesTotal = operation.bytesTotal,
+                            ),
+                        ),
+                    )
+                }
+            }
+            try {
+                when (val outcome = handle.await()) {
+                    is usb.service.OperationState.Failed -> {
+                        val message =
+                            outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                        onIntent(UiIntent.Status(message))
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Failed,
+                                    label = label,
+                                    errorMessage = message,
+                                ),
+                            ),
+                        )
+                        // The USB claim may be gone; reopen for the next attempt.
+                        closeFilesVolume()
+                    }
+                    is usb.service.OperationState.Cancelled ->
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(state = OperationState.Cancelled, label = label),
+                            ),
+                        )
+                    else ->
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Completed,
+                                    label = label,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                    resultMessage = operation.result,
+                                ),
+                            ),
+                        )
+                }
+            } finally {
+                ticker.cancel()
+                if (activeHandle === handle) {
+                    activeHandle = null
+                }
+            }
+        }
+    }
+
+    /**
+     * App-owned external directory (`Android/data/<package>/files`): no storage permission
+     * needed and the exact path can be reported. Fails loudly instead of inventing a path.
+     */
+    private fun backupDirectory(): File =
+        getApplication<Application>().getExternalFilesDir(null)
+            ?: throw IllegalStateException(
+                "external files directory is unavailable; cannot save the backup",
+            )
+
+    /** Read the selected SAF document, bounded by the size this device needs. */
+    private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
+        val resolver = getApplication<Application>().contentResolver
+        val input = resolver.openInputStream(Uri.parse(uri))
+            ?: throw IllegalStateException("cannot open $uri for reading")
+        return input.use { stream ->
+            val buffer = ByteArray(expectedBytes + 1)
+            var read = 0
+            while (read < buffer.size) {
+                val n = stream.read(buffer, read, buffer.size - read)
+                if (n < 0) break
+                read += n
+            }
+            require(read == expectedBytes) {
+                "selected file holds $read bytes; this device needs $expectedBytes " +
+                    "(${GptBackup.PRIMARY_SECTORS} + ${GptBackup.BACKUP_SECTORS} GPT sectors)"
+            }
+            buffer.copyOf(read)
+        }
+    }
+
+    private fun timestamp(): String =
+        SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+
     /** Disk thread -> main thread hop for result intents. */
     private fun post(intent: UiIntent) {
         scope.launch { onIntent(intent) }
@@ -863,6 +1079,17 @@ class MainActivity : ComponentActivity() {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         viewModel.onIntent(UiIntent.SetImage(uri.toString()))
+    }
+
+    /** SAF file chosen for the next GPT critical-sector restore. */
+    private val gptBackupPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.onIntent(UiIntent.SetBackupFile(uri.toString()))
     }
 
     /** Entry name waiting for the SAF destination chosen in [downloadLauncher]. */
@@ -936,6 +1163,9 @@ class MainActivity : ComponentActivity() {
                 onRequestDownload = { name ->
                     pendingDownloadName = name
                     downloadLauncher.launch(name)
+                },
+                onPickBackup = {
+                    gptBackupPickerLauncher.launch(arrayOf("*/*"))
                 },
             )
         }

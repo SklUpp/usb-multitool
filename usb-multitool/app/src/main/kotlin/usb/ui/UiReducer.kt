@@ -33,6 +33,18 @@ sealed class UiIntent {
 
     data class SetImage(val uri: String?) : UiIntent()
 
+    /** SAF [uri] of the GPT critical-sector backup chosen for the next restore. */
+    data class SetBackupFile(val uri: String?) : UiIntent()
+
+    /** Read-only scan of every sector; reports unreadable ranges. */
+    data object StartReadScan : UiIntent()
+
+    /** Read-only full image plus rescue map into the app's external files dir. */
+    data object StartRescueBackup : UiIntent()
+
+    /** Capture the GPT critical sectors into the app's external files dir. */
+    data object CaptureGptBackup : UiIntent()
+
     data class Status(val message: String?) : UiIntent()
 
     data object CancelOperation : UiIntent()
@@ -93,6 +105,9 @@ data class UiEffect(
         DeleteEntry,
         UploadFile,
         DownloadFile,
+        ReadScan,
+        RescueBackup,
+        CaptureGptBackup,
     }
 }
 
@@ -187,7 +202,8 @@ object UiReducer {
                             },
                         statusMessage =
                             when (intent.progress?.state) {
-                                OperationState.Completed -> "Success"
+                                OperationState.Completed ->
+                                    intent.progress.resultMessage ?: "Success"
                                 OperationState.Cancelled -> "Cancelled"
                                 OperationState.Failed ->
                                     intent.progress.errorMessage ?: "Failed"
@@ -202,12 +218,16 @@ object UiReducer {
 
             is UiIntent.RequestDestructive -> {
                 val device = state.device
-                if (device != null &&
-                    state.actionsEnabled &&
-                    intent.action == DestructiveAction.RAW_WRITE &&
-                    state.imageUri == null
-                ) {
-                    ReduceResult(state.copy(statusMessage = "Select an ISO/IMG file first"))
+                val missingInput =
+                    when {
+                        intent.action == DestructiveAction.RAW_WRITE && state.imageUri == null ->
+                            "Select an ISO/IMG file first"
+                        intent.action == DestructiveAction.GPT_RESTORE && state.backupUri == null ->
+                            "Choose a GPT backup file first"
+                        else -> null
+                    }
+                if (device != null && state.actionsEnabled && missingInput != null) {
+                    ReduceResult(state.copy(statusMessage = missingInput))
                 } else if (device == null || !state.actionsEnabled) {
                     ReduceResult(
                         state.copy(
@@ -300,6 +320,25 @@ object UiReducer {
                             if (intent.uri == null) "Image cleared" else "Image ready for raw write",
                     ),
                 )
+
+            is UiIntent.SetBackupFile ->
+                ReduceResult(
+                    state.copy(
+                        backupUri = intent.uri,
+                        statusMessage =
+                            if (intent.uri == null) {
+                                "GPT backup cleared"
+                            } else {
+                                "GPT backup ready: ${intent.uri.substringAfterLast('/')}"
+                            },
+                    ),
+                )
+
+            UiIntent.StartReadScan -> nonDestructiveEffect(state, UiEffect.Kind.ReadScan)
+
+            UiIntent.StartRescueBackup -> nonDestructiveEffect(state, UiEffect.Kind.RescueBackup)
+
+            UiIntent.CaptureGptBackup -> nonDestructiveEffect(state, UiEffect.Kind.CaptureGptBackup)
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 
@@ -437,6 +476,14 @@ object UiReducer {
                         state.copy(files = emptyList(), statusMessage = intent.message),
                     )
                 }
+        }
+
+    /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */
+    private fun nonDestructiveEffect(state: AppUiState, kind: UiEffect.Kind): ReduceResult =
+        if (!state.actionsEnabled) {
+            ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+        } else {
+            ReduceResult(state, effects = listOf(UiEffect(kind)))
         }
 
     fun presenceMessage(presence: DevicePresence): String =

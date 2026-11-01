@@ -15,6 +15,7 @@ fun DiagnosticsScreen(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onPickBackup: () -> Unit = {},
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -22,8 +23,10 @@ fun DiagnosticsScreen(
     ) {
         Text("Diagnostics")
         Text(
-            "Read scan never writes. Fake-capacity, wipe, and restore require confirmation " +
-                "with device identity and capacity. Partial rescue stays marked partial.",
+            "Read scan and rescue backup only read the device; the rescue image and its map " +
+                "land in this app's external files directory. Wipe and GPT restore require " +
+                "confirmation with device identity and capacity. Partial rescue stays marked " +
+                "partial.",
         )
 
         if (!state.actionsEnabled) {
@@ -31,7 +34,7 @@ fun DiagnosticsScreen(
         }
 
         OutlinedButton(
-            onClick = { onIntent(UiIntent.Status("Read scan requested")) },
+            onClick = { onIntent(UiIntent.StartReadScan) },
             enabled = state.actionsEnabled,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -39,13 +42,19 @@ fun DiagnosticsScreen(
         }
 
         OutlinedButton(
-            onClick = {
-                onIntent(UiIntent.RequestDestructive(DestructiveAction.FAKE_CAPACITY))
-            },
+            onClick = { onIntent(UiIntent.StartRescueBackup) },
             enabled = state.actionsEnabled,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Fake-capacity probe")
+            Text("Backup image + rescue map (read-only)")
+        }
+
+        OutlinedButton(
+            onClick = { onIntent(UiIntent.CaptureGptBackup) },
+            enabled = state.actionsEnabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Back up GPT critical sectors")
         }
 
         OutlinedButton(
@@ -66,22 +75,26 @@ fun DiagnosticsScreen(
             Text("Wipe device")
         }
 
+        Text(
+            state.backupUri?.let { "GPT backup: ${it.substringAfterLast('/')}" }
+                ?: "No GPT backup selected",
+        )
+
         OutlinedButton(
-            onClick = { onIntent(UiIntent.Status("Backup with rescue map requested")) },
-            enabled = state.actionsEnabled,
+            onClick = onPickBackup,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Backup (rescue map)")
+            Text("Choose GPT backup file")
         }
 
         Button(
             onClick = {
-                onIntent(UiIntent.RequestDestructive(DestructiveAction.BACKUP_RESTORE))
+                onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
             },
             enabled = state.actionsEnabled,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Restore from backup")
+            Text("Restore GPT backup")
         }
     }
 }

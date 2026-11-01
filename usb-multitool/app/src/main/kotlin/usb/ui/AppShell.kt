@@ -33,6 +33,7 @@ fun AppShell(
     modifier: Modifier = Modifier,
     onPickImage: () -> Unit = {},
     onRequestDownload: (String) -> Unit = {},
+    onPickBackup: () -> Unit = {},
 ) {
     MaterialTheme {
         Scaffold(
@@ -64,7 +65,7 @@ fun AppShell(
                     ShellTab.Files -> FilesScreen(state, onIntent, onRequestDownload = onRequestDownload)
                     ShellTab.Ventoy -> VentoyScreen(state, onIntent)
                     ShellTab.Partitions -> PartitionsScreen(state, onIntent, onPickImage = onPickImage)
-                    ShellTab.Diagnostics -> DiagnosticsScreen(state, onIntent)
+                    ShellTab.Diagnostics -> DiagnosticsScreen(state, onIntent, onPickBackup = onPickBackup)
                 }
             }
         }

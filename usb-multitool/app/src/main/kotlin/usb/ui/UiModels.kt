@@ -57,8 +57,7 @@ enum class DestructiveAction {
     DELETE_PARTITION,
     CREATE_PARTITION,
     GPT_REPAIR,
-    BACKUP_RESTORE,
-    FAKE_CAPACITY,
+    GPT_RESTORE,
     WRITE_BENCHMARK,
 }
 
@@ -93,8 +92,7 @@ fun DestructiveAction.displayName(): String =
         DestructiveAction.DELETE_PARTITION -> "delete partition"
         DestructiveAction.CREATE_PARTITION -> "create partition"
         DestructiveAction.GPT_REPAIR -> "GPT backup repair"
-        DestructiveAction.BACKUP_RESTORE -> "restore from backup"
-        DestructiveAction.FAKE_CAPACITY -> "fake-capacity probe"
+        DestructiveAction.GPT_RESTORE -> "restore GPT backup"
         DestructiveAction.WRITE_BENCHMARK -> "write throughput benchmark"
     }
 
@@ -133,6 +131,8 @@ data class OperationProgress(
     val bytesTotal: Long = 0L,
     val bytesPerSecond: Long = 0L,
     val errorMessage: String? = null,
+    /** Concrete outcome (paths, counts) shown instead of the bare "Success" label. */
+    val resultMessage: String? = null,
 ) {
     val fraction: Float
         get() =
@@ -158,6 +158,8 @@ data class AppUiState(
     val statusMessage: String? = null,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
+    /** SAF URI of the GPT critical-sector backup chosen for the next restore. */
+    val backupUri: String? = null,
 ) {
     val actionsEnabled: Boolean
         get() =

@@ -342,6 +342,81 @@ class UiStateMachineTest {
     }
 
     @Test
+    fun readOnlyActionsSubmitRealDiskWork() {
+        assertEquals(
+            UiEffect.Kind.ReadScan,
+            UiReducer.reduce(ready(), UiIntent.StartReadScan).effects.single().kind,
+        )
+        assertEquals(
+            UiEffect.Kind.RescueBackup,
+            UiReducer.reduce(ready(), UiIntent.StartRescueBackup).effects.single().kind,
+        )
+        assertEquals(
+            UiEffect.Kind.CaptureGptBackup,
+            UiReducer.reduce(ready(), UiIntent.CaptureGptBackup).effects.single().kind,
+        )
+
+        val disconnected = ready().copy(presence = DevicePresence.Disconnected)
+        assertTrue(UiReducer.reduce(disconnected, UiIntent.StartReadScan).effects.isEmpty())
+        assertEquals(
+            "Device disconnected",
+            UiReducer.reduce(disconnected, UiIntent.StartRescueBackup).state.statusMessage,
+        )
+    }
+
+    @Test
+    fun gptRestoreNeedsAChosenBackupFile() {
+        val refused =
+            UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
+        assertNull(refused.state.pendingConfirmation)
+        assertEquals("Choose a GPT backup file first", refused.state.statusMessage)
+
+        val picked = UiReducer.reduce(ready(), UiIntent.SetBackupFile("content://b/gpt.bin"))
+        assertEquals("content://b/gpt.bin", picked.state.backupUri)
+        assertTrue(picked.state.statusMessage!!.contains("gpt.bin"))
+
+        val confirmed =
+            UiReducer.reduce(
+                picked.state,
+                UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE),
+            )
+        assertNotNull(confirmed.state.pendingConfirmation)
+
+        val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
+        assertEquals(DestructiveAction.GPT_RESTORE, submitted.effects.single().action)
+    }
+
+    @Test
+    fun completedOperationShowsItsResultMessage() {
+        val detail = "Rescue backup: image /x.img, map /x.map: 10 copied, 2 unreadable"
+        val completed =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        OperationState.Completed,
+                        "rescue backup",
+                        resultMessage = detail,
+                    ),
+                ),
+            )
+        assertEquals(detail, completed.state.statusMessage)
+
+        val bare =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, "wipe")),
+            )
+        assertEquals("Success", bare.state.statusMessage)
+    }
+
+    @Test
+    fun fakeCapacityActionIsNoLongerOffered() {
+        assertFalse(DestructiveAction.entries.any { it.name.contains("FAKE") })
+        assertEquals("restore GPT backup", DestructiveAction.GPT_RESTORE.displayName())
+    }
+
+    @Test
     fun selectPartitionIsRefusedWhileAnOperationRuns() {
         val running =
             ready().copy(

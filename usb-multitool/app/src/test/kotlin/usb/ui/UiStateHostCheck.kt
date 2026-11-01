@@ -83,6 +83,53 @@ object UiStateHostCheck {
         require(statusOf(OperationState.Cancelled) == "Cancelled")
         require(statusOf(OperationState.Failed, "boom") == "boom")
         require(statusOf(OperationState.Partial, "kept map") == "kept map")
+        require(
+            UiReducer.reduce(
+                ready,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        OperationState.Completed,
+                        "backup",
+                        resultMessage = "saved /a.bin",
+                    ),
+                ),
+            ).state.statusMessage == "saved /a.bin",
+        ) { "resultMessage must replace the bare Success label" }
+
+        require(
+            UiReducer.reduce(ready, UiIntent.StartReadScan).effects.single().kind ==
+                UiEffect.Kind.ReadScan,
+        ) { "read scan must submit real disk work" }
+        require(
+            UiReducer.reduce(ready, UiIntent.StartRescueBackup).effects.single().kind ==
+                UiEffect.Kind.RescueBackup,
+        ) { "rescue backup must submit real disk work" }
+        require(
+            UiReducer.reduce(ready, UiIntent.CaptureGptBackup).effects.single().kind ==
+                UiEffect.Kind.CaptureGptBackup,
+        ) { "GPT capture must submit real disk work" }
+
+        val noBackup =
+            UiReducer.reduce(ready, UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
+        require(noBackup.state.pendingConfirmation == null)
+        require(noBackup.state.statusMessage == "Choose a GPT backup file first")
+
+        val picked = UiReducer.reduce(ready, UiIntent.SetBackupFile("content://backup/gpt.bin"))
+        require(picked.state.backupUri == "content://backup/gpt.bin")
+        require(picked.state.statusMessage!!.contains("gpt.bin"))
+        val restorePending =
+            UiReducer.reduce(
+                picked.state,
+                UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE),
+            )
+        require(restorePending.state.pendingConfirmation != null)
+        require(
+            UiReducer.reduce(restorePending.state, UiIntent.ConfirmDestructive)
+                .effects.single().action == DestructiveAction.GPT_RESTORE,
+        )
+        require(DestructiveAction.entries.none { it.name.contains("FAKE") }) {
+            "fake-capacity action must stay removed"
+        }
 
         val pending =
             UiReducer.reduce(ready, UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE))

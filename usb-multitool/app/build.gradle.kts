@@ -30,7 +30,6 @@ android {
                 flag("usbWithNtfs", "USB_WITH_NTFS")
                 flag("usbWithLwext4", "USB_WITH_LWEXT4")
                 flag("usbWithVentoy", "USB_WITH_VENTOY")
-                flag("usbWithF3", "USB_WITH_F3")
                 flag("usbWithDdrescue", "USB_WITH_DDRESCUE")
                 if (project.findProperty("usbRequireEngines") == "true") {
                     arguments += "-DUSB_REQUIRE_ENGINES=ON"
