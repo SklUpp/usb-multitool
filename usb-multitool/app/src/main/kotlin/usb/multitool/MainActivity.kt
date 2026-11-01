@@ -8,12 +8,14 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.app.Application
+import android.content.ContentResolver
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,8 +29,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import usb.device.DiskException
 import usb.device.MassStorageDiscovery
+import usb.device.UsbDisk
 import usb.service.DiskController
 import usb.service.DiskOperation
 import usb.service.OperationHandle
@@ -45,8 +50,12 @@ import usb.ui.UiReducer
 import usb.ui.displayName
 import usb.device.UsbDiskSession
 import usb.diagnostics.Diagnostics
+import usb.fs.FatDirEntry
+import usb.fs.FatVolume
 import usb.fs.FilesystemId
 import usb.fs.Formatter
+import usb.fs.PartitionVolumeSession
+import usb.ui.fatChildPath
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
 import usb.ui.PartitionTab
@@ -72,8 +81,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var usbManager: UsbManager? = null
         private set
 
+    /**
+     * Owns the mounted FAT volume of the selected partition. Guarded by [filesLock]:
+     * every files operation runs inside it, so a close can never race a mounted read.
+     * The ceiling of this coarse lock is that detach/onCleared can wait for one files
+     * operation to finish; upgrade only if a single FAT call ever becomes unbounded.
+     */
+    private val filesLock = Any()
+    private var filesVolume: MountedFilesVolume? = null
+
+    private class MountedFilesVolume(
+        val partitionId: String,
+        private val disk: UsbDisk,
+        val volume: FatVolume,
+    ) : AutoCloseable {
+        override fun close() {
+            runCatching { volume.close() }
+            runCatching { disk.close() }
+        }
+    }
 
     override fun onCleared() {
+        closeFilesVolume()
         super.onCleared()
         scope.cancel()
     }
@@ -83,9 +112,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         state = result.state
         result.effects.forEach { effect ->
             handleEffect(effect)
-        }
-        if (intent is UiIntent.SelectPartition) {
-            refreshPartitionContents(intent.partitionId)
         }
     }
 
@@ -97,6 +123,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val uiState = state
                 val op = object : DiskOperation(name = actionName) {
                     override suspend fun run() {
+                        // Release the FAT session and its USB claim before raw/partition work.
+                        closeFilesVolume()
                         val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
                         val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
                         val disk = UsbDiskSession.open(mgr, dev)
@@ -253,7 +281,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UiEffect.Kind.CancelOperation -> {
                 activeHandle?.cancel()
             }
-            else -> Unit
+            UiEffect.Kind.LoadFiles -> {
+                listDirectory(effect.path ?: state.currentPath)
+            }
+            UiEffect.Kind.CreateFolder -> {
+                val name = effect.name
+                val path = effect.path
+                if (name != null && path != null) createFolder(path, name)
+            }
+            UiEffect.Kind.DeleteEntry -> {
+                val name = effect.name
+                val path = effect.path
+                if (name != null && path != null) deleteEntry(path, name)
+            }
+            UiEffect.Kind.UploadFile -> {
+                val uri = effect.uri
+                val path = effect.path
+                if (uri != null && path != null) uploadFile(path, uri)
+            }
+            UiEffect.Kind.DownloadFile -> {
+                val name = effect.name
+                val uri = effect.uri
+                val path = effect.path
+                if (name != null && uri != null && path != null) downloadFile(path, name, uri)
+            }
+            // Ventoy/raw-writer routing is owned by the other tabs.
+            UiEffect.Kind.LinkXml, UiEffect.Kind.SendToRawWriter -> Unit
         }
     }
 
@@ -268,8 +321,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (manager != null) {
             usbManager = manager
         }
+        // A (re)attach invalidates any volume mounted for the previous connection.
+        closeFilesVolume()
         var capacity = 0uL
         var partitions = emptyList<PartitionTab>()
+        var probeError: String? = null
         if (hasPermission && usbManager != null) {
             runCatching {
                 val disk = UsbDiskSession.open(usbManager!!, device)
@@ -289,6 +345,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } finally {
                     disk.close()
                 }
+            }.onFailure { failure ->
+                probeError = "Cannot read partition table: ${failure.message ?: failure.javaClass.simpleName}"
             }
         }
         val identity = DeviceIdentity(
@@ -297,61 +355,344 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         val presence = if (hasPermission) DevicePresence.Ready else DevicePresence.PermissionRequired
 
-        if (partitions.isEmpty()) {
-            partitions = listOf(
-                PartitionTab(id = "1", name = "VENTOY", readOnly = false),
-                PartitionTab(id = "2", name = "VTOYEFI", readOnly = true, isVtoyEfi = true),
-            )
-        }
-
-        val initialFiles = listOf(
-            FileEntry("ventoy", isDirectory = true, sizeBytes = 0uL),
-            FileEntry("ISO", isDirectory = true, sizeBytes = 0uL),
-            FileEntry("ventoy/ventoy.json", isDirectory = false, sizeBytes = 512uL),
-            FileEntry("ventoy/log.txt", isDirectory = false, sizeBytes = 1024uL),
-            FileEntry("ISO/ubuntu-24.04-desktop-amd64.iso", isDirectory = false, sizeBytes = 4_500_000_000uL),
-        )
-
         onIntent(
             UiIntent.DeviceChanged(
                 presence = presence,
                 device = identity,
                 partitions = partitions,
-                files = initialFiles,
+                files = emptyList(),
             ),
         )
+
+        val error = probeError
+        when {
+            error != null -> onIntent(UiIntent.Status(error))
+            presence == DevicePresence.Ready && partitions.isEmpty() ->
+                onIntent(UiIntent.Status("No partitions found on this device"))
+            presence == DevicePresence.Ready -> listDirectory(state.currentPath)
+        }
     }
 
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
         attachedDevice = null
+        activeHandle?.cancel()
+        activeHandle = null
+        closeFilesVolume()
         DiskController.get().onDisconnected()
         onIntent(UiIntent.DeviceChanged(presence = DevicePresence.Disconnected))
     }
 
-    fun refreshPartitionContents(partitionId: String) {
-        val partition = state.partitions.firstOrNull { it.id == partitionId }
-        val refreshedFiles = if (partition?.isVtoyEfi == true) {
-            listOf(
-                FileEntry("EFI", isDirectory = true, sizeBytes = 0uL),
-                FileEntry("grub", isDirectory = true, sizeBytes = 0uL),
-                FileEntry("ventoy.json", isDirectory = false, sizeBytes = 512uL),
-                FileEntry("EFI/BOOT", isDirectory = true, sizeBytes = 0uL),
-                FileEntry("EFI/bootx64.efi", isDirectory = false, sizeBytes = 1_048_576uL),
-                FileEntry("grub/grub.cfg", isDirectory = false, sizeBytes = 2048uL),
-            )
-        } else {
-            listOf(
-                FileEntry("ventoy", isDirectory = true, sizeBytes = 0uL),
-                FileEntry("ISO", isDirectory = true, sizeBytes = 0uL),
-                FileEntry("ventoy/ventoy.json", isDirectory = false, sizeBytes = 512uL),
-                FileEntry("ventoy/log.txt", isDirectory = false, sizeBytes = 1024uL),
-                FileEntry("ISO/ubuntu-24.04-desktop-amd64.iso", isDirectory = false, sizeBytes = 4_500_000_000uL),
-            )
+    /** Drop the mounted volume (and its USB claim) without blocking user code. */
+    private fun closeFilesVolume() {
+        synchronized(filesLock) {
+            filesVolume?.close()
+            filesVolume = null
         }
-        state = state.copy(
-            files = refreshedFiles,
-            statusMessage = "Partition ${partition?.name ?: partitionId} refreshed",
+    }
+
+    /**
+     * Mounted volume of [partitionId], opened on first use. Must be called from inside
+     * a files operation (holding [filesLock]).
+     */
+    private fun volumeForLocked(partitionId: String): FatVolume {
+        val current = filesVolume
+        if (current != null && current.partitionId == partitionId) return current.volume
+        current?.close()
+        filesVolume = null
+
+        val device = attachedDevice ?: throw DiskException.Disconnected()
+        val manager = usbManager ?: throw DiskException.Disconnected()
+        val disk = UsbDiskSession.open(manager, device)
+        val volume = try {
+            val index = partitionId.toIntOrNull()
+                ?: throw IllegalArgumentException("invalid partition id $partitionId")
+            val table = PartitionTable.read(disk)
+            val partition = table.partitions.getOrNull(index - 1)
+                ?: throw IllegalArgumentException("partition $partitionId no longer exists")
+            PartitionVolumeSession.open(disk, partition.startLba, partition.sectorCount)
+        } catch (failure: Throwable) {
+            // PartitionVolumeSession already closes on mount failure; close() is idempotent.
+            runCatching { disk.close() }
+            throw failure
+        }
+        filesVolume = MountedFilesVolume(partitionId, disk, volume)
+        return volume
+    }
+
+    /** Runs [action] with the partition selected at submit time, or reports why not. */
+    private inline fun withPartitionId(action: (String) -> Unit) {
+        val partitionId = state.selectedPartitionId
+        if (partitionId == null) {
+            onIntent(UiIntent.Status("Select a partition first"))
+        } else {
+            action(partitionId)
+        }
+    }
+
+    /** Re-list the displayed directory from the real volume. */
+    fun listDirectory(path: String, status: String? = null) = withPartitionId { partitionId ->
+        submitFilesOperation(
+            label = "List $path",
+            failurePath = path,
+            onSuccess = { status?.let { onIntent(UiIntent.Status(it)) } },
+        ) {
+            val entries = volumeForLocked(partitionId).list(path)
+            post(UiIntent.FilesListed(path, entries.map { it.toFileEntry() }))
+        }
+    }
+
+    private fun createFolder(path: String, name: String) {
+        val target = fatChildPath(path, name)
+        withPartitionId { partitionId ->
+            submitFilesOperation(
+                label = "New folder $name",
+                onSuccess = { listDirectory(path, status = "Created folder $target") },
+            ) {
+                val volume = volumeForLocked(partitionId)
+                volume.mkdir(target)
+                volume.sync()
+            }
+        }
+    }
+
+    private fun deleteEntry(path: String, name: String) {
+        val target = fatChildPath(path, name)
+        withPartitionId { partitionId ->
+            submitFilesOperation(
+                label = "Delete $name",
+                onSuccess = { listDirectory(path, status = "Deleted $target") },
+            ) {
+                val volume = volumeForLocked(partitionId)
+                volume.delete(target)
+                volume.sync()
+            }
+        }
+    }
+
+    /** Stream a SAF document into [path] in fixed-size chunks, reporting real bytes. */
+    private fun uploadFile(path: String, uri: String) {
+        val resolver = getApplication<Application>().contentResolver
+        var uploaded: String? = null
+        withPartitionId { partitionId ->
+            submitFilesOperation(
+                label = "Upload",
+                onSuccess = { listDirectory(path, status = "Uploaded $uploaded to $path") },
+            ) { operation ->
+                val document = Uri.parse(uri)
+                val (reportedName, reportedSize) = contentInfo(resolver, document)
+                val rawName = reportedName ?: document.lastPathSegment ?: uri
+                val name = rawName.substringAfterLast('/').trim()
+                require(name.isNotEmpty() && name != "." && name != "..") {
+                    "invalid file name \"$rawName\" for $uri"
+                }
+                uploaded = name
+                val target = fatChildPath(path, name)
+                operation.bytesTotal = reportedSize ?: -1L
+
+                val volume = volumeForLocked(partitionId)
+                val input = resolver.openInputStream(document)
+                    ?: throw IllegalStateException("cannot open $uri for reading")
+                input.use { stream ->
+                    val buffer = ByteArray(COPY_CHUNK_BYTES)
+                    var offset = 0L
+                    var created = false
+                    while (true) {
+                        val read = stream.read(buffer)
+                        if (read <= 0) break
+                        val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
+                        volume.write(target, chunk, offset = offset, create = !created)
+                        created = true
+                        offset += read
+                        operation.report(offset)
+                    }
+                    if (!created) {
+                        volume.write(target, ByteArray(0), offset = 0L, create = true)
+                    }
+                    volume.sync()
+                }
+            }
+        }
+    }
+
+    /** Copy a volume file into a SAF document chosen by the activity. */
+    private fun downloadFile(path: String, name: String, uri: String) {
+        val resolver = getApplication<Application>().contentResolver
+        withPartitionId { partitionId ->
+            submitFilesOperation(
+                label = "Download $name",
+                onSuccess = { onIntent(UiIntent.Status("Saved $name")) },
+            ) { operation ->
+                val target = fatChildPath(path, name)
+                val volume = volumeForLocked(partitionId)
+                val size = volume.stat(target).size
+                operation.bytesTotal = size
+
+                val destination = Uri.parse(uri)
+                val output = resolver.openOutputStream(destination, "wt")
+                    ?: throw IllegalStateException("cannot open $uri for writing")
+                output.use { stream ->
+                    var offset = 0L
+                    while (offset < size) {
+                        val want = minOf(COPY_CHUNK_BYTES.toLong(), size - offset).toInt()
+                        val data = volume.read(target, offset, want)
+                        if (data.isEmpty()) {
+                            throw IllegalStateException("short read at $offset of $size bytes")
+                        }
+                        stream.write(data)
+                        offset += data.size
+                        operation.report(offset)
+                    }
+                    stream.flush()
+                }
+            }
+        }
+    }
+
+    private fun contentInfo(resolver: ContentResolver, uri: Uri): Pair<String?, Long?> {
+        val columns = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+        val cursor = try {
+            resolver.query(uri, columns, null, null, null)
+        } catch (_: RuntimeException) {
+            // Metadata is optional; the stream itself is still opened (and may fail loudly).
+            null
+        } ?: return Pair(null, null)
+        return cursor.use { query ->
+            if (!query.moveToFirst()) {
+                Pair(null, null)
+            } else {
+                val nameIndex = query.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = query.getColumnIndex(OpenableColumns.SIZE)
+                val name =
+                    if (nameIndex >= 0 && !query.isNull(nameIndex)) {
+                        query.getString(nameIndex)
+                    } else {
+                        null
+                    }
+                val size =
+                    if (sizeIndex >= 0 && !query.isNull(sizeIndex)) {
+                        query.getLong(sizeIndex)
+                    } else {
+                        null
+                    }
+                Pair(name, size)
+            }
+        }
+    }
+
+    /**
+     * Enqueue one real FAT operation on the shared disk thread. The mounted volume and
+     * the volume side of a mutation are serialized by [filesLock]; [onSuccess] re-lists
+     * the affected directory after a mutation so the UI never shows invented entries.
+     */
+    private fun submitFilesOperation(
+        label: String,
+        bytesTotal: Long = -1L,
+        failurePath: String? = null,
+        onSuccess: (() -> Unit)? = null,
+        body: (DiskOperation) -> Unit,
+    ) {
+        val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
+            override suspend fun run() {
+                synchronized(filesLock) {
+                    body(this)
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Running,
+                    label = label,
+                    bytesTotal = bytesTotal,
+                ),
+            ),
         )
+        val handle = DiskController.get().submit(operation)
+        activeHandle = handle
+        scope.launch {
+            val ticker = launch {
+                while (true) {
+                    delay(PROGRESS_TICK_MS)
+                    onIntent(
+                        UiIntent.OperationUpdated(
+                            OperationProgress(
+                                state = OperationState.Running,
+                                label = label,
+                                bytesDone = operation.bytesDone,
+                                bytesTotal = operation.bytesTotal,
+                            ),
+                        ),
+                    )
+                }
+            }
+            try {
+                when (val outcome = handle.await()) {
+                    is usb.service.OperationState.Failed -> {
+                        val message =
+                            outcome.cause.message
+                                ?: outcome.cause.javaClass.simpleName
+                        if (failurePath != null) {
+                            onIntent(UiIntent.FilesListFailed(failurePath, message))
+                        } else {
+                            onIntent(UiIntent.Status(message))
+                        }
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Failed,
+                                    label = label,
+                                    errorMessage = message,
+                                ),
+                            ),
+                        )
+                        // The USB claim may be gone; reopen for the next attempt.
+                        closeFilesVolume()
+                    }
+                    is usb.service.OperationState.Cancelled -> {
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(state = OperationState.Cancelled, label = label),
+                            ),
+                        )
+                    }
+                    else -> {
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Completed,
+                                    label = label,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                ),
+                            ),
+                        )
+                        onSuccess?.invoke()
+                    }
+                }
+            } finally {
+                ticker.cancel()
+                if (activeHandle === handle) {
+                    activeHandle = null
+                }
+            }
+        }
+    }
+
+    /** Disk thread -> main thread hop for result intents. */
+    private fun post(intent: UiIntent) {
+        scope.launch { onIntent(intent) }
+    }
+
+    private fun FatDirEntry.toFileEntry(): FileEntry =
+        FileEntry(
+            name = name,
+            isDirectory = isDirectory,
+            sizeBytes = size.coerceAtLeast(0L).toULong(),
+        )
+
+    private companion object {
+        const val COPY_CHUNK_BYTES = 64 * 1024
+        const val PROGRESS_TICK_MS = 120L
     }
 }
 
@@ -372,6 +713,19 @@ class MainActivity : ComponentActivity() {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         viewModel.onIntent(UiIntent.SetImage(uri.toString()))
+    }
+
+    /** Entry name waiting for the SAF destination chosen in [downloadLauncher]. */
+    private var pendingDownloadName: String? = null
+
+    private val downloadLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri: Uri? ->
+        val name = pendingDownloadName
+        pendingDownloadName = null
+        if (uri != null && name != null) {
+            viewModel.onIntent(UiIntent.DownloadFile(name, uri.toString()))
+        }
     }
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -425,6 +779,10 @@ class MainActivity : ComponentActivity() {
                             "application/x-xz",
                         ),
                     )
+                },
+                onRequestDownload = { name ->
+                    pendingDownloadName = name
+                    downloadLauncher.launch(name)
                 },
             )
         }

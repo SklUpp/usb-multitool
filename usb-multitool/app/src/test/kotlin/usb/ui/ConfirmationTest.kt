@@ -235,33 +235,77 @@ class UiStateMachineTest {
     }
 
     @Test
-    fun addFileMutatesFileListAndShowsStatus() {
+    fun openDirectoryClearsStaleEntriesAndRequestsListing() {
         val state = ready()
-        val newEntry = FileEntry("custom.iso", isDirectory = false, sizeBytes = 100uL)
-        val result = UiReducer.reduce(state, UiIntent.AddFile(newEntry))
-        assertTrue(result.state.files.contains(newEntry))
-        assertEquals("Uploaded custom.iso", result.state.statusMessage)
-
-        val newFolder = FileEntry("custom_dir", isDirectory = true, sizeBytes = 0uL)
-        val folderResult = UiReducer.reduce(state, UiIntent.AddFile(newFolder))
-        assertTrue(folderResult.state.files.contains(newFolder))
-        assertEquals("Created folder custom_dir", folderResult.state.statusMessage)
+        val result = UiReducer.reduce(state, UiIntent.OpenDirectory("/docs"))
+        assertEquals("/docs", result.state.currentPath)
+        assertTrue(result.state.files.isEmpty())
+        assertEquals(1, result.effects.size)
+        assertEquals(UiEffect.Kind.LoadFiles, result.effects.single().kind)
+        assertEquals("/docs", result.effects.single().path)
     }
 
     @Test
-    fun deleteFileRemovesEntryAndShowsStatus() {
-        val state = ready()
-        val toDelete = state.files.first()
-        val result = UiReducer.reduce(state, UiIntent.DeleteFile(toDelete))
-        assertFalse(result.state.files.contains(toDelete))
-        assertEquals("Deleted ${toDelete.name}", result.state.statusMessage)
+    fun navigateUpMovesToParentAndRequestsListing() {
+        val nested = ready().copy(currentPath = "/docs/manuals", files = emptyList())
+        val result = UiReducer.reduce(nested, UiIntent.NavigateUp)
+        assertEquals("/docs", result.state.currentPath)
+        assertEquals(UiEffect.Kind.LoadFiles, result.effects.single().kind)
+
+        val root = UiReducer.reduce(result.state.copy(currentPath = "/"), UiIntent.NavigateUp)
+        assertEquals("/", root.state.currentPath)
+        assertTrue(root.effects.isEmpty())
     }
 
     @Test
-    fun updateFilesReplacesFileList() {
-        val state = ready()
-        val newFiles = listOf(FileEntry("single.txt", isDirectory = false, sizeBytes = 10uL))
-        val result = UiReducer.reduce(state, UiIntent.UpdateFiles(newFiles))
-        assertEquals(newFiles, result.state.files)
+    fun listedFilesApplyOnlyToTheDisplayedPath() {
+        val state = ready().copy(currentPath = "/docs", files = emptyList())
+        val entries = listOf(FileEntry("manual.pdf", isDirectory = false, sizeBytes = 10uL))
+        val applied = UiReducer.reduce(state, UiIntent.FilesListed("/docs", entries))
+        assertEquals(entries, applied.state.files)
+
+        val stale = UiReducer.reduce(state, UiIntent.FilesListed("/", entries))
+        assertTrue(stale.state.files.isEmpty())
+    }
+
+    @Test
+    fun createFolderAndDeleteEmitRealDiskEffects() {
+        val state = ready().copy(currentPath = "/docs", files = emptyList())
+        val mkdir = UiReducer.reduce(state, UiIntent.CreateFolder("reports"))
+        assertEquals(UiEffect.Kind.CreateFolder, mkdir.effects.single().kind)
+        assertEquals("/docs", mkdir.effects.single().path)
+        assertEquals("reports", mkdir.effects.single().name)
+
+        val delete = UiReducer.reduce(state, UiIntent.DeleteEntry("manual.pdf"))
+        assertEquals(UiEffect.Kind.DeleteEntry, delete.effects.single().kind)
+        assertEquals("manual.pdf", delete.effects.single().name)
+
+        val rejected = UiReducer.reduce(state, UiIntent.CreateFolder("a/b"))
+        assertTrue(rejected.effects.isEmpty())
+        assertNotNull(rejected.state.statusMessage)
+    }
+
+    @Test
+    fun uploadAndDownloadCarrySafUris() {
+        val state = ready().copy(currentPath = "/docs", files = emptyList())
+        val upload = UiReducer.reduce(state, UiIntent.UploadFile("content://docs/42"))
+        assertEquals(UiEffect.Kind.UploadFile, upload.effects.single().kind)
+        assertEquals("content://docs/42", upload.effects.single().uri)
+        assertEquals("/docs", upload.effects.single().path)
+
+        val download =
+            UiReducer.reduce(state, UiIntent.DownloadFile("manual.pdf", "content://out/7"))
+        val effect = download.effects.single()
+        assertEquals(UiEffect.Kind.DownloadFile, effect.kind)
+        assertEquals("manual.pdf", effect.name)
+        assertEquals("content://out/7", effect.uri)
+    }
+
+    @Test
+    fun fileEffectsAreSuppressedWhileBusy() {
+        val busy = ready().copy(presence = DevicePresence.Busy)
+        assertTrue(UiReducer.reduce(busy, UiIntent.UploadFile("content://docs/42")).effects.isEmpty())
+        assertTrue(UiReducer.reduce(busy, UiIntent.CreateFolder("x")).effects.isEmpty())
+        assertTrue(UiReducer.reduce(busy, UiIntent.DeleteEntry("x")).effects.isEmpty())
     }
 }

@@ -2,8 +2,6 @@ package usb.ui
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import android.provider.OpenableColumns
-import androidx.compose.ui.platform.LocalContext
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,7 +22,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,42 +30,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/**
+ * Files tab over the real FAT volume of the selected partition.
+ *
+ * Every action leaves through [onIntent]; this composable never mutates the file list
+ * or the displayed path. [AppUiState.currentPath] is the path whose entries are shown
+ * and the path the view model actually listed.
+ */
 @Composable
 fun FilesScreen(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onRequestDownload: (String) -> Unit = {},
 ) {
-    var currentPath by remember { mutableStateOf("/") }
-    var selectedFile by remember { mutableStateOf<FileEntry?>(null) }
+    var selectedFile by remember(state.selectedPartitionId, state.currentPath) {
+        mutableStateOf<FileEntry?>(null)
+    }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.selectedPartitionId) {
-        currentPath = "/"
-        selectedFile = null
-    }
-
-    val context = LocalContext.current
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri: Uri? ->
         if (uri != null) {
-            val fileName = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-            val norm = currentPath.trim('/')
-            val createdName = if (norm.isEmpty()) fileName else "$norm/$fileName"
-            val size = runCatching {
-                context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    if (sizeIndex != -1 && cursor.moveToFirst()) {
-                        cursor.getLong(sizeIndex).toULong()
-                    } else 0uL
-                }
-            }.getOrNull() ?: 0uL
-            val entry = FileEntry(name = createdName, isDirectory = false, sizeBytes = size)
-            onIntent(UiIntent.AddFile(entry))
-            onIntent(UiIntent.Status("Uploaded $fileName to $currentPath"))
+            onIntent(UiIntent.UploadFile(uri.toString()))
         }
     }
 
@@ -86,11 +73,7 @@ fun FilesScreen(
             state.partitions.forEach { partition ->
                 FilterChip(
                     selected = partition.id == state.selectedPartitionId,
-                    onClick = {
-                        currentPath = "/"
-                        selectedFile = null
-                        onIntent(UiIntent.SelectPartition(partition.id))
-                    },
+                    onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
                     label = {
                         Text(
                             if (partition.isVtoyEfi) {
@@ -119,6 +102,10 @@ fun FilesScreen(
             }
         }
 
+        val canAct = state.actionsEnabled && selected != null
+        // A selection only counts while the entry is still present in the listed directory.
+        val selection = state.files.firstOrNull { it.name == selectedFile?.name }
+
         // Top Action Bar
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -127,29 +114,42 @@ fun FilesScreen(
         ) {
             Button(
                 onClick = { uploadLauncher.launch("*/*") },
-                enabled = state.actionsEnabled,
+                enabled = canAct,
             ) {
                 Text("Upload file")
             }
 
             OutlinedButton(
                 onClick = { showNewFolderDialog = true },
-                enabled = state.actionsEnabled,
+                enabled = canAct,
             ) {
                 Text("New folder")
             }
 
             OutlinedButton(
                 onClick = {
-                    if (selectedFile != null) {
-                        showDeleteConfirmDialog = true
-                    } else {
+                    if (selection == null) {
                         onIntent(UiIntent.Status("Select a file to delete"))
+                    } else {
+                        showDeleteConfirmDialog = true
                     }
                 },
-                enabled = state.actionsEnabled && selectedFile != null,
+                enabled = canAct && selection != null,
             ) {
                 Text("Delete")
+            }
+
+            OutlinedButton(
+                onClick = {
+                    when {
+                        selection == null -> onIntent(UiIntent.Status("Select a file to download"))
+                        selection.isDirectory -> onIntent(UiIntent.Status("Select a file, not a folder"))
+                        else -> onRequestDownload(selection.name)
+                    }
+                },
+                enabled = canAct && selection?.isDirectory == false,
+            ) {
+                Text("Download")
             }
         }
 
@@ -160,18 +160,13 @@ fun FilesScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(
-                onClick = {
-                    val trimmed = currentPath.trimEnd('/')
-                    val lastSlash = trimmed.lastIndexOf('/')
-                    currentPath = if (lastSlash <= 0) "/" else trimmed.substring(0, lastSlash)
-                    selectedFile = null
-                },
-                enabled = state.actionsEnabled && currentPath != "/",
+                onClick = { onIntent(UiIntent.NavigateUp) },
+                enabled = canAct && state.currentPath != "/",
             ) {
                 Text("..")
             }
             Text(
-                text = currentPath,
+                text = state.currentPath,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -180,55 +175,17 @@ fun FilesScreen(
             Text(UiReducer.presenceMessage(state.presence))
         }
 
-        val normPath = currentPath.trim('/')
-        val displayedFiles = remember(state.files, currentPath) {
-            val matching = if (normPath.isEmpty()) {
-                state.files.filter { entry ->
-                    val rel = entry.name.trimStart('/')
-                    !rel.contains('/')
-                }
-            } else {
-                state.files.filter { entry ->
-                    val rel = entry.name.trimStart('/')
-                    rel.startsWith("$normPath/") && !rel.removePrefix("$normPath/").contains('/')
-                }
-            }
-            if (matching.isEmpty() && normPath.isNotEmpty()) {
-                simulatedFolderContents[currentPath] ?: emptyList()
-            } else {
-                matching
-            }
-        }
-
         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(displayedFiles, key = { it.name }) { entry ->
+            items(state.files, key = { it.name }) { entry ->
                 FileRow(
                     entry = entry,
                     isSelected = entry == selectedFile,
-                    actionsEnabled = state.actionsEnabled,
+                    actionsEnabled = canAct,
                     onSelect = {
                         selectedFile = if (selectedFile == entry) null else entry
                     },
                     onNavigate = {
-                        val dirName = entry.name.substringAfterLast('/')
-                        val nextPath = if (currentPath.endsWith("/")) "$currentPath$dirName" else "$currentPath/$dirName"
-                        currentPath = nextPath
-                        selectedFile = null
-                        val norm = nextPath.trim('/')
-                        val hasEntries = state.files.any { it.name.trimStart('/').startsWith("$norm/") }
-                        if (!hasEntries) {
-                            val simulated = simulatedFolderContents[nextPath]
-                            if (simulated != null) {
-                                val seeded = simulated.map { sim ->
-                                    FileEntry(
-                                        name = "$norm/${sim.name}",
-                                        isDirectory = sim.isDirectory,
-                                        sizeBytes = sim.sizeBytes,
-                                    )
-                                }
-                                onIntent(UiIntent.UpdateFiles(state.files + seeded))
-                            }
-                        }
+                        onIntent(UiIntent.OpenDirectory(fatChildPath(state.currentPath, entry.name)))
                     },
                     onIntent = onIntent,
                 )
@@ -256,12 +213,7 @@ fun FilesScreen(
                     onClick = {
                         val name = newFolderName.trim()
                         if (name.isNotEmpty()) {
-                            val norm = currentPath.trim('/')
-                            val createdName = if (norm.isEmpty()) name else "$norm/$name"
-                            val entry = FileEntry(name = createdName, isDirectory = true, sizeBytes = 0uL)
-                            onIntent(UiIntent.AddFile(entry))
-                            val createdPath = if (currentPath.endsWith("/")) "$currentPath$name" else "$currentPath/$name"
-                            onIntent(UiIntent.Status("Created folder $createdPath"))
+                            onIntent(UiIntent.CreateFolder(name))
                         }
                         showNewFolderDialog = false
                         newFolderName = ""
@@ -284,18 +236,16 @@ fun FilesScreen(
     }
 
     if (showDeleteConfirmDialog && selectedFile != null) {
+        val entry = state.files.firstOrNull { it.name == selectedFile?.name }
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
             title = { Text("Delete") },
-            text = { Text("Delete ${selectedFile?.name}?") },
+            text = { Text("Delete ${entry?.name}?") },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val entry = selectedFile
                         if (entry != null) {
-                            onIntent(UiIntent.DeleteFile(entry))
-                            val name = entry.name.substringAfterLast('/')
-                            onIntent(UiIntent.Status("Deleted $name"))
+                            onIntent(UiIntent.DeleteEntry(entry.name))
                         }
                         selectedFile = null
                         showDeleteConfirmDialog = false
@@ -340,12 +290,11 @@ private fun FileRow(
             )
             .padding(vertical = 4.dp, horizontal = 4.dp),
     ) {
-        val displayName = entry.name.substringAfterLast('/')
         Text(
             if (entry.isDirectory) {
-                "$displayName/"
+                "${entry.name}/"
             } else {
-                "$displayName · ${DeviceIdentity.formatCapacity(entry.sizeBytes)}"
+                "${entry.name} · ${DeviceIdentity.formatCapacity(entry.sizeBytes)}"
             },
         )
         if (entry.isIso) {
@@ -372,23 +321,3 @@ private fun FileRow(
         }
     }
 }
-
-private val simulatedFolderContents: Map<String, List<FileEntry>> = mapOf(
-    "/ventoy" to listOf(
-        FileEntry("ventoy.json", isDirectory = false, sizeBytes = 512uL),
-        FileEntry("log.txt", isDirectory = false, sizeBytes = 1024uL),
-    ),
-    "/ISO" to listOf(
-        FileEntry("ubuntu-24.04-desktop-amd64.iso", isDirectory = false, sizeBytes = 4_500_000_000uL),
-    ),
-    "/EFI" to listOf(
-        FileEntry("BOOT", isDirectory = true, sizeBytes = 0uL),
-        FileEntry("bootx64.efi", isDirectory = false, sizeBytes = 1_048_576uL),
-    ),
-    "/grub" to listOf(
-        FileEntry("grub.cfg", isDirectory = false, sizeBytes = 2048uL),
-    ),
-    "/docs" to listOf(
-        FileEntry("manual.pdf", isDirectory = false, sizeBytes = 104_857uL),
-    ),
-)
