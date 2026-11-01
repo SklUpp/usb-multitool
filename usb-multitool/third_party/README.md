@@ -57,3 +57,17 @@ app `externalNativeBuild` CMake arguments.
 - URL: https://github.com/ventoy/Ventoy/archive/refs/tags/v1.1.18.tar.gz
 - Revision: tag **v1.1.18** / commit `6116894ab8abdf3ef8d43411a6732d34ee19214e`
 - Bridge: `app/src/main/cpp/ventoy_bridge.c`
+
+## F3
+
+- See `f3/README.md`
+- URL: https://github.com/AltraMayor/f3/archive/refs/tags/v10.0.tar.gz
+- Revision: tag **v10.0** / commit `67b8a5d546cbe41b0072c2e62aefe165e4675b61`
+- Bridge: `app/src/main/cpp/f3_bridge.c`
+
+## GNU ddrescue
+
+- See `ddrescue/README.md`
+- URL: https://ftp.gnu.org/gnu/ddrescue/ddrescue-1.30.tar.lz
+- Revision: **1.30**
+- Bridge: `app/src/main/cpp/ddrescue_bridge.c`
