@@ -3,17 +3,14 @@ package usb.multitool
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import usb.ui.RememberedAppShell
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AppRoot() }
+        setContent {
+            // Starts Absent; service/facade feeds DeviceChanged intents later.
+            RememberedAppShell()
+        }
     }
-}
-
-@Composable
-private fun AppRoot() {
-    Text("USB Multitool")
 }
