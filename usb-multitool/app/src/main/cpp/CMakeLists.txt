@@ -63,6 +63,7 @@ target_include_directories(usb_native PRIVATE
 
 target_compile_definitions(usb_native PRIVATE
     HAVE_CONFIG_H=1
+    _GNU_SOURCE
     _FILE_OFFSET_BITS=64
 )
 

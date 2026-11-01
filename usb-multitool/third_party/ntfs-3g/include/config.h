@@ -1,5 +1,12 @@
 /* config.h.  Generated from config.h.in by configure.  */
 /* config.h.in.  Generated from configure.ac by autoheader.  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
+#include <sys/types.h>
+#include <sys/stat.h>
+
 #ifndef __timespec_defined
 #define __timespec_defined 1
 #endif
