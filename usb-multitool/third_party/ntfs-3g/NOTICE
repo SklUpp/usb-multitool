@@ -1,0 +1,11 @@
+ntfs-3g 2026.9.28
+=================
+
+Upstream: https://github.com/tuxera/ntfs-3g
+Archive:  https://github.com/tuxera/ntfs-3g/archive/refs/tags/2026.9.28.tar.gz
+Commit:   7f0f841fc52cf719106c5c93bafe465004e36816
+License:  GPL-2.0-or-later (see COPYING)
+
+Vendored files include include/ntfs-3g/*.h, config.h, and libntfs-3g/*.c.
+FUSE tools (src/ and ntfsprogs/) are excluded per project policy.
+Device I/O is routed through usb_block_* with bounce buffer for unaligned head/tail.

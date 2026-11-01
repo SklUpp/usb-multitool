@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/android-usb-multitool
+      - feature/ntfs-engine
 
 concurrency:
   group: android-debug-${{ github.ref }}
@@ -47,6 +48,9 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;29.0.14206865" \
             "cmake;3.22.1"
+
+      - name: Host NTFS test
+        run: ./scripts/run-ntfs-host-test.sh
 
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon
