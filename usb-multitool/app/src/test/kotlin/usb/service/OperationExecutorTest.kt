@@ -3,6 +3,8 @@ package usb.service
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -226,6 +228,7 @@ class OperationExecutorTest {
             override suspend fun run() = Unit
         })
         assertEquals(OperationState.Completed, done.await())
+        clobber.awaitStop(1)
         assertEquals(0, testService.startCount)
         assertEquals(0, testService.stopCount)
         assertEquals(1, clobber.startCount)
@@ -237,6 +240,7 @@ class OperationExecutorTest {
             override suspend fun run() = Unit
         })
         assertEquals(OperationState.Completed, again.await())
+        testService.awaitStop(1)
         assertEquals(1, testService.startCount)
         assertEquals(1, testService.stopCount)
         assertEquals(1, clobber.startCount)
@@ -265,6 +269,7 @@ class OperationExecutorTest {
             }
         })
         assertEquals(OperationState.Completed, done.await())
+        newLifecycle.awaitStop(1)
         assertEquals(1, newLifecycle.startCount)
         assertEquals(1, newLifecycle.stopCount)
         assertEquals(0, oldLifecycle.startCount)
@@ -319,5 +324,13 @@ class RecordingServiceControl : ServiceControl {
 
     override fun stopWhenIdle() {
         stopCount++
+    }
+
+    suspend fun awaitStop(expected: Int = 1) {
+        withTimeout(2000) {
+            while (stopCount < expected) {
+                delay(10)
+            }
+        }
     }
 }
