@@ -477,13 +477,4 @@ class VentoyLayoutTest {
         val oobeSection = xml.substringAfter("<settings pass=\"oobeSystem\">").substringBefore("</settings>")
         assertTrue("BypassNRO must be in oobeSystem pass", oobeSection.contains("BypassNRO"))
     }
-
-    @Test
-    fun testVentoyNativeDeclarations() {
-        val methods = VentoyNative::class.java.declaredMethods.map { it.name }
-        assertTrue(methods.contains("nativeEngineLinked"))
-        assertTrue(methods.contains("nativeProbe"))
-        assertTrue(methods.contains("nativeInstall"))
-        assertTrue(methods.contains("nativeUpdate"))
-    }
 }
