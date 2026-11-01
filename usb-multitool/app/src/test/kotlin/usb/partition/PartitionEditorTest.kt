@@ -65,8 +65,8 @@ class PartitionEditorTest {
         val align = 2048UL // 1 MiB
         return when (name) {
             "between-partitions" -> {
-                val p0 = Partition(align, 2048UL, PartitionType.EFI, name = "EFI", esp = false)
-                val p1 = Partition(align + 4096UL, 2048UL, PartitionType.BASIC, name = "DATA")
+                val p0 = Partition(align, 2048UL, PartitionType.EFI.name, name = "EFI", esp = false)
+                val p1 = Partition(align + 4096UL, 2048UL, PartitionType.BASIC.name, name = "DATA")
                 // Gap between p0 end (4096) and p1 start (6144) = 2048 sectors free mid-disk,
                 // plus trailing free after p1.
                 val partitions = listOf(p0, p1)
@@ -82,7 +82,7 @@ class PartitionEditorTest {
                 )
             }
             "full-disk" -> {
-                val p0 = Partition(align, diskSectors - align, PartitionType.BASIC, name = "ONLY")
+                val p0 = Partition(align, diskSectors - align, PartitionType.BASIC.name, name = "ONLY")
                 PartitionTable(
                     scheme = TableScheme.MBR,
                     partitions = listOf(p0),

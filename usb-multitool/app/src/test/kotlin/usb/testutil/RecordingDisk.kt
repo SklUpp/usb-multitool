@@ -1,15 +1,21 @@
 package usb.testutil
 
 import java.nio.ByteBuffer
-import usb.device.BlockDevice
+import usb.device.BlockGeometry
+import usb.device.FakeBotSession
+import usb.device.UsbDisk
 
 class RecordingDisk(
-    override val sectorSize: Int = 512,
-    override val sectorCount: ULong = 262144UL, // 128 MiB default
-) : BlockDevice {
-
-    private val sectors = mutableMapOf<Long, ByteArray>()
+    sectorCount: ULong = 262144UL, // 128 MiB default
+    sectorSize: Int = 512,
+) : UsbDisk(
+    session = FakeBotSession(),
+    geometry = BlockGeometry(sectorSize, sectorCount),
+) {
+    val reads = mutableListOf<ULong>()
+    val writes = mutableListOf<ULong>()
     val writtenRanges = mutableListOf<Pair<Long, Int>>()
+    val bytes = mutableMapOf<ULong, ByteArray>()
 
     var readCount: Long = 0
         private set
@@ -26,6 +32,9 @@ class RecordingDisk(
         syncCount = 0
         bytesWritten = 0
         writtenRanges.clear()
+        reads.clear()
+        writes.clear()
+        bytes.clear()
     }
 
     fun wasRangeWritten(startLba: Long, count: Long): Boolean {
@@ -36,16 +45,13 @@ class RecordingDisk(
         }
     }
 
-    override fun read(lba: Long, destination: ByteBuffer) {
-        require(lba >= 0 && lba.toULong() < sectorCount) { "LBA out of bounds: $lba" }
+    override fun read(lba: ULong, destination: ByteBuffer) {
+        reads.add(lba)
         readCount++
         val count = destination.remaining() / sectorSize
-        require(count > 0) { "Destination must hold at least 1 sector" }
-        require((lba + count).toULong() <= sectorCount) { "Read exceeds disk bounds" }
-
         for (i in 0 until count) {
-            val curLba = lba + i
-            val data = sectors[curLba]
+            val cur = lba + i.toULong()
+            val data = bytes[cur]
             if (data != null) {
                 destination.put(data)
             } else {
@@ -54,21 +60,19 @@ class RecordingDisk(
         }
     }
 
-    override fun write(lba: Long, source: ByteBuffer) {
-        require(lba >= 0 && lba.toULong() < sectorCount) { "LBA out of bounds: $lba" }
+    override fun write(lba: ULong, source: ByteBuffer) {
+        writes.add(lba)
         writeCount++
         val count = source.remaining() / sectorSize
-        require(count > 0) { "Source must hold at least 1 sector" }
-        require((lba + count).toULong() <= sectorCount) { "Write exceeds disk bounds" }
-
-        writtenRanges.add(Pair(lba, count))
-        bytesWritten += (count * sectorSize).toLong()
+        writtenRanges.add(Pair(lba.toLong(), count))
+        val n = source.remaining()
+        bytesWritten += n.toLong()
 
         for (i in 0 until count) {
-            val curLba = lba + i
-            val sec = ByteArray(sectorSize)
-            source.get(sec)
-            sectors[curLba] = sec
+            val cur = lba + i.toULong()
+            val buf = ByteArray(sectorSize)
+            source.get(buf)
+            bytes[cur] = buf
         }
     }
 
@@ -76,10 +80,35 @@ class RecordingDisk(
         syncCount++
     }
 
-    fun getSector(lba: Long): ByteArray? = sectors[lba]?.copyOf()
+    override fun read(lba: Long, destination: ByteBuffer) = read(lba.toULong(), destination)
+    override fun write(lba: Long, source: ByteBuffer) = write(lba.toULong(), source)
 
-    fun putSector(lba: Long, data: ByteArray) {
-        require(data.size == sectorSize)
-        sectors[lba] = data.copyOf()
+    fun bytes(): ByteArray {
+        val total = (sectorCount * sectorSize.toULong()).toInt()
+        val out = ByteArray(total)
+        for ((lba, buf) in bytes) {
+            val off = (lba * sectorSize.toULong()).toInt()
+            if (off + buf.size <= out.size) {
+                System.arraycopy(buf, 0, out, off, buf.size)
+            }
+        }
+        return out
+    }
+
+    companion object {
+        fun fromBytes(data: ByteArray, sectorSize: Int = 512): RecordingDisk {
+            val count = (data.size + sectorSize - 1) / sectorSize
+            val disk = RecordingDisk(sectorSize = sectorSize, sectorCount = count.toULong())
+            for (i in 0 until count) {
+                val start = i * sectorSize
+                val len = minOf(sectorSize, data.size - start)
+                val full = ByteArray(sectorSize)
+                if (len > 0) {
+                    System.arraycopy(data, start, full, 0, len)
+                }
+                disk.bytes[i.toULong()] = full
+            }
+            return disk
+        }
     }
 }

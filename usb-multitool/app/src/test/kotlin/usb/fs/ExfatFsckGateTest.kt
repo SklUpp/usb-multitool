@@ -17,6 +17,8 @@ class ExfatFsckGateTest {
         override val sectorCount: ULong = 2048uL
         override fun read(lba: Long, destination: ByteBuffer) = Unit
         override fun write(lba: Long, source: ByteBuffer) = Unit
+        override fun read(lba: ULong, destination: ByteBuffer) = read(lba.toLong(), destination)
+        override fun write(lba: ULong, source: ByteBuffer) = write(lba.toLong(), source)
         override fun sync() = Unit
     }
 

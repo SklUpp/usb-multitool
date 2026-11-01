@@ -17,11 +17,12 @@ open class DiskOperation(
     @Volatile var bytesDone: Long = 0L,
     @Volatile var bytesTotal: Long = -1L,
     @Volatile var state: OperationState = OperationState.Queued,
+    private val active: () -> Boolean = { true },
 ) {
-    private val active = AtomicBoolean(true)
+    private val explicitActive = AtomicBoolean(true)
     private val inactive = CompletableDeferred<Unit>()
 
-    fun isActive(): Boolean = active.get()
+    fun isActive(): Boolean = explicitActive.get() && active()
 
     fun report(bytes: Long) {
         bytesDone = bytes
@@ -32,7 +33,7 @@ open class DiskOperation(
     }
 
     internal fun markInactive() {
-        if (active.getAndSet(false)) {
+        if (explicitActive.getAndSet(false)) {
             inactive.complete(Unit)
         }
     }
