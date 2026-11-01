@@ -65,9 +65,6 @@ jobs:
       - name: Host usb_block registry test
         run: ./scripts/run-usb-block-host-test.sh
 
-      - name: Host GPT critical backup test
-        run: ./scripts/run-gpt-critical-backup-check.sh
-
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon
 

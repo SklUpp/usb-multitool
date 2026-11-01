@@ -1,22 +1,25 @@
 package usb.ui
 
 import java.nio.ByteBuffer
+import org.junit.Test
 import usb.device.BlockDevice
 import usb.multitool.GptCriticalBackup
 
 /**
- * Host-runnable assert self-check for the GPT critical-sector restore path.
- * Compile with kotlinc against usb/device/BlockDevice.kt + GptCriticalBackup.kt.
+ * Covers the GPT critical-sector restore path: geometry derivation, CRC validation and the
+ * read-back that decides whether a restore is reported as successful.
  */
-object GptCriticalBackupHostCheck {
-    private const val SECTOR_SIZE = 512
-    private const val PRIMARY_SECTORS = 34
-    private const val BACKUP_SECTORS = 33
-    private const val ENTRY_COUNT = 128
-    private const val ENTRY_SIZE = 128
+class GptCriticalBackupTest {
+    companion object {
+        private const val SECTOR_SIZE = 512
+        private const val PRIMARY_SECTORS = 34
+        private const val BACKUP_SECTORS = 33
+        private const val ENTRY_COUNT = 128
+        private const val ENTRY_SIZE = 128
+    }
 
-    @JvmStatic
-    fun main(args: Array<String>) {
+    @Test
+    fun restoreWritesAndVerifiesEveryCriticalRegion() {
         val disk = syntheticGpt(2048UL)
         val blob = capture(disk)
 
@@ -137,7 +140,6 @@ object GptCriticalBackupHostCheck {
                 stale.message.orEmpty().contains("relocate the backup GPT"),
         ) { "stale backup header must fail loudly: ${stale?.message}" }
 
-        println("GptCriticalBackupHostCheck OK")
     }
 
     private fun expectFailure(blob: ByteArray, disk: BlockDevice, needle: String) {
@@ -207,7 +209,7 @@ object GptCriticalBackupHostCheck {
         return disk
     }
 
-    private class MemoryDisk(
+    private inner class MemoryDisk(
         override val sectorCount: ULong,
         override val sectorSize: Int = SECTOR_SIZE,
     ) : BlockDevice {
