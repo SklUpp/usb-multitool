@@ -10,6 +10,7 @@ HAMCREST_JAR="/data/data/com.termux/files/usr/tmp/hamcrest-core-1.3.jar"
 KOTLIN_STDLIB="/data/data/com.termux/files/usr/opt/kotlin/lib/kotlin-stdlib.jar"
 COMMONS_COMPRESS_JAR="/data/data/com.termux/files/usr/opt/android-sdk/cmdline-tools/lib/external/org/apache/commons/commons-compress/1.21/commons-compress-1.21.jar"
 XZ_JAR="/data/data/com.termux/files/usr/tmp/xz-1.10.jar"
+ANDROID_JAR="/data/data/com.termux/files/usr/opt/android-sdk/platforms/android-36/android.jar"
 
 TEST_CP="$JUNIT_JAR:$HAMCREST_JAR:$KOTLIN_STDLIB"
 if [ -f "$COMMONS_COMPRESS_JAR" ]; then
@@ -17,6 +18,9 @@ if [ -f "$COMMONS_COMPRESS_JAR" ]; then
 fi
 if [ -f "$XZ_JAR" ]; then
     TEST_CP="$TEST_CP:$XZ_JAR"
+fi
+if [ -f "$ANDROID_JAR" ]; then
+    TEST_CP="$ANDROID_JAR:$TEST_CP"
 fi
 
 if [ ! -f "$JUNIT_JAR" ] || [ ! -f "$HAMCREST_JAR" ] || [ ! -f "$KOTLIN_STDLIB" ]; then
@@ -32,13 +36,12 @@ echo "Compiling Kotlin sources..."
 kotlinc \
     -cp "$TEST_CP" \
     -d "$BUILD_DIR" \
-    "$APP_DIR/src/main/kotlin/usb/device/BlockDevice.kt" \
-    "$APP_DIR/src/main/kotlin/usb/partition/PartitionTable.kt" \
-    "$APP_DIR/src/main/kotlin/usb/ventoy/VentoyAssets.kt" \
-    "$APP_DIR/src/main/kotlin/usb/ventoy/VentoyNative.kt" \
-    "$APP_DIR/src/main/kotlin/usb/ventoy/VentoyLayout.kt" \
-    "$APP_DIR/src/test/kotlin/usb/testutil/RecordingDisk.kt" \
-    "$APP_DIR/src/test/kotlin/usb/ventoy/VentoyLayoutTest.kt"
+    $APP_DIR/src/main/kotlin/usb/device/*.kt \
+    $APP_DIR/src/main/kotlin/usb/partition/*.kt \
+    $APP_DIR/src/main/kotlin/usb/ventoy/*.kt \
+    $APP_DIR/src/test/kotlin/usb/device/FakeBotSession.kt \
+    $APP_DIR/src/test/kotlin/usb/testutil/RecordingDisk.kt \
+    $APP_DIR/src/test/kotlin/usb/ventoy/VentoyLayoutTest.kt
 
 echo "Running Ventoy JUnit tests..."
 java -cp "$BUILD_DIR:$TEST_CP" org.junit.runner.JUnitCore usb.ventoy.VentoyLayoutTest

@@ -120,6 +120,33 @@ class VentoyLayoutTest {
         assertEquals(TableScheme.GPT, probe!!.scheme)
         assertEquals(p1.startLba, probe.part1StartLba)
         assertEquals(p2.startLba, probe.part2StartLba)
+        val p2End = p2.startLba + p2.sectorCount - 1UL
+        val backupGptStart = disk.sectorCount - 34UL
+        assertTrue("Partition 2 end ($p2End) must be strictly less than backup GPT start ($backupGptStart)", p2End < backupGptStart)
+    }
+
+    @Test
+    fun installRefusesMbrAbove2Tb() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 0x100000000UL)
+        try {
+            VentoyInstaller.install(disk, fakeAssets, gpt = false)
+            fail("Expected IllegalArgumentException when installing MBR on disk > 2TB")
+        } catch (_: IllegalArgumentException) {
+            // Expected
+        }
+    }
+
+    @Test
+    fun loadBundledAssetsFromAssetsDirectoryWithChecksumValidation() {
+        val assetDir = java.io.File("app/src/main/assets/ventoy")
+        val assets = VentoyAssets.loadFromDirectory(assetDir, strict = true)
+        assertEquals("1.1.05", assets.release)
+        assertEquals(512, assets.bootImg.size)
+        assertTrue(assets.coreImg.isNotEmpty())
+        assertTrue(assets.efiPartImg.isNotEmpty())
+        assertTrue(VentoyAssets.isXz(assets.coreImg))
+        assertTrue(VentoyAssets.isXz(assets.efiPartImg))
+        assets.validateChecksums(strict = true)
     }
 
     @Test

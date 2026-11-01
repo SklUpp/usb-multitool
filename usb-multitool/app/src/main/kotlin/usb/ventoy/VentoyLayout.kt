@@ -154,6 +154,9 @@ object VentoyInstaller {
         if (disk.sectorSize != VentoyLayout.SECTOR_SIZE) {
             throw UnsupportedSectorSizeException("Unsupported sector size: ${disk.sectorSize}")
         }
+        if (!gpt && disk.sectorCount > 0xFFFFFFFFUL) {
+            throw IllegalArgumentException("Disks larger than 2TB require GPT; MBR cannot address > 0xFFFFFFFF sectors")
+        }
         assets.validateChecksums(strict = true)
 
         val diskSectors = disk.sectorCount.toLong()
@@ -165,7 +168,7 @@ object VentoyInstaller {
 
         val part1Start = VentoyLayout.PART1_START_SECTOR
         var part1End = if (gpt) {
-            diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - 34L
+            diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - 35L
         } else {
             diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - 1L
         }
@@ -243,7 +246,7 @@ object VentoyInstaller {
             ByteBuffer.wrap(pHdrArr, 24, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(1L)
             ByteBuffer.wrap(pHdrArr, 32, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 1L)
             ByteBuffer.wrap(pHdrArr, 40, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(34L)
-            ByteBuffer.wrap(pHdrArr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 34L)
+            ByteBuffer.wrap(pHdrArr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 35L)
             ByteBuffer.wrap(pHdrArr, 72, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(2L)
             ByteBuffer.wrap(pHdrArr, 80, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(128)
             ByteBuffer.wrap(pHdrArr, 84, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(128)

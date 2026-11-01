@@ -52,6 +52,7 @@ class RawWriterTest {
         RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
         assertEquals(1024, disk.bytesWritten)
         assertTrue(disk.bytes().copyOf(1024).contentEquals(payload))
+        assertEquals(1L, disk.syncCount)
     }
 
     @Test fun partialFinalSectorIsPadded() {
@@ -62,6 +63,18 @@ class RawWriterTest {
         assertEquals(512, disk.bytesWritten)
         assertEquals(9, disk.bytes()[0].toInt())
         assertEquals(0, disk.bytes()[100].toInt())
+    }
+    @Test fun prematureEofFailsOperationAndSkipsSync() {
+        val payload = ByteArray(512) { 4 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 1024L)
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val op = DiskOperation("raw-write-eof")
+        RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
+
+        assertEquals(0L, disk.syncCount)
+        assertTrue(op.state is OperationState.Failed)
+        val failed = op.state as OperationState.Failed
+        assertTrue(failed.cause is java.io.EOFException)
     }
 
     @Test fun overwriteFalseWritesNothing() {
