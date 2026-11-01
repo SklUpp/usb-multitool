@@ -150,6 +150,8 @@ data class AppUiState(
     val operation: OperationProgress? = null,
     val pendingConfirmation: DestructiveConfirmation? = null,
     val statusMessage: String? = null,
+    /** SAF URI of the image queued for the next raw write. */
+    val imageUri: String? = null,
 ) {
     val actionsEnabled: Boolean
         get() =

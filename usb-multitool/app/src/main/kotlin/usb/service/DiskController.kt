@@ -22,6 +22,7 @@ class DiskController(
     fun submit(operation: DiskOperation): OperationHandle = executor.submit(operation)
 
     fun onDisconnected() = executor.onDisconnected()
+    fun onConnected() = executor.onConnected()
 
     /** Rebind Android wake/service control without replacing the executor. */
     fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {

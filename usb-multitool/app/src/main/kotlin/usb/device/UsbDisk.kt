@@ -207,7 +207,12 @@ open class UsbDisk(
          */
         fun probeCapacity(session: BotSession): BlockGeometry {
             val buf10 = ByteBuffer.allocate(8)
-            val status10 = session.transfer(ScsiCommand.readCapacity10(), buf10)
+            val status10 = try {
+                session.transfer(ScsiCommand.readCapacity10(), buf10)
+            } catch (e: DiskException.IoFailure) {
+                session.bulkOnlyReset()
+                return readCapacity16(session)
+            }
             if (status10.status == CswStatus.PHASE_ERROR) {
                 session.bulkOnlyReset()
                 throw DiskException.IoFailure("phase error on READ CAPACITY(10)")

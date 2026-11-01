@@ -61,6 +61,9 @@ object VentoyDownloader {
             val fromAssets = runCatching { VentoyAssets.loadFromAssets(assetManager, strict = strict) }.getOrNull()
             if (fromAssets != null) return fromAssets
         }
-        return VentoyAssets.mockLoader(strict = strict)
+        if (strict) {
+            throw usb.device.DiskException.UnsupportedCommand("Ventoy assets unavailable; refusing to install synthetic images")
+        }
+        return VentoyAssets.mockLoader(strict = false)
     }
 }

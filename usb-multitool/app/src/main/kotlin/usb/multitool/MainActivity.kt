@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.app.Application
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
@@ -20,7 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,10 +52,16 @@ import usb.partition.PartitionEditor
 import usb.ui.PartitionTab
 import usb.partition.PartitionTable
 import usb.partition.PartitionType
+import usb.partition.PartitionWriter
 import usb.partition.VirtualPartition
+import usb.image.ImageSource
+import usb.image.RawWriter
+import usb.ventoy.VentoyDownloader
+import usb.ventoy.VentoyInstaller
+import java.io.File
 import usb.ui.DestructiveAction
 
-class MainViewModel : ViewModel() {
+class MainViewModel(application: Application) : AndroidViewModel(application) {
     var state by mutableStateOf(AppUiState())
         private set
 
@@ -87,94 +94,122 @@ class MainViewModel : ViewModel() {
             UiEffect.Kind.SubmitDestructive -> {
                 val action = effect.action
                 val actionName = action?.displayName() ?: "destructive"
+                val uiState = state
                 val op = object : DiskOperation(name = actionName) {
                     override suspend fun run() {
-                        val dev = attachedDevice
-                        val mgr = usbManager
-                        if (dev != null && mgr != null) {
-                            val disk = UsbDiskSession.open(mgr, dev)
-                            try {
-                                val devIdentity = state.device?.label ?: disk.geometry.capacityBytes.toString()
-                                val diagConfirm = usb.diagnostics.DestructiveConfirmation(
-                                    identity = devIdentity,
-                                    capacityBytes = state.device?.capacityBytes ?: disk.geometry.capacityBytes,
-                                )
-                                when (action) {
-                                    DestructiveAction.WIPE -> {
-                                        Diagnostics.wipe(
-                                            disk = disk,
-                                            identity = devIdentity,
-                                            confirmation = diagConfirm,
-                                            operation = this,
-                                        )
-                                    }
-                                    DestructiveAction.FAKE_CAPACITY -> {
-                                        Diagnostics.fakeCapacity(disk, operation = this)
-                                    }
-                                    DestructiveAction.WRITE_BENCHMARK -> {
-                                        val sectors = 2048UL.coerceAtMost(
-                                            if (disk.geometry.sectorCount > 2048UL) disk.geometry.sectorCount - 2048UL else 1UL,
-                                        )
-                                        Diagnostics.writeBenchmark(
-                                            disk = disk,
-                                            identity = devIdentity,
-                                            confirmation = diagConfirm,
-                                            startLba = 2048UL,
-                                            sectors = sectors,
-                                            operation = this,
-                                        )
-                                    }
-                                    DestructiveAction.GPT_REPAIR -> {
-                                        val table = PartitionTable.read(disk)
-                                        PartitionEditor.repairGptTail(table)
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    DestructiveAction.DELETE_PARTITION -> {
-                                        val table = PartitionTable.read(disk)
-                                        if (table.partitions.isNotEmpty()) {
-                                            PartitionEditor.delete(table, table.partitions.size - 1)
-                                        }
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    DestructiveAction.CREATE_PARTITION -> {
-                                        val table = PartitionTable.read(disk)
-                                        if (table.freeRegions.isNotEmpty()) {
-                                            val free = table.freeRegions.first()
-                                            PartitionEditor.create(
-                                                table,
-                                                size = free.sectorCount.coerceAtMost(2048UL),
-                                                type = PartitionType.BASIC,
-                                            )
-                                        }
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    DestructiveAction.FORMAT_PARTITION -> {
-                                        val partition = VirtualPartition(
-                                            startLba = 2048UL,
-                                            sectorCount = 2048UL.coerceAtMost(disk.geometry.sectorCount),
-                                            disk = disk,
-                                        )
-                                        Formatter.format(partition, FilesystemId.FAT)
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    DestructiveAction.BACKUP_RESTORE -> {
-                                        val table = PartitionTable.read(disk)
-                                        GptBackup.relocateBackup(disk, table.diskSectorCount)
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    DestructiveAction.VENTOY_INSTALL -> {
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    DestructiveAction.RAW_WRITE -> {
-                                        report(disk.geometry.capacityBytes.toLong())
-                                    }
-                                    null -> Unit
-                                }
-                            } finally {
-                                disk.close()
+                        val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
+                        val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
+                        val disk = UsbDiskSession.open(mgr, dev)
+                        try {
+                            val identity = uiState.device?.label ?: dev.productName ?: "USB Storage"
+                            val confirmation = usb.diagnostics.DestructiveConfirmation(
+                                identity = identity,
+                                capacityBytes = uiState.device?.capacityBytes ?: disk.geometry.capacityBytes,
+                            )
+                            val table = runCatching { PartitionTable.read(disk) }.getOrNull()
+                            val selected = table?.let { t ->
+                                val index = uiState.selectedPartitionId?.toIntOrNull() ?: 1
+                                t.partitions.getOrNull(index - 1)
                             }
-                        } else {
-                            report(1024L)
+                            when (action) {
+                                DestructiveAction.WIPE -> {
+                                    Diagnostics.wipe(
+                                        disk = disk,
+                                        identity = identity,
+                                        confirmation = confirmation,
+                                        operation = this,
+                                    )
+                                }
+                                DestructiveAction.FAKE_CAPACITY -> {
+                                    Diagnostics.fakeCapacity(disk, operation = this)
+                                }
+                                DestructiveAction.WRITE_BENCHMARK -> {
+                                    val startLba = 2048UL.coerceAtMost(disk.geometry.sectorCount - 1UL)
+                                    val sectors = 2048UL.coerceAtMost(disk.geometry.sectorCount - startLba)
+                                    Diagnostics.writeBenchmark(
+                                        disk = disk,
+                                        identity = identity,
+                                        confirmation = confirmation,
+                                        startLba = startLba,
+                                        sectors = sectors,
+                                        operation = this,
+                                    )
+                                }
+                                DestructiveAction.GPT_REPAIR -> {
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    PartitionWriter.commit(disk, PartitionEditor.repairGptTail(current))
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.DELETE_PARTITION -> {
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    val index = (uiState.selectedPartitionId?.toIntOrNull() ?: 1) - 1
+                                    if (current.partitions.getOrNull(index) == null) {
+                                        throw IllegalStateException("no partition selected for deletion")
+                                    }
+                                    PartitionWriter.commit(disk, PartitionEditor.delete(current, index))
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.CREATE_PARTITION -> {
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    val region = current.freeRegions.firstOrNull()
+                                        ?: throw usb.partition.NoFreeSpaceException("no free space")
+                                    val align = PartitionTable.alignmentSectors(current.sectorSize)
+                                    val alignedStart = ((region.startLba + align - 1UL) / align) * align
+                                    val size = region.sectorCount - (alignedStart - region.startLba)
+                                    PartitionWriter.commit(
+                                        disk,
+                                        PartitionEditor.create(current, size = size, type = PartitionType.BASIC),
+                                    )
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.FORMAT_PARTITION -> {
+                                    val target = selected
+                                        ?: throw IllegalStateException("no partition selected to format")
+                                    val partition = VirtualPartition(
+                                        startLba = target.startLba,
+                                        sectorCount = target.sectorCount,
+                                        disk = disk,
+                                    )
+                                    Formatter.format(partition, FilesystemId.FAT)
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.BACKUP_RESTORE -> {
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    GptBackup.relocateBackup(disk, current.diskSectorCount)
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.VENTOY_INSTALL -> {
+                                    val assets = VentoyDownloader.loadWithFallback(
+                                        externalDir = File(
+                                            Environment.getExternalStorageDirectory(),
+                                            "ventoy",
+                                        ),
+                                        assetManager = getApplication<Application>().assets,
+                                        strict = true,
+                                    )
+                                    VentoyInstaller.install(disk, assets)
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.RAW_WRITE -> {
+                                    val uri = uiState.imageUri
+                                        ?: throw IllegalStateException("no image selected for raw write")
+                                    RawWriter.write(
+                                        source = ImageSource.fromContentUri(
+                                            Uri.parse(uri),
+                                            getApplication<Application>().contentResolver,
+                                        ),
+                                        disk = disk,
+                                        identity = identity,
+                                        confirmation = confirmation,
+                                        overwrite = true,
+                                        operation = this,
+                                    )
+                                }
+                                null -> throw IllegalArgumentException("no destructive action selected")
+                            }
+                            disk.sync()
+                        } finally {
+                            disk.close()
                         }
                     }
                 }
@@ -229,22 +264,19 @@ class MainViewModel : ViewModel() {
     ) {
         if (device == null) return
         attachedDevice = device
+        DiskController.get().onConnected()
         if (manager != null) {
             usbManager = manager
         }
-        val identity = DeviceIdentity(
-            label = device.productName ?: device.deviceName ?: "USB Storage",
-            capacityBytes = 0uL,
-        )
-        val presence = if (hasPermission) DevicePresence.Ready else DevicePresence.PermissionRequired
-
+        var capacity = 0uL
         var partitions = emptyList<PartitionTab>()
         if (hasPermission && usbManager != null) {
-            partitions = runCatching {
+            runCatching {
                 val disk = UsbDiskSession.open(usbManager!!, device)
                 try {
+                    capacity = disk.geometry.capacityBytes
                     val table = PartitionTable.read(disk)
-                    table.partitions.mapIndexed { idx, p ->
+                    partitions = table.partitions.mapIndexed { idx, p ->
                         val isEfi = p.name.contains("VTOYEFI", ignoreCase = true) ||
                             p.type.contains("EFI", ignoreCase = true)
                         PartitionTab(
@@ -257,8 +289,13 @@ class MainViewModel : ViewModel() {
                 } finally {
                     disk.close()
                 }
-            }.getOrDefault(emptyList())
+            }
         }
+        val identity = DeviceIdentity(
+            label = device.productName ?: device.deviceName ?: "USB Storage",
+            capacityBytes = capacity,
+        )
+        val presence = if (hasPermission) DevicePresence.Ready else DevicePresence.PermissionRequired
 
         if (partitions.isEmpty()) {
             partitions = listOf(

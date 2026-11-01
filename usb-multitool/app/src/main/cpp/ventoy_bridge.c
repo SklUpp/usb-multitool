@@ -57,7 +57,7 @@ Java_usb_ventoy_VentoyNative_nativeInstall(JNIEnv *env, jclass clazz,
     jbyte *core_bytes = (*env)->GetByteArrayElements(env, coreImg, NULL);
     jbyte *efi_bytes = (*env)->GetByteArrayElements(env, efiPartImg, NULL);
 
-    int ret = 0;
+    int ret = -EINVAL;
     if (blockHandle != 0) {
         ventoy_asset_set assets;
         memset(&assets, 0, sizeof(assets));
@@ -120,7 +120,7 @@ Java_usb_ventoy_VentoyNative_nativeUpdate(JNIEnv *env, jclass clazz,
     jbyte *core_bytes = (*env)->GetByteArrayElements(env, coreImg, NULL);
     jbyte *efi_bytes = (*env)->GetByteArrayElements(env, efiPartImg, NULL);
 
-    int ret = 0;
+    int ret = -EINVAL;
     if (blockHandle != 0) {
         ventoy_asset_set assets;
         memset(&assets, 0, sizeof(assets));

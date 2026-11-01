@@ -31,6 +31,8 @@ sealed class UiIntent {
         val action: IsoAction,
     ) : UiIntent()
 
+    data class SetImage(val uri: String?) : UiIntent()
+
     data class Status(val message: String?) : UiIntent()
 
     data object CancelOperation : UiIntent()
@@ -148,7 +150,13 @@ object UiReducer {
 
             is UiIntent.RequestDestructive -> {
                 val device = state.device
-                if (device == null || !state.actionsEnabled) {
+                if (device != null &&
+                    state.actionsEnabled &&
+                    intent.action == DestructiveAction.RAW_WRITE &&
+                    state.imageUri == null
+                ) {
+                    ReduceResult(state.copy(statusMessage = "Select an ISO/IMG file first"))
+                } else if (device == null || !state.actionsEnabled) {
                     ReduceResult(
                         state.copy(
                             statusMessage =
@@ -227,6 +235,15 @@ object UiReducer {
                     ReduceResult(next, listOf(effect))
                 }
             }
+
+            is UiIntent.SetImage ->
+                ReduceResult(
+                    state.copy(
+                        imageUri = intent.uri,
+                        statusMessage =
+                            if (intent.uri == null) "Image cleared" else "Image ready for raw write",
+                    ),
+                )
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 

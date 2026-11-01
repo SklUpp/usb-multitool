@@ -134,7 +134,8 @@ int java_transfer(HandleRec *h, int writing, uint64_t lba, void *buf,
     if (writing)
         std::memcpy(direct, cbuf, bytes);
 
-    env->CallObjectMethod(bb, g_bb_clear);
+    jobject cleared = env->CallObjectMethod(bb, g_bb_clear);
+    if (cleared) env->DeleteLocalRef(cleared);
     if (writing) {
         env->CallVoidMethod(h->device, g_write_mid, static_cast<jlong>(lba), bb);
     } else {

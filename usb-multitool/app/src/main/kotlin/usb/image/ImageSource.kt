@@ -64,6 +64,34 @@ class ImageSource private constructor(
             )
         }
 
+        /** SAF/content URIs: the only stream source Android can read without a path. */
+        fun fromContentUri(uri: Uri, resolver: android.content.ContentResolver): ImageSource {
+            val name = uri.lastPathSegment ?: uri.toString()
+            val format = detectFormat(name)
+            val declaredSize =
+                if (format == ImageFormat.ISO || format == ImageFormat.IMG) {
+                    runCatching {
+                        resolver
+                            .query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)
+                            ?.use { cursor ->
+                                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+                            }
+                    }.getOrNull()
+                } else {
+                    null
+                }
+            return ImageSource(
+                openStream = {
+                    val raw =
+                        resolver.openInputStream(uri)
+                            ?: throw java.io.FileNotFoundException("cannot open $uri")
+                    wrap(raw, format, declaredSize)
+                },
+                format = format,
+                declaredDecodedSize = declaredSize,
+            )
+        }
+
         fun fromFile(file: java.io.File): ImageSource {
             val format = detectFormat(file.name)
             val declaredSize = if (format == ImageFormat.ISO || format == ImageFormat.IMG) {

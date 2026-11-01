@@ -109,6 +109,13 @@ class OperationExecutor(
             }
         }
     }
+    fun onConnected() {
+        scope.launch {
+            mutex.withLock {
+                disconnected = false
+            }
+        }
+    }
 
     private suspend fun drain() {
         while (true) {

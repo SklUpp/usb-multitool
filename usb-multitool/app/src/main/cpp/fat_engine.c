@@ -162,9 +162,15 @@ int fat_engine_umount(uint64_t volume)
 
 int fat_engine_sync(uint64_t volume)
 {
+	pthread_mutex_lock(&g_fat_mu);
 	FatVolume *v = vol_from(volume);
-	if (!v) return (int)FR_INVALID_OBJECT;
-	return usb_block_sync(v->block_handle) == 0 ? 0 : (int)FR_DISK_ERR;
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_OBJECT;
+	}
+	uint64_t bh = v->block_handle;
+	pthread_mutex_unlock(&g_fat_mu);
+	return usb_block_sync(bh) == 0 ? 0 : (int)FR_DISK_ERR;
 }
 
 int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t cap, size_t *out_count)
