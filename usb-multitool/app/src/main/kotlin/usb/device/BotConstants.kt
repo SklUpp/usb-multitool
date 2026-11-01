@@ -14,6 +14,5 @@ object BotConstants {
     const val REQUEST_TYPE_ENDPOINT_OUT = 0x02
     const val TRANSFER_TIMEOUT_MS = 5_000
     const val SYNCHRONIZE_CACHE_TIMEOUT_MS = 30_000
-    const val SYNC_CACHE_TIMEOUT_MS = 30_000
     const val MAX_BULK_REQUEST = 64 * 1024
 }
