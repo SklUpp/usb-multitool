@@ -63,7 +63,13 @@ class DiskService : Service() {
 
     override fun onDestroy() {
         // Idle teardown must leave DiskController / OperationExecutor alive.
+        // Rebind external starter so later submits can startForegroundService again.
+        DiskController.get().bind(
+            wakeLock = NoOpWakeLock,
+            serviceControl = ContextServiceControl(applicationContext),
+        )
         wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
         super.onDestroy()
     }
 
