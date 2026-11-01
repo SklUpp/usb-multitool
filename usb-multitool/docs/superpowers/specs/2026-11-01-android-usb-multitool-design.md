@@ -1,7 +1,7 @@
 # Android USB Multitool — Design
 
 **Date:** 2026-11-01
-**Status:** Approved architecture, pending written-spec review
+**Status:** Approved for implementation planning
 **License decision:** GPL-3.0-or-later for the application
 
 ## 1. Purpose
