@@ -327,13 +327,13 @@ object VentoyInstaller {
                 Partition(
                     startLba = part1Start.toULong(),
                     sectorCount = part1Count.toULong(),
-                    type = PartitionType.BASIC,
+                    type = PartitionType.BASIC.name,
                     name = "Ventoy",
                 ),
                 Partition(
                     startLba = part2Start.toULong(),
                     sectorCount = VentoyLayout.EFI_PART_SECTORS.toULong(),
-                    type = PartitionType.VTOYEFI,
+                    type = PartitionType.VTOYEFI.name,
                     name = "VTOYEFI",
                     esp = true,
                 ),
@@ -444,13 +444,13 @@ object VentoyInstaller {
                 Partition(
                     startLba = probe.part1StartLba,
                     sectorCount = probe.part1SectorCount,
-                    type = PartitionType.BASIC,
+                    type = PartitionType.BASIC.name,
                     name = "Ventoy",
                 ),
                 Partition(
                     startLba = probe.part2StartLba,
                     sectorCount = probe.part2SectorCount,
-                    type = PartitionType.VTOYEFI,
+                    type = PartitionType.VTOYEFI.name,
                     name = "VTOYEFI",
                     esp = true,
                 ),

@@ -20,7 +20,7 @@ object PartitionEditor {
         val created = Partition(
             startLba = alignedStart,
             sectorCount = size,
-            type = type,
+            type = type.name,
             name = type.name,
         )
         val partitions = table.partitions + created
@@ -106,5 +106,3 @@ object PartitionEditor {
     }
 }
 
-class NoFreeSpaceException(message: String) : Exception(message)
-class HybridAmbiguityException(message: String) : Exception(message)

@@ -10,33 +10,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import usb.device.DiskException
 
-sealed class OperationState {
-    data object Queued : OperationState()
-    data object Running : OperationState()
-    data object Completed : OperationState()
-    data object Cancelled : OperationState()
-    data class Failed(val cause: DiskException) : OperationState()
-}
-
-abstract class DiskOperation {
-    private val active = AtomicBoolean(true)
-    private val inactive = CompletableDeferred<Unit>()
-
-    fun isActive(): Boolean = active.get()
-
-    /** Suspend until cancel/disconnect marks this operation inactive. */
-    protected suspend fun awaitInactive() {
-        inactive.await()
-    }
-
-    internal fun markInactive() {
-        if (active.getAndSet(false)) {
-            inactive.complete(Unit)
-        }
-    }
-
-    abstract suspend fun run()
-}
 
 interface OperationWakeLock {
     fun acquire()
