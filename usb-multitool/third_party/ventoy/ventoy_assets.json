@@ -1,0 +1,30 @@
+{
+  "release": "1.1.18",
+  "commit": "6116894ab8abdf3ef8d43411a6732d34ee19214e",
+  "release_url": "https://github.com/ventoy/Ventoy/releases/tag/v1.1.18",
+  "tarball_sha256": "d86ff9de63d94c8b8f1f6b14d23c55af4b88e8207bf2893890892a6a97b1ad54",
+  "supports_4kn": false,
+  "assets": {
+    "boot_img": {
+      "path": "boot/boot.img",
+      "size": 512,
+      "sha256": "85b4b080765738ca96620c32d8182edddbaf6a36149162946d12aa1f9802bc44"
+    },
+    "core_img_xz": {
+      "path": "boot/core.img.xz",
+      "size": 455176,
+      "sha256": "97d70bf738a6e8d72fae6eb1a8993ceb4ac8bdc92570f2ff87bcd9aef3723431"
+    },
+    "ventoy_disk_img_xz": {
+      "path": "ventoy/ventoy.disk.img.xz",
+      "size": 13434140,
+      "sha256": "19174f133c4df8acda4423b1bc40ae69961773ef54e286ffd8c42fefaf6f174f"
+    },
+    "version": {
+      "path": "ventoy/version",
+      "size": 7,
+      "sha256": "32820b5fe235bf45d17986fb1b9b336365bef8b90c678f57d795b48082b2144e",
+      "content": "1.1.18"
+    }
+  }
+}
