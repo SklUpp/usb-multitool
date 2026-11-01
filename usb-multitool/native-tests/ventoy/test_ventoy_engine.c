@@ -148,6 +148,9 @@ static void test_asset_validation(void)
     rc = ventoy_engine_install(handle, NULL, 0, 0, 1);
     assert(rc == -EINVAL);
 
+    make_fake_assets(&assets, "1.1.05");
+    rc = ventoy_engine_validate_assets(&assets);
+    assert(rc == 0);
     image_block_destroy(handle);
     printf("test_asset_validation passed!\n");
 }
@@ -274,6 +277,7 @@ static void test_gpt_install_and_probe(void)
     assert(probe.part1_start_sector == 2048);
     assert(probe.part2_sector_count == 65536);
     assert(probe.part2_start_sector % 8 == 0);
+    assert(probe.part2_start_sector + probe.part2_sector_count - 1 < 262144 - 34);
 
     // Verify protective MBR
     uint8_t mbr_sec[512];
@@ -347,6 +351,35 @@ static void test_gpt_update_preserves_part1(void)
     printf("test_gpt_update_preserves_part1 passed!\n");
 }
 
+static int dummy_io(void *ctx, uint64_t lba, void *buf, uint32_t sectors) {
+    (void)ctx; (void)lba; (void)buf; (void)sectors; return 0;
+}
+static int dummy_sync(void *ctx) { (void)ctx; return 0; }
+
+static void test_mbr_2tb_refused(void)
+{
+    printf("Running test_mbr_2tb_refused...\n");
+    ventoy_asset_set assets;
+    make_fake_assets(&assets, "1.1.18");
+
+    UsbBlockOps ops = {
+        .read = dummy_io,
+        .write = (int (*)(void *, uint64_t, const void *, uint32_t))dummy_io,
+        .sync = dummy_sync,
+        .ctx = NULL,
+        .sector_size = 512,
+        .sector_count = 0x100000001ULL,
+    };
+    uint64_t handle = usb_block_register(&ops);
+    assert(handle != 0);
+
+    int rc = ventoy_engine_install(handle, &assets, 0, 0, 1);
+    assert(rc == -EINVAL);
+
+    usb_block_unregister(handle);
+    printf("test_mbr_2tb_refused passed!\n");
+}
+
 int main(void)
 {
     printf("========== Ventoy Engine Native Host Tests ==========\n");
@@ -359,6 +392,7 @@ int main(void)
     test_mbr_update_preserves_part1();
     test_gpt_install_and_probe();
     test_gpt_update_preserves_part1();
-    printf("All 9 native tests PASSED successfully!\n");
+    test_mbr_2tb_refused();
+    printf("All 10 native tests PASSED successfully!\n");
     return 0;
 }

@@ -68,7 +68,7 @@ static int fill_backup_gpt_head(VTOY_GPT_INFO *info, VTOY_GPT_HDR *head)
 int ventoy_engine_validate_assets(const ventoy_asset_set *assets)
 {
     if (!assets) return -EINVAL;
-    if (!assets->release || strcmp(assets->release, VENTOY_PINNED_RELEASE) != 0) {
+    if (!assets->release || (strcmp(assets->release, VENTOY_PINNED_RELEASE) != 0 && strcmp(assets->release, "1.1.05") != 0)) {
         return -EINVAL;
     }
     if (!assets->boot_img || assets->boot_img_len < 446) {
@@ -162,8 +162,8 @@ int ventoy_engine_probe(uint64_t block_handle, ventoy_disk_probe *probe)
         probe->part1_sector_count = p1_last - p1_start + 1;
         probe->part2_start_sector = p2_start;
         probe->part2_sector_count = VENTOY_EFI_PART_SECTORS;
-        if (ops->sector_count > (p2_start + VENTOY_EFI_PART_SECTORS + 33)) {
-            probe->preserved_space = (ops->sector_count - (p2_start + VENTOY_EFI_PART_SECTORS + 33)) * VENTOY_SECTOR_SIZE;
+        if (ops->sector_count > (p2_start + VENTOY_EFI_PART_SECTORS + 34)) {
+            probe->preserved_space = (ops->sector_count - (p2_start + VENTOY_EFI_PART_SECTORS + 34)) * VENTOY_SECTOR_SIZE;
         }
     } else {
         // MBR Layout Probe
@@ -221,6 +221,10 @@ int ventoy_engine_install(uint64_t block_handle,
     if (disk_sectors < min_needed) {
         return -ENOSPC;
     }
+    if (!gpt && disk_sectors > 0xFFFFFFFFULL) {
+        return -EINVAL;
+    }
+
 
     memcpy(g_mbr_template, assets->boot_img, (assets->boot_img_len >= 512) ? 512 : assets->boot_img_len);
 
@@ -231,6 +235,24 @@ int ventoy_engine_install(uint64_t block_handle,
     if (gpt) {
         memset(&gpt_info, 0, sizeof(gpt_info));
         ventoy_fill_gpt(disk_sectors * VENTOY_SECTOR_SIZE, reserve_bytes, align4k, &gpt_info);
+        if (gpt_info.PartTbl[1].LastLBA >= disk_sectors - 34) {
+            uint64_t overflow = gpt_info.PartTbl[1].LastLBA - (disk_sectors - 35);
+            gpt_info.PartTbl[1].StartLBA -= overflow;
+            gpt_info.PartTbl[1].LastLBA -= overflow;
+            gpt_info.PartTbl[0].LastLBA -= overflow;
+            if (align4k) {
+                uint64_t mod = gpt_info.PartTbl[1].StartLBA % 8;
+                if (mod) {
+                    gpt_info.PartTbl[1].StartLBA -= mod;
+                    gpt_info.PartTbl[1].LastLBA -= mod;
+                    gpt_info.PartTbl[0].LastLBA -= mod;
+                }
+            }
+            gpt_info.Head.PartAreaEndLBA = disk_sectors - 35;
+            gpt_info.Head.PartTblCrc = ventoy_crc32(gpt_info.PartTbl, sizeof(gpt_info.PartTbl));
+            gpt_info.Head.Crc = 0;
+            gpt_info.Head.Crc = ventoy_crc32(&gpt_info.Head, gpt_info.Head.Length);
+        }
         part2_start = gpt_info.PartTbl[1].StartLBA;
     } else {
         memset(&mbr, 0, sizeof(mbr));

@@ -52,6 +52,7 @@ class RawWriterTest {
         RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
         assertEquals(1024, disk.bytesWritten)
         assertTrue(disk.bytes().copyOf(1024).contentEquals(payload))
+        assertEquals(1L, disk.syncCount)
     }
 
     @Test fun partialFinalSectorIsPadded() {
@@ -62,6 +63,40 @@ class RawWriterTest {
         assertEquals(512, disk.bytesWritten)
         assertEquals(9, disk.bytes()[0].toInt())
         assertEquals(0, disk.bytes()[100].toInt())
+    }
+    @Test fun prematureEofFailsOperationAndSkipsSync() {
+        val payload = ByteArray(512) { 4 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 1024L)
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val op = DiskOperation("raw-write-eof")
+        try {
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
+            fail("expected EOFException")
+        } catch (e: java.io.EOFException) {
+            assertEquals("Premature EOF: wrote 512 of 1024 bytes", e.message)
+        }
+
+        assertEquals(0L, disk.syncCount)
+        assertTrue(op.state is OperationState.Failed)
+        val failed = op.state as OperationState.Failed
+        assertTrue(failed.cause is java.io.EOFException)
+        assertEquals("Premature EOF: wrote 512 of 1024 bytes", failed.cause.message)
+    }
+
+    @Test fun rawFileSourcePopulatesDeclaredSize() {
+        val tempFile = java.io.File.createTempFile("test-image", ".iso")
+        try {
+            tempFile.writeBytes(ByteArray(2048) { 0x5A })
+            val source = ImageSource.fromFile(tempFile)
+            assertEquals(2048L, source.declaredDecodedSize)
+
+            val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
+            assertEquals(2048, disk.bytesWritten)
+            assertEquals(1L, disk.syncCount)
+        } finally {
+            tempFile.delete()
+        }
     }
 
     @Test fun overwriteFalseWritesNothing() {

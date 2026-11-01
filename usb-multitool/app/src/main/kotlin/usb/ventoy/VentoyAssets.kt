@@ -17,8 +17,8 @@ data class VentoyAssets(
     val diskImgSha256: String = OFFICIAL_DISK_IMG_SHA256,
 ) {
     init {
-        require(release == PINNED_RELEASE) {
-            "Unsupported Ventoy release: $release; expected $PINNED_RELEASE"
+        require(release == PINNED_RELEASE || release == RELEASE_1_1_05) {
+            "Unsupported Ventoy release: $release; expected $PINNED_RELEASE or $RELEASE_1_1_05"
         }
         require(bootImg.size >= 446) { "boot.img must be at least 446 bytes" }
         require(coreImg.isNotEmpty()) { "core.img must not be empty" }
@@ -75,6 +75,12 @@ data class VentoyAssets(
     companion object {
         const val PINNED_RELEASE = "1.1.18"
         const val PINNED_COMMIT = "6116894ab8abdf3ef8d43411a6732d34ee19214e"
+        const val RELEASE_1_1_05 = "1.1.05"
+        val RELEASE_1_1_05_HASHES: Map<String, String> = mapOf(
+            "boot.img" to "1592e6a5c6faf999a632279777265af591590650e1828f93a46007cf46373b11",
+            "core.img.xz" to "611b6d3f67bf64892f5f54c6ae1ea54069d62614353af8131138097dc11f25bb",
+            "ventoy.disk.img.xz" to "0fedfa5a0d75dd40dd16467009f2cecce0951a20fd4655cca2ea00f59e017ad3",
+        )
 
         const val OFFICIAL_BOOT_IMG_SHA256 =
             "85b4b080765738ca96620c32d8182edddbaf6a36149162946d12aa1f9802bc44"
@@ -125,6 +131,168 @@ data class VentoyAssets(
                 coreImgSha256 = coreSha,
                 diskImgSha256 = efiSha,
             )
+        }
+
+        fun loadFromAssets(
+            assetManager: android.content.res.AssetManager,
+            basePath: String = "ventoy",
+            strict: Boolean = true,
+        ): VentoyAssets {
+            val boot = assetManager.open("$basePath/boot.img").use { it.readBytes() }
+            val core = runCatching {
+                assetManager.open("$basePath/core.img.xz").use { it.readBytes() }
+            }.getOrElse {
+                assetManager.open("$basePath/core.img").use { it.readBytes() }
+            }
+            val disk = runCatching {
+                assetManager.open("$basePath/ventoy.disk.img.xz").use { it.readBytes() }
+            }.getOrElse {
+                runCatching {
+                    assetManager.open("$basePath/ventoy.disk.img").use { it.readBytes() }
+                }.getOrElse {
+                    assetManager.open("$basePath/efi_part.img").use { it.readBytes() }
+                }
+            }
+
+            var rel = PINNED_RELEASE
+            var com = PINNED_COMMIT
+            runCatching {
+                assetManager.open("$basePath/version").bufferedReader().use {
+                    val line = it.readLine()?.trim()
+                    if (!line.isNullOrEmpty()) rel = line
+                }
+            }
+
+            var bootSha: String? = null
+            var coreSha: String? = null
+            var diskSha: String? = null
+
+            runCatching {
+                assetManager.open("$basePath/sha256.txt").bufferedReader().use { reader ->
+                    reader.lineSequence().forEach { rawLine ->
+                        val line = rawLine.trim()
+                        if (line.isNotEmpty() && !line.startsWith("#")) {
+                            val parts = line.split(Regex("\\s+"))
+                            if (parts.size >= 2) {
+                                val hash = parts[0].trim()
+                                val name = parts[1].trim().removePrefix("*")
+                                when {
+                                    name.endsWith("boot.img") -> bootSha = hash
+                                    name.endsWith("core.img.xz") || name.endsWith("core.img") -> coreSha = hash
+                                    name.endsWith("ventoy.disk.img.xz") || name.endsWith("ventoy.disk.img") || name.endsWith("efi_part.img") -> diskSha = hash
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            val defaultBootSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("boot.img") else OFFICIAL_BOOT_IMG_SHA256
+            val defaultCoreSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("core.img.xz") else OFFICIAL_CORE_IMG_SHA256
+            val defaultDiskSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("ventoy.disk.img.xz") else OFFICIAL_DISK_IMG_SHA256
+
+            val finalBootSha = bootSha ?: defaultBootSha
+            val finalCoreSha = coreSha ?: defaultCoreSha
+            val finalDiskSha = diskSha ?: defaultDiskSha
+
+            val assets = VentoyAssets(
+                release = rel,
+                commit = com,
+                bootImg = boot,
+                coreImg = core,
+                efiPartImg = disk,
+                bootImgSha256 = finalBootSha,
+                coreImgSha256 = finalCoreSha,
+                diskImgSha256 = finalDiskSha,
+            )
+            assets.validateChecksums(strict = strict)
+            return assets
+        }
+
+        fun fromAssetManager(
+            assetManager: android.content.res.AssetManager,
+            basePath: String = "ventoy",
+            strict: Boolean = true,
+        ): VentoyAssets = loadFromAssets(assetManager, basePath, strict)
+
+        fun loadFromDirectory(
+            dir: java.io.File,
+            strict: Boolean = true,
+        ): VentoyAssets {
+            val boot = java.io.File(dir, "boot.img").readBytes()
+            val coreFile = java.io.File(dir, "core.img.xz").takeIf { it.exists() }
+                ?: java.io.File(dir, "core.img")
+            val core = coreFile.readBytes()
+
+            val diskFile = java.io.File(dir, "ventoy.disk.img.xz").takeIf { it.exists() }
+                ?: java.io.File(dir, "ventoy.disk.img").takeIf { it.exists() }
+                ?: java.io.File(dir, "efi_part.img")
+            val disk = diskFile.readBytes()
+
+            var rel = PINNED_RELEASE
+            val verFile = java.io.File(dir, "version")
+            if (verFile.exists()) {
+                val line = verFile.readText().trim()
+                if (line.isNotEmpty()) rel = line
+            }
+
+            var bootSha: String? = null
+            var coreSha: String? = null
+            var diskSha: String? = null
+            val shaFile = java.io.File(dir, "sha256.txt")
+            if (shaFile.exists()) {
+                shaFile.readLines().forEach { rawLine ->
+                    val line = rawLine.trim()
+                    if (line.isNotEmpty() && !line.startsWith("#")) {
+                        val parts = line.split(Regex("\\s+"))
+                        if (parts.size >= 2) {
+                            val hash = parts[0].trim()
+                            val name = parts[1].trim().removePrefix("*")
+                            when {
+                                name.endsWith("boot.img") -> bootSha = hash
+                                name.endsWith("core.img.xz") || name.endsWith("core.img") -> coreSha = hash
+                                name.endsWith("ventoy.disk.img.xz") || name.endsWith("ventoy.disk.img") || name.endsWith("efi_part.img") -> diskSha = hash
+                            }
+                        }
+                    }
+                }
+            }
+
+            val defaultBootSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("boot.img") else OFFICIAL_BOOT_IMG_SHA256
+            val defaultCoreSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("core.img.xz") else OFFICIAL_CORE_IMG_SHA256
+            val defaultDiskSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("ventoy.disk.img.xz") else OFFICIAL_DISK_IMG_SHA256
+
+            val finalBootSha = bootSha ?: defaultBootSha
+            val finalCoreSha = coreSha ?: defaultCoreSha
+            val finalDiskSha = diskSha ?: defaultDiskSha
+
+            val assets = VentoyAssets(
+                release = rel,
+                commit = PINNED_COMMIT,
+                bootImg = boot,
+                coreImg = core,
+                efiPartImg = disk,
+                bootImgSha256 = finalBootSha,
+                coreImgSha256 = finalCoreSha,
+                diskImgSha256 = finalDiskSha,
+            )
+            assets.validateChecksums(strict = strict)
+            return assets
+        }
+
+        fun mockLoader(
+            dir: java.io.File = java.io.File("app/src/main/assets/ventoy"),
+            strict: Boolean = true,
+        ): VentoyAssets {
+            if (dir.exists() && dir.isDirectory) {
+                return loadFromDirectory(dir, strict = strict)
+            }
+            return fake(release = RELEASE_1_1_05)
+        }
+
+        private fun ByteArray.sha256Hex(): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            return digest.digest(this).toHex()
         }
 
         fun isXz(data: ByteArray): Boolean {

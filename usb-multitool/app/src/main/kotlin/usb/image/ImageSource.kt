@@ -51,12 +51,30 @@ class ImageSource private constructor(
         fun fromUri(uri: Uri): ImageSource {
             val path = uri.toString()
             val format = detectFormat(path)
+            val declaredSize = if (format == ImageFormat.ISO || format == ImageFormat.IMG) {
+                queryFileSize(uri)
+            } else null
             return ImageSource(
                 openStream = {
                     val raw = openRaw(uri)
-                    wrap(raw, format)
+                    wrap(raw, format, declaredSize)
                 },
                 format = format,
+                declaredDecodedSize = declaredSize,
+            )
+        }
+
+        fun fromFile(file: java.io.File): ImageSource {
+            val format = detectFormat(file.name)
+            val declaredSize = if (format == ImageFormat.ISO || format == ImageFormat.IMG) {
+                if (file.exists() && file.isFile) file.length() else null
+            } else null
+            return ImageSource(
+                openStream = {
+                    wrap(FileInputStream(file), format, declaredSize)
+                },
+                format = format,
+                declaredDecodedSize = declaredSize,
             )
         }
 
@@ -93,6 +111,19 @@ class ImageSource private constructor(
                 else -> FileInputStream(uri.path ?: uri.toString())
             }
         }
+        private fun queryFileSize(uri: Uri): Long? {
+            return runCatching {
+                val scheme = uri.scheme?.lowercase()
+                if (scheme == null || scheme == "file") {
+                    val path = if (scheme == "file") uri.path else (uri.path ?: uri.toString())
+                    if (path != null) {
+                        val file = java.io.File(path)
+                        if (file.exists() && file.isFile) file.length() else null
+                    } else null
+                } else null
+            }.getOrNull()
+        }
+
 
         private fun wrap(
             raw: InputStream,

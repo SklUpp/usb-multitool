@@ -1,5 +1,5 @@
 package usb.image
-
+import java.io.EOFException
 import java.nio.ByteBuffer
 import usb.device.UsbDisk
 import usb.diagnostics.DestructiveConfirmation
@@ -84,6 +84,13 @@ object RawWriter {
                 if (n < sectorSize) break
             }
             operation.bytesTotal = total
+            val expectedSize = input.decodedSizeHint ?: known
+            if (expectedSize != null && total < expectedSize) {
+                val ex = EOFException("Premature EOF: wrote $total of $expectedSize bytes")
+                operation.state = OperationState.Failed(ex)
+                throw ex
+            }
+            disk.sync()
             if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
                 operation.state = OperationState.Completed
             }
