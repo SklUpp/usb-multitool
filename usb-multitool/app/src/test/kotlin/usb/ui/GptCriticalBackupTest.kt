@@ -55,21 +55,29 @@ class GptCriticalBackupTest {
             "restore must not touch sectors between the critical regions"
         }
 
-        // 4K-sector geometry: backup entries span 4 sectors, not 32, and are derived.
+        // 4K-sector geometry: 6 primary sectors (MBR+hdr+4 entries) and 5 backup sectors (4 entries+hdr).
         val fourKDisk = syntheticGpt(2048UL, 4096)
-        val fourKBlob = capture(fourKDisk)
-        require(fourKBlob.size == (PRIMARY_SECTORS + BACKUP_SECTORS) * 4096)
+        val fourKPSectors = usb.partition.GptBackup.primarySectors(4096)
+        val fourKBSectors = usb.partition.GptBackup.backupSectors(4096)
+        val fourKBlob = capture(fourKDisk, fourKPSectors, fourKBSectors)
+        require(fourKBlob.size == (fourKPSectors + fourKBSectors) * 4096)
         val fourKTarget = MemoryDisk(2048UL, 4096)
         val fourKRestored =
-            GptCriticalBackup.restore(fourKTarget, fourKBlob, PRIMARY_SECTORS, BACKUP_SECTORS)
+            GptCriticalBackup.restore(fourKTarget, fourKBlob, fourKPSectors, fourKBSectors)
         require(fourKRestored.backup.entryLba == 2048UL - 5UL) {
             "4K backup entries at ${fourKRestored.backup.entryLba}"
         }
         require(
-            fourKTarget.range(0, PRIMARY_SECTORS * 4096)
-                .contentEquals(fourKBlob.copyOfRange(0, PRIMARY_SECTORS * 4096)),
+            fourKTarget.range(0, fourKPSectors * 4096)
+                .contentEquals(fourKBlob.copyOfRange(0, fourKPSectors * 4096)),
         ) { "4K head region not restored" }
 
+        // Aligned GPT disk: last usable LBA is strictly less than backup.entryLba - 1UL.
+        val alignedDisk = syntheticGpt(4096UL, SECTOR_SIZE, lastUsableOffset = 2048UL)
+        val alignedBlob = capture(alignedDisk)
+        val alignedTarget = MemoryDisk(4096UL)
+        val alignedRestored = GptCriticalBackup.restore(alignedTarget, alignedBlob, PRIMARY_SECTORS, BACKUP_SECTORS)
+        require(alignedRestored.partitions == 2) { "aligned restore lost partitions" }
         // Wrong blob size (e.g. a rescue image from another capture).
         expectFailure(blob.copyOf(blob.size - 1), disk, "GPT critical backup is")
 
@@ -153,16 +161,24 @@ class GptCriticalBackupTest {
         }
     }
 
-    private fun capture(disk: BlockDevice): ByteArray {
+    private fun capture(
+        disk: BlockDevice,
+        primarySectors: Int = PRIMARY_SECTORS,
+        backupSectors: Int = BACKUP_SECTORS,
+    ): ByteArray {
         val sectorSize = disk.sectorSize
-        val head = ByteArray(PRIMARY_SECTORS * sectorSize)
+        val head = ByteArray(primarySectors * sectorSize)
         disk.read(0UL, ByteBuffer.wrap(head))
-        val tail = ByteArray(BACKUP_SECTORS * sectorSize)
-        disk.read(disk.sectorCount - BACKUP_SECTORS.toULong(), ByteBuffer.wrap(tail))
+        val tail = ByteArray(backupSectors * sectorSize)
+        disk.read(disk.sectorCount - backupSectors.toULong(), ByteBuffer.wrap(tail))
         return head + tail
     }
 
-    private fun syntheticGpt(sectorCount: ULong, sectorSize: Int = SECTOR_SIZE): MemoryDisk {
+    private fun syntheticGpt(
+        sectorCount: ULong,
+        sectorSize: Int = SECTOR_SIZE,
+        lastUsableOffset: ULong = 1UL,
+    ): MemoryDisk {
         val disk = MemoryDisk(sectorCount, sectorSize)
         val entryBytes = ENTRY_COUNT * ENTRY_SIZE
         val entrySectors = ((entryBytes + sectorSize - 1) / sectorSize).toULong()
@@ -170,8 +186,7 @@ class GptCriticalBackupTest {
         val firstUsable = primaryEntriesLba + entrySectors
         val backupHeaderLba = sectorCount - 1UL
         val backupEntriesLba = backupHeaderLba - entrySectors
-        val lastUsable = backupEntriesLba - 1UL
-
+        val lastUsable = backupEntriesLba - lastUsableOffset
         val entries = ByteArray(entryBytes)
         for (index in 0 until 2) {
             val offset = index * ENTRY_SIZE

@@ -33,6 +33,22 @@ class FormatterFormatTest {
     }
 
     @Test
+    fun fatOnLargePartitionSelectsFat32() {
+        // 8388608 sectors * 512 = 4 GiB
+        val dummyDevice = object : usb.device.BlockDevice {
+            override val sectorSize = 512
+            override val sectorCount = 8388608UL
+            override fun read(lba: ULong, destination: ByteBuffer) {}
+            override fun write(lba: ULong, source: ByteBuffer) {}
+            override fun sync() {}
+        }
+        val largePart = VirtualPartition(0UL, 8388608UL, dummyDevice)
+        assertEquals(FatMkfsType.FAT32, fatMkfsType(FilesystemId.FAT, largePart))
+        val smallPart = VirtualPartition(0UL, 1024UL, dummyDevice)
+        assertEquals(FatMkfsType.FAT, fatMkfsType(FilesystemId.FAT, smallPart))
+    }
+
+    @Test
     fun nonFatFamilyIdIsRejected() {
         try {
             fatMkfsType(FilesystemId.NTFS)

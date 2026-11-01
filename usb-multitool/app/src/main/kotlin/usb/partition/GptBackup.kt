@@ -9,22 +9,28 @@ import usb.device.BlockDevice
  * Does not move or resize occupied partitions.
  */
 object GptBackup {
-    const val PRIMARY_SECTORS = 34 // MBR + primary header + 32 entry sectors (512-byte geometry)
-    const val BACKUP_SECTORS = 33 // 32 entry sectors + backup header
+    const val PRIMARY_SECTORS = 34 // 512-byte geometry default
+    const val BACKUP_SECTORS = 33 // 512-byte geometry default
+
+    fun primarySectors(sectorSize: Int, entryCount: Int = 128, entrySize: Int = 128): Int =
+        2 + (entryCount * entrySize + sectorSize - 1) / sectorSize
+
+    fun backupSectors(sectorSize: Int, entryCount: Int = 128, entrySize: Int = 128): Int =
+        1 + (entryCount * entrySize + sectorSize - 1) / sectorSize
 
     fun backupCriticalSectors(disk: BlockDevice): ByteArray {
         val sectorSize = disk.sectorSize
-        require(disk.sectorCount >= (PRIMARY_SECTORS + BACKUP_SECTORS).toULong()) {
+        val pSectors = primarySectors(sectorSize)
+        val bSectors = backupSectors(sectorSize)
+        require(disk.sectorCount >= (pSectors + bSectors).toULong()) {
             "disk too small for GPT critical backup"
         }
-        val total = (PRIMARY_SECTORS + BACKUP_SECTORS) * sectorSize
+        val total = (pSectors + bSectors) * sectorSize
         val out = ByteArray(total)
-        // First 34 sectors.
-        val head = ByteBuffer.wrap(out, 0, PRIMARY_SECTORS * sectorSize)
+        val head = ByteBuffer.wrap(out, 0, pSectors * sectorSize)
         disk.read(0UL, head)
-        // Last 33 sectors.
-        val tailLba = disk.sectorCount - BACKUP_SECTORS.toULong()
-        val tail = ByteBuffer.wrap(out, PRIMARY_SECTORS * sectorSize, BACKUP_SECTORS * sectorSize)
+        val tailLba = disk.sectorCount - bSectors.toULong()
+        val tail = ByteBuffer.wrap(out, pSectors * sectorSize, bSectors * sectorSize)
         disk.read(tailLba, tail)
         return out
     }

@@ -144,7 +144,7 @@ object GptCriticalBackup {
         require(crc32(backupEntries, 0, backupEntries.size) == backup.entriesCrc) {
             "backup GPT entry CRC mismatch inside the backup"
         }
-        require(primary.lastUsable + 1UL == backup.entryLba) {
+        require(primary.lastUsable + 1UL <= backup.entryLba) {
             "backup last usable LBA ${primary.lastUsable} does not end before the backup " +
                 "entries at ${backup.entryLba}"
         }

@@ -218,17 +218,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 DestructiveAction.GPT_RESTORE -> {
                                     val uri = uiState.backupUri
                                         ?: throw IllegalStateException("no GPT backup file selected")
+                                    val pSectors = GptBackup.primarySectors(disk.sectorSize)
+                                    val bSectors = GptBackup.backupSectors(disk.sectorSize)
                                     val blob = readBackupBlob(uri, GptCriticalBackup.blobSize(
                                         disk,
-                                        GptBackup.PRIMARY_SECTORS,
-                                        GptBackup.BACKUP_SECTORS,
+                                        pSectors,
+                                        bSectors,
                                     ))
                                     bytesTotal = blob.size.toLong()
                                     val restored = GptCriticalBackup.restore(
                                         disk = disk,
                                         blob = blob,
-                                        primarySectors = GptBackup.PRIMARY_SECTORS,
-                                        backupSectors = GptBackup.BACKUP_SECTORS,
+                                        primarySectors = pSectors,
+                                        backupSectors = bSectors,
                                     )
                                     report(blob.size.toLong())
                                     result = "Restored ${restored.sectorsRestored} GPT critical " +
@@ -401,8 +403,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val info = GptCriticalBackup.inspectCaptured(
                         blob = blob,
                         disk = disk,
-                        primarySectors = GptBackup.PRIMARY_SECTORS,
-                        backupSectors = GptBackup.BACKUP_SECTORS,
+                        primarySectors = GptBackup.primarySectors(disk.sectorSize),
+                        backupSectors = GptBackup.backupSectors(disk.sectorSize),
                     )
                     val file = File(backupDirectory(), "gpt-critical-${timestamp()}.bin")
                     file.writeBytes(blob)

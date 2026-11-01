@@ -249,12 +249,22 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
     }
 
     jclass entryCls = env->FindClass("usb/fs/NtfsDirEntry");
-    if (!entryCls) return nullptr;
+    if (!entryCls) {
+        free(entries);
+        return nullptr;
+    }
 
     jmethodID ctor = env->GetMethodID(entryCls, "<init>", "(Ljava/lang/String;ZJ)V");
-    if (!ctor) return nullptr;
+    if (!ctor) {
+        free(entries);
+        return nullptr;
+    }
 
     jobjectArray arr = env->NewObjectArray(static_cast<jsize>(count), entryCls, nullptr);
+    if (!arr) {
+        free(entries);
+        return nullptr;
+    }
     for (size_t i = 0; i < count; i++) {
         std::u16string u16 = utf8_to_utf16(entries[i].name);
         jstring name = env->NewString(reinterpret_cast<const jchar *>(u16.data()),

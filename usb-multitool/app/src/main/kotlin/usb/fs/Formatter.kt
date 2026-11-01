@@ -39,7 +39,7 @@ internal object FormatNative {
             callback = BlockDeviceFatCallback(partition),
             sectorSize = partition.sectorSize,
             sectorCount = partition.sectorCount.toLong(),
-            type = fatMkfsType(id),
+            type = fatMkfsType(id, partition),
         )
     }
 
@@ -61,8 +61,11 @@ internal object FormatNative {
 }
 
 /** FatFs mkfs flavour for a FAT-family [FilesystemId]. */
-internal fun fatMkfsType(id: FilesystemId): FatMkfsType = when (id) {
-    FilesystemId.FAT -> FatMkfsType.FAT
+internal fun fatMkfsType(id: FilesystemId, partition: VirtualPartition? = null): FatMkfsType = when (id) {
+    FilesystemId.FAT -> {
+        val bytes = (partition?.sectorCount ?: 0UL) * (partition?.sectorSize?.toULong() ?: 512UL)
+        if (bytes > 2147483648UL) FatMkfsType.FAT32 else FatMkfsType.FAT
+    }
     FilesystemId.EXFAT -> FatMkfsType.EXFAT
     else -> throw IllegalArgumentException("$id is not a FAT-family filesystem")
 }
