@@ -362,3 +362,19 @@ private fun OperationBanner(
         }
     }
 }
+
+private fun ShellTab.title(): String =
+    when (this) {
+        ShellTab.Files -> "Files"
+        ShellTab.Ventoy -> "Ventoy"
+        ShellTab.Partitions -> "Partitions"
+        ShellTab.Diagnostics -> "Diagnostics"
+    }
+
+private fun ShellTab.shortLabel(): String =
+    when (this) {
+        ShellTab.Files -> "F"
+        ShellTab.Ventoy -> "V"
+        ShellTab.Partitions -> "P"
+        ShellTab.Diagnostics -> "D"
+    }
