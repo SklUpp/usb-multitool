@@ -48,7 +48,7 @@ import usb.fs.FilesystemId
 import usb.fs.Formatter
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
-import usb.partition.PartitionTab
+import usb.ui.PartitionTab
 import usb.partition.PartitionTable
 import usb.partition.PartitionType
 import usb.partition.VirtualPartition
@@ -94,7 +94,7 @@ class MainViewModel : ViewModel() {
                         if (dev != null && mgr != null) {
                             val disk = UsbDiskSession.open(mgr, dev)
                             try {
-                                val devIdentity = state.device?.identity ?: disk.geometry.capacityBytes.toString()
+                                val devIdentity = state.device?.label ?: disk.geometry.capacityBytes.toString()
                                 val diagConfirm = usb.diagnostics.DestructiveConfirmation(
                                     identity = devIdentity,
                                     capacityBytes = state.device?.capacityBytes ?: disk.geometry.capacityBytes,
@@ -143,16 +143,16 @@ class MainViewModel : ViewModel() {
                                             PartitionEditor.create(
                                                 table,
                                                 size = free.sectorCount.coerceAtMost(2048UL),
-                                                type = PartitionType.LINUX_DATA,
+                                                type = PartitionType.BASIC,
                                             )
                                         }
                                         report(disk.geometry.capacityBytes.toLong())
                                     }
                                     DestructiveAction.FORMAT_PARTITION -> {
                                         val partition = VirtualPartition(
-                                            disk,
                                             startLba = 2048UL,
                                             sectorCount = 2048UL.coerceAtMost(disk.geometry.sectorCount),
+                                            disk = disk,
                                         )
                                         Formatter.format(partition, FilesystemId.FAT)
                                         report(disk.geometry.capacityBytes.toLong())
