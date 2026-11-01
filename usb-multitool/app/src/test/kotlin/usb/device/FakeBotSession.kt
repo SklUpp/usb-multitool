@@ -74,6 +74,7 @@ class FakeBotSession(
     private val capacity16LastLba: ULong? = null,
     private val syncSense: DiskException.SenseError? = null,
     private val phaseErrorOnOps: Set<Int> = emptySet(),
+    private val residue: Int = 0,
 ) : BotSession {
     var resetCount: Int = 0
         private set
@@ -100,7 +101,7 @@ class FakeBotSession(
             return CswResult(CswStatus.PHASE_ERROR, 0, 0)
         }
         if (failAlways && op != ScsiCommand.OP_REQUEST_SENSE) {
-            return CswResult(CswStatus.FAILED, 0, 0)
+            return CswResult(CswStatus.FAILED, 0, residue)
         }
         if (stallsBeforeSuccess > 0 && op != ScsiCommand.OP_REQUEST_SENSE) {
             stallsBeforeSuccess--
@@ -150,14 +151,14 @@ class FakeBotSession(
             ScsiCommand.OP_READ10, ScsiCommand.OP_READ16 -> {
                 val (lba, blocks) = decodeLbaBlocks(cdb)
                 fillRead(requireNotNull(data), lba, blocks)
-                CswResult(CswStatus.PASSED, 0, 0)
+                CswResult(CswStatus.PASSED, 0, residue)
             }
             ScsiCommand.OP_WRITE10, ScsiCommand.OP_WRITE16 -> {
                 val (lba, blocks) = decodeLbaBlocks(cdb)
                 drainWrite(requireNotNull(data), lba, blocks)
-                CswResult(CswStatus.PASSED, 0, 0)
+                CswResult(CswStatus.PASSED, 0, residue)
             }
-            else -> CswResult(CswStatus.PASSED, 0, 0)
+            else -> CswResult(CswStatus.PASSED, 0, residue)
         }
     }
 

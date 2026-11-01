@@ -50,7 +50,7 @@ object ScsiCommand {
 
     fun select(lba: ULong, blocks: Int): ScsiWidth {
         require(blocks > 0) { "blocks must be positive, was $blocks" }
-        return if (lba <= CDB10_MAX_LBA && blocks <= CDB10_MAX_BLOCKS) {
+        return if ((lba + blocks.toULong() - 1UL) <= CDB10_MAX_LBA && blocks <= CDB10_MAX_BLOCKS) {
             ScsiWidth.CDB10
         } else {
             ScsiWidth.CDB16

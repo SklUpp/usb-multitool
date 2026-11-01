@@ -52,4 +52,12 @@ class ScsiCommandTest {
         assertEquals(ScsiDirection.NONE, cdb.direction)
         assertEquals(0, cdb.transferLength)
     }
+
+    @Test
+    fun boundaryLbaWrapAroundUsesSixteenByteCommand() {
+        val width = ScsiCommand.select(lba = 0xFFFF_FFFFUL, blocks = 2)
+        assertEquals(ScsiWidth.CDB16, width)
+        val fits = ScsiCommand.select(lba = 0xFFFF_FFFFUL, blocks = 1)
+        assertEquals(ScsiWidth.CDB10, fits)
+    }
 }
