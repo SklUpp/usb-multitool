@@ -86,7 +86,7 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.commons.compress)
-    implementation(libs.tukaani.xz)
+    implementation(libs.xz)
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)

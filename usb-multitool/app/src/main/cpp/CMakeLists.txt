@@ -6,6 +6,7 @@ set(CMAKE_C_EXTENSIONS ON)
 set(FATFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/fatfs/source)
 set(EXFAT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/exfatprogs)
 set(NTFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/ntfs-3g)
+set(VENTOY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/ventoy)
 
 add_library(exfatprogs_fsck STATIC
     ${EXFAT_ROOT}/lib/libexfat.c
@@ -44,6 +45,10 @@ add_library(usb_native SHARED
     ntfs_engine.c
     ntfs_jni.cpp
     ${NTFS_SOURCES}
+    ventoy_engine.c
+    ventoy_bridge.c
+    ${VENTOY_DIR}/ventoy_crc32.c
+    ${VENTOY_DIR}/ventoy_util.c
 )
 
 target_include_directories(usb_native PRIVATE
@@ -53,6 +58,7 @@ target_include_directories(usb_native PRIVATE
     ${EXFAT_ROOT}/fsck
     ${NTFS_DIR}/include
     ${NTFS_DIR}/include/ntfs-3g
+    ${VENTOY_DIR}
 )
 
 target_compile_definitions(usb_native PRIVATE
