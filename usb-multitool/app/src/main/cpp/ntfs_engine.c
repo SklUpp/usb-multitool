@@ -1,9 +1,22 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ntfs_engine.h"
-#include "usb_block.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define HAVE_CONFIG_H 1
 #include "config.h"
+
+#ifndef __timespec_defined
+#define __timespec_defined 1
+#endif
+
+#include "ntfs_engine.h"
+#include "usb_block.h"
 #include "ntfs-3g/types.h"
 #include "ntfs-3g/layout.h"
 #include "ntfs-3g/device.h"
@@ -14,13 +27,6 @@
 #include "ntfs-3g/attrib.h"
 #include "ntfs-3g/inode.h"
 #include "ntfs-3g/unistr.h"
-
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-
 #define NTFS_CLEAR_DIRTY_CONFIRMATION "CONFIRM_NTFS_CLEAR_DIRTY"
 
 typedef struct NtfsDeviceContext {
