@@ -148,6 +148,52 @@ class VentoyLayoutTest {
         assertTrue(VentoyAssets.isXz(assets.efiPartImg))
         assets.validateChecksums(strict = true)
     }
+    @Test
+    fun hardcodedHashesTableUsedWhenSha256FileIsMissing() {
+        val srcDir = java.io.File("app/src/main/assets/ventoy")
+        val tempDir = java.io.File(System.getProperty("java.io.tmpdir"), "ventoy-test-" + System.nanoTime())
+        tempDir.mkdirs()
+        try {
+            java.io.File(srcDir, "boot.img").copyTo(java.io.File(tempDir, "boot.img"))
+            java.io.File(srcDir, "core.img.xz").copyTo(java.io.File(tempDir, "core.img.xz"))
+            java.io.File(srcDir, "ventoy.disk.img.xz").copyTo(java.io.File(tempDir, "ventoy.disk.img.xz"))
+            java.io.File(srcDir, "version").copyTo(java.io.File(tempDir, "version"))
+
+            // No sha256.txt in tempDir - must use RELEASE_1_1_05_HASHES
+            val assets = VentoyAssets.loadFromDirectory(tempDir, strict = true)
+            assertEquals(VentoyAssets.RELEASE_1_1_05, assets.release)
+            assertEquals(VentoyAssets.RELEASE_1_1_05_HASHES["boot.img"], assets.bootImgSha256)
+            assertEquals(VentoyAssets.RELEASE_1_1_05_HASHES["core.img.xz"], assets.coreImgSha256)
+            assertEquals(VentoyAssets.RELEASE_1_1_05_HASHES["ventoy.disk.img.xz"], assets.diskImgSha256)
+            assets.validateChecksums(strict = true)
+
+            // Tampering with boot.img without sha256.txt must FAIL checksum validation (not a tautology)
+            val tamperedBoot = java.io.File(tempDir, "boot.img").readBytes()
+            tamperedBoot[10] = (tamperedBoot[10].toInt() xor 0xFF).toByte()
+            java.io.File(tempDir, "boot.img").writeBytes(tamperedBoot)
+
+            try {
+                VentoyAssets.loadFromDirectory(tempDir, strict = true)
+                fail("Expected IllegalStateException due to checksum mismatch on tampered boot.img")
+            } catch (e: IllegalStateException) {
+                assertTrue(e.message?.contains("boot.img SHA-256 mismatch") == true)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun ventoyDownloaderExternalAndFallbackLoad() {
+        val assetDir = java.io.File("app/src/main/assets/ventoy")
+        val assets = VentoyDownloader.loadFromExternalStorage(assetDir, strict = true)
+        assertEquals("1.1.05", assets.release)
+        assets.validateChecksums(strict = true)
+
+        val fallbackAssets = VentoyDownloader.loadWithFallback(externalDir = assetDir, strict = true)
+        assertEquals("1.1.05", fallbackAssets.release)
+    }
+
 
     @Test
     fun updatePreservesPartition1() {

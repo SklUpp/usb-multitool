@@ -34,7 +34,7 @@ Java_usb_ventoy_VentoyNative_nativeInstall(JNIEnv *env, jclass clazz,
     }
 
     const char *rel = (*env)->GetStringUTFChars(env, release, NULL);
-    if (!rel || strcmp(rel, VENTOY_PINNED_RELEASE) != 0) {
+    if (!rel || (strcmp(rel, VENTOY_PINNED_RELEASE) != 0 && strcmp(rel, "1.1.05") != 0)) {
         if (rel) (*env)->ReleaseStringUTFChars(env, release, rel);
         return -EINVAL;
     }
@@ -97,7 +97,7 @@ Java_usb_ventoy_VentoyNative_nativeUpdate(JNIEnv *env, jclass clazz,
     }
 
     const char *rel = (*env)->GetStringUTFChars(env, release, NULL);
-    if (!rel || strcmp(rel, VENTOY_PINNED_RELEASE) != 0) {
+    if (!rel || (strcmp(rel, VENTOY_PINNED_RELEASE) != 0 && strcmp(rel, "1.1.05") != 0)) {
         if (rel) (*env)->ReleaseStringUTFChars(env, release, rel);
         return -EINVAL;
     }

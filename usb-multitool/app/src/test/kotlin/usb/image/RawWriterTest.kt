@@ -69,12 +69,34 @@ class RawWriterTest {
         val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 1024L)
         val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
         val op = DiskOperation("raw-write-eof")
-        RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
+        try {
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
+            fail("expected EOFException")
+        } catch (e: java.io.EOFException) {
+            assertEquals("Premature EOF: wrote 512 of 1024 bytes", e.message)
+        }
 
         assertEquals(0L, disk.syncCount)
         assertTrue(op.state is OperationState.Failed)
         val failed = op.state as OperationState.Failed
         assertTrue(failed.cause is java.io.EOFException)
+        assertEquals("Premature EOF: wrote 512 of 1024 bytes", failed.cause.message)
+    }
+
+    @Test fun rawFileSourcePopulatesDeclaredSize() {
+        val tempFile = java.io.File.createTempFile("test-image", ".iso")
+        try {
+            tempFile.writeBytes(ByteArray(2048) { 0x5A })
+            val source = ImageSource.fromFile(tempFile)
+            assertEquals(2048L, source.declaredDecodedSize)
+
+            val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
+            assertEquals(2048, disk.bytesWritten)
+            assertEquals(1L, disk.syncCount)
+        } finally {
+            tempFile.delete()
+        }
     }
 
     @Test fun overwriteFalseWritesNothing() {

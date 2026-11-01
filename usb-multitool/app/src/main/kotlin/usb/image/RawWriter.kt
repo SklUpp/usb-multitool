@@ -86,10 +86,9 @@ object RawWriter {
             operation.bytesTotal = total
             val expectedSize = input.decodedSizeHint ?: known
             if (expectedSize != null && total < expectedSize) {
-                operation.state = OperationState.Failed(
-                    EOFException("premature EOF: expected $expectedSize bytes, got $total"),
-                )
-                return
+                val ex = EOFException("Premature EOF: wrote $total of $expectedSize bytes")
+                operation.state = OperationState.Failed(ex)
+                throw ex
             }
             disk.sync()
             if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {

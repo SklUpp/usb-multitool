@@ -76,7 +76,11 @@ data class VentoyAssets(
         const val PINNED_RELEASE = "1.1.18"
         const val PINNED_COMMIT = "6116894ab8abdf3ef8d43411a6732d34ee19214e"
         const val RELEASE_1_1_05 = "1.1.05"
-
+        val RELEASE_1_1_05_HASHES: Map<String, String> = mapOf(
+            "boot.img" to "1592e6a5c6faf999a632279777265af591590650e1828f93a46007cf46373b11",
+            "core.img.xz" to "611b6d3f67bf64892f5f54c6ae1ea54069d62614353af8131138097dc11f25bb",
+            "ventoy.disk.img.xz" to "0fedfa5a0d75dd40dd16467009f2cecce0951a20fd4655cca2ea00f59e017ad3",
+        )
 
         const val OFFICIAL_BOOT_IMG_SHA256 =
             "85b4b080765738ca96620c32d8182edddbaf6a36149162946d12aa1f9802bc44"
@@ -183,9 +187,13 @@ data class VentoyAssets(
                 }
             }
 
-            val finalBootSha = bootSha ?: (if (rel == RELEASE_1_1_05) boot.sha256Hex() else OFFICIAL_BOOT_IMG_SHA256)
-            val finalCoreSha = coreSha ?: (if (rel == RELEASE_1_1_05) core.sha256Hex() else OFFICIAL_CORE_IMG_SHA256)
-            val finalDiskSha = diskSha ?: (if (rel == RELEASE_1_1_05) disk.sha256Hex() else OFFICIAL_DISK_IMG_SHA256)
+            val defaultBootSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("boot.img") else OFFICIAL_BOOT_IMG_SHA256
+            val defaultCoreSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("core.img.xz") else OFFICIAL_CORE_IMG_SHA256
+            val defaultDiskSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("ventoy.disk.img.xz") else OFFICIAL_DISK_IMG_SHA256
+
+            val finalBootSha = bootSha ?: defaultBootSha
+            val finalCoreSha = coreSha ?: defaultCoreSha
+            val finalDiskSha = diskSha ?: defaultDiskSha
 
             val assets = VentoyAssets(
                 release = rel,
@@ -250,9 +258,13 @@ data class VentoyAssets(
                 }
             }
 
-            val finalBootSha = bootSha ?: (if (rel == RELEASE_1_1_05) boot.sha256Hex() else OFFICIAL_BOOT_IMG_SHA256)
-            val finalCoreSha = coreSha ?: (if (rel == RELEASE_1_1_05) core.sha256Hex() else OFFICIAL_CORE_IMG_SHA256)
-            val finalDiskSha = diskSha ?: (if (rel == RELEASE_1_1_05) disk.sha256Hex() else OFFICIAL_DISK_IMG_SHA256)
+            val defaultBootSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("boot.img") else OFFICIAL_BOOT_IMG_SHA256
+            val defaultCoreSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("core.img.xz") else OFFICIAL_CORE_IMG_SHA256
+            val defaultDiskSha = if (rel == RELEASE_1_1_05) RELEASE_1_1_05_HASHES.getValue("ventoy.disk.img.xz") else OFFICIAL_DISK_IMG_SHA256
+
+            val finalBootSha = bootSha ?: defaultBootSha
+            val finalCoreSha = coreSha ?: defaultCoreSha
+            val finalDiskSha = diskSha ?: defaultDiskSha
 
             val assets = VentoyAssets(
                 release = rel,

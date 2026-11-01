@@ -148,6 +148,9 @@ static void test_asset_validation(void)
     rc = ventoy_engine_install(handle, NULL, 0, 0, 1);
     assert(rc == -EINVAL);
 
+    make_fake_assets(&assets, "1.1.05");
+    rc = ventoy_engine_validate_assets(&assets);
+    assert(rc == 0);
     image_block_destroy(handle);
     printf("test_asset_validation passed!\n");
 }
