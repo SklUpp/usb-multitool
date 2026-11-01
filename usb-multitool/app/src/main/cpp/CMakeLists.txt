@@ -53,12 +53,13 @@ add_library(usb_native SHARED
 
 target_include_directories(usb_native PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${FATFS_DIR}
-    ${EXFAT_ROOT}/include
-    ${EXFAT_ROOT}/fsck
+    ${NTFS_DIR}/libntfs-3g
     ${NTFS_DIR}/include
     ${NTFS_DIR}/include/ntfs-3g
+    ${FATFS_DIR}
     ${VENTOY_DIR}
+    ${EXFAT_ROOT}/include
+    ${EXFAT_ROOT}/fsck
 )
 
 target_compile_definitions(usb_native PRIVATE
