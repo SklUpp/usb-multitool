@@ -80,7 +80,7 @@ fun FilesScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "📑 Partitions",
+                    text = "Partitions",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -168,7 +168,7 @@ fun FilesScreen(
                         onClick = { onIntent(UiIntent.NavigateUp) },
                         enabled = canAct && state.currentPath != "/",
                     ) {
-                        Text("📁 ..")
+                        Text("Up ..")
                     }
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -390,23 +390,35 @@ private fun FileRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = if (entry.isDirectory) {
-                        "📁 ${entry.name}/"
-                    } else if (entry.isIso) {
-                        "💿 ${entry.name}"
-                    } else {
-                        "📄 ${entry.name}"
-                    },
+                    text = if (entry.isDirectory) "${entry.name}/" else entry.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (entry.isDirectory || isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.weight(1f),
                 )
                 if (!entry.isDirectory) {
-                    Text(
-                        text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (entry.isIso) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                            ) {
+                                Text(
+                                    text = "ISO",
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                            }
+                        }
+                        Text(
+                            text = DeviceIdentity.formatCapacity(entry.sizeBytes),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             if (entry.isIso) {

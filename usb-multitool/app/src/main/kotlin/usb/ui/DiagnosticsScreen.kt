@@ -18,7 +18,6 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,7 +47,7 @@ fun DiagnosticsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "🩺 Automated Engine Self-Test",
+                    text = "Automated Engine Self-Test",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -82,7 +81,7 @@ fun DiagnosticsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "🔍 Non-Destructive Inspection",
+                    text = "Non-Destructive Inspection",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -132,7 +131,7 @@ fun DiagnosticsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "🛡️ GPT Backup & Recovery",
+                    text = "GPT Backup & Recovery",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -150,7 +149,7 @@ fun DiagnosticsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        text = state.backupUri?.let { "📁 ${it.substringAfterLast('/')}" }
+                        text = state.backupUri?.let { it.substringAfterLast('/') }
                             ?: "No GPT backup selected",
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodyMedium,
@@ -194,7 +193,7 @@ fun DiagnosticsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "⚠️ Benchmarks & Device Wipe",
+                    text = "Benchmarks & Device Wipe",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )

@@ -63,7 +63,7 @@ fun AppShell(
                         NavigationBarItem(
                             selected = state.tab == tab,
                             onClick = { onIntent(UiIntent.SelectTab(tab)) },
-                            icon = { Text(tab.shortLabel()) },
+                            icon = { Text(tab.shortLabel(), fontWeight = FontWeight.Bold) },
                             label = { Text(tab.title()) },
                         )
                     }
@@ -170,9 +170,9 @@ private fun DeviceBanner(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                     fontWeight = FontWeight.Bold,
                 )
                 val themeLabel = when (state.darkTheme) {
-                    null -> "🌗 Auto"
-                    true -> "🌙 Dark"
-                    false -> "☀️ Light"
+                    null -> "Auto"
+                    true -> "Dark"
+                    false -> "Light"
                 }
                 OutlinedButton(onClick = { onIntent(UiIntent.ToggleTheme) }) {
                     Text(themeLabel, style = MaterialTheme.typography.labelMedium)
@@ -210,41 +210,38 @@ private fun DeviceBanner(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AssistChip(
                             onClick = {},
-                            label = { Text("💾 ${device.capacityLabel}") },
+                            label = { Text(device.capacityLabel) },
                         )
+                        val partCount = state.partitions.size
+                        val partLabel = if (partCount == 1) "1 partition" else "$partCount partitions"
                         AssistChip(
                             onClick = {},
-                            label = { Text("📑 ${state.partitions.size} partitions") },
+                            label = { Text(partLabel) },
                         )
                     }
                 }
             } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    val statusText = when (state.presence) {
-                        DevicePresence.PermissionRequired -> "⚠️ Permission required"
-                        DevicePresence.Busy -> "⏳ Device busy"
-                        DevicePresence.Absent, DevicePresence.Disconnected -> "🔌 No USB drive connected"
-                        else -> state.presence.name
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = statusText,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = if (state.presence == DevicePresence.PermissionRequired) {
-                                "Grant USB permission in the Android dialog."
-                            } else {
-                                "Plug in a USB mass-storage device via OTG."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                val statusText = when (state.presence) {
+                    DevicePresence.PermissionRequired -> "Permission required"
+                    DevicePresence.Busy -> "Device busy"
+                    DevicePresence.Absent, DevicePresence.Disconnected -> "No USB drive connected"
+                    else -> state.presence.name
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = if (state.presence == DevicePresence.PermissionRequired) {
+                            "Grant USB permission in the Android dialog."
+                        } else {
+                            "Plug in a USB mass-storage device via OTG."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -271,6 +268,8 @@ private fun OperationBanner(
     onIntent: (UiIntent) -> Unit,
 ) {
     val op = state.operation ?: return
+    var expanded by remember(op.label, op.state) { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -295,30 +294,41 @@ private fun OperationBanner(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = when (op.state) {
-                        OperationState.Running -> MaterialTheme.colorScheme.primary
-                        OperationState.Completed -> MaterialTheme.colorScheme.primaryContainer
-                        OperationState.Failed -> MaterialTheme.colorScheme.errorContainer
-                        else -> MaterialTheme.colorScheme.surfaceVariant
-                    },
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        text = op.state.name,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
                         color = when (op.state) {
-                            OperationState.Running -> MaterialTheme.colorScheme.onPrimary
-                            OperationState.Completed -> MaterialTheme.colorScheme.onPrimaryContainer
-                            OperationState.Failed -> MaterialTheme.colorScheme.onErrorContainer
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            OperationState.Running -> MaterialTheme.colorScheme.primary
+                            OperationState.Completed -> MaterialTheme.colorScheme.primaryContainer
+                            OperationState.Failed -> MaterialTheme.colorScheme.errorContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
                         },
-                    )
+                    ) {
+                        Text(
+                            text = op.state.name,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when (op.state) {
+                                OperationState.Running -> MaterialTheme.colorScheme.onPrimary
+                                OperationState.Completed -> MaterialTheme.colorScheme.onPrimaryContainer
+                                OperationState.Failed -> MaterialTheme.colorScheme.onErrorContainer
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+
+                    if (op.state == OperationState.Completed || op.state is OperationState.Failed || op.state == OperationState.Cancelled) {
+                        TextButton(onClick = { onIntent(UiIntent.OperationUpdated(null)) }) {
+                            Text("Dismiss")
+                        }
+                    }
                 }
             }
 
-            if (op.bytesTotal > 0L) {
+            if (op.bytesTotal > 0L && op.state == OperationState.Running) {
                 LinearProgressIndicator(
                     progress = { op.fraction },
                     modifier = Modifier.fillMaxWidth(),
@@ -341,11 +351,23 @@ private fun OperationBanner(
             }
 
             op.resultMessage?.let { res ->
+                val lines = res.lines()
+                val isMultiLine = lines.size > 2
+                val displayText = if (isMultiLine && !expanded) lines.first() else res
+
                 Text(
-                    text = res,
+                    text = displayText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
+
+                if (isMultiLine) {
+                    TextButton(
+                        onClick = { expanded = !expanded },
+                    ) {
+                        Text(if (expanded) "Hide details" else "Show details (${lines.size} items)")
+                    }
+                }
             }
 
             op.errorMessage?.let { err ->
@@ -384,8 +406,8 @@ private fun ShellTab.title(): String =
 
 private fun ShellTab.shortLabel(): String =
     when (this) {
-        ShellTab.Files -> "📁"
-        ShellTab.Ventoy -> "🚀"
-        ShellTab.Partitions -> "💾"
-        ShellTab.Diagnostics -> "🔧"
+        ShellTab.Files -> "F"
+        ShellTab.Ventoy -> "V"
+        ShellTab.Partitions -> "P"
+        ShellTab.Diagnostics -> "D"
     }

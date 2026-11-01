@@ -45,7 +45,7 @@ fun VentoyScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "🚀 Ventoy Multi-Boot",
+                    text = "Ventoy Multi-Boot",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -114,7 +114,7 @@ fun VentoyScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "🪟 Windows Unattended Setup",
+                    text = "Windows Unattended Setup",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -156,7 +156,7 @@ fun VentoyScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        text = "💿 $baseName",
+                                        text = baseName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.weight(1f),

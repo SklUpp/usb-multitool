@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,7 +53,7 @@ fun PartitionsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "💾 Partition Table",
+                        text = "Partition Table",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
@@ -85,14 +86,19 @@ fun PartitionsScreen(
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         state.partitions.forEach { partition ->
+                            val isSelected = partition.id == state.selectedPartitionId
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (partition.id == state.selectedPartitionId) {
+                                color = if (isSelected) {
                                     MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
                                 } else {
                                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                                 },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = state.actionsEnabled) {
+                                        onIntent(UiIntent.SelectPartition(partition.id))
+                                    },
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -102,7 +108,7 @@ fun PartitionsScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        text = partition.name,
+                                        text = if (isSelected) "${partition.name} [Selected]" else partition.name,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                     )
@@ -186,7 +192,7 @@ fun PartitionsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "⚡ Raw Image Flasher",
+                    text = "Raw Image Flasher",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -211,7 +217,7 @@ fun PartitionsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = state.imageUri?.let { "📦 ${it.substringAfterLast('/')}" }
+                            text = state.imageUri?.let { it.substringAfterLast('/') }
                                 ?: "No image selected",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (state.imageUri != null) FontWeight.SemiBold else FontWeight.Normal,

@@ -34,7 +34,7 @@ data class SelfTestReport(
         val status = if (allPassed) "ALL PASSED" else "FAILURES DETECTED"
         val header = "Self-test $status: $passedCount of $totalCount suites passed in ${totalDurationMs}ms"
         val details = results.joinToString("\n") { r ->
-            val mark = if (r.passed) "✓" else "✗"
+            val mark = if (r.passed) "[OK]" else "[FAIL]"
             "$mark ${r.name}: ${r.message} (${r.durationMs}ms)"
         }
         return "$header\n$details"
