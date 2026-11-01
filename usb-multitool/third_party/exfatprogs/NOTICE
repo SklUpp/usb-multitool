@@ -1,0 +1,5 @@
+exfatprogs 1.4.3
+Copyright (C) 2019-2026 Namjae Jeon and contributors
+License: GPL-2.0-or-later (see COPYING and SPDX headers)
+Source: https://github.com/exfatprogs/exfatprogs/archive/refs/tags/1.4.3.tar.gz
+Commit: a37d327389358017d78026ddcba22706773a9cbe
