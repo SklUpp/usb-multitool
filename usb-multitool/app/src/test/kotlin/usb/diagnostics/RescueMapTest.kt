@@ -8,6 +8,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 import usb.image.ImageFormat
 import usb.image.ImageSource
+import usb.service.DiskOperation
 import usb.testutil.RecordingDisk
 
 class RescueMapTest {
@@ -223,5 +224,53 @@ class RescueMapTest {
         assertTrue(disk.bytes().copyOfRange(sectorSize * 2, sectorSize * 3).contentEquals(s2))
         assertTrue(disk.bytes().copyOfRange(0, sectorSize).contentEquals(s0))
         assertEquals(listOf(0UL until 3UL), map.copied)
+    }
+
+    @Test fun restoreShortEofAfterCopiedSectorLeavesLaterUntouched() {
+        // One full sector restored, then mid-sector EOF: later LBAs stay seed, no zero-fill.
+        val sectorSize = 512
+        val seed = ByteArray(4 * sectorSize) { 0x5A }
+        val disk = RecordingDisk.fromBytes(seed)
+        val map = RescueMap.whole(4UL)
+        val image = ByteArray(sectorSize + 100) { 7 }
+        val source = ImageSource.fromBytes(
+            image,
+            format = ImageFormat.IMG,
+            decodedSize = image.size.toLong(),
+        )
+
+        Rescue.restore(source, disk, map)
+
+        assertEquals(listOf(0UL), disk.writes)
+        assertEquals(listOf(0UL until 1UL), map.copied)
+        assertEquals(listOf(1UL until 4UL), map.nonTried)
+        assertEquals(7, disk.bytes()[0].toInt() and 0xFF)
+        // Sector 1+ never written or zero-filled.
+        assertEquals(0x5A, disk.bytes()[sectorSize].toInt() and 0xFF)
+        assertEquals(0x5A, disk.bytes()[3 * sectorSize].toInt() and 0xFF)
+        assertTrue(map.partial)
+    }
+
+    @Test fun restoreCancelMidRestorePreservesMapAndStopsWrites() {
+        val sectorSize = 512
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = sectorSize)
+        val map = RescueMap.whole(4UL)
+        val payload = ByteArray(4 * sectorSize) { 3 }
+        val source = ImageSource.fromBytes(
+            payload,
+            format = ImageFormat.IMG,
+            decodedSize = payload.size.toLong(),
+        )
+        // Become inactive once two sectors committed; third write must not happen.
+        val op = DiskOperation("rescue-restore-cancel", active = { disk.writes.size < 2 })
+
+        val returned = Rescue.restore(source, disk, map, operation = op)
+
+        assertEquals(map, returned)
+        assertEquals(listOf(0UL, 1UL), disk.writes)
+        assertEquals(listOf(0UL until 2UL), map.copied)
+        assertEquals(listOf(2UL until 4UL), map.nonTried)
+        assertTrue(map.partial)
+        assertEquals(2 * sectorSize, disk.bytesWritten)
     }
 }

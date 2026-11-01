@@ -113,6 +113,22 @@ class RawWriterTest {
         assertEquals(1024L, op.bytesDone)
     }
 
+    @Test fun unknownLengthOversizeBeforeAnyCommitStaysNonPartial() {
+        // No room on disk: first chunk already overflows. Throw, but never claim Partial.
+        val payload = ByteArray(512) { 7 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = null)
+        val disk = RecordingDisk(sectorCount = 0UL, sectorSize = 512)
+        val op = DiskOperation("raw-write-zero-overflow")
+        try {
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
+            fail("expected ImageTooLargeException")
+        } catch (_: ImageTooLargeException) {
+        }
+        assertEquals(0, disk.bytesWritten)
+        assertEquals(emptyList<ULong>(), disk.writes)
+        assertTrue(op.state != OperationState.Partial)
+    }
+
     private fun gzip(data: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { it.write(data) }
