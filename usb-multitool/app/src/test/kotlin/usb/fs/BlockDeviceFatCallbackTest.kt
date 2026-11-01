@@ -18,7 +18,7 @@ class BlockDeviceFatCallbackTest {
         val buffer = ByteArray(1024)
 
         assertEquals(0, callback.readSectors(2L, buffer))
-        assertEquals(0x5A.toByte(), buffer[512 + 7])
+        assertEquals(0x5A.toLong(), buffer[512 + 7].toLong())
     }
 
     @Test

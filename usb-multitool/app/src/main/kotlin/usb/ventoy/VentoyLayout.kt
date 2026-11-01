@@ -147,7 +147,10 @@ object VentoyInstaller {
         gpt: Boolean = true,
         reserveBytes: Long = 0L,
         align4k: Boolean = true,
+        isActive: () -> Boolean = { true },
+        onProgress: (done: Long, total: Long) -> Unit = { _, _ -> },
     ): PartitionTable {
+        checkActive(isActive, "Ventoy install")
         if (disk.sectorSize == 4096) {
             throw UnsupportedSectorSizeException("Upstream Ventoy does not support 4K native devices")
         }
@@ -200,7 +203,11 @@ object VentoyInstaller {
         val decompressedEfi = assets.decompressEfiPartImg()
 
         // Write VTOYEFI partition data
-        writeBufferToDisk(disk, part2Start, decompressedEfi, VentoyLayout.EFI_PART_SECTORS)
+        val payloadBytes = VentoyLayout.EFI_PART_SECTORS * VentoyLayout.SECTOR_SIZE
+        writeBufferToDisk(disk, part2Start, decompressedEfi, VentoyLayout.EFI_PART_SECTORS) { done ->
+            onProgress(done, payloadBytes)
+        }
+        checkActive(isActive, "Ventoy install")
 
         if (gpt) {
             // Write legacy GRUB stage1 at LBA 34
