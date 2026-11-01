@@ -1,5 +1,6 @@
 /*-----------------------------------------------------------------------/
-/  Low level disk interface modlue include file   (C)ChaN, 2025          /
+/  Low level disk interface module include file   (C)ChaN, 2025          /
+/  Project additions: fat_diskio_bind / fat_diskio_unbind                 /
 /-----------------------------------------------------------------------*/
 
 #ifndef _DISKIO_DEFINED
@@ -8,6 +9,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdint.h>
 
 /* Status of Disk Functions */
 typedef BYTE	DSTATUS;
@@ -32,6 +35,10 @@ DRESULT disk_read (BYTE pdrv, BYTE* buff, LBA_t sector, UINT count);
 DRESULT disk_write (BYTE pdrv, const BYTE* buff, LBA_t sector, UINT count);
 DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void* buff);
 
+/* Bind a physical drive slot to a usb_block handle (relative LBA space). */
+void fat_diskio_bind(BYTE pdrv, uint64_t handle, uint32_t sector_size, uint64_t sector_count);
+void fat_diskio_unbind(BYTE pdrv);
+
 
 /* Disk Status Bits (DSTATUS) */
 
@@ -40,7 +47,7 @@ DRESULT disk_ioctl (BYTE pdrv, BYTE cmd, void* buff);
 #define STA_PROTECT		0x04	/* Write protected */
 
 
-/* Command code for disk_ioctrl fucntion */
+/* Command code for disk_ioctrl function */
 
 /* Generic command (Used by FatFs) */
 #define CTRL_SYNC			0	/* Complete pending write process (needed at FF_FS_READONLY == 0) */
