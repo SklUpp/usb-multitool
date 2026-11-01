@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 TP="$ROOT/third_party"
-mkdir -p "$TP/fatfs" "$TP/ntfs-3g" "$TP/lwext4" "$TP/ventoy" "$TP/f3" "$TP/ddrescue"
+mkdir -p "$TP/fatfs" "$TP/ntfs-3g" "$TP/lwext4" "$TP/f3" "$TP/ddrescue"
 
 have_marker() {
   local path="$1"
@@ -41,28 +41,6 @@ if ! have_marker "$TP/lwext4/include/ext4.h"; then
   curl -fsSL https://github.com/gkostka/lwext4/archive/58bcf89a121b72d4fb66334f1693d3b30e4cb9c5.tar.gz \
     | tar -xz --strip-components=1 -C "$TP/lwext4"
   have_marker "$TP/lwext4/include/ext4.h" || { echo "lwext4 fetch failed"; exit 1; }
-fi
-
-echo "Fetching Ventoy v1.1.18..."
-if ! have_marker "$TP/ventoy/INSTALL"; then
-  # Keep README, replace with upstream tree.
-  curl -fsSL https://github.com/ventoy/Ventoy/archive/refs/tags/v1.1.18.tar.gz \
-    | tar -xz --strip-components=1 -C "$TP/ventoy"
-  # Upstream may not ship INSTALL; accept README.md or Ventoy2Disk.sh as marker.
-  if [[ ! -f "$TP/ventoy/INSTALL" ]]; then
-    if [[ -f "$TP/ventoy/Ventoy2Disk.sh" ]]; then
-      echo "Ventoy tree present (Ventoy2Disk.sh)" > "$TP/ventoy/INSTALL"
-    elif [[ -f "$TP/ventoy/README.md" ]]; then
-      # Distinguish pending README from real tree by looking for source dirs.
-      if [[ -d "$TP/ventoy/SRC" || -d "$TP/ventoy/INSTALL" || -f "$TP/ventoy/Ventoy2Disk.sh" ]]; then
-        echo "Ventoy tree present" > "$TP/ventoy/INSTALL"
-      else
-        echo "Ventoy fetch failed: no upstream markers"; exit 1
-      fi
-    else
-      echo "Ventoy fetch failed"; exit 1
-    fi
-  fi
 fi
 
 echo "Fetching F3 v10.0..."
