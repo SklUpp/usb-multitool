@@ -12,6 +12,17 @@
 #define USB_WITH_DDRESCUE 0
 #endif
 
+JNIEXPORT jboolean JNICALL
+Java_usb_diagnostics_DdrescueNative_nativeEngineLinked(JNIEnv *env, jclass clazz) {
+    (void)env;
+    (void)clazz;
+#if USB_WITH_DDRESCUE
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
 JNIEXPORT void JNICALL
 Java_usb_diagnostics_DdrescueNative_nativePersist(JNIEnv *env, jclass clazz,
                                                   jlong sectorCount, jboolean partial) {

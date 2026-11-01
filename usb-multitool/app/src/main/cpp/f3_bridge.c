@@ -12,6 +12,17 @@
 #define USB_WITH_F3 0
 #endif
 
+JNIEXPORT jboolean JNICALL
+Java_usb_diagnostics_F3Native_nativeEngineLinked(JNIEnv *env, jclass clazz) {
+    (void)env;
+    (void)clazz;
+#if USB_WITH_F3
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
 JNIEXPORT jint JNICALL
 Java_usb_diagnostics_F3Native_nativeProbe(JNIEnv *env, jclass clazz,
                                           jint sectorSize, jlong sectorCount) {

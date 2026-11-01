@@ -6,25 +6,48 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.diagnostics.ConfirmationMismatchException
+import usb.diagnostics.DestructiveConfirmation
 import usb.testutil.RecordingDisk
 
 class RawWriterTest {
+    private val identity = "RAW-TEST"
+
+    private fun conf(disk: RecordingDisk) =
+        DestructiveConfirmation(identity, disk.geometry.capacityBytes)
+
     @Test fun compressedSourceWritesDecodedBytesAndStopsAtCapacity() {
         val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
         val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
         try {
-            RawWriter.write(source, disk)
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
             fail("expected ImageTooLargeException")
         } catch (_: ImageTooLargeException) {
         }
         assertEquals(0, disk.bytesWritten)
     }
 
+    @Test fun knownSizeRejectionWritesNoSector() {
+        val source = ImageSource.fromBytes(
+            ByteArray(1024) { 1 },
+            format = ImageFormat.IMG,
+            decodedSize = 10_000L,
+        )
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        try {
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
+            fail("expected ImageTooLargeException")
+        } catch (_: ImageTooLargeException) {
+        }
+        assertEquals(0, disk.bytesWritten)
+        assertEquals(emptyList<ULong>(), disk.writes)
+    }
+
     @Test fun rawImageWritesExactSectors() {
         val payload = ByteArray(1024) { 3 }
         val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 1024L)
         val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
-        RawWriter.write(source, disk)
+        RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
         assertEquals(1024, disk.bytesWritten)
         assertTrue(disk.bytes().copyOf(1024).contentEquals(payload))
     }
@@ -33,10 +56,40 @@ class RawWriterTest {
         val payload = ByteArray(100) { 9 }
         val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 100L)
         val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
-        RawWriter.write(source, disk)
+        RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
         assertEquals(512, disk.bytesWritten)
         assertEquals(9, disk.bytes()[0].toInt())
         assertEquals(0, disk.bytes()[100].toInt())
+    }
+
+    @Test fun overwriteFalseWritesNothing() {
+        val payload = ByteArray(512) { 1 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        try {
+            RawWriter.write(source, disk, identity, conf(disk), overwrite = false)
+            fail("expected OverwriteRequiredException")
+        } catch (_: OverwriteRequiredException) {
+        }
+        assertEquals(0, disk.bytesWritten)
+    }
+
+    @Test fun confirmationMismatchWritesNothing() {
+        val payload = ByteArray(512) { 1 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                source,
+                disk,
+                identity,
+                DestructiveConfirmation("OTHER", disk.geometry.capacityBytes),
+                overwrite = true,
+            )
+            fail("expected ConfirmationMismatchException")
+        } catch (_: ConfirmationMismatchException) {
+        }
+        assertEquals(0, disk.bytesWritten)
     }
 
     private fun gzip(data: ByteArray): ByteArray {

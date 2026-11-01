@@ -2,23 +2,43 @@ package usb.image
 
 import java.nio.ByteBuffer
 import usb.device.UsbDisk
+import usb.diagnostics.DestructiveConfirmation
+import usb.diagnostics.closeMountedVolumes
+import usb.fs.MountedVolume
 import usb.service.DiskOperation
 
 class ImageTooLargeException(message: String) : Exception(message)
 class ImageCancelledException(message: String = "image write cancelled") : Exception(message)
+class OverwriteRequiredException(message: String = "raw write requires overwrite=true") : Exception(message)
 
 object RawWriter {
+    /**
+     * Stream [source] onto [disk] from LBA 0.
+     * Size rejection happens before any sector write.
+     * Mounted volumes are synced and closed first.
+     * [confirmation] must match [identity] and disk capacity.
+     * [overwrite] must be true; silent overwrite is refused.
+     */
     fun write(
         source: ImageSource,
         disk: UsbDisk,
+        identity: String,
+        confirmation: DestructiveConfirmation,
+        overwrite: Boolean,
+        openVolumes: List<MountedVolume> = emptyList(),
         operation: DiskOperation = DiskOperation("raw-write"),
     ) {
+        confirmation.requireMatch(identity, disk)
+        if (!overwrite) throw OverwriteRequiredException()
+
         val capacity = disk.geometry.capacityBytes
         val sectorSize = disk.geometry.sectorSize
         val known = source.declaredDecodedSize
         if (known != null && known.toULong() > capacity) {
             throw ImageTooLargeException("image $known exceeds disk capacity $capacity")
         }
+
+        closeMountedVolumes(openVolumes)
 
         source.open().use { input ->
             val hint = input.decodedSizeHint ?: known
@@ -35,6 +55,9 @@ object RawWriter {
                 if (n <= 0) break
                 val endBytes = total + n
                 if (endBytes.toULong() > capacity) {
+                    // Size rejection: no sector written for this overflowing chunk.
+                    // Prior full sectors may already be committed; known-size path
+                    // rejects before the loop. Streaming unknown length stops here.
                     throw ImageTooLargeException(
                         "decoded stream exceeds disk capacity at byte $endBytes",
                     )

@@ -1,9 +1,9 @@
 # Third-party engines
 
 Upstream trees are **not** stored in this commit. Exact URLs and revisions are
-pinned below. CI or a maintainer fetches them into the named directories before
-enabling `USB_WITH_*` CMake options. JNI adapters live under `app/src/main/cpp/`
-and must not be mixed into these trees.
+pinned below. CI runs `scripts/fetch-third-party.sh` before enabling
+`USB_WITH_*` and `-DUSB_REQUIRE_ENGINES=ON`. Local builds keep engines OFF and
+must not invent filesystem/Ventoy/F3/ddrescue success.
 
 ## FatFs (FAT12/16/32 + exFAT)
 

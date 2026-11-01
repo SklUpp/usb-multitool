@@ -1,5 +1,6 @@
 package usb.fs
 
+import usb.EngineMissingException
 import usb.partition.VirtualPartition
 
 object Formatter {
@@ -31,23 +32,37 @@ object Formatter {
 internal object FormatNative {
     fun fat(partition: VirtualPartition, id: FilesystemId) {
         // Upstream: FatFs f_mkfs with FM_FAT/FM_FAT32/FM_EXFAT.
-        FormatProbe.record(partition, id)
+        // Never invent success when engines are absent.
+        if (FormatProbe.testMode) {
+            FormatProbe.record(partition, id)
+            return
+        }
+        throw EngineMissingException(if (id == FilesystemId.EXFAT) "FatFs/exFAT" else "FatFs")
     }
 
     fun ntfs(partition: VirtualPartition) {
-        // Upstream: mkntfs via ntfs-3g device backend.
-        FormatProbe.record(partition, FilesystemId.NTFS)
+        if (FormatProbe.testMode) {
+            FormatProbe.record(partition, FilesystemId.NTFS)
+            return
+        }
+        throw EngineMissingException("ntfs-3g")
     }
 
     fun ext(partition: VirtualPartition) {
-        // Upstream: lwext4 mkfs.
-        FormatProbe.record(partition, FilesystemId.EXT)
+        if (FormatProbe.testMode) {
+            FormatProbe.record(partition, FilesystemId.EXT)
+            return
+        }
+        throw EngineMissingException("lwext4")
     }
 }
 
-/** Test seam recording last format request. */
+/** Test seam recording last format request. Production keeps testMode=false. */
 object FormatProbe {
     data class Request(val startLba: ULong, val sectorCount: ULong, val id: FilesystemId)
+
+    @Volatile
+    var testMode: Boolean = false
 
     @Volatile
     var last: Request? = null
@@ -59,5 +74,6 @@ object FormatProbe {
 
     fun reset() {
         last = null
+        testMode = false
     }
 }

@@ -7,15 +7,24 @@ enum class RescueStatus {
 }
 
 /**
- * ddrescue-style map over sector ranges. Partial output stays partial while any
- * sector is failed or non-tried.
+ * ddrescue-style map over sector ranges using run-length encoding.
+ * Supports disks of any size without a per-sector array or 512 MiB cap.
+ * Partial output stays partial while any sector is failed or non-tried.
  */
 class RescueMap private constructor(
     val sectorCount: ULong,
-    private val status: Array<RescueStatus>,
+    private val runs: MutableList<Run>,
 ) {
+    private data class Run(
+        var start: ULong,
+        var count: ULong,
+        var status: RescueStatus,
+    ) {
+        val endExclusive: ULong get() = start + count
+    }
+
     val partial: Boolean
-        get() = status.any { it != RescueStatus.COPIED }
+        get() = runs.any { it.status != RescueStatus.COPIED }
 
     val failed: List<ULongRange>
         get() = rangesOf(RescueStatus.FAILED)
@@ -34,63 +43,70 @@ class RescueMap private constructor(
 
     fun statusAt(lba: ULong): RescueStatus {
         require(lba < sectorCount)
-        return status[lba.toInt()]
+        return runAt(lba).status
     }
 
     /** Serialize beside a partial image for resume. */
     fun encode(): String = buildString {
         append("sectorCount=$sectorCount\n")
-        for (range in allRanges()) {
-            append(range.first)
+        for (run in runs) {
+            append(run.start)
             append(' ')
-            append(range.last - range.first + 1UL)
+            append(run.count)
             append(' ')
-            append(status[range.first.toInt()].name)
+            append(run.status.name)
             append('\n')
         }
+    }
+
+    private fun runAt(lba: ULong): Run {
+        for (run in runs) {
+            if (lba >= run.start && lba < run.endExclusive) return run
+        }
+        error("no run covers LBA $lba")
     }
 
     private fun paint(start: ULong, count: ULong, value: RescueStatus) {
         require(count > 0UL)
         require(start < sectorCount)
         require(start + count <= sectorCount)
-        var i = start
-        while (i < start + count) {
-            status[i.toInt()] = value
-            i++
+        val end = start + count
+        val rebuilt = ArrayList<Run>(runs.size + 2)
+        for (run in runs) {
+            val rEnd = run.endExclusive
+            if (rEnd <= start || run.start >= end) {
+                rebuilt += Run(run.start, run.count, run.status)
+                continue
+            }
+            if (run.start < start) {
+                rebuilt += Run(run.start, start - run.start, run.status)
+            }
+            if (rEnd > end) {
+                rebuilt += Run(end, rEnd - end, run.status)
+            }
+        }
+        rebuilt += Run(start, count, value)
+        rebuilt.sortBy { it.start }
+        runs.clear()
+        for (run in rebuilt) {
+            val last = runs.lastOrNull()
+            if (last != null && last.status == run.status && last.endExclusive == run.start) {
+                last.count += run.count
+            } else {
+                runs += run
+            }
         }
     }
 
     private fun rangesOf(wanted: RescueStatus): List<ULongRange> =
-        allRanges().filter { status[it.first.toInt()] == wanted }
-
-    private fun allRanges(): List<ULongRange> {
-        if (sectorCount == 0UL) return emptyList()
-        val out = mutableListOf<ULongRange>()
-        var start = 0UL
-        var current = status[0]
-        var i = 1UL
-        while (i < sectorCount) {
-            val s = status[i.toInt()]
-            if (s != current) {
-                out += start until i
-                start = i
-                current = s
-            }
-            i++
-        }
-        out += start until sectorCount
-        return out
-    }
+        runs.filter { it.status == wanted }.map { it.start until it.endExclusive }
 
     companion object {
         fun whole(sectorCount: ULong): RescueMap {
             require(sectorCount > 0UL)
-            // Cap in-memory map for unit tests; production uses sparse encoding via JNI.
-            require(sectorCount <= 1_048_576UL) { "in-memory map limited to 1Mi sectors" }
             return RescueMap(
                 sectorCount = sectorCount,
-                status = Array(sectorCount.toInt()) { RescueStatus.NON_TRIED },
+                runs = mutableListOf(Run(0UL, sectorCount, RescueStatus.NON_TRIED)),
             )
         }
 

@@ -43,8 +43,9 @@ int usb_partition_read(usb_partition_io *io, uint64_t relative_lba, void *buf, u
         return -1;
     }
     if (io->disk_read == NULL) {
-        memset(buf, 0, (size_t)sectors * (size_t)io->sector_size);
-        return 0;
+        /* Engine callbacks not wired — refuse dummy success. */
+        (void)buf;
+        return -1;
     }
     return io->disk_read(io->user, relative_lba, buf, sectors);
 }

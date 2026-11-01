@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/android-usb-multitool
+      - feature/usb-native
 
 concurrency:
   group: android-debug-${{ github.ref }}
@@ -17,7 +18,7 @@ defaults:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,11 +49,33 @@ jobs:
             "ndk;29.0.14206865" \
             "cmake;3.22.1"
 
+      - name: Install fetch helpers
+        working-directory: ${{ github.workspace }}
+        run: sudo apt-get update && sudo apt-get install -y lzip unzip
+
+      - name: Fetch pinned upstream engines
+        run: |
+          bash scripts/fetch-third-party.sh
+          test -f third_party/fatfs/source/ff.c
+          test -f third_party/ntfs-3g/libntfs-3g/ntfs.c
+          test -f third_party/lwext4/include/ext4.h
+          test -f third_party/ventoy/INSTALL
+          test -f third_party/f3/f3probe.c
+          test -f third_party/ddrescue/mapfile.cc
+
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon
 
-      - name: Assemble debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Assemble debug APK with engines required
+        run: |
+          ./gradlew :app:assembleDebug --no-daemon \
+            -PusbRequireEngines=true \
+            -PusbWithFatfs=true \
+            -PusbWithNtfs=true \
+            -PusbWithLwext4=true \
+            -PusbWithVentoy=true \
+            -PusbWithF3=true \
+            -PusbWithDdrescue=true
 
       - name: Lint debug
         run: ./gradlew :app:lintDebug --no-daemon

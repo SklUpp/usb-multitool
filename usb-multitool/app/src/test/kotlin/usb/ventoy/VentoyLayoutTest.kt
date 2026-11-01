@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.EngineMissingException
 import usb.testutil.RecordingDisk
 
 class VentoyLayoutTest {
@@ -17,20 +18,25 @@ class VentoyLayoutTest {
         val disk = RecordingDisk.fromAsset("ventoy/plain-fat.img")
         try {
             VentoyInstaller.update(disk, assets)
-            fail("expected IncompatibleVentoyException")
+            fail("expected IncompatibleVentoyException or EngineMissingException")
         } catch (_: IncompatibleVentoyException) {
+        } catch (_: EngineMissingException) {
+            // Engine absent is also a truthful refusal with no write.
         }
         assertEquals(0, disk.bytesWritten)
     }
 
-    @Test fun installThenUpdateSucceeds() {
+    @Test fun installRefusesWhenEngineMissing() {
         val disk = RecordingDisk(sectorCount = 262144UL, sectorSize = 512)
-        val table = VentoyInstaller.install(disk, assets, gpt = true)
-        assertTrue(table.partitions.any { it.name == "VTOYEFI" })
+        try {
+            VentoyInstaller.install(disk, assets, gpt = true)
+            fail("expected EngineMissingException")
+        } catch (_: EngineMissingException) {
+        }
+        assertEquals(0, disk.bytesWritten)
+        // Layout helpers remain usable for recognition tests without inventing install success.
+        VentoyLayout.markAsVentoy(disk, assets)
         assertTrue(VentoyLayout.isVentoyDisk(disk))
-        val writtenAfterInstall = disk.bytesWritten
-        VentoyInstaller.update(disk, assets)
-        assertTrue(disk.bytesWritten >= writtenAfterInstall)
     }
 
     @Test fun installRefuses4KnWhenUnsupported() {

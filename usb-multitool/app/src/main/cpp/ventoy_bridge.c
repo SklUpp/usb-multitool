@@ -15,6 +15,17 @@
 #define USB_WITH_VENTOY 0
 #endif
 
+JNIEXPORT jboolean JNICALL
+Java_usb_ventoy_VentoyNative_nativeEngineLinked(JNIEnv *env, jclass clazz) {
+    (void)env;
+    (void)clazz;
+#if USB_WITH_VENTOY
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
 JNIEXPORT jint JNICALL
 Java_usb_ventoy_VentoyNative_nativeInstall(JNIEnv *env, jclass clazz,
                                           jint sectorSize, jlong sectorCount,

@@ -1,6 +1,7 @@
 package usb.ventoy
 
 import java.nio.ByteBuffer
+import usb.EngineMissingException
 import usb.device.UsbDisk
 import usb.partition.Partition
 import usb.partition.PartitionTable
@@ -56,12 +57,11 @@ object VentoyInstaller {
         if (disk.geometry.sectorSize == 4096 && !assets.supports4Kn) {
             throw UnsupportedSectorSizeException("Ventoy ${assets.release} refuses 4Kn")
         }
-        // Upstream native install path (ventoy_bridge) performs real partitioning.
-        // Boundary: refuse to invent layout constants; call JNI when linked, else mark.
+        if (!VentoyNative.engineAvailable()) {
+            throw EngineMissingException("Ventoy")
+        }
         val rc = VentoyNative.install(disk, assets, gpt)
-        if (rc != 0 && !VentoyNative.libraryLoaded) {
-            VentoyLayout.markAsVentoy(disk, assets)
-        } else if (rc != 0) {
+        if (rc != 0) {
             throw IncompatibleVentoyException("ventoy install failed rc=$rc")
         }
         return PartitionTable(
@@ -83,8 +83,11 @@ object VentoyInstaller {
         if (disk.geometry.sectorSize == 4096 && !assets.supports4Kn) {
             throw UnsupportedSectorSizeException("Ventoy ${assets.release} refuses 4Kn update")
         }
+        if (!VentoyNative.engineAvailable()) {
+            throw EngineMissingException("Ventoy")
+        }
         val rc = VentoyNative.update(disk, assets)
-        if (rc != 0 && VentoyNative.libraryLoaded) {
+        if (rc != 0) {
             throw IncompatibleVentoyException("ventoy update failed rc=$rc")
         }
         // Update must not recreate the ISO partition; preserve existing table view.
@@ -148,17 +151,25 @@ internal object VentoyNative {
     var libraryLoaded: Boolean = false
         private set
 
+    @Volatile
+    var engineLinked: Boolean = false
+        private set
+
     init {
         try {
             System.loadLibrary("usb_native")
             libraryLoaded = true
+            engineLinked = nativeEngineLinked()
         } catch (_: UnsatisfiedLinkError) {
             libraryLoaded = false
+            engineLinked = false
         }
     }
 
+    fun engineAvailable(): Boolean = libraryLoaded && engineLinked
+
     fun install(disk: UsbDisk, assets: VentoyAssets, gpt: Boolean): Int {
-        if (!libraryLoaded) return -1
+        if (!engineAvailable()) return -1
         return nativeInstall(
             disk.geometry.sectorSize,
             disk.geometry.sectorCount.toLong(),
@@ -168,7 +179,7 @@ internal object VentoyNative {
     }
 
     fun update(disk: UsbDisk, assets: VentoyAssets): Int {
-        if (!libraryLoaded) return -1
+        if (!engineAvailable()) return -1
         return nativeUpdate(disk.geometry.sectorSize, disk.geometry.sectorCount.toLong(), assets.release)
     }
 
@@ -184,4 +195,6 @@ internal object VentoyNative {
         sectorCount: Long,
         release: String,
     ): Int
+
+    @JvmStatic external fun nativeEngineLinked(): Boolean
 }
