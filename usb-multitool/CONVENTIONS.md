@@ -10,6 +10,8 @@ Gradle, NDK, emulator, and instrumentation commands run **only in GitHub Actions
 
 Local checks are file, script, and static validation only. Do not run `./gradlew` with any task on developer phones.
 
+Host FatFs image tests may run locally with plain `gcc`/`make` (no Android SDK).
+
 ## GitHub Actions verification commands
 
 Exact commands executed by `.github/workflows/android-debug.yml`:
@@ -19,6 +21,12 @@ Exact commands executed by `.github/workflows/android-debug.yml`:
 ./gradlew :app:assembleDebug
 ./gradlew :app:lintDebug
 ./gradlew :app:compileDebugKotlin
+```
+
+FatFs host image tests (job `fatfs-host`, no Android SDK):
+
+```bash
+make -C native-tests/fatfs test
 ```
 
 ## Local static checks

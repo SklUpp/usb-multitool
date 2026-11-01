@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/android-usb-multitool
+      - feature/fat-engine
 
 concurrency:
   group: android-debug-${{ github.ref }}
@@ -15,6 +16,17 @@ defaults:
     working-directory: usb-multitool
 
 jobs:
+  fatfs-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and run FatFs host image tests
+        working-directory: usb-multitool/native-tests/fatfs
+        run: make test
+
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 60

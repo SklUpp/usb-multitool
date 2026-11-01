@@ -12,3 +12,8 @@ app/build/
 *.ap_
 *.dex
 *.class
+
+# FatFs host tests
+native-tests/fatfs/test_fat_images
+native-tests/fatfs/*.img
+
