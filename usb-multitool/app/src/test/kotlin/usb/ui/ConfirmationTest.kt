@@ -218,4 +218,19 @@ class UiStateMachineTest {
         assertTrue(result.effects.isEmpty())
         assertEquals("Device disconnected", result.state.statusMessage)
     }
+
+    @Test
+    fun selectPartitionSwitchesActivePartition() {
+        val state = ready()
+        val switched = UiReducer.reduce(state, UiIntent.SelectPartition("2"))
+        assertEquals("2", switched.state.selectedPartitionId)
+        assertEquals("2", switched.state.selectedPartition()?.id)
+    }
+
+    @Test
+    fun statusMessageIsUpdatedByStatusIntent() {
+        val state = ready()
+        val updated = UiReducer.reduce(state, UiIntent.Status("Uploaded myfile.iso to /"))
+        assertEquals("Uploaded myfile.iso to /", updated.state.statusMessage)
+    }
 }
