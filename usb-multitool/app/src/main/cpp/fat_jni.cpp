@@ -202,10 +202,13 @@ Java_usb_fs_FatFsNative_nativeList(JNIEnv *env, jclass, jlong volume, jstring pa
 			return nullptr;
 		}
 	}
+	if (count > tmp.size()) {
+		count = tmp.size();
+	}
 	jclass entryCls = env->FindClass("usb/fs/FatDirEntry");
 	jmethodID ctor = env->GetMethodID(entryCls, "<init>", "(Ljava/lang/String;ZJB)V");
 	jobjectArray arr = env->NewObjectArray(static_cast<jsize>(count), entryCls, nullptr);
-	for (size_t i = 0; i < count; i++) {
+	for (size_t i = 0; i < count && i < tmp.size(); i++) {
 		jstring name = to_jstring(env, tmp[i].name);
 		jobject obj = env->NewObject(entryCls, ctor, name, tmp[i].is_dir ? JNI_TRUE : JNI_FALSE,
 					     static_cast<jlong>(tmp[i].size),

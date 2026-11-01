@@ -31,6 +31,7 @@ typedef struct FatVolume {
 static FatVolume g_vols[FF_VOLUMES];
 static BYTE g_next_pdrv;
 static pthread_mutex_t g_vols_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_fat_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static int map_fr(FRESULT fr)
 {
@@ -109,10 +110,12 @@ int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t secto
 		return (int)FR_INVALID_PARAMETER;
 	}
 
+	pthread_mutex_lock(&g_fat_mu);
 	pthread_mutex_lock(&g_vols_mu);
 	v = alloc_vol_locked();
 	if (!v) {
 		pthread_mutex_unlock(&g_vols_mu);
+		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_TOO_MANY_OPEN_FILES;
 	}
 
@@ -127,6 +130,7 @@ int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t secto
 		fat_diskio_unbind(v->pdrv);
 		v->in_use = 0;
 		pthread_mutex_unlock(&g_vols_mu);
+		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
 
@@ -134,6 +138,7 @@ int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t secto
 	*out_kind = v->kind;
 	*out_volume = (uint64_t)(uintptr_t)v;
 	pthread_mutex_unlock(&g_vols_mu);
+	pthread_mutex_unlock(&g_fat_mu);
 	return 0;
 }
 
@@ -144,12 +149,14 @@ int fat_engine_umount(uint64_t volume)
 	FRESULT fr;
 
 	if (!v) return (int)FR_INVALID_OBJECT;
+	pthread_mutex_lock(&g_fat_mu);
 	pthread_mutex_lock(&g_vols_mu);
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	fr = f_mount(NULL, path, 0);
 	fat_diskio_unbind(v->pdrv);
 	memset(v, 0, sizeof(*v));
 	pthread_mutex_unlock(&g_vols_mu);
+	pthread_mutex_unlock(&g_fat_mu);
 	return map_fr(fr);
 }
 
@@ -162,19 +169,28 @@ int fat_engine_sync(uint64_t volume)
 
 int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t cap, size_t *out_count)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	DIR dir;
 	FILINFO fno;
 	char full[512];
 	FRESULT fr;
 	size_t n = 0;
 
-	if (!v || !out_count) return (int)FR_INVALID_PARAMETER;
+	if (!out_count) return (int)FR_INVALID_PARAMETER;
 	*out_count = 0;
+
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 	make_path(full, sizeof(full), v->pdrv, path);
 	fr = f_opendir(&dir, full);
-	if (fr != FR_OK) return map_fr(fr);
-
+	if (fr != FR_OK) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return map_fr(fr);
+	}
 	for (;;) {
 		fr = f_readdir(&dir, &fno);
 		if (fr != FR_OK || fno.fname[0] == 0) break;
@@ -194,18 +210,26 @@ int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t ca
 	}
 	f_closedir(&dir);
 	*out_count = n;
+	pthread_mutex_unlock(&g_fat_mu);
 	return map_fr(fr == FR_OK ? FR_OK : fr);
 }
 
 int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	FILINFO fno;
 	char full[512];
 	FRESULT fr;
 	const char *p;
 
-	if (!v || !out || !path) return (int)FR_INVALID_PARAMETER;
+	if (!out || !path) return (int)FR_INVALID_PARAMETER;
+
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 
 	/* FatFs f_stat rejects bare drive roots ("0:"); synthesize directory stat. */
 	p = path;
@@ -217,72 +241,116 @@ int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 		out->is_dir = 1;
 		out->size = 0;
 		out->attrib = AM_DIR;
+		pthread_mutex_unlock(&g_fat_mu);
 		return 0;
 	}
 
 	make_path(full, sizeof(full), v->pdrv, path);
 	fr = f_stat(full, &fno);
-	if (fr != FR_OK) return map_fr(fr);
+	if (fr != FR_OK) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return map_fr(fr);
+	}
 	memset(out, 0, sizeof(*out));
 	strncpy(out->name, (const char *)fno.fname, sizeof(out->name) - 1);
 	out->is_dir = (fno.fattrib & AM_DIR) ? 1 : 0;
 	out->size = (uint64_t)fno.fsize;
 	out->attrib = fno.fattrib;
+	pthread_mutex_unlock(&g_fat_mu);
 	return 0;
 }
 
 int fat_engine_mkdir(uint64_t volume, const char *path)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	char full[512];
-	if (!v || !path) return (int)FR_INVALID_PARAMETER;
+	FRESULT fr;
+	if (!path) return (int)FR_INVALID_PARAMETER;
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 	make_path(full, sizeof(full), v->pdrv, path);
-	return map_fr(f_mkdir(full));
+	fr = f_mkdir(full);
+	pthread_mutex_unlock(&g_fat_mu);
+	return map_fr(fr);
 }
 
 int fat_engine_delete(uint64_t volume, const char *path)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	char full[512];
-	if (!v || !path) return (int)FR_INVALID_PARAMETER;
+	FRESULT fr;
+	if (!path) return (int)FR_INVALID_PARAMETER;
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 	make_path(full, sizeof(full), v->pdrv, path);
-	return map_fr(f_unlink(full));
+	fr = f_unlink(full);
+	pthread_mutex_unlock(&g_fat_mu);
+	return map_fr(fr);
 }
 
 int fat_engine_rename(uint64_t volume, const char *from, const char *to)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	char a[512], b[512];
-	if (!v || !from || !to) return (int)FR_INVALID_PARAMETER;
+	FRESULT fr;
+	if (!from || !to) return (int)FR_INVALID_PARAMETER;
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 	make_path(a, sizeof(a), v->pdrv, from);
 	make_path(b, sizeof(b), v->pdrv, to);
-	return map_fr(f_rename(a, b));
+	fr = f_rename(a, b);
+	pthread_mutex_unlock(&g_fat_mu);
+	return map_fr(fr);
 }
 
 int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 			 void *buf, size_t len, size_t *out_read)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	FIL fil;
 	char full[512];
 	FRESULT fr;
 	UINT br = 0;
 
-	if (!v || !path || !buf || !out_read) return (int)FR_INVALID_PARAMETER;
+	if (!path || !buf || !out_read) return (int)FR_INVALID_PARAMETER;
 	*out_read = 0;
+
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 	make_path(full, sizeof(full), v->pdrv, path);
 	fr = f_open(&fil, full, FA_READ);
-	if (fr != FR_OK) return map_fr(fr);
+	if (fr != FR_OK) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return map_fr(fr);
+	}
 	if (offset > 0) {
 		fr = f_lseek(&fil, (FSIZE_t)offset);
 		if (fr != FR_OK) {
 			f_close(&fil);
+			pthread_mutex_unlock(&g_fat_mu);
 			return map_fr(fr);
 		}
 	}
 	fr = f_read(&fil, buf, (UINT)len, &br);
 	f_close(&fil);
 	*out_read = (size_t)br;
+	pthread_mutex_unlock(&g_fat_mu);
 	return map_fr(fr);
 }
 
@@ -290,18 +358,26 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 			  const void *buf, size_t len, size_t *out_written,
 			  uint64_t planned_total_size, int create)
 {
-	FatVolume *v = vol_from(volume);
+	FatVolume *v;
 	FIL fil;
 	char full[512];
 	FRESULT fr;
 	UINT bw = 0;
 	BYTE mode;
 
-	if (!v || !path || !buf || !out_written) return (int)FR_INVALID_PARAMETER;
+	if (!path || !buf || !out_written) return (int)FR_INVALID_PARAMETER;
 	*out_written = 0;
+
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_PARAMETER;
+	}
 
 	/* Reject oversized files before creating destination. */
 	if (planned_total_size > fat_engine_max_file_size(v->kind)) {
+		pthread_mutex_unlock(&g_fat_mu);
 		return FAT_ENGINE_FILE_TOO_LARGE;
 	}
 
@@ -312,11 +388,15 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		mode = FA_WRITE | FA_OPEN_EXISTING;
 	}
 	fr = f_open(&fil, full, mode);
-	if (fr != FR_OK) return map_fr(fr);
+	if (fr != FR_OK) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return map_fr(fr);
+	}
 	if (offset > 0) {
 		fr = f_lseek(&fil, (FSIZE_t)offset);
 		if (fr != FR_OK) {
 			f_close(&fil);
+			pthread_mutex_unlock(&g_fat_mu);
 			return map_fr(fr);
 		}
 	}
@@ -324,6 +404,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	if (fr == FR_OK) fr = f_sync(&fil);
 	f_close(&fil);
 	*out_written = (size_t)bw;
+	pthread_mutex_unlock(&g_fat_mu);
 	if (fr == FR_OK && bw < len) {
 		/* Disk full / truncated write: surface as disk error so callers do not
 		 * treat partial success as complete. */
@@ -337,7 +418,7 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 {
 	FatVolume *v;
 	MKFS_PARM opt;
-	BYTE work[FF_MAX_SS * 4];
+	BYTE *work;
 	char path[8];
 	FRESULT fr;
 
@@ -345,10 +426,18 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 		return (int)FR_INVALID_PARAMETER;
 	}
 
+	work = (BYTE *)malloc(FF_MAX_SS * 4);
+	if (!work) {
+		return (int)FR_NOT_ENOUGH_CORE;
+	}
+
+	pthread_mutex_lock(&g_fat_mu);
 	pthread_mutex_lock(&g_vols_mu);
 	v = alloc_vol_locked();
 	if (!v) {
 		pthread_mutex_unlock(&g_vols_mu);
+		pthread_mutex_unlock(&g_fat_mu);
+		free(work);
 		return (int)FR_TOO_MANY_OPEN_FILES;
 	}
 
@@ -367,11 +456,13 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	/* Mount work area without immediate mount so f_mkfs can bind the drive. */
-	fr = f_mkfs(path, &opt, work, sizeof(work));
+	fr = f_mkfs(path, &opt, work, FF_MAX_SS * 4);
 
 	fat_diskio_unbind(v->pdrv);
 	memset(v, 0, sizeof(*v));
 	pthread_mutex_unlock(&g_vols_mu);
+	pthread_mutex_unlock(&g_fat_mu);
+	free(work);
 	return map_fr(fr);
 }
 
