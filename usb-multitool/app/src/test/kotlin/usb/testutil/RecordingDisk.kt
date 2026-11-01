@@ -34,7 +34,6 @@ class RecordingDisk(
         writtenRanges.clear()
         reads.clear()
         writes.clear()
-        bytes.clear()
     }
 
     fun wasRangeWritten(startLba: Long, count: Long): Boolean {
