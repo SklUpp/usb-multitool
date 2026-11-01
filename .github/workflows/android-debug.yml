@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/android-usb-multitool
+      - feature/usb-stack
 
 concurrency:
   group: android-debug-${{ github.ref }}
