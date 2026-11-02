@@ -22,6 +22,8 @@ data class SelfTestResult(
     val durationMs: Long,
 )
 
+private const val LIVE_PROBE_NAME = "Live USB Device Safe Probe"
+
 data class SelfTestReport(
     val results: List<SelfTestResult>,
     val totalDurationMs: Long,
@@ -31,7 +33,12 @@ data class SelfTestReport(
     val totalCount: Int get() = results.size
 
     fun summary(): String {
-        val status = if (allPassed) "ALL PASSED" else "FAILURES DETECTED"
+        val usbProbed = results.any { it.name == LIVE_PROBE_NAME }
+        val status = when {
+            !allPassed -> "FAILURES DETECTED"
+            usbProbed -> "ALL PASSED"
+            else -> "INTERNAL SUITES PASSED (USB not connected)"
+        }
         val header = "Self-test $status: $passedCount of $totalCount suites passed in ${totalDurationMs}ms"
         val details = results.joinToString("\n") { r ->
             val mark = if (r.passed) "[OK]" else "[FAIL]"
@@ -46,6 +53,7 @@ data class SelfTestReport(
  * Runs non-destructively in-memory, requiring no external USB stick,
  * but safely probes the connected drive if present.
  */
+
 object SelfTestRunner {
     fun runAll(
         disk: UsbDisk? = null,
@@ -96,7 +104,7 @@ object SelfTestRunner {
         }
 
         if (disk != null) {
-            runCheck("Live USB Device Safe Probe") {
+            runCheck(LIVE_PROBE_NAME) {
                 testLiveDevice(disk)
             }
         }

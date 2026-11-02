@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,10 +9,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -29,6 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,7 +68,7 @@ fun AppShell(
                         NavigationBarItem(
                             selected = state.tab == tab,
                             onClick = { onIntent(UiIntent.SelectTab(tab)) },
-                            icon = { Text(tab.shortLabel(), fontWeight = FontWeight.Bold) },
+                            icon = { TabIcon(tab) },
                             label = { Text(tab.title()) },
                         )
                     }
@@ -371,10 +379,33 @@ private fun ShellTab.title(): String =
         ShellTab.Diagnostics -> "Diagnostics"
     }
 
-private fun ShellTab.shortLabel(): String =
-    when (this) {
-        ShellTab.Files -> "F"
-        ShellTab.Ventoy -> "V"
-        ShellTab.Partitions -> "P"
-        ShellTab.Diagnostics -> "D"
+@Composable
+private fun TabIcon(tab: ShellTab) {
+    val color = LocalContentColor.current
+    Canvas(Modifier.size(24.dp)) {
+        scale(size.width / 24f, size.height / 24f, pivot = androidx.compose.ui.geometry.Offset.Zero) {
+            val path = Path().apply {
+                when (tab) {
+                    ShellTab.Files -> {
+                        moveTo(3f, 6f); lineTo(10f, 6f); lineTo(12f, 8f); lineTo(21f, 8f)
+                        lineTo(21f, 19f); lineTo(3f, 19f); close()
+                    }
+                    ShellTab.Ventoy -> {
+                        moveTo(9f, 3f); lineTo(15f, 3f); lineTo(15f, 8f); lineTo(18f, 8f)
+                        lineTo(18f, 21f); lineTo(6f, 21f); lineTo(6f, 8f); lineTo(9f, 8f); close()
+                        moveTo(11f, 5f); lineTo(11f, 6f); moveTo(13f, 5f); lineTo(13f, 6f)
+                    }
+                    ShellTab.Partitions -> {
+                        moveTo(3f, 5f); lineTo(21f, 5f); lineTo(21f, 19f); lineTo(3f, 19f); close()
+                        moveTo(10f, 5f); lineTo(10f, 19f); moveTo(16f, 5f); lineTo(16f, 19f)
+                    }
+                    ShellTab.Diagnostics -> {
+                        moveTo(3f, 12f); lineTo(7f, 12f); lineTo(9f, 7f); lineTo(12f, 17f)
+                        lineTo(15f, 9f); lineTo(17f, 12f); lineTo(21f, 12f)
+                    }
+                }
+            }
+            drawPath(path, color, style = Stroke(width = 1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
     }
+}
