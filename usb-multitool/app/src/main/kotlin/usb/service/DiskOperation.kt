@@ -17,6 +17,7 @@ open class DiskOperation(
     @Volatile var bytesDone: Long = 0L,
     @Volatile var bytesTotal: Long = -1L,
     @Volatile var state: OperationState = OperationState.Queued,
+    @Volatile var failureCause: Throwable? = null,
     private val active: () -> Boolean = { true },
 ) {
     private val explicitActive = AtomicBoolean(true)

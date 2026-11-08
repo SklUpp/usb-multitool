@@ -212,6 +212,51 @@ object UiStateHostCheck {
         require(blockedSelfTest.effects.isEmpty()) { "self-test while running must be blocked" }
         require(blockedSelfTest.state.statusMessage?.contains("progress") == true)
 
+        val noPart = ready.copy(selectedPartitionId = null)
+        val deleteBlocked = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
+        require(deleteBlocked.state.pendingConfirmation == null)
+        require(deleteBlocked.state.statusMessage == "Select a partition first")
+        val formatBlocked = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
+        require(formatBlocked.state.pendingConfirmation == null)
+        require(formatBlocked.state.statusMessage == "Select a partition first")
+
+        val tpmToggle = UiReducer.reduce(ready, UiIntent.SetVtoyBypassTpm(false)).state
+        require(!tpmToggle.vtoyBypassTpm)
+
+        val cancelEffect = UiReducer.reduce(ready, UiIntent.CancelOperation)
+        require(cancelEffect.effects.single().kind == UiEffect.Kind.CancelOperation)
+
+        val corrupt = ready.copy(tableValid = false)
+        val createBlocked = UiReducer.reduce(corrupt, UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
+        require(createBlocked.state.pendingConfirmation == null)
+        require(createBlocked.state.statusMessage?.contains("Cannot create partition on corrupt table") == true)
+
+        val busyReset = UiReducer.reduce(
+            ready.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.WIPE)),
+            UiIntent.DeviceChanged(presence = DevicePresence.Busy),
+        )
+        require(busyReset.state.pendingConfirmation == null) { "DeviceChanged(Busy) must clear pendingConfirmation" }
+
+        val confirmCorrupt = UiReducer.reduce(
+            ready.copy(
+                tableValid = false,
+                pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.CREATE_PARTITION),
+            ),
+            UiIntent.ConfirmDestructive,
+        )
+        require(confirmCorrupt.state.pendingConfirmation == null)
+        require(confirmCorrupt.effects.isEmpty()) { "ConfirmDestructive on corrupt table must not emit SubmitDestructive" }
+
+        val confirmNoSelection = UiReducer.reduce(
+            ready.copy(
+                selectedPartitionId = null,
+                pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.DELETE_PARTITION, "1"),
+            ),
+            UiIntent.ConfirmDestructive,
+        )
+        require(confirmNoSelection.state.pendingConfirmation == null)
+        require(confirmNoSelection.effects.isEmpty()) { "ConfirmDestructive without selection must not emit SubmitDestructive" }
+
         println("UiStateHostCheck PASS")
     }
 }

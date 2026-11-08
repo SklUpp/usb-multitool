@@ -292,6 +292,258 @@ class OperationExecutorTest {
         assertEquals(1, newLifecycle.stopCount)
         controller.shutdown()
     }
+    @Test fun throwErrorFromRunFailsOperationAndWorkerAcceptsNextSubmit() = runTest {
+        val executor = OperationExecutor(this)
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                throw java.lang.NoClassDefFoundError("FatFs native library missing")
+            }
+        })
+        val firstOutcome = first.await()
+        assertTrue(firstOutcome is OperationState.Failed)
+        val failCause = (firstOutcome as OperationState.Failed).cause
+        assertTrue(failCause is DiskException.IoFailure)
+        assertTrue(failCause.message?.contains("FatFs native library missing") == true)
+
+        // Worker must not be stuck — next submit must succeed
+        val second = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, second.await())
+    }
+
+    @Test fun partialStatePreservedOnException() = runTest {
+        val executor = OperationExecutor(this)
+        val handle = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Partial
+                throw DiskException.IoFailure("simulated short write")
+            }
+        })
+        assertEquals(OperationState.Partial, handle.await())
+    }
+
+    @Test fun foregroundServiceStartFailureFailsOperation() = runTest {
+        val failingControl = object : ServiceControl {
+            override fun startForeground() {
+                throw IllegalStateException("FGS not allowed")
+            }
+            override fun stopWhenIdle() = Unit
+        }
+        val executor = OperationExecutor(this, serviceControl = failingControl)
+        val handle = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        val outcome = handle.await()
+        assertTrue(outcome is OperationState.Failed)
+        val cause = (outcome as OperationState.Failed).cause
+        assertTrue(cause.message?.contains("Failed to start foreground service") == true)
+    }
+
+    @Test fun wakeLockAcquireFailureFailsOperationWithoutRunning() = runTest {
+        val failingWakeLock = object : OperationWakeLock {
+            override fun acquire() {
+                throw SecurityException("WakeLock denied")
+            }
+            override fun release() = Unit
+        }
+        val executor = OperationExecutor(this, wakeLock = failingWakeLock)
+        var hasRun = false
+        val handle = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                hasRun = true
+            }
+        })
+        val outcome = handle.await()
+        assertTrue(outcome is OperationState.Failed)
+        assertFalse(hasRun)
+    }
+
+    @Test fun disconnectRejectsSubsequentSubmitsImmediately() = runTest {
+        val executor = OperationExecutor(this)
+        val gate = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                gate.await()
+            }
+        })
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
+
+        val subsequent = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), subsequent.await())
+    }
+
+    @Test fun serviceLifecycleInterleavingDoesNotDropForeground() {
+        var starts = 0
+        var stops = 0
+        var outstandingWork = false
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = { starts++ },
+            stopService = { stops++ },
+            hasOutstandingWork = { outstandingWork },
+        )
+
+        // First start
+        lifecycle.startForeground()
+        assertEquals(1, starts)
+        assertTrue(lifecycle.hasRequestedStart())
+
+        // Work finishes and stopWhenIdle starts, but more work arrives
+        outstandingWork = true
+        lifecycle.stopWhenIdle()
+        // Because hasOutstandingWork was true, stopService was not called
+        assertEquals(0, stops)
+        assertTrue(lifecycle.hasRequestedStart())
+    }
+
+    @Test fun serviceAlreadyForegroundDoesNotCallRequestStart() {
+        var starts = 0
+        var isForeground = true
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = { starts++ },
+            stopService = {},
+            hasOutstandingWork = { false },
+            isServiceForeground = { isForeground },
+        )
+        lifecycle.startForeground()
+        assertEquals(0, starts)
+
+        // Second call while still foreground must not request start again
+        lifecycle.startForeground()
+        assertEquals(0, starts)
+    }
+
+    @Test fun quickReconnectDoesNotDiscardSubsequentOperations() = runTest {
+        val executor = OperationExecutor(this)
+        executor.onDisconnected()
+        executor.onConnected()
+
+        val afterReconnect = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, afterReconnect.await())
+    }
+
+    @Test fun pendingCancellationCompletesWithoutRunning() = runTest {
+        val executor = OperationExecutor(this)
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                fail("cancelled operation must not run")
+            }
+        }
+        val handle = executor.submit(op)
+        handle.cancel()
+        assertEquals(OperationState.Cancelled, handle.await())
+    }
+
+    @Test fun oldQueuedOperationsDiscardedOnReconnect() = runTest {
+        val executor = OperationExecutor(this)
+        val firstStarted = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                firstStarted.complete(Unit)
+                gate.await()
+            }
+        })
+        firstStarted.await()
+
+        var staleRan = false
+        val stale = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                staleRan = true
+            }
+        })
+        kotlinx.coroutines.yield()
+
+        executor.onDisconnected()
+        executor.onConnected()
+        gate.complete(Unit)
+
+        var newRan = false
+        val newOp = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                newRan = true
+            }
+        })
+        assertEquals(OperationState.Completed, newOp.await())
+        assertTrue(newRan)
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), stale.await())
+        assertFalse(staleRan)
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
+    }
+
+    @Test fun repeatedOnConnectedSameDeviceIsIdempotent() = runTest {
+        val executor = OperationExecutor(this)
+        executor.onConnected("dev1")
+        val op1 = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        // Repeated attach/resume for same device must not abort queued or completed operations
+        executor.onConnected("dev1")
+        val op2 = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, op1.await())
+        assertEquals(OperationState.Completed, op2.await())
+    }
+
+    @Test fun repeatedGenericOnConnectedIsIdempotent() = runTest {
+        val executor = OperationExecutor(this)
+        executor.onConnected()
+        val op1 = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        executor.onConnected()
+        val op2 = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, op1.await())
+        assertEquals(OperationState.Completed, op2.await())
+    }
+
+    @Test fun deviceSwapWithoutDetachAbortsOldDeviceOperations() = runTest {
+        val executor = OperationExecutor(this)
+        executor.onConnected("dev1")
+
+        val firstStarted = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                firstStarted.complete(Unit)
+                gate.await()
+            }
+        })
+        firstStarted.await()
+
+        var staleRan = false
+        val stale = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                staleRan = true
+            }
+        })
+        kotlinx.coroutines.yield()
+
+        // Hot swap to dev2 without explicit onDisconnected
+        executor.onConnected("dev2")
+        gate.complete(Unit)
+
+        var newRan = false
+        val newOp = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                newRan = true
+            }
+        })
+        assertEquals(OperationState.Completed, newOp.await())
+        assertTrue(newRan)
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), stale.await())
+        assertFalse(staleRan)
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
+    }
 
 
 }

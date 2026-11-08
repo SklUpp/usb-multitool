@@ -121,8 +121,8 @@ object PartitionWriter {
         disk.read(0UL, buffer)
         buffer.flip()
         buffer.get(sector)
-        // Keep boot code (0..445); rebuild the partition entries and signature.
-        sector.fill(0.toByte(), 446, sectorSize)
+        // Keep boot code (0..445); rebuild the 4 partition entries and signature.
+        sector.fill(0.toByte(), 446, 510)
         table.partitions.forEachIndexed { index, partition ->
             val offset = 446 + index * 16
             sector[offset] = if (partition.bootable) 0x80.toByte() else 0.toByte()

@@ -21,63 +21,60 @@ import android.os.PowerManager
  */
 class DiskService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
-    private var lifecycle: DiskServiceLifecycle? = null
 
     override fun onCreate() {
         super.onCreate()
-        ensureChannel()
+        ensureChannel(this)
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "usb.multitool:disk").apply {
             setReferenceCounted(false)
         }
-        val lock = object : OperationWakeLock {
-            override fun acquire() {
-                wakeLock?.acquire(60 * 60 * 1000L)
-            }
-
-            override fun release() {
-                wakeLock?.let { if (it.isHeld) it.release() }
-            }
-        }
-        val controller = DiskController.get()
-        val policy = DiskServiceLifecycle(
-            requestStart = { requestServiceStart() },
-            stopService = {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            },
-            hasOutstandingWork = { controller.executor.hasOutstandingWork() },
-        )
-        lifecycle = policy
-        controller.bind(wakeLock = lock, serviceControl = policy)
+        activeWakeLock = wakeLock
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val controller = DiskController.get()
+        if (intent?.action == ACTION_STOP) {
+            synchronized(Companion) {
+                if (controller.executor.hasOutstandingWork()) {
+                    return START_NOT_STICKY
+                }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                if (controller.executor.hasOutstandingWork()) {
+                    startForegroundInternal()
+                    isForeground = true
+                    return START_NOT_STICKY
+                }
+                isForeground = false
+                stopSelfResult(startId)
+            }
+            return START_NOT_STICKY
+        }
         // Synchronous promotion — never call startForegroundService from here.
         startForegroundInternal()
-        return START_STICKY
+        synchronized(Companion) {
+            isForeground = true
+            serviceReady.complete(Unit)
+        }
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        // Idle teardown must leave DiskController / OperationExecutor alive.
-        // Unbind only this instance so a newer service binding stays intact.
         wakeLock?.let { if (it.isHeld) it.release() }
-        lifecycle?.let { DiskController.get().unbind(it) }
-        lifecycle = null
+        synchronized(Companion) {
+            if (activeWakeLock === wakeLock) {
+                activeWakeLock = null
+            }
+            isForeground = false
+            if (serviceReady.isCompleted) {
+                serviceReady = kotlinx.coroutines.CompletableDeferred()
+            }
+        }
         super.onDestroy()
     }
 
-    private fun requestServiceStart() {
-        val intent = Intent(this, DiskService::class.java)
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent)
-        } else {
-            @Suppress("DEPRECATION")
-            startService(intent)
-        }
-    }
 
     private fun startForegroundInternal() {
         val notification = Notification.Builder(this, CHANNEL_ID)
@@ -96,9 +93,9 @@ class DiskService : Service() {
         }
     }
 
-    private fun ensureChannel() {
+    private fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
-        val manager = getSystemService(NotificationManager::class.java)
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Disk operations",
@@ -110,5 +107,85 @@ class DiskService : Service() {
     companion object {
         private const val CHANNEL_ID = "usb.disk"
         private const val NOTIFICATION_ID = 42
+        const val ACTION_STOP = "usb.service.DiskService.STOP"
+
+        @Volatile
+        private var serviceReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+        @Volatile
+        private var activeWakeLock: PowerManager.WakeLock? = null
+
+        fun initialize(context: Context) {
+            val app = context.applicationContext
+            ensureChannelStatic(app)
+            setupServiceControl(app)
+        }
+
+        private fun setupServiceControl(context: Context) {
+            val controller = DiskController.get()
+            val lock = object : OperationWakeLock {
+                override fun acquire() {
+                    val wl = activeWakeLock
+                        ?: throw IllegalStateException("Wake lock is not bound by active DiskService")
+                    wl.acquire()
+                }
+
+                override fun release() {
+                    activeWakeLock?.let { if (it.isHeld) it.release() }
+                }
+            }
+            val policy = DiskServiceLifecycle(
+                requestStart = { requestStart(context) },
+                stopService = {
+                    synchronized(Companion) {
+                        if (!isForeground && activeWakeLock == null) return@synchronized
+                        val intent = Intent(context, DiskService::class.java).apply {
+                            action = ACTION_STOP
+                        }
+                        try {
+                            context.startService(intent)
+                        } catch (_: Exception) {}
+                    }
+                },
+                hasOutstandingWork = { controller.executor.hasOutstandingWork() },
+                isServiceForeground = { isForeground && activeWakeLock != null },
+            )
+            controller.bind(wakeLock = lock, serviceControl = policy)
+        }
+        @Volatile
+        private var isForeground = false
+
+        fun requestStart(context: Context) {
+            val ready = synchronized(Companion) {
+                if (!serviceReady.isCompleted) {
+                    serviceReady
+                } else {
+                    serviceReady = kotlinx.coroutines.CompletableDeferred()
+                    serviceReady
+                }
+            }
+            val intent = Intent(context, DiskService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(intent)
+            } else {
+                @Suppress("DEPRECATION")
+                context.startService(intent)
+            }
+            kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeout(5_000L) {
+                    ready.await()
+                }
+            }
+        }
+
+        private fun ensureChannelStatic(context: Context) {
+            if (Build.VERSION.SDK_INT < 26) return
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Disk operations",
+                NotificationManager.IMPORTANCE_LOW,
+            )
+            manager.createNotificationChannel(channel)
+        }
     }
 }

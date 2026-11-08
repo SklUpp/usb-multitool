@@ -69,26 +69,33 @@ open class UsbDisk(
     @Synchronized
     override fun sync() {
         ensureOpen()
-        val result = execute(
-            ScsiCommand.synchronizeCache10(),
-            null,
-            timeoutMs = BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS,
-        )
-        when (result.status) {
-            CswStatus.PASSED -> return
-            CswStatus.FAILED -> {
-                val sense = requestSense()
-                if (sense.isIllegalRequest) {
-                    throw DiskException.UnsupportedCommand(
-                        "SYNCHRONIZE CACHE(10) unsupported: $sense",
-                    )
+        var uaRetried = false
+        while (true) {
+            val result = execute(
+                ScsiCommand.synchronizeCache10(),
+                null,
+                timeoutMs = BotConstants.SYNCHRONIZE_CACHE_TIMEOUT_MS,
+            )
+            when (result.status) {
+                CswStatus.PASSED -> return
+                CswStatus.FAILED -> {
+                    val sense = requestSense()
+                    if (sense.isIllegalRequest) {
+                        throw DiskException.UnsupportedCommand(
+                            "SYNCHRONIZE CACHE(10) unsupported: $sense",
+                        )
+                    }
+                    if (sense.isUnitAttention && !uaRetried) {
+                        uaRetried = true
+                        continue
+                    }
+                    throw sense
                 }
-                throw sense
-            }
-            CswStatus.PHASE_ERROR -> {
-                session.bulkOnlyReset()
-                closeSession()
-                throw DiskException.IoFailure("phase error on SYNCHRONIZE CACHE(10)")
+                CswStatus.PHASE_ERROR -> {
+                    session.bulkOnlyReset()
+                    closeSession()
+                    throw DiskException.IoFailure("phase error on SYNCHRONIZE CACHE(10)")
+                }
             }
         }
     }

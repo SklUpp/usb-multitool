@@ -60,4 +60,12 @@ class ScsiCommandTest {
         val fits = ScsiCommand.select(lba = 0xFFFF_FFFFUL, blocks = 1)
         assertEquals(ScsiWidth.CDB10, fits)
     }
+
+    @Test
+    fun selectWithNearMaxLbaDoesNotOverflow() {
+        val width = ScsiCommand.select(lba = ULong.MAX_VALUE - 2UL, blocks = 5)
+        assertEquals(ScsiWidth.CDB16, width)
+        val widthMax = ScsiCommand.select(lba = ULong.MAX_VALUE, blocks = 1)
+        assertEquals(ScsiWidth.CDB16, widthMax)
+    }
 }

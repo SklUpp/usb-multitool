@@ -22,9 +22,19 @@ object VentoySetup {
     /** ISO file names present in `/ISO` on the Ventoy partition. */
     fun listIsos(disk: BlockDevice): List<String> =
         withVolume(disk) { volume ->
-            volume.list("/$ISO_DIR")
-                .filter { !it.isDirectory && it.name.endsWith(".iso", ignoreCase = true) }
-                .map { it.name }
+            val hasIsoDir = try {
+                volume.list("/").any { it.isDirectory && it.name.equals(ISO_DIR, ignoreCase = true) }
+            } catch (_: Exception) {
+                false
+            }
+            if (!hasIsoDir) return@withVolume emptyList()
+            try {
+                volume.list("/$ISO_DIR")
+                    .filter { !it.isDirectory && it.name.endsWith(".iso", ignoreCase = true) }
+                    .map { it.name }
+            } catch (_: Exception) {
+                emptyList()
+            }
         }
 
     /**
@@ -49,6 +59,7 @@ object VentoySetup {
                     "ISO \"$wanted\" is not in /$ISO_DIR on the Ventoy partition; copy it there first",
                 )
 
+            ensureDirectory(volume, VENTOY_DIR)
             val root = configRoot(readText(volume, CONFIG_PATH))
 
             val json = WindowsSetup.write(root, iso.name, options, overwrite)
@@ -57,7 +68,7 @@ object VentoySetup {
                 root["$VENTOY_DIR/$xmlName"] as? String
                     ?: throw IllegalStateException("WindowsSetup did not produce $VENTOY_DIR/$xmlName")
 
-            ensureDirectory(volume, VENTOY_DIR)
+            // ventoy directory ensured before readText above
             volume.write("/$VENTOY_DIR/$xmlName", xml.toByteArray(Charsets.UTF_8))
             volume.write(CONFIG_PATH, json.toByteArray(Charsets.UTF_8))
             volume.sync()
@@ -99,9 +110,18 @@ object VentoySetup {
     private fun readText(volume: FatVolume, path: String): String? {
         val name = path.substringAfterLast('/')
         val parent = path.substringBeforeLast('/', "/")
+        val hasParent = try {
+            parent == "/" || volume.list("/").any { it.isDirectory && it.name.equals(parent.removePrefix("/"), ignoreCase = true) }
+        } catch (_: Exception) {
+            false
+        }
+        if (!hasParent) return null
         val entry =
-            volume.list(parent).firstOrNull { !it.isDirectory && it.name.equals(name, ignoreCase = true) }
-                ?: return null
+            try {
+                volume.list(parent).firstOrNull { !it.isDirectory && it.name.equals(name, ignoreCase = true) }
+            } catch (_: Exception) {
+                null
+            } ?: return null
         if (entry.size <= 0L) return ""
         if (entry.size > Int.MAX_VALUE) {
             throw IllegalStateException("$path is ${entry.size} bytes; refusing to load it as text")

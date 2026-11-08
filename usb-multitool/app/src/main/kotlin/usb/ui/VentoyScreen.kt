@@ -194,8 +194,8 @@ fun VentoyScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                         )
                                         Switch(
-                                            checked = true,
-                                            onCheckedChange = {},
+                                            checked = state.vtoyBypassTpm,
+                                            onCheckedChange = { onIntent(UiIntent.SetVtoyBypassTpm(it)) },
                                             enabled = state.actionsEnabled,
                                         )
                                         OutlinedButton(

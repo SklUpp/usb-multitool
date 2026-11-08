@@ -69,9 +69,14 @@ object GptTable {
         val entriesCrc = headerBuf.getInt(88)
         require(entrySize >= 128) { "GPT entry size $entrySize too small" }
         require(entryCount > 0) { "no GPT entries" }
+        require(currentLba == headerLba) { "GPT header current LBA $currentLba != expected $headerLba" }
+        require(firstUsable <= lastUsable) { "GPT first usable $firstUsable > last usable $lastUsable" }
 
         val entriesBytes = entryCount * entrySize
         val sectorsNeeded = (entriesBytes + sectorSize - 1) / sectorSize
+        require(entryLba + sectorsNeeded.toULong() <= disk.sectorCount) {
+            "GPT entry array extends past disk bounds"
+        }
         val entriesBuf = ByteBuffer.allocate(sectorsNeeded * sectorSize).order(ByteOrder.LITTLE_ENDIAN)
         disk.read(entryLba, entriesBuf)
         entriesBuf.flip()

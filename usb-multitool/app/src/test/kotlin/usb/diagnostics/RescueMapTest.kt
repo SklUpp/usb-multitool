@@ -293,8 +293,9 @@ class RescueMapTest {
 
         val copyMap = RescueMap.whole(sectorCount.toULong())
         val image = ByteArrayOutputStream()
-        Rescue.copy(source, image.asRescueSink(sectorSize), copyMap)
-
+        val op = DiskOperation("rescue-copy")
+        Rescue.copy(source, image.asRescueSink(sectorSize), copyMap, operation = op)
+        assertEquals(usb.service.OperationState.Partial, op.state)
         val imageBytes = image.toByteArray()
         assertEquals(sectorCount * sectorSize, imageBytes.size)
         assertEquals(listOf(3UL until 4UL), copyMap.failed)

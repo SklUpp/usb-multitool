@@ -10,20 +10,40 @@ class DiskServiceLifecycle(
     private val requestStart: () -> Unit,
     private val stopService: () -> Unit,
     private val hasOutstandingWork: () -> Boolean,
+    private val isServiceForeground: () -> Boolean = { false },
 ) : ServiceControl {
+    private val lock = Any()
     @Volatile
     private var startRequested = false
 
     override fun startForeground() {
-        if (startRequested) return
-        startRequested = true
-        requestStart()
+        synchronized(lock) {
+            if (isServiceForeground()) {
+                startRequested = true
+                return
+            }
+            if (startRequested) return
+            startRequested = true
+            try {
+                requestStart()
+            } catch (t: Throwable) {
+                startRequested = false
+                throw t
+            }
+        }
     }
 
     override fun stopWhenIdle() {
-        if (hasOutstandingWork()) return
-        startRequested = false
-        stopService()
+        synchronized(lock) {
+            if (hasOutstandingWork()) return
+            startRequested = false
+            if (hasOutstandingWork()) {
+                startRequested = true
+                runCatching { requestStart() }.onFailure { startRequested = false }
+                return
+            }
+            stopService()
+        }
     }
 
     /** Test hook: whether a start has already been requested. */

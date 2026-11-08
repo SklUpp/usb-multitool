@@ -271,13 +271,32 @@ private fun OperationBanner(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (op.bytesTotal > 0L) {
-                        Text(
-                            text = "${(op.fraction * 100).toInt()}% · ${DeviceIdentity.formatCapacity(op.bytesPerSecond.toULong())}/s",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (op.bytesTotal > 0L) {
+                            val speed = if (op.bytesPerSecond > 0L) " · ${DeviceIdentity.formatCapacity(op.bytesPerSecond.toULong())}/s" else ""
+                            Text(
+                                text = "${(op.fraction * 100).toInt()}%$speed",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                        if (op.cancelable) {
+                            TextButton(
+                                onClick = { onIntent(UiIntent.CancelOperation) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    text = "Cancel",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                            }
+                        }
                     }
                 }
                 if (op.bytesTotal > 0L) {
@@ -320,7 +339,12 @@ private fun OperationBanner(
                                 MaterialTheme.colorScheme.onSecondaryContainer
                             },
                         )
-                        op.resultMessage?.let { res ->
+                        val messageToDisplay = if (op.state == OperationState.Failed || op.state == OperationState.Partial) {
+                            op.errorMessage ?: op.resultMessage
+                        } else {
+                            op.resultMessage ?: op.errorMessage
+                        }
+                        messageToDisplay?.let { res ->
                             val lines = res.lines()
                             val isMultiLine = lines.size > 2
                             val displayText = if (isMultiLine && !expanded) lines.first() else res
@@ -328,7 +352,7 @@ private fun OperationBanner(
                             Text(
                                 text = displayText,
                                 style = MaterialTheme.typography.bodySmall,
-                                maxLines = if (expanded) 8 else 1,
+                                maxLines = if (expanded) 8 else 2,
                                 overflow = TextOverflow.Ellipsis,
                                 color = if (op.state == OperationState.Failed) {
                                     MaterialTheme.colorScheme.onErrorContainer
@@ -343,7 +367,12 @@ private fun OperationBanner(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        op.resultMessage?.let { res ->
+                        val messageToDisplay = if (op.state == OperationState.Failed || op.state == OperationState.Partial) {
+                            op.errorMessage ?: op.resultMessage
+                        } else {
+                            op.resultMessage ?: op.errorMessage
+                        }
+                        messageToDisplay?.let { res ->
                             if (res.lines().size > 2) {
                                 TextButton(
                                     onClick = { expanded = !expanded },
@@ -356,7 +385,7 @@ private fun OperationBanner(
                                 }
                             }
                         }
-                        if (op.state == OperationState.Completed || op.state == OperationState.Failed || op.state == OperationState.Cancelled) {
+                        if (op.state == OperationState.Completed || op.state == OperationState.Failed || op.state == OperationState.Cancelled || op.state == OperationState.Partial) {
                             TextButton(
                                 onClick = { onIntent(UiIntent.OperationUpdated(null)) },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),

@@ -298,7 +298,7 @@ class VentoyLayoutTest {
         val json = WindowsSetup.write(volumeRoot, "Win11_23H2.iso", options, overwrite = true)
 
         // Linkage verification
-        assertTrue(json.contains("\"image\": \"/Win11_23H2.iso\""))
+        assertTrue(json.contains("\"image\": \"/ISO/Win11_23H2.iso\""))
         assertTrue(json.contains("\"template\": \"/ventoy/Win11_23H2.xml\""))
         assertTrue(json.contains("\"VTOY_WIN11_BYPASS_TPM\": \"1\""))
         assertTrue(json.contains("\"VTOY_WIN11_BYPASS_RAM\": \"1\""))
@@ -332,6 +332,27 @@ class VentoyLayoutTest {
 
         assertEquals("update must not write when the payload cannot fit", 0, disk.writeCount)
         assertEquals(bytesBefore, disk.bytes.toSortedMap().mapValues { it.value.toList() })
+    }
+
+    @Test
+    fun installRefusesToTruncateAnOversizedVtoyefi() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        try {
+            VentoyInstaller.install(disk, syntheticVentoyAssets(efiPartSectors = 65537))
+            fail("Expected VentoyPayloadTooLargeException instead of a silent truncation")
+        } catch (e: VentoyPayloadTooLargeException) {
+            assertTrue("message must name needed sectors: ${e.message}", e.message!!.contains("65537"))
+            assertTrue("message must name available sectors: ${e.message}", e.message!!.contains("65536"))
+        }
+        assertEquals("install must not write when payload cannot fit", 0, disk.writeCount)
+    }
+
+    @Test
+    fun windowsSetupEscapesXmlFullName() {
+        val volumeRoot = mutableMapOf<String, Any?>()
+        WindowsSetup.write(volumeRoot, "Win & Test <1>.iso", SetupOptions(), overwrite = true)
+        val xml = volumeRoot["ventoy/Win & Test <1>.xml"] as String
+        assertTrue(xml.contains("<FullName>Win &amp; Test &lt;1&gt;</FullName>"))
     }
 
     private fun syntheticStick(part1Sectors: Long, part2Sectors: Long): RecordingDisk {

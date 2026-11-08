@@ -7,6 +7,7 @@ import usb.fs.MountedVolume
 import usb.image.CountedInputStream
 import usb.image.ImageSource
 import usb.service.DiskOperation
+import usb.service.OperationState
 
 data class ScanReport(
     val sectorsRead: ULong,
@@ -174,6 +175,13 @@ object Rescue {
             }
         }
         DdrescueNative.persistHint(map)
+        if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
+            operation.state = if (map.failed.isNotEmpty() || map.partial) {
+                OperationState.Partial
+            } else {
+                OperationState.Completed
+            }
+        }
         return map
     }
 
@@ -211,6 +219,14 @@ object Rescue {
                 }
                 lba++
                 operation.report((lba * sectorSize.toULong()).toLong())
+            }
+        }
+        disk.sync()
+        if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
+            operation.state = if (map.failed.isNotEmpty() || map.partial) {
+                OperationState.Partial
+            } else {
+                OperationState.Completed
             }
         }
         return map

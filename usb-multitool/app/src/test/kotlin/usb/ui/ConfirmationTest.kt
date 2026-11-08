@@ -433,4 +433,70 @@ class UiStateMachineTest {
         assertEquals("1", result.state.selectedPartitionId)
         assertEquals("Device busy", result.state.statusMessage)
     }
+    @Test
+    fun deleteAndFormatPartitionRefusedWithoutSelectedPartition() {
+        val noPart = ready().copy(selectedPartitionId = null)
+        val deleteResult = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
+        assertNull(deleteResult.state.pendingConfirmation)
+        assertEquals("Select a partition first", deleteResult.state.statusMessage)
+
+        val formatResult = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
+        assertNull(formatResult.state.pendingConfirmation)
+        assertEquals("Select a partition first", formatResult.state.statusMessage)
+    }
+
+    @Test
+    fun toggleVtoyBypassTpmUpdatesState() {
+        val initial = ready()
+        assertTrue(initial.vtoyBypassTpm)
+        val disabled = UiReducer.reduce(initial, UiIntent.SetVtoyBypassTpm(false))
+        assertFalse(disabled.state.vtoyBypassTpm)
+        val reEnabled = UiReducer.reduce(disabled.state, UiIntent.SetVtoyBypassTpm(true))
+        assertTrue(reEnabled.state.vtoyBypassTpm)
+    }
+
+    @Test
+    fun confirmationIncludesPartitionNameForPartitionActions() {
+        val deleteReq = UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
+        assertNotNull(deleteReq.state.pendingConfirmation)
+        assertTrue(deleteReq.state.pendingConfirmation!!.message.contains("partition VENTOY"))
+    }
+
+    @Test
+    fun createPartitionRefusedOnCorruptTable() {
+        val corrupt = ready().copy(tableValid = false)
+        val createResult = UiReducer.reduce(corrupt, UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
+        assertNull(createResult.state.pendingConfirmation)
+        assertTrue(createResult.state.statusMessage?.contains("Cannot create partition on corrupt table") == true)
+    }
+
+    @Test
+    fun deviceChangedClearsPendingConfirmationAcrossAllStates() {
+        for (presence in DevicePresence.entries) {
+            val pending = ready().copy(
+                pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.WIPE),
+            )
+            val result = UiReducer.reduce(pending, UiIntent.DeviceChanged(presence = presence))
+            assertNull("pendingConfirmation must be cleared on DeviceChanged with presence $presence", result.state.pendingConfirmation)
+        }
+    }
+
+    @Test
+    fun confirmDestructiveRevalidatesTableAndSelection() {
+        val corruptState = ready().copy(
+            tableValid = false,
+            pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.CREATE_PARTITION),
+        )
+        val confirmCorrupt = UiReducer.reduce(corruptState, UiIntent.ConfirmDestructive)
+        assertNull(confirmCorrupt.state.pendingConfirmation)
+        assertTrue(confirmCorrupt.effects.isEmpty())
+
+        val noSelection = ready().copy(
+            selectedPartitionId = null,
+            pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.DELETE_PARTITION, "1"),
+        )
+        val confirmNoSel = UiReducer.reduce(noSelection, UiIntent.ConfirmDestructive)
+        assertNull(confirmNoSel.state.pendingConfirmation)
+        assertTrue(confirmNoSel.effects.isEmpty())
+    }
 }

@@ -330,7 +330,7 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 	FRESULT fr;
 	UINT br = 0;
 
-	if (!path || !buf || !out_read) return (int)FR_INVALID_PARAMETER;
+	if (!path || (!buf && len > 0) || !out_read) return (int)FR_INVALID_PARAMETER;
 	*out_read = 0;
 
 	pthread_mutex_lock(&g_fat_mu);
@@ -353,7 +353,9 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 			return map_fr(fr);
 		}
 	}
-	fr = f_read(&fil, buf, (UINT)len, &br);
+	if (len > 0) {
+		fr = f_read(&fil, buf, (UINT)len, &br);
+	}
 	f_close(&fil);
 	*out_read = (size_t)br;
 	pthread_mutex_unlock(&g_fat_mu);
@@ -371,7 +373,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	UINT bw = 0;
 	BYTE mode;
 
-	if (!path || !buf || !out_written) return (int)FR_INVALID_PARAMETER;
+	if (!path || (!buf && len > 0) || !out_written) return (int)FR_INVALID_PARAMETER;
 	*out_written = 0;
 
 	pthread_mutex_lock(&g_fat_mu);
@@ -406,7 +408,9 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 			return map_fr(fr);
 		}
 	}
-	fr = f_write(&fil, buf, (UINT)len, &bw);
+	if (len > 0) {
+		fr = f_write(&fil, buf, (UINT)len, &bw);
+	}
 	if (fr == FR_OK) fr = f_sync(&fil);
 	f_close(&fil);
 	*out_written = (size_t)bw;

@@ -163,6 +163,9 @@ class AndroidUsbBulkChannel private constructor(
                 throw DiskException.IoFailure("bulkTransfer returned 0 bytes")
             }
             transferred += n
+            // A short bulk IN packet ends the BOT data phase. The next IN
+            // URB would read the 13-byte CSW into the caller's buffer.
+            if (endpoint.direction == UsbConstants.USB_DIR_IN && n < chunk) break
         }
 
         if (!buffer.hasArray() && endpoint.direction == UsbConstants.USB_DIR_IN) {

@@ -189,6 +189,17 @@ object VentoyInstaller {
         val part2End = part2Start + VentoyLayout.EFI_PART_SECTORS - 1L
         val part1Count = part1End - part1Start + 1L
 
+        val decompressedCore = assets.decompressCoreImg()
+        val decompressedEfi = assets.decompressEfiPartImg()
+
+        val efiSectors =
+            (decompressedEfi.size.toLong() + VentoyLayout.SECTOR_SIZE - 1) / VentoyLayout.SECTOR_SIZE
+        if (efiSectors > VentoyLayout.EFI_PART_SECTORS) {
+            throw VentoyPayloadTooLargeException(
+                "EFI payload needs $efiSectors sectors but VTOYEFI partition has only " +
+                    "${VentoyLayout.EFI_PART_SECTORS}; install would truncate the boot image",
+            )
+        }
         // Clean initial sectors
         val zeroSec = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE)
         for (i in 0L until 34L) {
@@ -201,9 +212,6 @@ object VentoyInstaller {
                 disk.write(i, zeroSec)
             }
         }
-
-        val decompressedCore = assets.decompressCoreImg()
-        val decompressedEfi = assets.decompressEfiPartImg()
 
         // Write VTOYEFI partition data
         val payloadBytes = VentoyLayout.EFI_PART_SECTORS * VentoyLayout.SECTOR_SIZE
@@ -656,7 +664,8 @@ object WindowsSetup {
         rootMap["control"] = controlList
 
         val autoInstallList: MutableList<Any?> = ((rootMap["auto_install"] as? List<*>)?.toMutableList()) ?: mutableListOf()
-        val targetImage = "/$isoName"
+        val cleanName = isoName.substringAfterLast('/')
+        val targetImage = "/ISO/$cleanName"
         val targetTemplate = "/ventoy/$xmlName"
         var matched = false
 
@@ -664,7 +673,7 @@ object WindowsSetup {
             val item = autoInstallList[i]
             if (item is Map<*, *>) {
                 val img = item["image"]?.toString()
-                if (img == targetImage || img == isoName) {
+                if (img == targetImage || img == "/$cleanName" || img == cleanName) {
                     val newEntry = linkedMapOf<String, Any?>()
                     for ((k, v) in item) newEntry[k.toString()] = v
                     newEntry["image"] = targetImage
@@ -678,7 +687,6 @@ object WindowsSetup {
         if (!matched) {
             autoInstallList.add(linkedMapOf("image" to targetImage, "template" to targetTemplate))
         }
-
         rootMap["auto_install"] = autoInstallList
 
         return MiniJson.stringify(rootMap)
@@ -694,11 +702,20 @@ object WindowsSetup {
                 null
             } ?: return false
         val entries = root["auto_install"] as? List<*> ?: return false
+        val cleanName = isoName.substringAfterLast('/')
+        val targetImage = "/ISO/$cleanName"
         return entries.any { entry ->
             val image = (entry as? Map<*, *>)?.get("image")?.toString()
-            image == "/$isoName" || image == isoName
+            image == targetImage || image == "/$cleanName" || image == cleanName
         }
     }
+
+    private fun escapeXml(text: String): String =
+        text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
 
     private fun buildXmlTemplate(name: String, options: SetupOptions): String = buildString {
         appendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
@@ -707,7 +724,7 @@ object WindowsSetup {
         appendLine("    <component name=\"Microsoft-Windows-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">")
         appendLine("      <UserData>")
         appendLine("        <AcceptEula>true</AcceptEula>")
-        appendLine("        <FullName>$name</FullName>")
+        appendLine("        <FullName>${escapeXml(name)}</FullName>")
         appendLine("      </UserData>")
         if (options.tpmBypass || options.bypassRamCheck) {
             appendLine("      <RunSynchronous>")

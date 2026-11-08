@@ -69,7 +69,7 @@ class RescueMap private constructor(
     private fun paint(start: ULong, count: ULong, value: RescueStatus) {
         require(count > 0UL)
         require(start < sectorCount)
-        require(start + count <= sectorCount)
+        require(count <= sectorCount - start)
         val end = start + count
         val rebuilt = ArrayList<Run>(runs.size + 2)
         for (run in runs) {

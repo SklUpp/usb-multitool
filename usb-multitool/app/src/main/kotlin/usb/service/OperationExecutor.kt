@@ -3,6 +3,7 @@ package usb.service
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -43,9 +44,11 @@ class OperationExecutor(
 ) {
     private val mutex = Mutex()
     private val queue = ArrayDeque<QueuedOp>()
-    private var disconnected = false
+    private val disconnected = AtomicBoolean(false)
+    private val connectionGeneration = AtomicLong(0)
     private var running = false
     @Volatile private var current: QueuedOp? = null
+    @Volatile private var currentDeviceId: String? = null
     private val outstanding = AtomicInteger(0)
 
     /** Rebind wake/service control. Not a public field write. */
@@ -69,20 +72,40 @@ class OperationExecutor(
     /** Queued or running operations remain. Safe for stopWhenIdle re-entry. */
     fun hasOutstandingWork(): Boolean = outstanding.get() > 0
     fun submit(operation: DiskOperation): OperationHandle {
-        val handle = QueuedOp(operation)
+        val submitGen = connectionGeneration.get()
+        val handle = QueuedOp(operation, generation = submitGen)
         // Count before async enqueue so a second submit cannot lose a race
         // against the first op's idle stopWhenIdle check.
         handle.markCounted()
         outstanding.incrementAndGet()
+
         scope.launch {
             val startWorker = mutex.withLock {
-                if (disconnected) {
+                if (disconnected.get() || connectionGeneration.get() != submitGen) {
                     handle.complete(OperationState.Failed(DiskException.Disconnected()))
                     return@withLock false
                 }
+                if (handle.cancelled.get() || !handle.operation.isActive()) {
+                    handle.complete(OperationState.Cancelled)
+                    return@withLock false
+                }
                 val wasEmpty = queue.isEmpty() && !running
+                if (wasEmpty) {
+                    try {
+                        serviceControl.startForeground()
+                    } catch (t: Throwable) {
+                        handle.complete(
+                            OperationState.Failed(
+                                DiskException.IoFailure(
+                                    "Failed to start foreground service: ${t.message ?: t.javaClass.simpleName}",
+                                    t,
+                                ),
+                            ),
+                        )
+                        return@withLock false
+                    }
+                }
                 queue.addLast(handle)
-                if (wasEmpty) serviceControl.startForeground()
                 !running
             }
             if (startWorker) drain()
@@ -91,31 +114,64 @@ class OperationExecutor(
     }
 
     fun onDisconnected() {
+        val gen = connectionGeneration.incrementAndGet()
+        disconnected.set(true)
+        currentDeviceId = null
         scope.launch {
-            val runningOp: QueuedOp?
-            val queued: List<QueuedOp>
+            var runningOp: QueuedOp? = null
+            val toFail = mutableListOf<QueuedOp>()
             mutex.withLock {
-                disconnected = true
-                runningOp = current
-                queued = queue.toList()
-                queue.clear()
+                runningOp = current?.takeIf { it.generation <= gen }
+                val iter = queue.iterator()
+                while (iter.hasNext()) {
+                    val op = iter.next()
+                    if (op.generation <= gen) {
+                        iter.remove()
+                        toFail.add(op)
+                    }
+                }
             }
             runningOp?.failDisconnected()
-            for (op in queued) {
+            for (op in toFail) {
                 op.failDisconnected()
             }
             mutex.withLock {
-                if (!running) serviceControl.stopWhenIdle()
+                if (!running && queue.isEmpty()) {
+                    if (outstanding.get() == 0) {
+                        serviceControl.stopWhenIdle()
+                    }
+                }
             }
         }
     }
-    fun onConnected() {
+    fun onConnected(deviceId: String? = null) {
+        val same = !disconnected.get() &&
+            ((deviceId != null && currentDeviceId == deviceId) || (deviceId == null && currentDeviceId == null))
+        if (same) return
+        currentDeviceId = deviceId
+        val gen = connectionGeneration.incrementAndGet()
+        disconnected.set(false)
         scope.launch {
+            var runningOp: QueuedOp? = null
+            val toFail = mutableListOf<QueuedOp>()
             mutex.withLock {
-                disconnected = false
+                runningOp = current?.takeIf { it.generation < gen }
+                val iter = queue.iterator()
+                while (iter.hasNext()) {
+                    val op = iter.next()
+                    if (op.generation < gen) {
+                        iter.remove()
+                        toFail.add(op)
+                    }
+                }
+            }
+            runningOp?.failDisconnected()
+            for (op in toFail) {
+                op.failDisconnected()
             }
         }
     }
+
 
     private suspend fun drain() {
         while (true) {
@@ -130,8 +186,12 @@ class OperationExecutor(
                     }
                     return
                 }
-                if (disconnected) {
+                if (disconnected.get() || next.generation != connectionGeneration.get()) {
                     next.failDisconnected()
+                    return@withLock null
+                }
+                if (next.cancelled.get() || !next.operation.isActive()) {
+                    next.complete(OperationState.Cancelled)
                     return@withLock null
                 }
                 running = true
@@ -139,69 +199,98 @@ class OperationExecutor(
                 next
             } ?: continue
 
-            runOne(op)
-
-            mutex.withLock {
-                running = false
-                current = null
-                if (queue.isEmpty()) {
-                    if (outstanding.get() == 0) {
-                        serviceControl.stopWhenIdle()
+            try {
+                runOne(op)
+            } finally {
+                mutex.withLock {
+                    running = false
+                    current = null
+                    if (queue.isEmpty()) {
+                        if (outstanding.get() == 0) {
+                            serviceControl.stopWhenIdle()
+                            return
+                        }
+                        // Counted submit still pending enqueue — exit; it restarts drain.
                         return
                     }
-                    // Counted submit still pending enqueue — exit; it restarts drain.
-                    return
                 }
             }
         }
     }
-
     private suspend fun runOne(op: QueuedOp) {
         if (op.isDone()) return
-        if (op.cancelled.get()) {
+        if (op.cancelled.get() || !op.operation.isActive()) {
             op.operation.markInactive()
             op.complete(OperationState.Cancelled)
             return
         }
-        if (mutex.withLock { disconnected }) {
+        if (disconnected.get() || op.generation != connectionGeneration.get()) {
             op.failDisconnected()
             return
         }
 
         op.state = OperationState.Running
-        wakeLock.acquire()
+        try {
+            wakeLock.acquire()
+        } catch (t: Throwable) {
+            op.complete(
+                OperationState.Failed(
+                    DiskException.IoFailure("Wake lock acquire failed: ${t.message ?: t.javaClass.simpleName}", t),
+                ),
+            )
+            return
+        }
         var terminal: OperationState = OperationState.Completed
         try {
             try {
                 op.operation.run()
                 terminal = when {
                     op.isDone() -> op.state
-                    mutex.withLock { disconnected } ->
+                    op.operation.state == OperationState.Partial -> OperationState.Partial
+                    disconnected.get() ->
                         OperationState.Failed(DiskException.Disconnected())
                     op.cancelled.get() || !op.operation.isActive() ->
                         OperationState.Cancelled
+                    op.operation.state is OperationState.Failed -> op.operation.state
                     else -> OperationState.Completed
                 }
             } catch (e: DiskException) {
-                terminal = if (op.isDone()) op.state else OperationState.Failed(e)
+                if (op.operation.failureCause == null) {
+                    op.operation.failureCause = e
+                }
+                terminal = when {
+                    op.isDone() -> op.state
+                    op.operation.state == OperationState.Partial -> OperationState.Partial
+                    else -> OperationState.Failed(e)
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Do not wrap cooperative/cancellation as IoFailure.
-                terminal = if (op.isDone()) op.state else OperationState.Cancelled
-            } catch (e: Exception) {
-                terminal = if (op.isDone()) {
-                    op.state
-                } else {
-                    OperationState.Failed(DiskException.IoFailure(e.message ?: "io"))
+                terminal = when {
+                    op.isDone() -> op.state
+                    op.operation.state == OperationState.Partial -> OperationState.Partial
+                    else -> OperationState.Cancelled
+                }
+            } catch (t: Throwable) {
+                if (op.operation.failureCause == null) {
+                    op.operation.failureCause = t
+                }
+                terminal = when {
+                    op.isDone() -> op.state
+                    op.operation.state == OperationState.Partial -> OperationState.Partial
+                    else -> OperationState.Failed(DiskException.IoFailure(t.message ?: t.javaClass.name, t))
                 }
             }
         } finally {
-            wakeLock.release()
+            try {
+                wakeLock.release()
+            } catch (_: Throwable) {}
             if (!op.isDone()) op.complete(terminal)
         }
     }
 
     private inner class QueuedOp(
         val operation: DiskOperation,
+        val generation: Long,
     ) : OperationHandle {
         private val result = CompletableDeferred<OperationState>()
         val cancelled = AtomicBoolean(false)
@@ -217,6 +306,7 @@ class OperationExecutor(
         fun complete(state: OperationState) {
             if (result.complete(state)) {
                 this.state = state
+                this.operation.state = state
                 if (counted.get()) outstanding.decrementAndGet()
             }
         }

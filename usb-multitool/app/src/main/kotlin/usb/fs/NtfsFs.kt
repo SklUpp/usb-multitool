@@ -205,7 +205,13 @@ class NtfsVolume internal constructor(
     override fun close() {
         if (!open) return
         open = false
-        NtfsFs.unregisterVolume(device)
-        NtfsFs.nativeClose(handle)
+        try {
+            NtfsFs.unregisterVolume(device)
+        } finally {
+            val rc = NtfsFs.nativeClose(handle)
+            if (rc != 0) {
+                throw NtfsException("Failed to close NTFS volume: rc=$rc")
+            }
+        }
     }
 }

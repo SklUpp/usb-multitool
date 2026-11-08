@@ -249,6 +249,38 @@ class UsbDiskTest {
     }
 
     @Test
+    fun syncRetriesOnUnitAttentionAndSucceeds() {
+        val session = FakeBotSession(
+            unitAttentionBeforeSuccess = 1,
+            unitAttentionOnOps = setOf(ScsiCommand.OP_SYNCHRONIZE_CACHE10),
+        )
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        disk.sync()
+
+        assertEquals(
+            listOf(
+                ScsiCommand.OP_SYNCHRONIZE_CACHE10,
+                ScsiCommand.OP_REQUEST_SENSE,
+                ScsiCommand.OP_SYNCHRONIZE_CACHE10,
+            ),
+            session.commands,
+        )
+    }
+
+    @Test
+    fun syncFailsWhenUnitAttentionPersists() {
+        val session = FakeBotSession(
+            unitAttentionBeforeSuccess = 2,
+            stickyUnitAttention = true,
+            unitAttentionOnOps = setOf(ScsiCommand.OP_SYNCHRONIZE_CACHE10),
+        )
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        assertThrows(DiskException.SenseError::class.java) {
+            disk.sync()
+        }
+    }
+
+    @Test
     fun stallThenUnitAttentionRetriesSameCommandOnceAndReads() {
         // Real path: STALL -> reset recovery -> retried command fails with a
         // pending UNIT ATTENTION -> REQUEST SENSE clears it -> retry succeeds.

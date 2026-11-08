@@ -10,12 +10,14 @@ sealed class UiIntent {
     data class SelectPartition(val partitionId: String) : UiIntent()
 
     data class SetVtoyEfiWritable(val enabled: Boolean) : UiIntent()
+    data class SetVtoyBypassTpm(val enabled: Boolean) : UiIntent()
 
     data class DeviceChanged(
         val presence: DevicePresence,
         val device: DeviceIdentity? = null,
         val partitions: List<PartitionTab> = emptyList(),
         val files: List<FileEntry> = emptyList(),
+        val tableValid: Boolean = true,
     ) : UiIntent()
 
     data class OperationUpdated(val progress: OperationProgress?) : UiIntent()
@@ -147,6 +149,8 @@ object UiReducer {
 
             is UiIntent.SetVtoyEfiWritable ->
                 ReduceResult(state.copy(vtoyEfiWriteEnabled = intent.enabled))
+            is UiIntent.SetVtoyBypassTpm ->
+                ReduceResult(state.copy(vtoyBypassTpm = intent.enabled))
 
             is UiIntent.DeviceChanged -> {
                 val selected =
@@ -159,17 +163,11 @@ object UiReducer {
                         presence = intent.presence,
                         device = intent.device,
                         partitions = intent.partitions,
+                        tableValid = intent.tableValid,
                         selectedPartitionId = selected,
                         currentPath = "/",
                         files = intent.files,
-                        pendingConfirmation =
-                            if (intent.presence == DevicePresence.Disconnected ||
-                                intent.presence == DevicePresence.Absent
-                            ) {
-                                null
-                            } else {
-                                state.pendingConfirmation
-                            },
+                        pendingConfirmation = null,
                         statusMessage =
                             when (intent.presence) {
                                 DevicePresence.Absent -> "No USB mass-storage device"
@@ -215,7 +213,7 @@ object UiReducer {
                                 OperationState.Failed ->
                                     intent.progress.errorMessage ?: "Failed"
                                 OperationState.Partial ->
-                                    intent.progress.errorMessage ?: "Partial result"
+                                    intent.progress.resultMessage ?: intent.progress.errorMessage ?: "Partial result"
                                 OperationState.Running -> "Running"
                                 OperationState.Queued -> "Queued"
                                 null -> state.statusMessage
@@ -231,6 +229,11 @@ object UiReducer {
                             "Select an ISO/IMG file first"
                         intent.action == DestructiveAction.GPT_RESTORE && state.backupUri == null ->
                             "Choose a GPT backup file first"
+                        (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) &&
+                            state.selectedPartitionId == null ->
+                            "Select a partition first"
+                        intent.action == DestructiveAction.CREATE_PARTITION && !state.tableValid ->
+                            "Cannot create partition on corrupt table. Wipe or restore first."
                         else -> null
                     }
                 if (device != null && state.actionsEnabled && missingInput != null) {
@@ -247,10 +250,17 @@ object UiReducer {
                         ),
                     )
                 } else {
+                    val targetPart = if (intent.action == DestructiveAction.DELETE_PARTITION ||
+                        intent.action == DestructiveAction.FORMAT_PARTITION
+                    ) {
+                        state.selectedPartition()?.name ?: state.selectedPartitionId
+                    } else {
+                        null
+                    }
                     ReduceResult(
                         state.copy(
                             pendingConfirmation =
-                                DestructiveConfirmation.request(device, intent.action),
+                                DestructiveConfirmation.request(device, intent.action, targetPart),
                         ),
                     )
                 }
@@ -258,21 +268,26 @@ object UiReducer {
 
             UiIntent.ConfirmDestructive -> {
                 val pending = state.pendingConfirmation
-                if (pending == null) {
-                    ReduceResult(state)
+                val device = state.device
+                val action =
+                    pending?.let { p ->
+                        DestructiveAction.entries.firstOrNull { it.displayName() == p.action }
+                    }
+                val invalidState = when {
+                    pending == null || device == null -> true
+                    state.presence != DevicePresence.Ready -> true
+                    state.isRunning -> true
+                    action == DestructiveAction.CREATE_PARTITION && !state.tableValid -> true
+                    (action == DestructiveAction.DELETE_PARTITION || action == DestructiveAction.FORMAT_PARTITION) &&
+                        state.selectedPartitionId == null -> true
+                    else -> false
+                }
+                if (invalidState || action == null) {
+                    ReduceResult(state.copy(pendingConfirmation = null))
                 } else {
-                    val action =
-                        DestructiveAction.entries.firstOrNull {
-                            it.displayName() == pending.action
-                        }
                     ReduceResult(
                         state.copy(pendingConfirmation = null),
-                        effects =
-                            if (action != null) {
-                                listOf(UiEffect(UiEffect.Kind.SubmitDestructive, action = action))
-                            } else {
-                                emptyList()
-                            },
+                        effects = listOf(UiEffect(UiEffect.Kind.SubmitDestructive, action = action)),
                     )
                 }
             }

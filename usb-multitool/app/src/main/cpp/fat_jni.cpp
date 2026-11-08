@@ -89,15 +89,73 @@ int jni_sync(void *ctx)
 
 jstring to_jstring(JNIEnv *env, const char *s)
 {
-	return env->NewStringUTF(s ? s : "");
+	if (!s) return env->NewString(nullptr, 0);
+	std::vector<jchar> u16;
+	const auto *p = reinterpret_cast<const uint8_t *>(s);
+	while (*p) {
+		uint32_t cp = 0;
+		if (*p < 0x80) {
+			cp = *p++;
+		} else if ((*p & 0xE0) == 0xC0) {
+			if ((p[1] & 0xC0) != 0x80) { p++; continue; }
+			cp = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+			p += 2;
+		} else if ((*p & 0xF0) == 0xE0) {
+			if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80) { p++; continue; }
+			cp = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+			p += 3;
+		} else if ((*p & 0xF8) == 0xF0) {
+			if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80) { p++; continue; }
+			cp = ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+			p += 4;
+		} else {
+			p++;
+			continue;
+		}
+		if (cp <= 0xFFFF) {
+			u16.push_back(static_cast<jchar>(cp));
+		} else if (cp <= 0x10FFFF) {
+			cp -= 0x10000;
+			u16.push_back(static_cast<jchar>(0xD800 + (cp >> 10)));
+			u16.push_back(static_cast<jchar>(0xDC00 + (cp & 0x3FF)));
+		}
+	}
+	return env->NewString(u16.data(), static_cast<jsize>(u16.size()));
 }
 
 std::string from_jstring(JNIEnv *env, jstring s)
 {
 	if (!s) return {};
-	const char *p = env->GetStringUTFChars(s, nullptr);
-	std::string out = p ? p : "";
-	if (p) env->ReleaseStringUTFChars(s, p);
+	jsize len = env->GetStringLength(s);
+	const jchar *chars = env->GetStringChars(s, nullptr);
+	if (!chars) return {};
+	std::string out;
+	for (jsize i = 0; i < len; i++) {
+		uint32_t cp = chars[i];
+		if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < len) {
+			uint32_t low = chars[i + 1];
+			if (low >= 0xDC00 && low <= 0xDFFF) {
+				cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+				i++;
+			}
+		}
+		if (cp < 0x80) {
+			out.push_back(static_cast<char>(cp));
+		} else if (cp < 0x800) {
+			out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		} else if (cp < 0x10000) {
+			out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+			out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		} else {
+			out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+			out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+			out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		}
+	}
+	env->ReleaseStringChars(s, chars);
 	return out;
 }
 

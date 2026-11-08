@@ -1,6 +1,7 @@
 package usb.image
 import java.io.EOFException
 import java.nio.ByteBuffer
+import kotlinx.coroutines.CancellationException
 import usb.device.UsbDisk
 import usb.diagnostics.DestructiveConfirmation
 import usb.diagnostics.closeMountedVolumes
@@ -9,7 +10,7 @@ import usb.service.DiskOperation
 import usb.service.OperationState
 
 class ImageTooLargeException(message: String) : Exception(message)
-class ImageCancelledException(message: String = "image write cancelled") : Exception(message)
+class ImageCancelledException(message: String = "image write cancelled") : CancellationException(message)
 class OverwriteRequiredException(message: String = "raw write requires overwrite=true") : Exception(message)
 
 object RawWriter {
@@ -84,6 +85,11 @@ object RawWriter {
                 if (n < sectorSize) break
             }
             operation.bytesTotal = total
+            if (total == 0L) {
+                val ex = IllegalArgumentException("image is empty")
+                operation.state = OperationState.Failed(ex)
+                throw ex
+            }
             val expectedSize = input.decodedSizeHint ?: known
             if (expectedSize != null && total < expectedSize) {
                 val ex = EOFException("Premature EOF: wrote $total of $expectedSize bytes")

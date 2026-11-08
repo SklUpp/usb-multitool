@@ -34,7 +34,7 @@ class VentoySetupTest {
 
         val root = MiniJson.parse(merged) as Map<*, *>
         val images = (root["auto_install"] as List<*>).map { (it as Map<*, *>)["image"] }
-        assertEquals(listOf("/Windows11_Pro.iso", "/Ubuntu.iso"), images)
+        assertEquals(listOf("/ISO/Windows11_Pro.iso", "/ISO/Ubuntu.iso"), images)
 
         val controlKeys = (root["control"] as List<*>)
             .flatMap { (it as Map<*, *>).keys }

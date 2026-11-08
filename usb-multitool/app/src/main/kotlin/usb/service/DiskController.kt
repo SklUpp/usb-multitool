@@ -13,7 +13,7 @@ import kotlinx.coroutines.cancel
 class DiskController(
     wakeLock: OperationWakeLock = NoOpWakeLock,
     serviceControl: ServiceControl = NoOpServiceControl,
-    dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
+    dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
 ) {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + dispatcher)
@@ -22,7 +22,7 @@ class DiskController(
     fun submit(operation: DiskOperation): OperationHandle = executor.submit(operation)
 
     fun onDisconnected() = executor.onDisconnected()
-    fun onConnected() = executor.onConnected()
+    fun onConnected(deviceId: String? = null) = executor.onConnected(deviceId)
 
     /** Rebind Android wake/service control without replacing the executor. */
     fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {

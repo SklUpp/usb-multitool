@@ -45,7 +45,7 @@ class BotSessionImpl(
                 val oldLimit = dest.limit()
                 try {
                     dest.limit(mark + cdb.transferLength)
-                    transferExactIn(dest, cdb.transferLength, timeoutMs)
+                    transferDataIn(dest, cdb.transferLength, timeoutMs)
                 } finally {
                     dest.limit(oldLimit)
                 }
@@ -116,6 +116,25 @@ class BotSessionImpl(
             throw DiskException.IoFailure("CSW tag mismatch: got $tag expected $expectedTag")
         }
         return CswResult(status, tag, residue)
+    }
+
+    private fun transferDataIn(destination: ByteBuffer, length: Int, timeoutMs: Int): Int {
+        var remaining = length
+        var total = 0
+        while (remaining > 0) {
+            if (!channel.isConnected()) throw DiskException.Disconnected()
+            val requested = remaining
+            val n = channel.bulkIn(destination, requested, timeoutMs)
+            if (n <= 0) throw DiskException.IoFailure("short bulk IN returned $n")
+            total += n
+            remaining -= n
+            if (n < requested) {
+                // Short read: device ended the BOT data phase early.
+                // Stop reading data so the next read cleanly consumes the CSW.
+                break
+            }
+        }
+        return total
     }
 
     private fun transferExactIn(destination: ByteBuffer, length: Int, timeoutMs: Int) {

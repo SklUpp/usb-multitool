@@ -88,9 +88,10 @@ fun PartitionsScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = UiReducer.presenceMessage(state.presence),
+                            text = if (!state.tableValid) (state.statusMessage ?: "Invalid partition table") else UiReducer.presenceMessage(state.presence),
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.bodySmall,
+                            color = if (!state.tableValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 } else {
@@ -149,7 +150,7 @@ fun PartitionsScreen(
                         onClick = {
                             onIntent(UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
                         },
-                        enabled = state.actionsEnabled,
+                        enabled = state.actionsEnabled && state.tableValid,
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Create")
@@ -159,7 +160,7 @@ fun PartitionsScreen(
                         onClick = {
                             onIntent(UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
                         },
-                        enabled = state.actionsEnabled,
+                        enabled = state.actionsEnabled && state.selectedPartitionId != null,
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Delete")
@@ -174,7 +175,7 @@ fun PartitionsScreen(
                         onClick = {
                             onIntent(UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
                         },
-                        enabled = state.actionsEnabled,
+                        enabled = state.actionsEnabled && state.selectedPartitionId != null,
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Format")

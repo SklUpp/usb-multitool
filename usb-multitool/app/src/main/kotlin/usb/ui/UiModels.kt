@@ -67,10 +67,15 @@ data class DestructiveConfirmation(
     val message: String,
 ) {
     companion object {
-        fun request(device: DeviceIdentity, action: DestructiveAction): DestructiveConfirmation {
+        fun request(
+            device: DeviceIdentity,
+            action: DestructiveAction,
+            targetPartition: String? = null,
+        ): DestructiveConfirmation {
             val actionLabel = action.displayName()
+            val targetSuffix = if (targetPartition != null) " (partition $targetPartition)" else ""
             val message =
-                "Confirm $actionLabel on ${device.identity} (${device.capacityLabel}). " +
+                "Confirm $actionLabel$targetSuffix on ${device.identity} (${device.capacityLabel}). " +
                     "This changes the USB device and cannot be undone from this app."
             return DestructiveConfirmation(
                 action = actionLabel,
@@ -133,6 +138,7 @@ data class OperationProgress(
     val errorMessage: String? = null,
     /** Concrete outcome (paths, counts) shown instead of the bare "Success" label. */
     val resultMessage: String? = null,
+    val cancelable: Boolean = true,
 ) {
     val fraction: Float
         get() =
@@ -150,6 +156,8 @@ data class AppUiState(
     val partitions: List<PartitionTab> = emptyList(),
     val selectedPartitionId: String? = null,
     val vtoyEfiWriteEnabled: Boolean = false,
+    val vtoyBypassTpm: Boolean = true,
+    val tableValid: Boolean = true,
     /** Absolute FAT path currently displayed; [files] are the entries of this directory. */
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),

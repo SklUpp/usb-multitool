@@ -39,6 +39,7 @@ import usb.device.UsbDisk
 import usb.service.DiskController
 import usb.service.DiskOperation
 import usb.service.OperationHandle
+import usb.service.DiskService
 import usb.ui.AppShell
 import usb.ui.AppUiState
 import usb.ui.DeviceIdentity
@@ -88,11 +89,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeHandle: OperationHandle? = null
+    private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
+    private var attachGeneration = 0L
+    @Volatile
     var attachedDevice: UsbDevice? = null
         private set
+    @Volatile
     var usbManager: UsbManager? = null
         private set
 
+    private fun deviceKey(device: UsbDevice?): String? =
+        device?.let { "${it.deviceId}:${it.deviceName}" }
+
+    init {
+        DiskService.initialize(application)
+    }
     /**
      * Owns the mounted FAT volume of the selected partition. Guarded by [filesLock]:
      * every files operation runs inside it, so a close can never race a mounted read.
@@ -185,7 +196,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.DELETE_PARTITION -> {
                                     val current = table ?: throw IllegalStateException("no partition table")
-                                    val index = (uiState.selectedPartitionId?.toIntOrNull() ?: 1) - 1
+                                    val partId = uiState.selectedPartitionId
+                                        ?: throw IllegalStateException("no partition selected for deletion")
+                                    val index = (partId.toIntOrNull()
+                                        ?: throw IllegalStateException("invalid partition id: $partId")) - 1
                                     if (current.partitions.getOrNull(index) == null) {
                                         throw IllegalStateException("no partition selected for deletion")
                                     }
@@ -194,11 +208,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.CREATE_PARTITION -> {
                                     val current = table ?: throw IllegalStateException("no partition table")
-                                    val region = current.freeRegions.firstOrNull()
-                                        ?: throw usb.partition.NoFreeSpaceException("no free space")
                                     val align = PartitionTable.alignmentSectors(current.sectorSize)
-                                    val alignedStart = ((region.startLba + align - 1UL) / align) * align
-                                    val size = region.sectorCount - (alignedStart - region.startLba)
+                                    val region = current.freeRegions.firstOrNull {
+                                        PartitionEditor.alignedCapacity(it, align) > 0UL
+                                    } ?: throw usb.partition.NoFreeSpaceException("no free space")
+                                    val size = PartitionEditor.alignedCapacity(region, align)
                                     PartitionWriter.commit(
                                         disk,
                                         PartitionEditor.create(current, size = size, type = PartitionType.BASIC),
@@ -206,7 +220,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.FORMAT_PARTITION -> {
-                                    val target = selected
+                                    val partId = uiState.selectedPartitionId
+                                        ?: throw IllegalStateException("no partition selected to format")
+                                    val index = (partId.toIntOrNull()
+                                        ?: throw IllegalStateException("invalid partition id: $partId")) - 1
+                                    val target = table?.partitions?.getOrNull(index)
                                         ?: throw IllegalStateException("no partition selected to format")
                                     val partition = VirtualPartition(
                                         startLba = target.startLba,
@@ -324,16 +342,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+                val isCooperative = action == DestructiveAction.RAW_WRITE ||
+                    action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = OperationState.Running,
                             label = actionName,
+                            cancelable = isCooperative,
                         ),
                     ),
                 )
                 val handle = DiskController.get().submit(op)
-                activeHandle = handle
+                if (isCooperative) activeHandle = handle
+                activeHandles.add(handle)
                 scope.launch {
                     try {
                         val outcome = handle.await()
@@ -345,6 +367,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             else -> OperationState.Completed
                         }
                         val errorMsg = (outcome as? usb.service.OperationState.Failed)?.cause?.message
+                            ?: op.failureCause?.message
+                            ?: (outcome as? usb.service.OperationState.Failed)?.cause?.javaClass?.simpleName
+                            ?: op.failureCause?.javaClass?.simpleName
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
@@ -352,13 +377,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     label = actionName,
                                     errorMessage = errorMsg,
                                     resultMessage = op.result,
+                                    cancelable = isCooperative,
                                 ),
                             ),
                         )
-                    } finally {
-                        if (activeHandle == handle) {
-                            activeHandle = null
+                        when (action) {
+                            DestructiveAction.DELETE_PARTITION,
+                            DestructiveAction.CREATE_PARTITION,
+                            DestructiveAction.FORMAT_PARTITION,
+                            DestructiveAction.GPT_REPAIR,
+                            DestructiveAction.GPT_RESTORE,
+                            DestructiveAction.VENTOY_INSTALL,
+                            DestructiveAction.VENTOY_UPDATE,
+                            DestructiveAction.VENTOY_DOWNLOAD_INSTALL,
+                            DestructiveAction.WIPE,
+                            DestructiveAction.RAW_WRITE -> refreshPartitions()
+                            else -> Unit
                         }
+                    } finally {
+                        if (activeHandle === handle) activeHandle = null
+                        activeHandles.remove(handle)
                     }
                 }
             }
@@ -468,7 +506,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
                         val disk = UsbDiskSession.open(mgr, dev)
                         try {
-                            VentoySetup.linkXml(disk = disk, isoName = isoName, overwrite = true)
+                            VentoySetup.linkXml(
+                                disk = disk,
+                                isoName = isoName,
+                                options = usb.ventoy.SetupOptions(tpmBypass = state.vtoyBypassTpm),
+                                overwrite = true,
+                            )
                         } finally {
                             disk.close()
                         }
@@ -476,11 +519,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(state = OperationState.Running, label = "autounattend.xml link"),
+                        OperationProgress(
+                            state = OperationState.Running,
+                            label = "autounattend.xml link",
+                            cancelable = false,
+                        ),
                     ),
                 )
                 val handle = DiskController.get().submit(op)
-                activeHandle = handle
+                activeHandles.add(handle)
                 scope.launch {
                     try {
                         val outcome = handle.await()
@@ -492,19 +539,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             else -> OperationState.Completed
                         }
                         val errorMsg = (outcome as? usb.service.OperationState.Failed)?.cause?.message
+                            ?: (outcome as? usb.service.OperationState.Failed)?.cause?.javaClass?.simpleName
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = mappedState,
                                     label = "autounattend.xml link",
                                     errorMessage = errorMsg,
+                                    cancelable = false,
                                 ),
                             ),
                         )
                     } finally {
-                        if (activeHandle == handle) {
-                            activeHandle = null
-                        }
+                        activeHandles.remove(handle)
                     }
                 }
             }
@@ -518,7 +565,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dev = attachedDevice
         val mgr = usbManager
         if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
-            submitReadOnlyDiskOperation("Self-test") { disk, _ ->
+            submitReadOnlyDiskOperation("Self-test", cancelable = false) { disk, _ ->
                 val report = usb.diagnostics.SelfTestRunner.runAll(disk)
                 check(report.allPassed) { report.summary() }
                 report.summary()
@@ -527,7 +574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scope.launch {
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(state = OperationState.Running, label = "Self-test: running..."),
+                        OperationProgress(state = OperationState.Running, label = "Self-test: running...", cancelable = false),
                     ),
                 )
                 try {
@@ -543,6 +590,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 label = "Self-test",
                                 resultMessage = if (report.allPassed) summary else null,
                                 errorMessage = if (!report.allPassed) summary else null,
+                                cancelable = false,
                             ),
                         ),
                     )
@@ -554,6 +602,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 state = OperationState.Failed,
                                 label = "Self-test",
                                 errorMessage = t.message ?: "Self-test failed",
+                                cancelable = false,
                             ),
                         ),
                     )
@@ -568,23 +617,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         manager: UsbManager? = null,
     ) {
         if (device == null) return
+        val key = deviceKey(device)
+        val prevKey = deviceKey(attachedDevice)
+        val isNewDevice = prevKey != null && prevKey != key
+        val gen = ++attachGeneration
+        if (isNewDevice) {
+            activeHandles.forEach { it.cancel() }
+            activeHandles.clear()
+            activeHandle = null
+            scope.launch(Dispatchers.IO) {
+                if (attachGeneration == gen) {
+                    closeFilesVolume()
+                }
+            }
+        }
         attachedDevice = device
-        DiskController.get().onConnected()
+        DiskController.get().onConnected(key)
         if (manager != null) {
             usbManager = manager
         }
-        // A (re)attach invalidates any volume mounted for the previous connection.
-        closeFilesVolume()
-        var capacity = 0uL
-        var partitions = emptyList<PartitionTab>()
-        var probeError: String? = null
-        if (hasPermission && usbManager != null) {
-            runCatching {
-                val disk = UsbDiskSession.open(usbManager!!, device)
+        val mgr = usbManager
+        val identity = DeviceIdentity(
+            label = device.productName ?: device.deviceName ?: "USB Storage",
+            capacityBytes = 0uL,
+        )
+        if (!hasPermission || mgr == null) {
+            onIntent(
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.PermissionRequired,
+                    device = identity,
+                    partitions = emptyList(),
+                    files = emptyList(),
+                ),
+            )
+            return
+        }
+
+        onIntent(
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Busy,
+                device = identity,
+                partitions = emptyList(),
+                files = emptyList(),
+            ),
+        )
+        onIntent(UiIntent.Status("Probing USB device..."))
+
+        val op = object : DiskOperation(name = "Probe device") {
+            override suspend fun run() {
+                closeFilesVolume()
+                val disk = UsbDiskSession.open(mgr, device)
                 try {
-                    capacity = disk.geometry.capacityBytes
-                    val table = PartitionTable.read(disk)
-                    partitions = table.partitions.mapIndexed { idx, p ->
+                    val capacity = disk.geometry.capacityBytes
+                    val tableResult = runCatching { PartitionTable.read(disk) }
+                    val failure = tableResult.exceptionOrNull()
+                    val isTransport = failure is DiskException || failure?.cause is DiskException
+                    val partitions = tableResult.getOrNull()?.partitions?.mapIndexed { idx, p ->
                         val isEfi = p.name.contains("VTOYEFI", ignoreCase = true) ||
                             p.type.contains("EFI", ignoreCase = true)
                         PartitionTab(
@@ -593,46 +681,177 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             readOnly = isEfi,
                             isVtoyEfi = isEfi,
                         )
+                    } ?: emptyList()
+                    withContext(Dispatchers.Main.immediate) {
+                        if (attachGeneration != gen || attachedDevice?.deviceId != device.deviceId) {
+                            return@withContext
+                        }
+                        val probedIdentity = DeviceIdentity(
+                            label = device.productName ?: device.deviceName ?: "USB Storage",
+                            capacityBytes = capacity,
+                        )
+                        onIntent(
+                            UiIntent.DeviceChanged(
+                                presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
+                                device = if (isTransport) identity else probedIdentity,
+                                partitions = partitions,
+                                files = emptyList(),
+                                tableValid = !isTransport && tableResult.isSuccess,
+                            ),
+                        )
+                        tableResult.onSuccess {
+                            if (partitions.isEmpty()) {
+                                onIntent(UiIntent.Status("No partitions found on this device"))
+                            } else {
+                                listDirectory(state.currentPath)
+                            }
+                        }.onFailure { err ->
+                            val prefix = if (isTransport) "Cannot read USB device" else "Cannot read partition table"
+                            onIntent(UiIntent.Status("$prefix: ${err.message ?: err.javaClass.simpleName}"))
+                        }
                     }
                 } finally {
                     disk.close()
                 }
-            }.onFailure { failure ->
-                probeError = "Cannot read partition table: ${failure.message ?: failure.javaClass.simpleName}"
             }
         }
-        val identity = DeviceIdentity(
-            label = device.productName ?: device.deviceName ?: "USB Storage",
-            capacityBytes = capacity,
-        )
-        val presence = if (hasPermission) DevicePresence.Ready else DevicePresence.PermissionRequired
-
-        onIntent(
-            UiIntent.DeviceChanged(
-                presence = presence,
-                device = identity,
-                partitions = partitions,
-                files = emptyList(),
-            ),
-        )
-
-        val error = probeError
-        when {
-            error != null -> onIntent(UiIntent.Status(error))
-            presence == DevicePresence.Ready && partitions.isEmpty() ->
-                onIntent(UiIntent.Status("No partitions found on this device"))
-            presence == DevicePresence.Ready -> listDirectory(state.currentPath)
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                when (val outcome = handle.await()) {
+                    is usb.service.OperationState.Failed -> {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (attachGeneration == gen && attachedDevice?.deviceId == device.deviceId) {
+                                onIntent(
+                                    UiIntent.DeviceChanged(
+                                        presence = DevicePresence.Disconnected,
+                                        device = identity,
+                                        partitions = emptyList(),
+                                        files = emptyList(),
+                                    ),
+                                )
+                                val errorMsg = "Cannot open USB device: ${outcome.cause.message ?: outcome.cause.javaClass.simpleName}"
+                                onIntent(UiIntent.Status(errorMsg))
+                            }
+                        }
+                    }
+                    is usb.service.OperationState.Cancelled -> {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (attachGeneration == gen && attachedDevice?.deviceId == device.deviceId) {
+                                onIntent(
+                                    UiIntent.DeviceChanged(
+                                        presence = DevicePresence.Disconnected,
+                                        device = identity,
+                                        partitions = emptyList(),
+                                        files = emptyList(),
+                                    ),
+                                )
+                                onIntent(UiIntent.Status("USB probe cancelled"))
+                            }
+                        }
+                    }
+                    else -> Unit
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
         }
     }
 
+    fun refreshPartitions() {
+        val dev = attachedDevice ?: return
+        val mgr = usbManager ?: return
+        val gen = attachGeneration
+        val op = object : DiskOperation(name = "Refresh partitions") {
+            override suspend fun run() {
+                closeFilesVolume()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val capacity = disk.geometry.capacityBytes
+                    val tableResult = runCatching { PartitionTable.read(disk) }
+                    val failure = tableResult.exceptionOrNull()
+                    val isTransport = failure is DiskException || failure?.cause is DiskException
+                    val partitions = tableResult.getOrNull()?.partitions?.mapIndexed { idx, p ->
+                        val isEfi = p.name.contains("VTOYEFI", ignoreCase = true) ||
+                            p.type.contains("EFI", ignoreCase = true)
+                        PartitionTab(
+                            id = (idx + 1).toString(),
+                            name = p.name.ifBlank { "Partition ${idx + 1}" },
+                            readOnly = isEfi,
+                            isVtoyEfi = isEfi,
+                        )
+                    } ?: emptyList()
+                    withContext(Dispatchers.Main.immediate) {
+                        if (attachGeneration != gen || attachedDevice?.deviceId != dev.deviceId) {
+                            return@withContext
+                        }
+                        val identity = DeviceIdentity(
+                            label = dev.productName ?: dev.deviceName ?: "USB Storage",
+                            capacityBytes = capacity,
+                        )
+                        onIntent(
+                            UiIntent.DeviceChanged(
+                                presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
+                                device = identity,
+                                partitions = partitions,
+                                files = emptyList(),
+                                tableValid = !isTransport && tableResult.isSuccess,
+                            ),
+                        )
+                        tableResult.onFailure { err ->
+                            val prefix = if (isTransport) "Cannot read USB device" else "Cannot read partition table"
+                            onIntent(UiIntent.Status("$prefix: ${err.message ?: err.javaClass.simpleName}"))
+                        }
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.service.OperationState.Failed) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (attachGeneration == gen && attachedDevice?.deviceId == dev.deviceId) {
+                            val isTransport = outcome.cause is DiskException
+                            onIntent(
+                                UiIntent.DeviceChanged(
+                                    presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
+                                    device = state.device ?: DeviceIdentity(
+                                        label = dev.productName ?: dev.deviceName ?: "USB Storage",
+                                        capacityBytes = 0uL,
+                                    ),
+                                    partitions = emptyList(),
+                                    files = emptyList(),
+                                    tableValid = false,
+                                ),
+                            )
+                            val prefix = if (isTransport) "Cannot read USB device" else "Cannot read partition table"
+                            onIntent(UiIntent.Status("$prefix: ${outcome.cause.message ?: outcome.cause.javaClass.simpleName}"))
+                        }
+                    }
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
-        // A mouse, hub or other USB device leaving says nothing about the mass-storage
-        // disk; tearing down here would cancel a live raw write and leave it half-done.
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
+        val gen = ++attachGeneration
         attachedDevice = null
-        activeHandle?.cancel()
+        activeHandles.forEach { it.cancel() }
+        activeHandles.clear()
         activeHandle = null
-        closeFilesVolume()
+        scope.launch(Dispatchers.IO) {
+            if (attachGeneration == gen) {
+                closeFilesVolume()
+            }
+        }
         DiskController.get().onDisconnected()
         onIntent(UiIntent.DeviceChanged(presence = DevicePresence.Disconnected))
     }
@@ -764,20 +983,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 input.use { stream ->
                     val buffer = ByteArray(COPY_CHUNK_BYTES)
                     var offset = 0L
-                    var created = false
-                    while (true) {
-                        val read = stream.read(buffer)
-                        if (read <= 0) break
-                        val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
-                        volume.write(target, chunk, offset = offset, create = !created)
-                        created = true
-                        offset += read
-                        operation.report(offset)
+                    var createAttempted = false
+                    try {
+                        while (true) {
+                            if (!operation.isActive()) {
+                                throw kotlinx.coroutines.CancellationException("Upload cancelled")
+                            }
+                            val read = stream.read(buffer)
+                            if (read <= 0) break
+                            val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
+                            val isFirstWrite = !createAttempted
+                            if (isFirstWrite) {
+                                createAttempted = true
+                            }
+                            volume.write(target, chunk, offset = offset, create = isFirstWrite)
+                            offset += read
+                            operation.report(offset)
+                        }
+                        if (!createAttempted) {
+                            createAttempted = true
+                            volume.write(target, ByteArray(0), offset = 0L, create = true)
+                        }
+                        volume.sync()
+                    } catch (t: Throwable) {
+                        if (createAttempted) {
+                            try {
+                                volume.delete(target)
+                                volume.sync()
+                            } catch (cleanupError: Throwable) {
+                                val isNoFile = cleanupError is FatFsException &&
+                                    cleanupError.message.orEmpty().endsWith("delete failed: $FR_NO_FILE")
+                                if (!isNoFile) {
+                                    t.addSuppressed(cleanupError)
+                                    post(
+                                        UiIntent.Status(
+                                            "Failed to clean up incomplete upload $name: ${cleanupError.message ?: cleanupError.javaClass.simpleName}",
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                        throw t
                     }
-                    if (!created) {
-                        volume.write(target, ByteArray(0), offset = 0L, create = true)
-                    }
-                    volume.sync()
                 }
             }
         }
@@ -821,17 +1068,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ?: throw IllegalStateException("cannot open $uri for writing")
                 output.use { stream ->
                     var offset = 0L
-                    while (offset < size) {
-                        val want = minOf(COPY_CHUNK_BYTES.toLong(), size - offset).toInt()
-                        val data = volume.read(target, offset, want)
-                        if (data.isEmpty()) {
-                            throw IllegalStateException("short read at $offset of $size bytes")
+                    try {
+                        while (offset < size) {
+                            if (!operation.isActive()) {
+                                throw kotlinx.coroutines.CancellationException("Download cancelled")
+                            }
+                            val want = minOf(COPY_CHUNK_BYTES.toLong(), size - offset).toInt()
+                            val data = volume.read(target, offset, want)
+                            if (data.isEmpty()) {
+                                throw IllegalStateException("short read at $offset of $size bytes")
+                            }
+                            stream.write(data)
+                            offset += data.size
+                            operation.report(offset)
                         }
-                        stream.write(data)
-                        offset += data.size
-                        operation.report(offset)
+                        stream.flush()
+                    } catch (t: Throwable) {
+                        operation.state = usb.service.OperationState.Partial
+                        val detail = if (offset > 0L) {
+                            "$offset of $size bytes written"
+                        } else {
+                            "0 bytes written, document truncated"
+                        }
+                        val baseMsg = t.message ?: t.javaClass.simpleName
+                        val warning = if (t is kotlinx.coroutines.CancellationException) {
+                            "Download cancelled: destination document was truncated ($detail)"
+                        } else {
+                            "Download failed ($baseMsg): destination document was truncated ($detail)"
+                        }
+                        operation.failureCause = DiskException.IoFailure(warning, t)
+                        throw t
                     }
-                    stream.flush()
                 }
             }
         }
@@ -898,6 +1165,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         val handle = DiskController.get().submit(operation)
         activeHandle = handle
+        activeHandles.add(handle)
         scope.launch {
             val ticker = launch {
                 while (true) {
@@ -935,12 +1203,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                         // The USB claim may be gone; reopen for the next attempt.
-                        closeFilesVolume()
+                        scope.launch(Dispatchers.IO) { closeFilesVolume() }
                     }
                     is usb.service.OperationState.Cancelled -> {
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(state = OperationState.Cancelled, label = label),
+                            ),
+                        )
+                    }
+                    is usb.service.OperationState.Partial -> {
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Partial,
+                                    label = label,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                    errorMessage = operation.failureCause?.message
+                                        ?: operation.failureCause?.javaClass?.simpleName
+                                        ?: "Incomplete operation",
+                                ),
                             ),
                         )
                     }
@@ -960,9 +1243,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 ticker.cancel()
-                if (activeHandle === handle) {
-                    activeHandle = null
-                }
+                if (activeHandle === handle) activeHandle = null
+                activeHandles.remove(handle)
             }
         }
     }
@@ -974,6 +1256,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun submitReadOnlyDiskOperation(
         label: String,
+        cancelable: Boolean = true,
         body: (UsbDisk, DiskOperation) -> String,
     ) {
         val operation = object : DiskOperation(name = label) {
@@ -993,11 +1276,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         onIntent(
             UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, label = label),
+                OperationProgress(state = OperationState.Running, label = label, cancelable = cancelable),
             ),
         )
         val handle = DiskController.get().submit(operation)
-        activeHandle = handle
+        if (cancelable) activeHandle = handle
+        activeHandles.add(handle)
         scope.launch {
             val ticker = launch {
                 while (true) {
@@ -1009,6 +1293,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 label = label,
                                 bytesDone = operation.bytesDone,
                                 bytesTotal = operation.bytesTotal,
+                                cancelable = cancelable,
                             ),
                         ),
                     )
@@ -1026,16 +1311,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     state = OperationState.Failed,
                                     label = label,
                                     errorMessage = message,
+                                    cancelable = cancelable,
                                 ),
                             ),
                         )
                         // The USB claim may be gone; reopen for the next attempt.
-                        closeFilesVolume()
+                        scope.launch(Dispatchers.IO) { closeFilesVolume() }
                     }
                     is usb.service.OperationState.Cancelled ->
                         onIntent(
                             UiIntent.OperationUpdated(
-                                OperationProgress(state = OperationState.Cancelled, label = label),
+                                OperationProgress(state = OperationState.Cancelled, label = label, cancelable = cancelable),
+                            ),
+                        )
+                    is usb.service.OperationState.Partial ->
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Partial,
+                                    label = label,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                    resultMessage = operation.result,
+                                    errorMessage = operation.failureCause?.message ?: operation.failureCause?.javaClass?.simpleName,
+                                    cancelable = cancelable,
+                                ),
                             ),
                         )
                     else ->
@@ -1047,15 +1347,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
                                     resultMessage = operation.result,
+                                    cancelable = cancelable,
                                 ),
                             ),
                         )
                 }
             } finally {
                 ticker.cancel()
-                if (activeHandle === handle) {
-                    activeHandle = null
-                }
+                if (activeHandle === handle) activeHandle = null
+                activeHandles.remove(handle)
             }
         }
     }
@@ -1170,7 +1470,7 @@ class MainActivity : ComponentActivity() {
 
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    if (device != null && usbManager != null) {
+                    if (device != null && usbManager != null && MassStorageDiscovery.findBotInterface(device) != null) {
                         val hasPerm = usbManager.hasPermission(device)
                         viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
                         if (!hasPerm) {
@@ -1183,7 +1483,7 @@ class MainActivity : ComponentActivity() {
                 }
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    if (device != null) {
+                    if (device != null && MassStorageDiscovery.findBotInterface(device) != null) {
                         viewModel.onUsbDeviceAttached(device, granted, usbManager)
                     }
                 }
@@ -1251,6 +1551,12 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         runCatching { unregisterReceiver(usbReceiver) }
     }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkAttachedDevices()
+    }
+
 
     private fun checkAttachedDevices() {
         val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
@@ -1260,11 +1566,14 @@ class MainActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
         }
+        intent?.removeExtra(UsbManager.EXTRA_DEVICE)
 
-        val device = deviceFromIntent
-            ?: usbManager.deviceList.values.firstOrNull { MassStorageDiscovery.findBotInterface(it) != null }
-            ?: usbManager.deviceList.values.firstOrNull()
-
+        val currentDevices = usbManager.deviceList
+        val validFromIntent = deviceFromIntent?.let { dev ->
+            currentDevices[dev.deviceName]?.takeIf { MassStorageDiscovery.findBotInterface(it) != null }
+        }
+        val device = validFromIntent
+            ?: currentDevices.values.firstOrNull { MassStorageDiscovery.findBotInterface(it) != null }
         if (device != null) {
             val hasPerm = usbManager.hasPermission(device)
             viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
@@ -1272,6 +1581,7 @@ class MainActivity : ComponentActivity() {
                 requestUsbPermission(usbManager, device)
             }
         } else {
+            viewModel.onUsbDeviceDetached()
             viewModel.onIntent(UiIntent.DeviceChanged(DevicePresence.Absent))
         }
     }

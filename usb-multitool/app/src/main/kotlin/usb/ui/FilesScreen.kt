@@ -241,10 +241,15 @@ fun FilesScreen(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    val status = state.statusMessage
+                    val isError = state.operation?.state == OperationState.Failed ||
+                        (status != null && (status.contains("error", ignoreCase = true) ||
+                            status.contains("cannot", ignoreCase = true) ||
+                            status.contains("failed", ignoreCase = true)))
                     Text(
-                        text = "Folder is empty",
+                        text = if (isError) (status ?: "Failed to list folder") else "Folder is empty",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -326,6 +331,8 @@ fun FilesScreen(
                     onClick = {
                         if (entry != null) {
                             onIntent(UiIntent.DeleteEntry(entry.name))
+                        } else {
+                            onIntent(UiIntent.Status("Selected file not found"))
                         }
                         selectedFile = null
                         showDeleteConfirmDialog = false
