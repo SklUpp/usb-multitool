@@ -496,6 +496,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     return
                 }
+                val tpmBypass = state.vtoyBypassTpm
                 val op = object : DiskOperation(name = "autounattend.xml link") {
                     override suspend fun run() {
                         // The browse volume still holds the USB interface claim; release it
@@ -509,7 +510,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             VentoySetup.linkXml(
                                 disk = disk,
                                 isoName = isoName,
-                                options = usb.ventoy.SetupOptions(tpmBypass = state.vtoyBypassTpm),
+                                options = usb.ventoy.SetupOptions(tpmBypass = tpmBypass),
                                 overwrite = true,
                             )
                         } finally {
@@ -703,7 +704,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             if (partitions.isEmpty()) {
                                 onIntent(UiIntent.Status("No partitions found on this device"))
                             } else {
-                                listDirectory(state.currentPath)
+                                listDirectory(this@MainViewModel.state.currentPath)
                             }
                         }.onFailure { err ->
                             val prefix = if (isTransport) "Cannot read USB device" else "Cannot read partition table"
