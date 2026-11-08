@@ -574,6 +574,7 @@ int ntfs_engine_write(uint64_t vol_handle, const char *path,
      * reports the full length as written; refuse instead of faking success. */
     if (NVolReadOnly(v->vol)) return -EROFS;
 
+    int created = 0;
     ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
     if (!ni && create) {
         char parent[512];
@@ -593,6 +594,7 @@ int ntfs_engine_write(uint64_t vol_handle, const char *path,
         ni = ntfs_create(dir_ni, 0, uname, (u8)ulen, S_IFREG);
         free(uname);
         ntfs_inode_close(dir_ni);
+        created = 1;
     }
 
     if (!ni) return -ENOENT;
@@ -601,6 +603,16 @@ int ntfs_engine_write(uint64_t vol_handle, const char *path,
     if (!na) {
         ntfs_inode_close(ni);
         return -EIO;
+    }
+
+    /* create=true on an existing file at offset 0 matches FAT FA_CREATE_ALWAYS:
+     * replace contents. Non-zero offset keeps append/overwrite-at-offset. */
+    if (create && !created && offset == 0) {
+        if (ntfs_attr_truncate(na, 0) != 0) {
+            ntfs_attr_close(na);
+            ntfs_inode_close(ni);
+            return -EIO;
+        }
     }
 
     s64 written = ntfs_attr_pwrite(na, (s64)offset, (s64)count, buf);

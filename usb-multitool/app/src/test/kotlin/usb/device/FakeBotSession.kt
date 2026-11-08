@@ -80,6 +80,8 @@ class FakeBotSession(
     private val unitAttentionOnOps: Set<Int> = emptySet(),
     private val stickyUnitAttention: Boolean = false,
     private val residue: Int = 0,
+    /** When set, READ fills only this many bytes then returns PASSED with [residue]. */
+    private val shortReadBytes: Int? = null,
 ) : BotSession {
     var resetCount: Int = 0
         private set
@@ -175,7 +177,7 @@ class FakeBotSession(
             }
             ScsiCommand.OP_READ10, ScsiCommand.OP_READ16 -> {
                 val (lba, blocks) = decodeLbaBlocks(cdb)
-                fillRead(requireNotNull(data), lba, blocks)
+                fillRead(requireNotNull(data), lba, blocks, shortReadBytes)
                 CswResult(CswStatus.PASSED, 0, residue)
             }
             ScsiCommand.OP_WRITE10, ScsiCommand.OP_WRITE16 -> {
@@ -204,18 +206,31 @@ class FakeBotSession(
         pendingUnitAttention > 0 &&
             (unitAttentionOnOps.isEmpty() || op in unitAttentionOnOps)
 
-    private fun fillRead(destination: ByteBuffer, lba: ULong, blocks: Int) {
+    private fun fillRead(
+        destination: ByteBuffer,
+        lba: ULong,
+        blocks: Int,
+        limitBytes: Int? = null,
+    ) {
         var cur = lba
+        var remainingCap = limitBytes ?: Int.MAX_VALUE
         repeat(blocks) {
+            if (remainingCap <= 0) return
             val sector = media[cur] ?: ByteArray(capacityBlockLength) { i ->
                 (0xA0 + ((i + cur.toInt()) and 0x0F)).toByte()
             }
             var offset = 0
-            while (offset < capacityBlockLength) {
-                val n = minOf(capacityBlockLength - offset, maxChunk, destination.remaining())
+            while (offset < capacityBlockLength && remainingCap > 0) {
+                val n = minOf(
+                    capacityBlockLength - offset,
+                    maxChunk,
+                    destination.remaining(),
+                    remainingCap,
+                )
                 require(n > 0) { "destination exhausted mid-sector" }
                 destination.put(sector, offset, n)
                 offset += n
+                remainingCap -= n
             }
             cur++
         }

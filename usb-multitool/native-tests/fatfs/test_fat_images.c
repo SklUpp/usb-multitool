@@ -1,6 +1,6 @@
 #include "fat_engine.h"
 #include "usb_block.h"
-
+#include "ff.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -259,6 +259,66 @@ static void test_format_over_existing_content(void)
 	unlink(img);
 	printf("OK format over existing content (kind=%d)\n", (int)kind);
 }
+/* Over-long path must refuse before any FatFs op so a truncated name cannot
+ * create/delete a shorter neighbor that already exists. */
+static void test_path_overflow_preserves_neighbor(void)
+{
+	const char *img = "pathovf.img";
+	const uint32_t ss = 512;
+	const uint64_t sc = (32ull * 1024 * 1024) / ss;
+	uint64_t block, vol = 0;
+	FatFsKind kind = FAT_KIND_UNKNOWN;
+	FatStat st;
+	size_t wrote = 0, got = 0;
+	char neighbor[] = "keep.txt";
+	char long_path[600];
+	char buf[16];
+	int rc;
+	size_t i;
+
+	unlink(img);
+	block = image_block_open(img, ss, sc, 1);
+	if (!block) fail("pathovf open", -1);
+	/* Same geometry as exercise(fat16.img): FAT32 aborts (FR_MKFS_ABORTED=14) on 32 MiB. */
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT);
+	if (rc != 0) fail("pathovf mkfs", rc);
+	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
+	if (rc != 0) fail("pathovf mount", rc);
+
+	rc = fat_engine_write_file(vol, neighbor, 0, "SAFE", 4, &wrote, 4, 1);
+	if (rc != 0 || wrote != 4) fail("pathovf neighbor write", rc);
+
+	/* "0:/" + path must exceed 512. Build a single-component path of 'A's. */
+	long_path[0] = '/';
+	for (i = 1; i < sizeof(long_path) - 1; i++) long_path[i] = 'A';
+	long_path[sizeof(long_path) - 1] = '\0';
+
+	wrote = 0;
+	rc = fat_engine_write_file(vol, long_path, 0, "X", 1, &wrote, 1, 1);
+	if (rc != (int)FR_INVALID_NAME) {
+		fprintf(stderr, "FAIL: pathovf write expected INVALID_NAME got %d\n", rc);
+		exit(1);
+	}
+	if (wrote != 0) fail("pathovf write leaked bytes", (int)wrote);
+
+	rc = fat_engine_delete(vol, long_path);
+	if (rc != (int)FR_INVALID_NAME) {
+		fprintf(stderr, "FAIL: pathovf delete expected INVALID_NAME got %d\n", rc);
+		exit(1);
+	}
+
+	rc = fat_engine_stat(vol, neighbor, &st);
+	if (rc != 0 || st.size != 4) fail("pathovf neighbor missing after overflow", rc);
+	memset(buf, 0, sizeof(buf));
+	rc = fat_engine_read_file(vol, neighbor, 0, buf, sizeof(buf), &got);
+	if (rc != 0 || got != 4 || memcmp(buf, "SAFE", 4) != 0) fail("pathovf neighbor corrupted", rc);
+
+	rc = fat_engine_umount(vol);
+	if (rc != 0) fail("pathovf umount", rc);
+	image_block_close(block);
+	unlink(img);
+	printf("OK path overflow preserves neighbor\n");
+}
 
 int main(void)
 {
@@ -276,6 +336,7 @@ int main(void)
 	test_list_over_256();
 	test_short_write();
 	test_format_over_existing_content();
+	test_path_overflow_preserves_neighbor();
 
 	printf("all fat image tests passed\n");
 	return 0;

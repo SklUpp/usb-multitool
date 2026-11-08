@@ -37,7 +37,12 @@ data class PartitionTable(
             }
             if (mbr.partitions.isNotEmpty()) {
                 // Classic MBR. Still probe GPT — hybrid layouts are ambiguous.
-                val gpt = runCatching { GptTable.read(disk) }.getOrNull()
+                // Parse failures mean "no GPT"; transport failures must surface.
+                val gpt = try {
+                    GptTable.read(disk)
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
                 if (gpt != null && gpt.partitions.isNotEmpty()) {
                     return PartitionTable(
                         scheme = TableScheme.HYBRID,

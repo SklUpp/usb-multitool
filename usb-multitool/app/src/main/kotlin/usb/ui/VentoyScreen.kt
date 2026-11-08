@@ -150,7 +150,8 @@ fun VentoyScreen(
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-                val isos = state.files.filter { it.isIso }
+                val isIsoDir = state.currentPath.trimEnd('/').equals("/ISO", ignoreCase = true)
+                val isos = if (isIsoDir) state.files.filter { it.isIso } else emptyList()
                 if (isos.isEmpty()) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -158,7 +159,11 @@ fun VentoyScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = "No Windows ISO files found on current partition.",
+                            text = if (isIsoDir) {
+                                "No ISO files in /ISO on this partition."
+                            } else {
+                                "Open /ISO on the Files tab to link Windows ISOs."
+                            },
                             modifier = Modifier.padding(10.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

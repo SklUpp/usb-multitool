@@ -48,7 +48,17 @@ class MountedVolume internal constructor(
 object Filesystem {
     fun mount(partition: VirtualPartition): MountedVolume {
         val id = probe(partition)
+        // fs_bridge.c is not linked into libusb_native yet. A null handle would look
+        // like a successful mount while sync/close are no-ops — refuse instead.
+        if (!FilesystemNative.isLinked()) {
+            throw UnsupportedFilesystemException(
+                "filesystem engine bridge is not linked for $id",
+            )
+        }
         val handle = FilesystemNative.mount(id.ordinal, partition)
+        if (handle == 0L) {
+            throw UnsupportedFilesystemException("native mount failed for $id")
+        }
         return MountedVolume(id, partition, handle)
     }
 
@@ -130,8 +140,20 @@ internal object FilesystemNative {
         }
     }
 
+    /** True only when fs_bridge JNI symbols are present in the loaded library. */
+    fun isLinked(): Boolean {
+        if (!libraryLoaded) return false
+        return try {
+            // Probe with impossible geometry so a real implementation returns quickly.
+            nativeProbe(0L, 0L, 0)
+            true
+        } catch (_: UnsatisfiedLinkError) {
+            false
+        }
+    }
+
     fun mount(idOrdinal: Int, partition: VirtualPartition): Long {
-        if (!libraryLoaded) return 0L
+        if (!isLinked()) return 0L
         return nativeMount(
             idOrdinal,
             partition.startLba.toLong(),

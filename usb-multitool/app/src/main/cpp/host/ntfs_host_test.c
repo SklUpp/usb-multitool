@@ -186,6 +186,42 @@ int main(int argc, char **argv)
     assert(strcmp(read_buf, payload) == 0);
     printf("PASS: read back verified ('%s')\n", read_buf);
 
+    /* 5b. create=true at offset 0 truncates; non-zero offset appends. */
+    {
+        const char *short_payload = "SHORT";
+        written = 0;
+        rc = ntfs_engine_write(vol, "/test_file.txt", 0, short_payload, strlen(short_payload),
+                               true, &written);
+        assert(rc == 0);
+        assert(written == strlen(short_payload));
+        char trunc_buf[128] = {0};
+        size_t trunc_bytes = 0;
+        rc = ntfs_engine_read(vol, "/test_file.txt", 0, trunc_buf, sizeof(trunc_buf) - 1,
+                              &trunc_bytes);
+        assert(rc == 0);
+        assert(trunc_bytes == strlen(short_payload));
+        assert(strcmp(trunc_buf, short_payload) == 0);
+
+        written = 0;
+        rc = ntfs_engine_write(vol, "/test_file.txt", trunc_bytes, "-TAIL", 5, true, &written);
+        assert(rc == 0);
+        assert(written == 5);
+        memset(trunc_buf, 0, sizeof(trunc_buf));
+        trunc_bytes = 0;
+        rc = ntfs_engine_read(vol, "/test_file.txt", 0, trunc_buf, sizeof(trunc_buf) - 1,
+                              &trunc_bytes);
+        assert(rc == 0);
+        assert(trunc_bytes == strlen("SHORT-TAIL"));
+        assert(strcmp(trunc_buf, "SHORT-TAIL") == 0);
+        printf("PASS: create=true truncates at offset 0; append at non-zero offset\n");
+
+        /* Restore original payload for later steps that expect it. */
+        written = 0;
+        rc = ntfs_engine_write(vol, "/test_file.txt", 0, payload, payload_len, true, &written);
+        assert(rc == 0);
+        assert(written == payload_len);
+    }
+
     /* 6. Stat file */
     NtfsStat nstat;
     memset(&nstat, 0, sizeof(nstat));

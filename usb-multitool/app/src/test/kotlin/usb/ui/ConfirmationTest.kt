@@ -188,7 +188,7 @@ class UiStateMachineTest {
     }
 
     @Test
-    fun isoActionsExposeLinkXmlAndSendToRawWriter() {
+    fun isoActionsExposeLinkXml() {
         val link =
             UiReducer.reduce(
                 ready(),
@@ -196,15 +196,6 @@ class UiStateMachineTest {
             )
         assertEquals(UiEffect.Kind.LinkXml, link.effects.single().kind)
         assertEquals("ubuntu.iso", link.effects.single().isoName)
-
-        val raw =
-            UiReducer.reduce(
-                ready(),
-                UiIntent.IsoActionRequested("ubuntu.iso", IsoAction.SendToRawWriter),
-            )
-        assertEquals(UiEffect.Kind.SendToRawWriter, raw.effects.single().kind)
-        assertEquals(ShellTab.Partitions, raw.state.tab)
-        assertTrue(raw.state.statusMessage!!.contains("ubuntu.iso"))
     }
 
     @Test

@@ -149,8 +149,15 @@ open class UsbDisk(
             }
             when (result.status) {
                 CswStatus.PASSED -> {
-                    if (result.residue > 0) {
-                        throw DiskException.IoFailure("short transfer residue=${result.residue}")
+                    // Block reads need a full sector. Short IN (honest residue or lying
+                    // residue=0) must not look like success — UsbDisk would otherwise
+                    // advance LBA by the full part while the buffer only holds delivered.
+                    val delivered = buffer.position() - mark
+                    if (delivered != length || result.residue != 0) {
+                        throw DiskException.IoFailure(
+                            "data phase mismatch: $delivered of $length bytes, " +
+                                "residue=${result.residue}",
+                        )
                     }
                     return
                 }

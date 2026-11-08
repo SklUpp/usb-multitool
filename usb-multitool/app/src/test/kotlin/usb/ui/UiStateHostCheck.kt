@@ -153,14 +153,6 @@ object UiStateHostCheck {
             )
         require(link.effects.single().kind == UiEffect.Kind.LinkXml)
 
-        val send =
-            UiReducer.reduce(
-                ready,
-                UiIntent.IsoActionRequested("win11.iso", IsoAction.SendToRawWriter),
-            )
-        require(send.effects.single().kind == UiEffect.Kind.SendToRawWriter)
-        require(send.state.tab == ShellTab.Partitions)
-
         val efi = ready.copy(selectedPartitionId = "2")
         listOf(
             UiIntent.CreateFolder("reports"),

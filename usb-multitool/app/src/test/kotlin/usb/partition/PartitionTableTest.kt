@@ -7,6 +7,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.device.BlockDevice
+import usb.device.DiskException
 
 class PartitionTableTest {
     @Test
@@ -111,6 +112,69 @@ class PartitionTableTest {
         assertEquals(0xEE, protectiveMbr[446 + 4].toInt() and 0xFF)
         assertEquals(TableScheme.GPT, committed.scheme)
     }
+
+    @Test
+    fun mbrPartitionPastDiskEndRejected() {
+        val disk = DiskFixture.empty(sectorCount = 100UL)
+        val bytes = (disk as ImageBlockDevice).snapshot()
+        bytes[510] = 0x55
+        bytes[511] = 0xAA.toByte()
+        // Slot 0: type 0x83, start=90, count=20 → ends past capacity 100.
+        bytes[446 + 4] = 0x83.toByte()
+        putLeInt(bytes, 446 + 8, 90)
+        putLeInt(bytes, 446 + 12, 20)
+        val crafted = ImageBlockDevice(bytes, disk.sectorSize, disk.sectorCount)
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            MbrTable.read(crafted)
+        }
+        assertTrue(ex.message!!.contains("past end of disk"))
+    }
+
+    @Test
+    fun mbrStartPlusCountOverflowRejected() {
+        val disk = DiskFixture.empty(sectorCount = 64UL)
+        val bytes = (disk as ImageBlockDevice).snapshot()
+        bytes[510] = 0x55
+        bytes[511] = 0xAA.toByte()
+        bytes[446 + 4] = 0x83.toByte()
+        // start=0xFFFFFFF0, count=0x20 → start+count wraps past UInt/ULong capacity check.
+        putLeInt(bytes, 446 + 8, -16) // 0xFFFFFFF0
+        putLeInt(bytes, 446 + 12, 0x20)
+        val crafted = ImageBlockDevice(bytes, disk.sectorSize, disk.sectorCount)
+        assertThrows(IllegalArgumentException::class.java) {
+            MbrTable.read(crafted)
+        }
+    }
+
+    @Test
+    fun classicMbrGptProbeTransportFailureSurfaces() {
+        // Classic MBR with one real partition; LBA 1 GPT probe must not swallow DiskException.
+        val base = DiskFixture.empty(sectorCount = 128UL)
+        val bytes = (base as ImageBlockDevice).snapshot()
+        bytes[510] = 0x55
+        bytes[511] = 0xAA.toByte()
+        bytes[446 + 4] = 0x83.toByte()
+        putLeInt(bytes, 446 + 8, 8)
+        putLeInt(bytes, 446 + 12, 16)
+        val disk = object : BlockDevice {
+            override val sectorSize = base.sectorSize
+            override val sectorCount = base.sectorCount
+            override fun read(lba: ULong, destination: ByteBuffer) {
+                if (lba == 1UL) throw DiskException.IoFailure("LBA 1 unreachable")
+                val offset = (lba * sectorSize.toULong()).toInt()
+                destination.put(bytes, offset, destination.remaining())
+            }
+            override fun write(lba: ULong, source: ByteBuffer) {
+                throw UnsupportedOperationException()
+            }
+            override fun sync() = Unit
+        }
+        val failure = assertThrows(DiskException.IoFailure::class.java) {
+            PartitionTable.read(disk)
+        }
+        assertTrue(failure.message!!.contains("LBA 1 unreachable"))
+    }
+
 
     private fun sector(disk: BlockDevice, lba: ULong): ByteArray {
         val buffer = ByteBuffer.allocate(disk.sectorSize)

@@ -62,7 +62,9 @@ int ntfs_engine_read(uint64_t vol_handle, const char *path,
                      size_t *out_read);
 
 /* Write to file at byte offset.
- * If create is true, creates file if it doesn't exist.
+ * If create is true and the file is missing, creates it. If create is true,
+ * the file already exists, and offset is 0, truncates before writing (FAT
+ * FA_CREATE_ALWAYS). Non-zero offset never truncates (append/overwrite-at-offset).
  * *out_written is set to bytes written. Returns 0 on success.
  * Returns -EROFS when the volume is mounted read-only; libntfs-3g would
  * otherwise report the full length as written without touching the device.

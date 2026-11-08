@@ -171,14 +171,41 @@ class UsbDiskTest {
     }
 
     @Test
-    fun cswPassedWithResidueThrowsShortTransfer() {
+    fun cswPassedWithResidueAndFullDeliveryThrowsMismatch() {
         val session = FakeBotSession(residue = 128)
         val disk = UsbDisk(session, BlockGeometry(512, 100UL))
         val out = ByteBuffer.allocate(512)
         val ex = assertThrows(DiskException.IoFailure::class.java) {
             disk.read(0UL, out)
         }
-        assertEquals("short transfer residue=128", ex.message)
+        assertEquals("data phase mismatch: 512 of 512 bytes, residue=128", ex.message)
+    }
+
+    @Test
+    fun shortDataInWithLyingResidueZeroThrowsMismatch() {
+        // Device ends data phase after 256 bytes but CSW claims residue=0.
+        val session = FakeBotSession(shortReadBytes = 256, residue = 0)
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+        val ex = assertThrows(DiskException.IoFailure::class.java) {
+            disk.read(0UL, out)
+        }
+        assertEquals("data phase mismatch: 256 of 512 bytes, residue=0", ex.message)
+        assertEquals(256, out.position())
+    }
+
+    @Test
+    fun honestShortInWithMatchingResidueStillRejected() {
+        // Device short-INs 256 of 512 and reports residue=256 — BOT-honest, still
+        // unusable for a full-sector block read.
+        val session = FakeBotSession(shortReadBytes = 256, residue = 256)
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+        val ex = assertThrows(DiskException.IoFailure::class.java) {
+            disk.read(0UL, out)
+        }
+        assertEquals("data phase mismatch: 256 of 512 bytes, residue=256", ex.message)
+        assertEquals(256, out.position())
     }
 
     @Test

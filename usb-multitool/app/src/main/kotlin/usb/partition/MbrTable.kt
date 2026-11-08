@@ -14,6 +14,7 @@ object MbrTable {
 
     fun read(disk: BlockDevice): Result {
         val sectorSize = disk.sectorSize
+        val diskSectors = disk.sectorCount
         val buf = ByteBuffer.allocate(sectorSize).order(ByteOrder.LITTLE_ENDIAN)
         disk.read(0UL, buf)
         buf.flip()
@@ -33,6 +34,9 @@ object MbrTable {
             if (type == PROTECTIVE_TYPE) {
                 protective = true
                 continue
+            }
+            require(count <= diskSectors && start <= diskSectors - count) {
+                "MBR partition past end of disk: start=$start count=$count capacity=$diskSectors"
             }
             val bootable = (buf.get(off).toInt() and 0x80) != 0
             entries.add(

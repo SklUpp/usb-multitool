@@ -148,7 +148,36 @@ class GptCriticalBackupTest {
                 stale.message.orEmpty().contains("relocate the backup GPT"),
         ) { "stale backup header must fail loudly: ${stale?.message}" }
 
+        // Entries outside usable range must fail before any write.
+        val oobDisk = syntheticGpt(2048UL)
+        val oobBlob = capture(oobDisk)
+        val oobTarget = MemoryDisk(2048UL)
+        expectFailure(
+            mutatePrimaryEntry(oobBlob, index = 0) { entry ->
+                // Push end past lastUsable while keeping type GUID occupied.
+                putLeU64(entry, 32, 34UL)
+                putLeU64(entry, 40, 2047UL)
+            },
+            oobTarget,
+            "outside usable range",
+        )
+        require(oobTarget.syncs == 0) { "OOB restore must not write" }
+
+        // Overlapping entries must fail before any write.
+        val overlapDisk = syntheticGpt(2048UL)
+        val overlapBlob = capture(overlapDisk)
+        val overlapTarget = MemoryDisk(2048UL)
+        expectFailure(
+            mutatePrimaryEntry(overlapBlob, index = 1) { entry ->
+                putLeU64(entry, 32, 34UL)
+                putLeU64(entry, 40, 43UL)
+            },
+            overlapTarget,
+            "overlapping partitions",
+        )
+        require(overlapTarget.syncs == 0) { "overlap restore must not write" }
     }
+
 
     private fun expectFailure(blob: ByteArray, disk: BlockDevice, needle: String) {
         val failure =
@@ -192,7 +221,10 @@ class GptCriticalBackupTest {
             val offset = index * ENTRY_SIZE
             entries[offset] = 0x28
             entries[offset + 1] = 0x73
-            entries[offset + 32] = (firstUsable + index.toULong() * 10UL).toByte()
+            val start = firstUsable + index.toULong() * 10UL
+            val end = start + 4UL
+            putLeU64(entries, offset + 32, start)
+            putLeU64(entries, offset + 40, end)
         }
         val entriesCrc = crc32(entries, 0, entries.size)
 
@@ -222,6 +254,37 @@ class GptCriticalBackupTest {
         disk.write(primaryEntriesLba, ByteBuffer.wrap(entries))
         disk.write(backupEntriesLba, ByteBuffer.wrap(entries))
         return disk
+    }
+
+    /** Mutate one GPT entry in both primary and backup arrays; refresh entry + header CRCs. */
+    private fun mutatePrimaryEntry(
+        blob: ByteArray,
+        index: Int,
+        mutate: (ByteArray) -> Unit,
+    ): ByteArray {
+        val out = blob.copyOf()
+        val entryBytes = ENTRY_COUNT * ENTRY_SIZE
+        val primaryEntriesOff = 2 * SECTOR_SIZE
+        val backupEntriesOff = PRIMARY_SECTORS * SECTOR_SIZE
+        val entry = out.copyOfRange(
+            primaryEntriesOff + index * ENTRY_SIZE,
+            primaryEntriesOff + (index + 1) * ENTRY_SIZE,
+        )
+        mutate(entry)
+        entry.copyInto(out, primaryEntriesOff + index * ENTRY_SIZE)
+        entry.copyInto(out, backupEntriesOff + index * ENTRY_SIZE)
+        val entriesCrc = crc32(out, primaryEntriesOff, entryBytes)
+        fun patchHeader(headerOff: Int) {
+            putLeInt(out, headerOff + 88, entriesCrc)
+            putLeInt(out, headerOff + 16, 0)
+            putLeInt(out, headerOff + 16, crc32(out, headerOff, 92))
+        }
+        patchHeader(SECTOR_SIZE)
+        patchHeader((PRIMARY_SECTORS + BACKUP_SECTORS - 1) * SECTOR_SIZE)
+        // Keep backup entry array CRC in sync with primary.
+        out.copyOfRange(primaryEntriesOff, primaryEntriesOff + entryBytes)
+            .copyInto(out, backupEntriesOff)
+        return out
     }
 
     private inner class MemoryDisk(

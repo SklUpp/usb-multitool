@@ -124,11 +124,13 @@ object GptCriticalBackup {
         }
         val entrySectors =
             ((primary.entryCount * primary.entrySize + sectorSize - 1) / sectorSize).toULong()
-        require(primary.entryLba + entrySectors <= primarySectors.toULong()) {
+        require(entrySectors <= primarySectors.toULong() &&
+            primary.entryLba <= primarySectors.toULong() - entrySectors) {
             "primary entries at LBA ${primary.entryLba} do not fit the " +
                 "$primarySectors captured head sectors"
         }
-        require(backup.entryLba + entrySectors == sectorCount - 1UL) {
+        require(entrySectors <= sectorCount - 1UL &&
+            backup.entryLba == (sectorCount - 1UL) - entrySectors) {
             "backup entries at LBA ${backup.entryLba} do not end at the backup header " +
                 "LBA ${sectorCount - 1UL}"
         }
@@ -150,18 +152,38 @@ object GptCriticalBackup {
         require(backup.firstUsable == primary.firstUsable && backup.lastUsable == primary.lastUsable) {
             "primary and backup GPT usable ranges disagree"
         }
-        require(primary.lastUsable + 1UL <= backup.entryLba) {
+        // lastUsable + 1 <= backup.entryLba without ULong wrap on lastUsable == MAX.
+        require(primary.lastUsable < backup.entryLba) {
             "primary last usable LBA ${primary.lastUsable} does not end before the backup " +
                 "entries at ${backup.entryLba}"
         }
+        // Refuse restore of a GPT the live parser would reject: every used entry must
+        // sit inside usable bounds without overflow or overlap.
+        val partitions = ArrayList<usb.partition.Partition>()
+        for (i in 0 until backup.entryCount) {
+            val off = i * backup.entrySize
+            if (backupEntries.copyOfRange(off, off + 16).all { it == 0.toByte() }) continue
+            val start = leLong(backupEntries, off + 32)
+            val end = leLong(backupEntries, off + 40)
+            require(end >= start) { "GPT entry end < start at index $i" }
+            require(start >= primary.firstUsable && end <= primary.lastUsable) {
+                "GPT entry outside usable range: start=$start end=$end " +
+                    "usable=${primary.firstUsable}..${primary.lastUsable}"
+            }
+            partitions.add(
+                usb.partition.Partition(
+                    startLba = start,
+                    sectorCount = end - start + 1UL,
+                ),
+            )
+        }
+        usb.partition.rejectOverlaps(partitions)
 
         return RestoreReport(
             sectorsRestored = primarySectors + backupSectors,
             primary = primary,
             backup = backup,
-            partitions = backupEntries.asList().chunked(backup.entrySize).count { entry ->
-                entry.take(16).any { it != 0.toByte() }
-            },
+            partitions = partitions.size,
         )
     }
 
@@ -261,7 +283,8 @@ object GptCriticalBackup {
         require(lba >= 2UL) { "GPT entries must not start in the protective MBR or header" }
         val offset =
             if (lba < primarySectors.toULong()) {
-                require(lba + sectors <= primarySectors.toULong()) {
+                require(sectors <= primarySectors.toULong() &&
+                    lba <= primarySectors.toULong() - sectors) {
                     "GPT entries at LBA $lba overrun the $primarySectors captured head sectors"
                 }
                 lba * sectorSize.toULong()
@@ -270,7 +293,8 @@ object GptCriticalBackup {
                     "GPT entries at LBA $lba are inside the unusable gap"
                 }
                 val index = lba - tailStart
-                require(index + sectors <= backupSectors.toULong()) {
+                require(sectors <= backupSectors.toULong() &&
+                    index <= backupSectors.toULong() - sectors) {
                     "GPT entries at LBA $lba overrun the $backupSectors captured tail sectors"
                 }
                 primarySectors.toULong() * sectorSize.toULong() + index * sectorSize.toULong()

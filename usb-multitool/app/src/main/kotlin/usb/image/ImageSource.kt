@@ -40,10 +40,18 @@ class CountedInputStream(
 
 class ImageSource private constructor(
     private val openStream: () -> CountedInputStream,
-    val format: ImageFormat,
+    initialFormat: ImageFormat,
     val declaredDecodedSize: Long? = null,
 ) {
+    /** Updated on [open] when content sniffing reconciles name vs magic. */
+    var format: ImageFormat = initialFormat
+        private set
+
     fun open(): CountedInputStream = openStream()
+
+    private fun noteFormat(detected: ImageFormat) {
+        format = detected
+    }
 
     companion object {
         fun open(uri: Uri): CountedInputStream = fromUri(uri).open()
@@ -59,37 +67,70 @@ class ImageSource private constructor(
                     val raw = openRaw(uri)
                     wrap(raw, format, declaredSize)
                 },
-                format = format,
+                initialFormat = format,
                 declaredDecodedSize = declaredSize,
             )
         }
 
         /** SAF/content URIs: the only stream source Android can read without a path. */
         fun fromContentUri(uri: Uri, resolver: android.content.ContentResolver): ImageSource {
-            val name = uri.lastPathSegment ?: uri.toString()
-            val format = detectFormat(name)
-            val declaredSize =
-                if (format == ImageFormat.ISO || format == ImageFormat.IMG) {
-                    runCatching {
-                        resolver
-                            .query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)
-                            ?.use { cursor ->
-                                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
-                            }
-                    }.getOrNull()
-                } else {
-                    null
-                }
-            return ImageSource(
-                openStream = {
-                    val raw =
-                        resolver.openInputStream(uri)
-                            ?: throw java.io.FileNotFoundException("cannot open $uri")
-                    wrap(raw, format, declaredSize)
+            // lastPathSegment on content:// is often an opaque doc id (msf:123), never a
+            // filename. Prefer OpenableColumns.DISPLAY_NAME; magic comes from the live stream.
+            val displayName = queryOpenableString(resolver, uri, android.provider.OpenableColumns.DISPLAY_NAME)
+            val size = queryOpenableLong(resolver, uri, android.provider.OpenableColumns.SIZE)
+            return fromContent(
+                openRaw = {
+                    resolver.openInputStream(uri)
+                        ?: throw java.io.FileNotFoundException("cannot open $uri")
                 },
-                format = format,
-                declaredDecodedSize = declaredSize,
+                displayName = displayName,
+                size = size,
             )
+        }
+
+        /**
+         * Content-URI decode without Android types. Used by [fromContentUri] and host tests.
+         * Format is decided on the stream that will be written: read up to 6 magic bytes
+         * (tolerating short reads), reconcile with DISPLAY_NAME, prepend the prefix so no
+         * payload is lost. Open/read failures propagate — never fall back to raw IMG.
+         */
+        internal fun fromContent(
+            openRaw: () -> InputStream,
+            displayName: String?,
+            size: Long?,
+        ): ImageSource {
+            val named = displayName?.let { detectFormat(it) }
+            val provisional = when (named) {
+                ImageFormat.GZIP, ImageFormat.XZ, ImageFormat.ISO -> named
+                else -> ImageFormat.IMG
+            }
+            // SIZE from the provider is the on-disk/compressed length. Do not publish it as
+            // decodedSize until magic on the live stream confirms an uncompressed image;
+            // a mislabeled .iso that is actually gzip must never early-reject on SIZE.
+            lateinit var source: ImageSource
+            source = ImageSource(
+                openStream = {
+                    val raw = openRaw()
+                    try {
+                        val header = ByteArray(6)
+                        val n = readPrefix(raw, header)
+                        val magic =
+                            if (n <= 0) ImageFormat.IMG else detectFormatBytes(header.copyOf(n))
+                        val format = reconcileContentFormat(named, magic)
+                        source.noteFormat(format)
+                        val restored = prependPrefix(header, n, raw)
+                        val decodedSize =
+                            if (format == ImageFormat.ISO || format == ImageFormat.IMG) size else null
+                        wrap(restored, format, decodedSize)
+                    } catch (t: Throwable) {
+                        runCatching { raw.close() }
+                        throw t
+                    }
+                },
+                initialFormat = provisional,
+                declaredDecodedSize = null,
+            )
+            return source
         }
 
         fun fromFile(file: java.io.File): ImageSource {
@@ -101,7 +142,7 @@ class ImageSource private constructor(
                 openStream = {
                     wrap(FileInputStream(file), format, declaredSize)
                 },
-                format = format,
+                initialFormat = format,
                 declaredDecodedSize = declaredSize,
             )
         }
@@ -112,7 +153,7 @@ class ImageSource private constructor(
             decodedSize: Long? = null,
         ): ImageSource = ImageSource(
             openStream = { wrap(ByteArrayInputStream(bytes), format, decodedSize) },
-            format = format,
+            initialFormat = format,
             declaredDecodedSize = decodedSize,
         )
 
@@ -151,6 +192,59 @@ class ImageSource private constructor(
                 } else null
             }.getOrNull()
         }
+
+        private fun queryOpenableString(
+            resolver: android.content.ContentResolver,
+            uri: Uri,
+            column: String,
+        ): String? =
+            runCatching {
+                resolver.query(uri, arrayOf(column), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+                }
+            }.getOrNull()
+
+        private fun queryOpenableLong(
+            resolver: android.content.ContentResolver,
+            uri: Uri,
+            column: String,
+        ): Long? =
+            runCatching {
+                resolver.query(uri, arrayOf(column), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+                }
+            }.getOrNull()
+
+        /**
+         * Compressed magic always wins so a mislabeled .iso never writes gzip/xz bytes raw.
+         * A compressed DISPLAY_NAME with non-compressed magic keeps the name so the decoder
+         * fails loudly instead of silently writing the stream as an image.
+         */
+        private fun reconcileContentFormat(named: ImageFormat?, magic: ImageFormat): ImageFormat {
+            if (magic == ImageFormat.GZIP || magic == ImageFormat.XZ) return magic
+            return when (named) {
+                ImageFormat.GZIP, ImageFormat.XZ, ImageFormat.ISO -> named
+                else -> ImageFormat.IMG
+            }
+        }
+
+        /** Read up to [buffer].size bytes, tolerating short reads, stopping at EOF. */
+        private fun readPrefix(input: InputStream, buffer: ByteArray): Int {
+            var off = 0
+            while (off < buffer.size) {
+                val n = input.read(buffer, off, buffer.size - off)
+                if (n < 0) break
+                off += n
+            }
+            return off
+        }
+
+        private fun prependPrefix(header: ByteArray, n: Int, rest: InputStream): InputStream {
+            if (n <= 0) return rest
+            return java.io.SequenceInputStream(ByteArrayInputStream(header, 0, n), rest)
+        }
+
+
 
 
         private fun wrap(

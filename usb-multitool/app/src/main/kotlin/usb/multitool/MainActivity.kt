@@ -556,7 +556,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
-            UiEffect.Kind.SendToRawWriter -> Unit
             UiEffect.Kind.RunSelfTest -> {
                 runSelfTest()
             }

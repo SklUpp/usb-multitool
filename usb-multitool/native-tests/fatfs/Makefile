@@ -30,4 +30,4 @@ test: test_fat_images
 	./test_fat_images
 
 clean:
-	rm -f test_fat_images fat16.img fat32.img exfat.img fat32_4k.img exfat_4k.img list256.img short.img
+	rm -f test_fat_images fat16.img fat32.img exfat.img fat32_4k.img exfat_4k.img list256.img short.img reformat.img pathovf.img

@@ -126,7 +126,6 @@ data class FileEntry(
 
 enum class IsoAction {
     LinkXml,
-    SendToRawWriter,
 }
 
 data class OperationProgress(

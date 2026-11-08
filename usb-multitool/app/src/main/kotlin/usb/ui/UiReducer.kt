@@ -107,7 +107,6 @@ data class UiEffect(
         SubmitDestructive,
         CancelOperation,
         LinkXml,
-        SendToRawWriter,
         LoadFiles,
         CreateFolder,
         DeleteEntry,
@@ -302,35 +301,19 @@ object UiReducer {
                     )
                 } else {
                     val effect =
-                        when (intent.action) {
-                            IsoAction.LinkXml ->
-                                UiEffect(
-                                    UiEffect.Kind.LinkXml,
-                                    isoName = intent.fileName,
-                                    isoAction = intent.action,
-                                )
-                            IsoAction.SendToRawWriter ->
-                                UiEffect(
-                                    UiEffect.Kind.SendToRawWriter,
-                                    isoName = intent.fileName,
-                                    isoAction = intent.action,
-                                )
-                        }
-                    val next =
-                        if (intent.action == IsoAction.SendToRawWriter) {
-                            // Route to Partitions/Raw; still requires destructive confirm upstream.
-                            state.copy(
-                                tab = ShellTab.Partitions,
-                                statusMessage = "Send ${intent.fileName} to raw writer",
-                            )
-                        } else {
-                            state.copy(
-                                statusMessage =
-                                    "Writing autounattend.xml and ventoy.json for " +
-                                        "${intent.fileName.substringAfterLast('/')}…",
-                            )
-                        }
-                    ReduceResult(next, listOf(effect))
+                        UiEffect(
+                            UiEffect.Kind.LinkXml,
+                            isoName = intent.fileName,
+                            isoAction = intent.action,
+                        )
+                    ReduceResult(
+                        state.copy(
+                            statusMessage =
+                                "Writing autounattend.xml and ventoy.json for " +
+                                    "${intent.fileName.substringAfterLast('/')}…",
+                        ),
+                        listOf(effect),
+                    )
                 }
             }
 

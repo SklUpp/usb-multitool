@@ -455,17 +455,6 @@ private fun FileRow(
                     ) {
                         Text("Link XML", style = MaterialTheme.typography.labelSmall)
                     }
-                    OutlinedButton(
-                        onClick = {
-                            onIntent(
-                                UiIntent.IsoActionRequested(entry.name, IsoAction.SendToRawWriter),
-                            )
-                        },
-                        enabled = actionsEnabled,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                        Text("To Raw Writer", style = MaterialTheme.typography.labelSmall)
-                    }
                 }
             }
         }
