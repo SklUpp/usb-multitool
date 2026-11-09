@@ -10,7 +10,6 @@ object VentoyAssetOperations {
         isActive: () -> Boolean,
     ): VentoyDownloader.VentoyReleaseDownload = VentoyDownloader.downloadRelease(
         cacheDir = cacheDir,
-        release = VentoyAssets.PINNED_RELEASE,
         onProgress = { done, total ->
             if (total > 0) operation.bytesTotal = total
             operation.report(done)

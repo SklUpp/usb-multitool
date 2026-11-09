@@ -74,11 +74,11 @@ object VentoyDownloader {
      */
     fun downloadRelease(
         cacheDir: File,
-        release: String = VentoyAssets.PINNED_RELEASE,
+        release: String? = null,
         onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> },
         isActive: () -> Boolean = { true },
     ): VentoyReleaseDownload {
-        val source = sourceFor(release)
+        val source = if (release == null) latestSource() else sourceFor(release)
         cacheDir.mkdirs()
         if (!cacheDir.isDirectory) {
             throw VentoyAssetsMissingException("Cache directory ${cacheDir.path} is not writable")
@@ -112,8 +112,8 @@ object VentoyDownloader {
                 )
             }
 
-            val members =
-                VentoyReleaseArchive.extract(archive.inputStream().buffered(), source.memberHashes.keys)
+            val names = setOf("boot.img", "core.img.xz", "ventoy.disk.img.xz")
+            val members = archive.inputStream().buffered().use { VentoyReleaseArchive.extract(it, names) }
             for ((name, expected) in source.memberHashes) {
                 val actual = sha256Hex(members.getValue(name))
                 if (!actual.equals(expected, ignoreCase = true)) {
@@ -126,13 +126,13 @@ object VentoyDownloader {
             val assets =
                 VentoyAssets(
                     release = source.release,
-                    commit = source.commit.ifEmpty { VentoyAssets.PINNED_COMMIT },
+                    commit = source.commit,
                     bootImg = members.getValue("boot.img"),
                     coreImg = members.getValue("core.img.xz"),
                     efiPartImg = members.getValue("ventoy.disk.img.xz"),
-                    bootImgSha256 = source.memberHashes.getValue("boot.img"),
-                    coreImgSha256 = source.memberHashes.getValue("core.img.xz"),
-                    diskImgSha256 = source.memberHashes.getValue("ventoy.disk.img.xz"),
+                    bootImgSha256 = source.memberHashes["boot.img"] ?: sha256Hex(members.getValue("boot.img")),
+                    coreImgSha256 = source.memberHashes["core.img.xz"] ?: sha256Hex(members.getValue("core.img.xz")),
+                    diskImgSha256 = source.memberHashes["ventoy.disk.img.xz"] ?: sha256Hex(members.getValue("ventoy.disk.img.xz")),
                 )
             assets.validateChecksums(strict = true)
             return VentoyReleaseDownload(assets, archiveSha, sourceUrl)
@@ -167,6 +167,42 @@ object VentoyDownloader {
                 "or download a pinned release from the server. " + failures.joinToString("; "),
         )
     }
+    private fun latestSource(): ReleaseSource {
+        val connection = openConnection("https://api.github.com/repos/ventoy/Ventoy/releases/latest")
+        try {
+            val body = connection.inputStream.bufferedReader().use { it.readTextLimited(1024 * 1024) }
+            val json = org.json.JSONObject(body)
+            val tag = json.getString("tag_name")
+            require(Regex("v[0-9]+(?:\\.[0-9]+)+").matches(tag)) { "Invalid Ventoy release tag" }
+            val version = tag.substring(1)
+            val expectedName = "ventoy-$version-linux.tar.gz"
+            val assets = json.getJSONArray("assets")
+            val asset = (0 until assets.length()).map { assets.getJSONObject(it) }
+                .single { it.getString("name") == expectedName }
+            val digest = asset.getString("digest").removePrefix("sha256:")
+            require(Regex("[0-9a-fA-F]{64}").matches(digest)) { "Missing Ventoy SHA-256" }
+            val pinned = RELEASES.firstOrNull { it.release == version }
+            if (pinned != null) {
+                require(digest.equals(pinned.archiveSha256, ignoreCase = true)) { "Ventoy pinned digest mismatch" }
+                return pinned
+            }
+            return ReleaseSource(version, "", listOf("$DEFAULT_BASE_URL/$tag/$expectedName"), digest, emptyMap())
+        } finally {
+            connection.disconnect()
+        }
+    }
+    private fun java.io.Reader.readTextLimited(limit: Int): String {
+        val text = StringBuilder()
+        val buffer = CharArray(4096)
+        while (true) {
+            val count = read(buffer)
+            if (count < 0) break
+            require(text.length + count <= limit) { "Ventoy release metadata too large" }
+            text.append(buffer, 0, count)
+        }
+        return text.toString()
+    }
+
 
     /**
      * Queries the GitHub Releases API for the latest Ventoy release tag.
@@ -184,10 +220,10 @@ object VentoyDownloader {
         conn.setRequestProperty("User-Agent", "usb-multitool")
         try {
             if (conn.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
-            val body = conn.inputStream.bufferedReader().readText()
-            // Parse "tag_name":"v1.1.19" without a JSON library.
-            val match = Regex(""""tag_name"\s*:\s*"v?([^"]+)"""").find(body)
-            match?.groupValues?.getOrNull(1)?.trim()
+            val body = conn.inputStream.bufferedReader().use { it.readTextLimited(1024 * 1024) }
+            val tag = org.json.JSONObject(body).getString("tag_name")
+            require(Regex("v[0-9]+(?:\\.[0-9]+)+").matches(tag)) { "Invalid Ventoy release tag" }
+            tag.substring(1)
         } finally {
             conn.disconnect()
         }

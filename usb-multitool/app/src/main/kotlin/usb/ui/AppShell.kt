@@ -11,9 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -256,9 +253,7 @@ private fun OperationBanner(
     onIntent: (UiIntent) -> Unit,
 ) {
     val op = state.operation ?: return
-    // Reset expanded only when the operation label changes, not on every state transition.
-    // This prevents the banner staying expanded when a same-label op re-fails.
-    var expanded by remember(op.label) { mutableStateOf(false) }
+    var expanded by remember(op.label, op.state) { mutableStateOf(false) }
 
     if (op.state == OperationState.Running) {
         Surface(
@@ -320,26 +315,19 @@ private fun OperationBanner(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                // Realtime log tail: last 5 lines while running
-                val tail = state.logLines.takeLast(5)
-                if (tail.isNotEmpty()) {
-                    val logScroll = rememberScrollState()
-                    LaunchedEffect(tail.size) { logScroll.animateScrollTo(logScroll.maxValue) }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 80.dp)
-                            .verticalScroll(logScroll),
-                    ) {
-                        for (line in tail) {
-                            Text(
-                                text = line,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                if (state.logLines.isNotEmpty()) {
+                    val tail = state.logLines.takeLast(if (expanded) 5 else 1)
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Less" else "Log details", style = MaterialTheme.typography.labelSmall)
+                    }
+                    tail.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }

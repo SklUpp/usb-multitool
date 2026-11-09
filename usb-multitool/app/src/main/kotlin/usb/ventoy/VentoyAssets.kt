@@ -17,9 +17,6 @@ data class VentoyAssets(
     val diskImgSha256: String = OFFICIAL_DISK_IMG_SHA256,
 ) {
     init {
-        require(release == PINNED_RELEASE || release == RELEASE_1_1_05) {
-            "Unsupported Ventoy release: $release; expected $PINNED_RELEASE or $RELEASE_1_1_05"
-        }
         require(bootImg.size >= 446) { "boot.img must be at least 446 bytes" }
         require(coreImg.isNotEmpty()) { "core.img must not be empty" }
         require(efiPartImg.isNotEmpty()) { "efi_part.img must not be empty" }

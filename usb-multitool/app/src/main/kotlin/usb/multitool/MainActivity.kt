@@ -128,8 +128,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
-        scope.launch(Dispatchers.IO) {
-            val tag = usb.ventoy.VentoyDownloader.checkLatestRelease()
+        scope.launch {
+            val tag = kotlinx.coroutines.withContext(Dispatchers.IO) { usb.ventoy.VentoyDownloader.checkLatestRelease() }
             onIntent(UiIntent.SetLatestVentoyRelease(tag))
         }
     }
@@ -188,7 +188,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (stagingMutationFailed) return
         val result = UiReducer.reduce(state, intent)
-        state = result.state
+        if (intent is UiIntent.OperationUpdated && intent.progress != null) {
+            val current = intent.progress
+            val previous = state.operation
+            if (previous?.state != current.state || previous?.label != current.label) {
+                val detail = current.errorMessage ?: current.resultMessage
+                val message = "${current.label}: ${current.state}" + if (detail.isNullOrBlank()) "" else " — $detail"
+                android.util.Log.i("UsbMultitool", message)
+                state = UiReducer.reduce(state, UiIntent.AppendLog(logLine(message))).state
+            }
+        }
+        state = if (intent is UiIntent.OperationUpdated) result.state.copy(logLines = state.logLines) else result.state
         result.effects.forEach { effect ->
             handleEffect(effect)
         }
@@ -1560,7 +1570,6 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 OperationProgress(state = OperationState.Running, label = label, cancelable = cancelable),
             ),
         )
-        onIntent(UiIntent.AppendLog(logLine("▶ $label started")))
         val handle = DiskController.get().submit(operation)
         if (cancelable) activeHandle = handle
         activeHandles.add(handle)
@@ -1589,8 +1598,10 @@ private fun downloadFile(path: String, name: String, uri: String) {
                     val total = operation.bytesTotal
                     if (done != lastLogged) {
                         lastLogged = done
-                        val pct = if (total > 0) " ${(done * 100L / total)}%" else ""
-                        onIntent(UiIntent.AppendLog(logLine("  $label$pct")))
+                        val pct = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else ""
+                        val message = "$label$pct"
+                        android.util.Log.i("UsbMultitool", message)
+                        onIntent(UiIntent.AppendLog(logLine(message)))
                     }
                 }
             }
@@ -1599,7 +1610,6 @@ private fun downloadFile(path: String, name: String, uri: String) {
                     is usb.service.OperationState.Failed -> {
                         val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                         onIntent(UiIntent.Status(message))
-                        onIntent(UiIntent.AppendLog(logLine("✗ $label failed: $message")))
                         onIntent(
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
@@ -1617,8 +1627,6 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
                     }
                     else -> {
-                        val summary = operation.result ?: outcome.javaClass.simpleName
-                        onIntent(UiIntent.AppendLog(logLine("✓ $label: $summary")))
                         onIntent(
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(

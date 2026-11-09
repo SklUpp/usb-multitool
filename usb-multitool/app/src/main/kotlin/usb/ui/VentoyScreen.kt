@@ -66,7 +66,7 @@ fun VentoyScreen(
                             color = MaterialTheme.colorScheme.primaryContainer,
                         ) {
                             Text(
-                                text = "v${usb.ventoy.VentoyAssets.PINNED_RELEASE}",
+                                text = "Built-in v${usb.ventoy.VentoyAssets.PINNED_RELEASE}",
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,

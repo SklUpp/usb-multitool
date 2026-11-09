@@ -6,6 +6,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.device.DiskException
+import usb.service.DiskOperation
 import usb.testutil.RecordingDisk
 
 class ReadScanTest {
@@ -24,15 +25,13 @@ class ReadScanTest {
         }
     }
 
-    // SCAN_CHUNK_BYTES = 1 MiB = 2048 sectors at 512 B/sector
     private val chunk = Diagnostics.SCAN_CHUNK_BYTES / 512
 
     @Test fun cleanDiskUsesChunkedReads() {
-        val disk = Probe(4096UL) { _, _ -> null }
+        val disk = Probe((chunk * 2).toULong()) { _, _ -> null }
         val report = Diagnostics.readScan(disk)
-        assertEquals(4096UL, report.sectorsRead)
+        assertEquals((chunk * 2).toULong(), report.sectorsRead)
         assertTrue(report.failed.isEmpty())
-        // 4096 sectors / 2048 per chunk = exactly 2 chunk reads
         assertEquals(listOf(0UL to chunk, chunk.toULong() to chunk), disk.calls)
     }
 
@@ -57,6 +56,21 @@ class ReadScanTest {
             else null
         }
         assertEquals(listOf(3UL..4UL), Diagnostics.readScan(disk).failed)
+    }
+
+    @Test fun cancellationDuringSectorFallbackReportsOnlyScannedSectors() {
+        var active = true
+        val operation = DiskOperation(active = { active })
+        val disk = Probe(16UL) { lba, sectors ->
+            if (sectors > 1) medium() else {
+                if (lba == 2UL) active = false
+                null
+            }
+        }
+        val report = Diagnostics.readScan(disk, operation)
+        assertEquals(3UL, report.sectorsRead)
+        assertEquals(3L * 512, operation.bytesDone)
+        assertEquals(16L * 512, operation.bytesTotal)
     }
 
     @Test fun disconnectAbortsInsteadOfMarkingRestFailed() {

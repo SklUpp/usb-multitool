@@ -62,10 +62,12 @@ app `externalNativeBuild` CMake arguments.
 
 ## Ventoy
 
-- No upstream tree is vendored or fetched. `usb/ventoy/VentoyLayout.kt` builds the
-  VTOYEFI/partition layout itself and `VentoyAssets` pins the release payloads it
-  installs; `VentoyDownloader` fetches official release archives over HTTPS and
-  verifies them by SHA-256.
+- Ventoy 1.1.18 boot payloads are bundled in `app/src/main/assets/ventoy/`;
+  their SHA-256 values are pinned in `VentoyAssets.kt`. Upstream: GPL-3.0-or-later,
+  source https://github.com/ventoy/Ventoy/tree/v1.1.18.
+- Download-and-install resolves the latest GitHub release and checks the archive
+  SHA-256 against GitHub release metadata over HTTPS. New releases do not have an
+  independently pinned digest; bundled 1.1.18 retains pinned member hashes.
 - URL: https://github.com/ventoy/Ventoy/releases
 
 ## F3

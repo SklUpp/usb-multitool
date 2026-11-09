@@ -27,7 +27,7 @@ class UnsafeBenchmarkTargetException(message: String) : Exception(message)
 
 object Diagnostics {
     /** One SCSI-sized batch per iteration; per-sector reads only after a medium error. */
-    internal const val SCAN_CHUNK_BYTES = 1 shl 20
+    internal const val SCAN_CHUNK_BYTES = 64 * 1024
 
     /**
      * Read-only surface scan. Reads [SCAN_CHUNK_BYTES] at a time and falls back to
@@ -38,6 +38,8 @@ object Diagnostics {
     fun readScan(disk: UsbDisk, operation: DiskOperation = DiskOperation("read-scan")): ScanReport {
         val sectorSize = disk.geometry.sectorSize
         val total = disk.geometry.sectorCount
+        require(disk.geometry.capacityBytes <= Long.MAX_VALUE.toULong()) { "Disk capacity exceeds supported progress range" }
+        operation.bytesTotal = disk.geometry.capacityBytes.toLong()
         val chunkSectors = maxOf(1, SCAN_CHUNK_BYTES / sectorSize).toULong()
         val buf = ByteBuffer.allocate(chunkSectors.toInt() * sectorSize)
         val failed = mutableListOf<ULongRange>()
@@ -57,7 +59,11 @@ object Diagnostics {
             } catch (e: DiskException.SenseError) {
                 if (!e.isMediumError) throw e
                 for (i in 0 until n) {
-                    if (!operation.isActive()) break
+                    if (!operation.isActive()) {
+                        val scanned = lba + i.toULong()
+                        operation.report((scanned * sectorSize.toULong()).toLong())
+                        return ScanReport(sectorsRead = scanned, failed = failed)
+                    }
                     buf.clear()
                     buf.limit(sectorSize)
                     try {

@@ -1,12 +1,14 @@
 package usb.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -100,74 +102,73 @@ fun DiagnosticsScreen(
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.StartReadScan) },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Read Scan (Detect Unreadable Sectors)")
+                // List-style actions: compact rows instead of full-width buttons
+                val enabled = state.actionsEnabled
+                listOf(
+                    Triple("Read Scan", "Detect unreadable sectors (read-only)", enabled) to
+                        { onIntent(UiIntent.StartReadScan) },
+                    Triple("Backup Image + Map", "ddrescue-style copy to external storage", enabled) to
+                        { onIntent(UiIntent.StartRescueBackup) },
+                ).forEach { (meta, action) ->
+                    val (label, hint, isEnabled) = meta
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isEnabled) 0.5f else 0.2f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = isEnabled, onClick = action),
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                            Text(hint, style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
 
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.StartRescueBackup) },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Backup Image + Rescue Map (ddrescue Copy)")
-                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
 
+                // Rescue restore: image + map pickers in one compact row
+                Text("Restore from rescue image", style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = "Restore writes the dense image back to the stick. " +
-                        "Sector geometry must match. Resume skips COPIED only when map identity " +
-                        "matches the attached disk; otherwise full rewrite (disk swap OK with confirm). " +
-                        "Partial COPY maps refused (unread → zeros). FAILED sectors are zeros.",
+                    text = "Restore writes the dense image back. Geometry must match. " +
+                        "Resume skips copied sectors only when the map identity matches; otherwise a full rewrite is required. " +
+                        "Partial COPY maps are refused; FAILED sectors become zeros.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(
-                    text = state.rescueImageUri?.substringAfterLast('/') ?: "No rescue image selected",
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = state.rescueMapUri?.substringAfterLast('/') ?: "No rescue map selected",
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = onPickRescueImage,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Choose Image") }
-                    OutlinedButton(
-                        onClick = onPickRescueMap,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Choose Map") }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).clickable(onClick = onPickRescueImage),
+                    ) {
+                        Text(
+                            text = state.rescueImageUri?.substringAfterLast('/') ?: "Choose image…",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = 48.dp).clickable(onClick = onPickRescueMap),
+                    ) {
+                        Text(
+                            text = state.rescueMapUri?.substringAfterLast('/') ?: "Choose map…",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 Button(
-                    onClick = {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
-                    },
-                    enabled = state.actionsEnabled &&
-                        state.rescueImageUri != null &&
-                        state.rescueMapUri != null,
+                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE)) },
+                    enabled = state.actionsEnabled && state.rescueImageUri != null && state.rescueMapUri != null,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Restore Rescue Image")
-                }
-
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.CaptureGptBackup) },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Back Up GPT Critical Sectors")
-                }
+                ) { Text("Restore Rescue Image") }
             }
         }
 
@@ -219,26 +220,21 @@ fun DiagnosticsScreen(
                     }
                 }
 
+                OutlinedButton(
+                    onClick = { onIntent(UiIntent.CaptureGptBackup) },
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Back Up GPT") }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = onPickBackup,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Choose Backup")
-                    }
-
+                    OutlinedButton(onClick = onPickBackup, modifier = Modifier.weight(1f)) { Text("Choose File") }
                     Button(
-                        onClick = {
-                            onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
-                        },
+                        onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE)) },
                         enabled = state.actionsEnabled && state.backupUri != null,
                         modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Restore GPT")
-                    }
+                    ) { Text("Restore GPT") }
                 }
             }
         }
@@ -306,7 +302,7 @@ fun DiagnosticsScreen(
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                     val scrollState = rememberScrollState()
-                    androidx.compose.runtime.LaunchedEffect(state.logLines.size) {
+                    androidx.compose.runtime.LaunchedEffect(state.logLines.lastOrNull()) {
                         scrollState.animateScrollTo(scrollState.maxValue)
                     }
                     Column(
