@@ -58,23 +58,6 @@ class FormatterFormatTest {
         }
     }
 
-    @Test
-    fun testModeRecordsWithoutFormatting() {
-        FormatProbe.testMode = true
-        try {
-            val fixture = Fixture(sectors = 8192, sectorSize = sectorSize)
-            Formatter.format(fixture.partition, FilesystemId.FAT)
-
-            assertEquals(
-                FormatProbe.Request(0UL, 8192UL, FilesystemId.FAT),
-                FormatProbe.last,
-            )
-            // Recorded, not formatted: the image is untouched.
-            assertEquals(0x5A.toByte(), fixture.image.snapshot()[0])
-        } finally {
-            FormatProbe.reset()
-        }
-    }
 
     @Test
     fun fatFormatRunsTheEngineInsteadOfThrowingEngineMissing() {
@@ -103,5 +86,16 @@ class FormatterFormatTest {
         }
         val boot = fixture.image.snapshot().copyOfRange(0, sectorSize)
         assertEquals("EXFAT   ", String(boot, 3, 8, Charsets.US_ASCII))
+    }
+
+
+    @Test
+    fun requireSupportedRejectsNtfs() {
+        try {
+            Formatter.requireSupported(FilesystemId.NTFS)
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+            // ok
+        }
     }
 }

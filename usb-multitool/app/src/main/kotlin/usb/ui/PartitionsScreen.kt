@@ -1,6 +1,9 @@
 package usb.ui
 
+import usb.fs.FormatCatalog
+
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -17,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -167,6 +172,26 @@ fun PartitionsScreen(
                     }
                 }
 
+                Text(
+                    text = "Format filesystem",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FormatCatalog.supportedFormatIds().forEach { id ->
+                        FilterChip(
+                            selected = state.selectedFormatId == id,
+                            onClick = { onIntent(UiIntent.SelectFormatFilesystem(id)) },
+                            enabled = state.actionsEnabled,
+                            label = { Text(FormatCatalog.label(id)) },
+                        )
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -178,7 +203,7 @@ fun PartitionsScreen(
                         enabled = state.actionsEnabled && state.selectedPartitionId != null,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Format")
+                        Text("Format as ${FormatCatalog.label(state.selectedFormatId)}")
                     }
 
                     OutlinedButton(
@@ -229,7 +254,8 @@ fun PartitionsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = state.imageUri?.let { it.substringAfterLast('/') }
+                            text = state.stagedRawImageLabel
+                                ?: state.imageUri?.let { it.substringAfterLast('/') }
                                 ?: "No image selected",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (state.imageUri != null) FontWeight.SemiBold else FontWeight.Normal,
@@ -239,6 +265,7 @@ fun PartitionsScreen(
                         )
                         OutlinedButton(
                             onClick = onPickImage,
+                            enabled = state.actionsEnabled,
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         ) {
                             Text("Choose Image", style = MaterialTheme.typography.labelMedium)
@@ -248,7 +275,7 @@ fun PartitionsScreen(
 
                 Button(
                     onClick = {
-                        if (state.imageUri == null) {
+                        if (state.imageUri == null && state.stagedRawImagePath == null) {
                             onPickImage()
                         } else {
                             onIntent(UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE))
@@ -257,7 +284,23 @@ fun PartitionsScreen(
                     enabled = state.actionsEnabled,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Write Raw Image to USB")
+                    Text(
+                        if (state.stagedRawImagePath != null) {
+                            "Write Staged Image to USB"
+                        } else {
+                            "Write Raw Image to USB"
+                        },
+                    )
+                }
+                if (state.stagedRawImagePath != null) {
+                    val stagingBusy = state.operation?.state == OperationState.Running ||
+                        state.operation?.state == OperationState.Queued
+                    TextButton(
+                        onClick = { onIntent(UiIntent.ClearStagedRawImage(deleteFile = true)) },
+                        enabled = !stagingBusy,
+                    ) {
+                        Text("Discard staged image")
+                    }
                 }
             }
         }

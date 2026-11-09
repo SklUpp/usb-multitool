@@ -88,8 +88,10 @@ fun FilesScreen(
                         selected = partition.id == state.selectedPartitionId,
                         onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
                         label = {
+                            val fsTag = partition.filesystemLabel.let { if (it.isNotEmpty()) " · $it" else "" }
                             Text(
-                                if (partition.isVtoyEfi) "${partition.name} (EFI)" else partition.name,
+                                if (partition.isVtoyEfi) "${partition.name} (EFI)$fsTag"
+                                else "${partition.name}$fsTag",
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         },
@@ -195,6 +197,20 @@ fun FilesScreen(
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             ) {
                                 Text("Save", style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(
+                                onClick = {
+                                    onIntent(
+                                        UiIntent.IsoActionRequested(
+                                            selection.name,
+                                            IsoAction.SendToRawWriter,
+                                        ),
+                                    )
+                                },
+                                enabled = state.actionsEnabled,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text("Send to raw", style = MaterialTheme.typography.labelMedium)
                             }
                         }
                         TextButton(
@@ -325,7 +341,15 @@ fun FilesScreen(
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
             title = { Text("Delete") },
-            text = { Text("Delete ${entry?.name}?") },
+            text = {
+                Text(
+                    if (entry?.isDirectory == true) {
+                        "Delete folder ${entry.name}? It must be empty — nonempty folders are refused."
+                    } else {
+                        "Delete ${entry?.name}?"
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {

@@ -7,8 +7,15 @@ SRC="$ROOT/app/src/main/cpp"
 TP="$ROOT/third_party/ntfs-3g"
 mkdir -p "$BUILD"
 
+if [[ ! -f "$TP/libntfs-3g/volume.c" ]]; then
+  echo "ntfs-3g missing at $TP/libntfs-3g/volume.c" >&2
+  echo "Run scripts/fetch-third-party.sh only with explicit approval; do not auto-fetch here." >&2
+  exit 1
+fi
+
 C_SOURCES=$(ls "$TP/libntfs-3g"/*.c | grep -v 'win32_io.c')
 
-${CC:-gcc} -std=gnu11 -O2 -g   -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DHAVE_CONFIG_H=1   -I"$SRC"   -I"$TP/include"   -I"$TP/include/ntfs-3g"   -Wno-unused-parameter -Wno-unused-function -Wno-address-of-packed-member   -o "$BUILD/ntfs_host_test"   "$SRC/host/ntfs_host_test.c"   "$SRC/usb_block.c"   "$SRC/ntfs_engine.c"   $C_SOURCES
+${CC:-gcc} -std=gnu11 -O2 -g   -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DHAVE_CONFIG_H=1 -DNTFS_TEST_HOOKS=1   -I"$SRC"   -I"$TP/include"   -I"$TP/include/ntfs-3g"   -Wno-unused-parameter -Wno-unused-function -Wno-address-of-packed-member   -o "$BUILD/ntfs_host_test"   "$SRC/host/ntfs_host_test.c"   "$SRC/usb_block.c"   "$SRC/ntfs_engine.c"   $C_SOURCES
+
 
 "$BUILD/ntfs_host_test" "$TP/testdata/ntfs.img.xz"

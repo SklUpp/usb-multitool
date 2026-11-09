@@ -1,5 +1,8 @@
 package usb.ui
 
+import usb.fs.FilesystemId
+import usb.fs.FormatCatalog
+
 /**
  * Host-runnable assert self-check (no Android/Compose).
  * Compile with kotlinc against UiModels.kt + UiReducer.kt.
@@ -146,12 +149,20 @@ object UiStateHostCheck {
         require(confirmed.effects.single().kind == UiEffect.Kind.SubmitDestructive)
         require(confirmed.effects.single().action == DestructiveAction.RAW_WRITE)
 
-        val link =
+        val linkReq =
             UiReducer.reduce(
                 ready,
                 UiIntent.IsoActionRequested("win11.iso", IsoAction.LinkXml),
             )
+        require(linkReq.effects.isEmpty()) { "LinkXml must confirm before write" }
+        require(linkReq.state.pendingConfirmation != null)
+        require(linkReq.state.pendingConfirmation!!.action.contains("link Ventoy"))
+        require(!linkReq.state.pendingConfirmation!!.linkOverwrite)
+        val link =
+            UiReducer.reduce(linkReq.state, UiIntent.ConfirmDestructive)
         require(link.effects.single().kind == UiEffect.Kind.LinkXml)
+        require(link.effects.single().isoName == "win11.iso")
+        require(!link.effects.single().linkOverwrite)
 
         val efi = ready.copy(selectedPartitionId = "2")
         listOf(
@@ -214,8 +225,31 @@ object UiStateHostCheck {
 
         val tpmToggle = UiReducer.reduce(ready, UiIntent.SetVtoyBypassTpm(false)).state
         require(!tpmToggle.vtoyBypassTpm)
+        val ramToggle = UiReducer.reduce(ready, UiIntent.SetVtoyBypassRam(true)).state
+        require(ramToggle.vtoyBypassRam)
+        val localToggle = UiReducer.reduce(ramToggle, UiIntent.SetVtoyLocalAccount(true)).state
+        require(localToggle.vtoyLocalAccount)
+        val candidate = UiReducer.reduce(ready, UiIntent.LinkOverwriteAvailable("win.iso")).state
+        require(candidate.linkOverwriteCandidate == "win.iso")
+        require(candidate.linkOverwriteCandidateIdentity == device.identity)
+        val sameDiskOverwrite = UiReducer.reduce(candidate, UiIntent.RequestLinkOverwrite("win.iso")).state
+        require(sameDiskOverwrite.pendingConfirmation?.linkOverwrite == true)
+        val detached = UiReducer.reduce(candidate, UiIntent.DeviceChanged(DevicePresence.Disconnected)).state
+        require(detached.linkOverwriteCandidate == null)
+        require(detached.linkOverwriteCandidateIdentity == null)
+        require(UiReducer.reduce(detached, UiIntent.RequestLinkOverwrite("win.iso")).state.pendingConfirmation == null)
+        val otherDevice = device.copy(label = "Other USB", serialNumber = "other")
+        val deviceSwitched = UiReducer.reduce(candidate, UiIntent.DeviceChanged(DevicePresence.Ready, otherDevice)).state
+        require(deviceSwitched.linkOverwriteCandidate == null)
+        require(UiReducer.reduce(deviceSwitched, UiIntent.RequestLinkOverwrite("win.iso")).state.pendingConfirmation == null)
 
         val cancelEffect = UiReducer.reduce(ready, UiIntent.CancelOperation)
+        val staged = ready.copy(stagedRawImagePath = "/staging/old.img", stagedRawImageLabel = "old")
+        val stagedBusy = staged.copy(operation = OperationProgress(OperationState.Running, "raw write", bytesTotal = 1))
+        require(UiReducer.reduce(stagedBusy, UiIntent.ClearStagedRawImage()).state.stagedRawImagePath == "/staging/old.img")
+        require(UiReducer.reduce(stagedBusy, UiIntent.SetStagedRawImage("/staging/new.img", "new")).state.stagedRawImagePath == "/staging/old.img")
+        val stagedConfirmed = staged.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.RAW_WRITE))
+        require(UiReducer.reduce(stagedConfirmed, UiIntent.ClearStagedRawImage()).state.stagedRawImagePath == "/staging/old.img")
         require(cancelEffect.effects.single().kind == UiEffect.Kind.CancelOperation)
 
         val corrupt = ready.copy(tableValid = false)
@@ -250,5 +284,67 @@ object UiStateHostCheck {
         require(confirmNoSelection.effects.isEmpty()) { "ConfirmDestructive without selection must not emit SubmitDestructive" }
 
         println("UiStateHostCheck PASS")
+
+        // Format picker host invariants (FormatCatalog — no Formatter/JNI).
+        require(FormatCatalog.supportedFormatIds() == listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT))
+        val fmtReady =
+            AppUiState(
+                presence = DevicePresence.Ready,
+                device = device,
+                partitions = listOf(PartitionTab("1", "DATA", readOnly = false)),
+                selectedPartitionId = "1",
+                selectedFormatId = FilesystemId.EXFAT,
+            )
+        val fmtReq =
+            UiReducer.reduce(fmtReady, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
+        require(fmtReq.state.pendingConfirmation != null)
+        require(fmtReq.state.pendingConfirmation!!.formatId == FilesystemId.EXFAT)
+        require(fmtReq.state.pendingConfirmation!!.message.contains("exFAT"))
+        val fmtGo = UiReducer.reduce(fmtReq.state, UiIntent.ConfirmDestructive)
+        require(fmtGo.effects.single().formatId == FilesystemId.EXFAT)
+        val blockedSel =
+            UiReducer.reduce(fmtReq.state, UiIntent.SelectFormatFilesystem(FilesystemId.EXT))
+        require(blockedSel.state.selectedFormatId == FilesystemId.EXFAT)
+        require(blockedSel.state.pendingConfirmation != null)
+
+        // Choose Image / SetImage must not clear staged source while busy.
+        run {
+            val device = DeviceIdentity(
+                label = "SanDisk Ultra USB 3.0 (USB 1234:5678)",
+                capacityBytes = 31_457_280uL,
+                serialNumber = "SN-TEST",
+            )
+            val busy = AppUiState(
+                presence = DevicePresence.Ready,
+                device = device,
+                stagedRawImagePath = "/data/staging/raw-1-img.bin",
+                stagedRawImageLabel = "img.bin",
+                operation = OperationProgress(state = OperationState.Running, label = "raw image write"),
+            )
+            require(!busy.actionsEnabled)
+            val blocked = UiReducer.reduce(busy, UiIntent.SetImage("content://new.iso"))
+            require(blocked.state.stagedRawImagePath == "/data/staging/raw-1-img.bin")
+            require(blocked.state.imageUri == null)
+            require(blocked.effects.isEmpty())
+
+            val idle = busy.copy(operation = null)
+            require(idle.actionsEnabled)
+            val ok = UiReducer.reduce(idle, UiIntent.SetImage("content://new.iso"))
+            require(ok.state.imageUri == "content://new.iso")
+            require(ok.state.stagedRawImagePath == null)
+
+            val absent = AppUiState(
+                presence = DevicePresence.Absent,
+                stagedRawImagePath = "/data/staging/raw-1-img.bin",
+                stagedRawImageLabel = "img.bin",
+            )
+            val absentSet = UiReducer.reduce(absent, UiIntent.SetImage("content://new.iso"))
+            require(absentSet.state.stagedRawImagePath == "/data/staging/raw-1-img.bin")
+            require(absentSet.state.imageUri == null)
+            val cleared = UiReducer.reduce(absent, UiIntent.ClearStagedRawImage(deleteFile = true))
+            require(cleared.state.stagedRawImagePath == null)
+            require(cleared.state.stagedRawImageLabel == null)
+        }
+
     }
 }

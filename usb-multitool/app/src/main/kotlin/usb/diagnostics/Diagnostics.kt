@@ -2,9 +2,11 @@ package usb.diagnostics
 
 import java.io.OutputStream
 import java.nio.ByteBuffer
+import usb.device.DiskException
 import usb.device.UsbDisk
 import usb.fs.MountedVolume
 import usb.image.CountedInputStream
+import usb.image.ImageCancelledException
 import usb.image.ImageSource
 import usb.service.DiskOperation
 import usb.service.OperationState
@@ -145,91 +147,265 @@ fun OutputStream.asRescueSink(sectorSize: Int): RescueSink {
 }
 
 object Rescue {
+    /**
+     * Disk → dense positional image. Only [DiskException.SenseError.isMediumError]
+     * marks a sector FAILED (zero-filled gap). Disconnect / transport / sink errors
+     * abort immediately without marking FAILED. [checkpoint] runs only after the
+     * caller has synced image data for the painted sectors (see MainActivity).
+     */
     fun copy(
         disk: UsbDisk,
         destination: RescueSink,
-        map: RescueMap = RescueMap.whole(disk.geometry.sectorCount),
+        map: RescueMap = RescueMap.forCopy(disk.geometry.sectorCount),
+        checkpointEverySectors: ULong = 4096UL,
+        checkpoint: (RescueMap) -> Unit = {},
         operation: DiskOperation = DiskOperation("rescue-copy"),
     ): RescueMap {
+        require(map.kind == MapKind.COPY) { "rescue copy needs a COPY map" }
+        require(map.sectorCount == disk.geometry.sectorCount) {
+            "COPY map sectorCount ${map.sectorCount} != disk ${disk.geometry.sectorCount}"
+        }
         val sectorSize = disk.geometry.sectorSize
-        val buf = ByteBuffer.allocate(sectorSize)
-        val zeros = ByteArray(sectorSize)
-        for (range in map.nonTried + map.failed) {
-            var lba = range.first
-            while (lba <= range.last) {
-                if (!operation.isActive()) return map
-                try {
-                    buf.clear()
-                    disk.read(lba, buf)
-                    destination.writeSector(lba, buf.array().copyOf(sectorSize))
-                    map.markCopied(lba, 1UL)
-                } catch (_: Exception) {
-                    map.markFailed(lba, 1UL)
-                    // Keep the image dense: the unreadable sector becomes a zero
-                    // gap at its own offset so every later sector stays aligned
-                    // with its LBA in the map.
-                    destination.writeSector(lba, zeros)
-                }
-                lba++
-                operation.report((lba * sectorSize.toULong()).toLong())
+        if (map.sectorSize != null) {
+            require(map.sectorSize == sectorSize) {
+                "COPY map sectorSize ${map.sectorSize} != disk $sectorSize"
             }
         }
-        DdrescueNative.persistHint(map)
-        if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
-            operation.state = if (map.failed.isNotEmpty() || map.partial) {
-                OperationState.Partial
-            } else {
-                OperationState.Completed
+        val buf = ByteBuffer.allocate(sectorSize)
+        val zeros = ByteArray(sectorSize)
+        var sinceCheckpoint = 0UL
+        var aborted: Throwable? = null
+        try {
+            for (range in map.nonTried + map.failed) {
+                var lba = range.first
+                while (lba <= range.last) {
+                    if (!operation.isActive()) {
+                        aborted = ImageCancelledException("rescue copy cancelled")
+                        return map
+                    }
+                    try {
+                        buf.clear()
+                        disk.read(lba, buf)
+                        destination.writeSector(lba, buf.array().copyOf(sectorSize))
+                        map.markCopied(lba, 1UL)
+                    } catch (e: DiskException.SenseError) {
+                        if (!e.isMediumError) {
+                            aborted = e
+                            throw e
+                        }
+                        // Medium error only: keep dense image, mark FAILED.
+                        try {
+                            destination.writeSector(lba, zeros)
+                        } catch (sink: Exception) {
+                            aborted = sink
+                            throw sink // do not leave FAILED without a gap written
+                        }
+                        map.markFailed(lba, 1UL)
+                    } catch (e: DiskException) {
+                        // Disconnected / Closed / IoFailure / Unsupported — abort.
+                        aborted = e
+                        throw e
+                    } catch (e: Exception) {
+                        // Sink / ENOSPC / unexpected — abort, do not mark FAILED.
+                        aborted = e
+                        throw e
+                    }
+                    lba++
+                    sinceCheckpoint++
+                    operation.report((lba * sectorSize.toULong()).toLong())
+                    if (sinceCheckpoint >= checkpointEverySectors) {
+                        checkpoint(map.snapshot())
+                        sinceCheckpoint = 0UL
+                    }
+                }
+            }
+        } finally {
+            DdrescueNative.persistHint(map)
+            // Final checkpoint even on cancel/abort so Partial retains a usable map.
+            try {
+                checkpoint(map.snapshot())
+            } catch (cp: Exception) {
+                if (aborted != null) aborted.addSuppressed(cp)
+                else if (operation.isActive()) throw cp
+                else operation.failureCause = mergeAbort(operation.failureCause, cp)
+            }
+            if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
+                when {
+                    aborted is ImageCancelledException || !operation.isActive() -> {
+                        operation.state = OperationState.Partial
+                        operation.failureCause =
+                            mergeAbort(operation.failureCause, aborted ?: ImageCancelledException("rescue copy cancelled"))
+                    }
+                    aborted != null -> {
+                        operation.state = OperationState.Partial
+                        operation.failureCause = mergeAbort(operation.failureCause, aborted)
+                    }
+                    map.failed.isNotEmpty() || map.partial -> operation.state = OperationState.Partial
+                    else -> operation.state = OperationState.Completed
+                }
             }
         }
         return map
     }
 
+    /**
+     * Image → disk. Requires a [MapKind.RESTORE] map (never a COPY map). Confirmation
+     * and size checks must run before the first write (caller / [restore] preflight).
+     * Medium write errors → FAILED; disconnect/transport → abort Partial.
+     */
     fun restore(
         source: ImageSource,
         disk: UsbDisk,
         map: RescueMap,
+        identity: String,
+        confirmation: DestructiveConfirmation,
         openVolumes: List<MountedVolume> = emptyList(),
+        checkpointEverySectors: ULong = 4096UL,
+        checkpoint: (RescueMap) -> Unit = {},
         operation: DiskOperation = DiskOperation("rescue-restore"),
     ): RescueMap {
+        require(map.kind == MapKind.RESTORE) {
+            "rescue restore needs a RESTORE map (got ${map.kind}); refuse COPY map to avoid skipping good sectors"
+        }
+        confirmation.requireMatch(identity, disk)
+        require(map.sectorCount <= disk.geometry.sectorCount) {
+            "RESTORE map covers ${map.sectorCount} sectors but disk has only ${disk.geometry.sectorCount}"
+        }
+        val sectorSize = disk.geometry.sectorSize
+        if (map.sectorSize != null) {
+            require(map.sectorSize == sectorSize) {
+                "RESTORE map sectorSize ${map.sectorSize} != disk $sectorSize"
+            }
+        }
+        val expectedBytes = map.sectorCount.toLong() * sectorSize.toLong()
+        require(expectedBytes / sectorSize.toLong() == map.sectorCount.toLong()) {
+            "sectorCount*sectorSize overflows Long"
+        }
+        val declared = source.declaredDecodedSize
+        if (declared != null) {
+            require(declared >= expectedBytes) {
+                "rescue image declares $declared bytes; need at least $expectedBytes for this map"
+            }
+        }
+
         closeMountedVolumes(openVolumes)
-        // Resume only from the provided map; non-tried/failed ranges are rewritten.
-        source.open().use { input ->
-            val sectorSize = disk.geometry.sectorSize
-            val sector = ByteArray(sectorSize)
-            var lba = 0UL
-            while (lba < map.sectorCount) {
-                // Always consume the sector at this LBA from the image so
-                // COPIED skips stay aligned; never rewrite a COPIED sector.
-                val n = readFully(input, sector)
-                if (n == 0) break // clean EOF
-                if (n < sectorSize) {
-                    // EOF mid-sector ends cleanly; never zero-fill or desync ranges.
-                    break
-                }
-                val status = map.statusAt(lba)
-                if (status != RescueStatus.COPIED) {
-                    if (!operation.isActive()) return map
-                    try {
-                        disk.write(lba, ByteBuffer.wrap(sector))
-                        map.markCopied(lba, 1UL)
-                    } catch (_: Exception) {
-                        map.markFailed(lba, 1UL)
+        var sinceCheckpoint = 0UL
+        var aborted: Throwable? = null
+        var wroteAny = false
+        try {
+            source.open().use { input ->
+                val sector = ByteArray(sectorSize)
+                var lba = 0UL
+                while (lba < map.sectorCount) {
+                    val n = readFully(input, sector)
+                    if (n == 0) {
+                        if (lba < map.sectorCount) {
+                            aborted =
+                                IllegalStateException(
+                                    "rescue image ended at LBA $lba; map expects ${map.sectorCount} sectors",
+                                )
+                        }
+                        break
+                    }
+                    if (n < sectorSize) {
+                        aborted =
+                            IllegalStateException(
+                                "rescue image truncated mid-sector at LBA $lba ($n of $sectorSize bytes)",
+                            )
+                        break
+                    }
+                    if (!operation.isActive()) {
+                        aborted = ImageCancelledException("rescue restore cancelled")
+                        break
+                    }
+                    val status = map.statusAt(lba)
+                    if (status != RescueStatus.COPIED) {
+                        try {
+                            disk.write(lba, ByteBuffer.wrap(sector))
+                            map.markCopied(lba, 1UL)
+                            wroteAny = true
+                        } catch (e: DiskException.SenseError) {
+                            if (!e.isMediumError) {
+                                aborted = e
+                                break
+                            }
+                            map.markFailed(lba, 1UL)
+                            wroteAny = true
+                        } catch (e: DiskException) {
+                            aborted = e
+                            break
+                        } catch (e: Exception) {
+                            aborted = e
+                            break
+                        }
+                    }
+                    lba++
+                    sinceCheckpoint++
+                    operation.report((lba * sectorSize.toULong()).toLong())
+                    if (sinceCheckpoint >= checkpointEverySectors) {
+                        try {
+                            disk.sync()
+                        } catch (syncErr: Exception) {
+                            aborted = syncErr
+                            break
+                        }
+                        checkpoint(map.snapshot())
+                        sinceCheckpoint = 0UL
                     }
                 }
-                lba++
-                operation.report((lba * sectorSize.toULong()).toLong())
+            }
+        } finally {
+            var syncOk = !wroteAny
+            try {
+                if (wroteAny) {
+                    disk.sync()
+                    syncOk = true
+                }
+            } catch (syncErr: Exception) {
+                aborted = mergeAbort(aborted, syncErr)
+                syncOk = false
+            }
+            // Data-before-map: never publish COPIED past an unconfirmed sync.
+            if (syncOk) {
+                try {
+                    checkpoint(map.snapshot())
+                } catch (cp: Exception) {
+                    aborted = mergeAbort(aborted, cp)
+                }
+            }
+            if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
+                when {
+                    aborted is ImageCancelledException ||
+                        (aborted == null && !operation.isActive()) -> {
+                        operation.state = OperationState.Partial
+                        operation.failureCause =
+                            mergeAbort(
+                                operation.failureCause,
+                                aborted ?: ImageCancelledException("rescue restore cancelled"),
+                            )
+                    }
+                    aborted != null -> {
+                        // Writes may already have landed — Partial, never silent Failed-as-clean.
+                        operation.state =
+                            if (wroteAny) OperationState.Partial
+                            else OperationState.Failed(aborted)
+                        operation.failureCause = mergeAbort(operation.failureCause, aborted)
+                    }
+                    map.failed.isNotEmpty() || map.partial -> operation.state = OperationState.Partial
+                    else -> operation.state = OperationState.Completed
+                }
             }
         }
-        disk.sync()
-        if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
-            operation.state = if (map.failed.isNotEmpty() || map.partial) {
-                OperationState.Partial
-            } else {
-                OperationState.Completed
-            }
+        if (aborted != null && operation.state is OperationState.Failed) {
+            throw aborted
         }
         return map
+    }
+
+    private fun mergeAbort(existing: Throwable?, next: Throwable): Throwable {
+        if (existing == null) return next
+        if (existing !== next) existing.addSuppressed(next)
+        return existing
     }
 
     private fun readFully(input: CountedInputStream, buffer: ByteArray): Int {

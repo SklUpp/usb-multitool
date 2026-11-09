@@ -4,11 +4,17 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.CRC32
 import usb.device.BlockDevice
+import usb.fs.BlockDeviceFatCallback
+import usb.fs.FatFs
+import usb.fs.FatKind
+import usb.fs.FilesystemId
+import usb.fs.Formatter
 import usb.partition.FreeRegion
 import usb.partition.Partition
 import usb.partition.PartitionTable
 import usb.partition.PartitionType
 import usb.partition.TableScheme
+import usb.partition.VirtualPartition
 
 class IncompatibleVentoyException(message: String) : Exception(message)
 
@@ -20,6 +26,12 @@ class EngineMissingException(message: String) : Exception(message)
 
 /** The release payload does not fit the existing partition; writing would truncate it. */
 class VentoyPayloadTooLargeException(message: String) : Exception(message)
+
+/**
+ * Install/update mutated the disk then failed. Callers must surface Partial, never
+ * "untouched failure".
+ */
+class VentoyMutationFailedException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 data class VentoyProbeResult(
     val isVentoy: Boolean,
@@ -84,6 +96,9 @@ object VentoyLayout {
             disk.read(2L, tblBuf)
             val tbl = tblBuf.array()
 
+            // Fail closed: GPT header + entries CRC + header geometry vs disk size.
+            if (!gptHeaderAndEntriesCrcOk(hdr, tbl, disk.sectorCount)) return null
+
             // Verify partition 1 and 2
             val p1Start = ByteBuffer.wrap(tbl, 32, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
             val p1Last = ByteBuffer.wrap(tbl, 40, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
@@ -91,8 +106,19 @@ object VentoyLayout {
             val p2Last = ByteBuffer.wrap(tbl, 128 + 40, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
 
             val p2Count = p2Last - p2Start + 1UL
-            if (p1Start != PART1_START_SECTOR.toULong() || p2Start != (p1Last + 1UL)) return null
+            // Fail closed on malformed tables before any update write.
+            if (p1Last < p1Start || p2Last < p2Start) return null
+            if (p2Start != (p1Last + 1UL)) return null
+            if (p1Start != PART1_START_SECTOR.toULong()) return null
             if (p2Count < 2048UL) return null
+            if (p1Last - p1Start + 1UL < 2048UL) return null
+            if (p1Start >= disk.sectorCount || p1Last >= disk.sectorCount) return null
+            if (p2Start >= disk.sectorCount || p2Last >= disk.sectorCount) return null
+            // Backup GPT occupies the last 33 LBAs — partitions must not overlap it.
+            if (p2Last >= disk.sectorCount - 33UL) return null
+            val firstUsable = ByteBuffer.wrap(hdr, 40, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+            val lastUsable = ByteBuffer.wrap(hdr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+            if (p1Start < firstUsable || p2Last > lastUsable) return null
             // Check VTOYEFI name
             val nameBytes = tbl.copyOfRange(128 + 56, 128 + 56 + 14)
             val nameStr = String(nameBytes, Charsets.UTF_16LE)
@@ -120,8 +146,12 @@ object VentoyLayout {
             val p1Start = (ByteBuffer.wrap(mbr, 462 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
             val p1Count = (ByteBuffer.wrap(mbr, 462 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
 
+            if (p0Count == 0UL || p1Count == 0UL) return null
+            if (p0Count < 2048UL) return null
             if (p0Start != PART1_START_SECTOR.toULong() || (p0Start + p0Count) != p1Start) return null
             if (p1Count < 2048UL || p1Flag != 0xEF) return null
+            if (p0Start >= disk.sectorCount || p0Count > disk.sectorCount - p0Start) return null
+            if (p1Start >= disk.sectorCount || p1Count > disk.sectorCount - p1Start) return null
 
             val rsv = ByteBuffer.allocate(8 * SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
             disk.read(2040L, rsv)
@@ -140,7 +170,83 @@ object VentoyLayout {
             )
         }
     }
+
+    /**
+     * Fail closed: GPT header CRC, partition-entry CRC, and basic header geometry.
+     * [diskSectorCount] when non-null also checks AlternateLBA / usable range / backup room.
+     */
+    internal fun gptHeaderAndEntriesCrcOk(
+        hdr: ByteArray,
+        entries: ByteArray,
+        diskSectorCount: ULong? = null,
+    ): Boolean {
+        if (hdr.size < 92) return false
+        // UEFI GPT HeaderSize (offset 12): must be 92; refuse truncated/extended headers.
+        val headerSize = ByteBuffer.wrap(hdr, 12, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        if (headerSize != 92) return false
+        if (hdr.size < headerSize) return false
+        val hdrCopy = hdr.copyOf(headerSize)
+        hdrCopy[16] = 0; hdrCopy[17] = 0; hdrCopy[18] = 0; hdrCopy[19] = 0
+        val hdrCrc = ieeeCrc32(hdrCopy, 0, headerSize)
+        val storedHdr = ByteBuffer.wrap(hdr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        if (hdrCrc != storedHdr) return false
+        val myLba = ByteBuffer.wrap(hdr, 24, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+        val alternateLba = ByteBuffer.wrap(hdr, 32, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+        val firstUsable = ByteBuffer.wrap(hdr, 40, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+        val lastUsable = ByteBuffer.wrap(hdr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+        val entryLba = ByteBuffer.wrap(hdr, 72, 8).order(ByteOrder.LITTLE_ENDIAN).long.toULong()
+        val entryCount = ByteBuffer.wrap(hdr, 80, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        val entrySize = ByteBuffer.wrap(hdr, 84, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        if (entrySize != 128 || entryCount < 2) return false
+        // Overflow-safe need = entrySize * entryCount
+        if (entryCount > Int.MAX_VALUE / entrySize) return false
+        val need = entrySize * entryCount
+        if (entries.size < need) return false
+        val entriesCrcStored = ByteBuffer.wrap(hdr, 88, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        if (ieeeCrc32(entries, 0, need) != entriesCrcStored) return false
+
+        if (myLba != 1UL) return false
+        if (entryLba != 2UL) return false
+        if (firstUsable > lastUsable) return false
+        if (diskSectorCount != null) {
+            if (alternateLba != diskSectorCount - 1UL) return false
+            if (alternateLba >= diskSectorCount) return false
+            // Primary entry array is 32 sectors at LBA 2; backup array occupies last 33 LBAs
+            // (32 entry sectors + 1 backup header). Usable must sit strictly between them.
+            if (firstUsable < 34UL) return false
+            if (lastUsable >= diskSectorCount - 33UL) return false
+        }
+        return true
+    }
+
+    private fun ieeeCrc32(data: ByteArray, offset: Int = 0, length: Int = data.size): Int {
+        var crc = 0xFFFFFFFF.toInt()
+        val end = offset + length
+        var i = offset
+        while (i < end) {
+            crc = crc xor (data[i].toInt() and 0xFF)
+            repeat(8) {
+                crc = if ((crc and 1) != 0) (crc ushr 1) xor 0xEDB88320.toInt() else crc ushr 1
+            }
+            i++
+        }
+        return crc.inv()
+    }
+
 }
+
+
+/** Pure install geometry after alignment; no disk I/O. */
+data class VentoyInstallGeometry(
+    val part1Start: Long,
+    val part1End: Long,
+    val part1Count: Long,
+    val part2Start: Long,
+    val part2End: Long,
+    val diskSectors: Long,
+    val gpt: Boolean,
+)
+
 
 object VentoyInstaller {
 
@@ -165,42 +271,26 @@ object VentoyInstaller {
         }
         assets.validateChecksums(strict = true)
 
-        val diskSectors = disk.sectorCount.toLong()
-        val reserveSectors = reserveBytes / VentoyLayout.SECTOR_SIZE
-        val minNeeded = VentoyLayout.PART1_START_SECTOR + VentoyLayout.EFI_PART_SECTORS + 2048L
-        if (diskSectors < minNeeded) {
-            throw IllegalArgumentException("Disk too small for Ventoy: $diskSectors sectors")
-        }
-
-        val part1Start = VentoyLayout.PART1_START_SECTOR
-        var part1End = if (gpt) {
-            diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - 35L
-        } else {
-            diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - 1L
-        }
-        var part2Start = part1End + 1L
-        if (align4k) {
-            val mod = (part2Start % 8L).toInt()
-            if (mod > 0) {
-                part1End -= mod.toLong()
-                part2Start = part1End + 1L
-            }
-        }
-        val part2End = part2Start + VentoyLayout.EFI_PART_SECTORS - 1L
-        val part1Count = part1End - part1Start + 1L
-
+        val geometry = computeInstallGeometry(
+            diskSectorCount = disk.sectorCount,
+            gpt = gpt,
+            reserveBytes = reserveBytes,
+            align4k = align4k,
+        )
+        val diskSectors = geometry.diskSectors
+        val part1Start = geometry.part1Start
+        val part1End = geometry.part1End
+        val part1Count = geometry.part1Count
+        val part2Start = geometry.part2Start
+        val part2End = geometry.part2End
         val decompressedCore = assets.decompressCoreImg()
         val decompressedEfi = assets.decompressEfiPartImg()
+        preflightInstallPayloads(gpt, decompressedCore, decompressedEfi)
+        Formatter.requireSupported(FilesystemId.EXFAT)
+        checkActive(isActive, "Ventoy install")
 
-        val efiSectors =
-            (decompressedEfi.size.toLong() + VentoyLayout.SECTOR_SIZE - 1) / VentoyLayout.SECTOR_SIZE
-        if (efiSectors > VentoyLayout.EFI_PART_SECTORS) {
-            throw VentoyPayloadTooLargeException(
-                "EFI payload needs $efiSectors sectors but VTOYEFI partition has only " +
-                    "${VentoyLayout.EFI_PART_SECTORS}; install would truncate the boot image",
-            )
-        }
-        // Clean initial sectors
+        try {
+        // Clean initial sectors — first mutation; failures after this → Partial.
         val zeroSec = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE)
         for (i in 0L until 34L) {
             zeroSec.clear()
@@ -223,7 +313,7 @@ object VentoyInstaller {
         if (gpt) {
             // Write legacy GRUB stage1 at LBA 34
             val coreBuf = ByteBuffer.allocate(2014 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(decompressedCore.size, 2014 * VentoyLayout.SECTOR_SIZE)
+            val copyLen = minOf(decompressedCore.size, coreBuf.capacity())
             coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.array()[500] = 35 // Blocklist marker
             coreBuf.flip()
@@ -309,7 +399,7 @@ object VentoyInstaller {
         } else {
             // Write legacy GRUB stage1 at LBA 1
             val coreBuf = ByteBuffer.allocate(2047 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(decompressedCore.size, 2047 * VentoyLayout.SECTOR_SIZE)
+            val copyLen = decompressedCore.size
             coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.flip()
             disk.write(1L, coreBuf)
@@ -342,6 +432,10 @@ object VentoyInstaller {
 
         disk.sync()
 
+        // Part1 exFAT only after layout preflight+writes; failure here is Partial.
+        formatDataPartitionExfat(disk, part1Start.toULong(), part1Count.toULong())
+        disk.sync()
+
         return PartitionTable(
             scheme = if (gpt) TableScheme.GPT else TableScheme.MBR,
             partitions = listOf(
@@ -363,6 +457,14 @@ object VentoyInstaller {
             diskSectorCount = disk.sectorCount,
             sectorSize = disk.sectorSize,
         )
+            } catch (t: Throwable) {
+                if (t is VentoyMutationFailedException) throw t
+                // Disk already mutated — even cancel is Partial, never untouched Cancelled.
+                throw VentoyMutationFailedException(
+                    "Ventoy install failed after the disk was modified: ${t.message}",
+                    t,
+                )
+            }
     }
 
     fun update(
@@ -395,8 +497,7 @@ object VentoyInstaller {
         val decompressedCore = assets.decompressCoreImg()
         val decompressedEfi = assets.decompressEfiPartImg()
 
-        // 1. Write new VTOYEFI partition image at part2Start. Refuse first: a short
-        // partition would silently truncate the boot payload inside writeBufferToDisk.
+        // Payload preflight — before ANY disk mutation.
         val efiSectors =
             (decompressedEfi.size.toLong() + VentoyLayout.SECTOR_SIZE - 1) / VentoyLayout.SECTOR_SIZE
         if (efiSectors > probe.part2SectorCount.toLong()) {
@@ -405,6 +506,35 @@ object VentoyInstaller {
                     "${probe.part2SectorCount}; update would truncate the boot image",
             )
         }
+        val coreLimitSectors = 2047L
+        val coreLimit = coreLimitSectors * VentoyLayout.SECTOR_SIZE
+        if (decompressedCore.size > coreLimit) {
+            throw VentoyPayloadTooLargeException(
+                "core.img is ${decompressedCore.size} bytes; boot gap holds only $coreLimit",
+            )
+        }
+        if (decompressedCore.size % VentoyLayout.SECTOR_SIZE != 0) {
+            throw VentoyPayloadTooLargeException(
+                "core.img size ${decompressedCore.size} is not a multiple of ${VentoyLayout.SECTOR_SIZE}",
+            )
+        }
+        if (decompressedEfi.size % VentoyLayout.SECTOR_SIZE != 0) {
+            throw VentoyPayloadTooLargeException(
+                "EFI payload size ${decompressedEfi.size} is not a multiple of ${VentoyLayout.SECTOR_SIZE}",
+            )
+        }
+        // Backup-zone overlap already refused by probe; re-assert before write.
+        if (probe.scheme == TableScheme.GPT &&
+            probe.part2StartLba + probe.part2SectorCount > disk.sectorCount - 33UL
+        ) {
+            throw IncompatibleVentoyException(
+                "VTOYEFI overlaps GPT backup area; refusing update",
+            )
+        }
+        checkActive(isActive, "Ventoy update")
+
+        try {
+        // 1. Write new VTOYEFI partition image at part2Start. First mutation → Partial on failure.
         val payloadBytes = probe.part2SectorCount.toLong() * VentoyLayout.SECTOR_SIZE
         writeBufferToDisk(disk, part2Start, decompressedEfi, probe.part2SectorCount.toLong()) { done ->
             onProgress(done, payloadBytes)
@@ -414,14 +544,14 @@ object VentoyInstaller {
         // 2. Write new core.img in boot gap
         if (probe.scheme == TableScheme.GPT) {
             val coreBuf = ByteBuffer.allocate(2014 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(decompressedCore.size, 2014 * VentoyLayout.SECTOR_SIZE)
+            val copyLen = minOf(decompressedCore.size, coreBuf.capacity())
             coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.array()[500] = 35
             coreBuf.flip()
             disk.write(34L, coreBuf)
         } else {
             val coreBuf = ByteBuffer.allocate(2047 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(decompressedCore.size, 2047 * VentoyLayout.SECTOR_SIZE)
+            val copyLen = decompressedCore.size
             coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.flip()
             disk.write(1L, coreBuf)
@@ -499,6 +629,121 @@ object VentoyInstaller {
             diskSectorCount = disk.sectorCount,
             sectorSize = disk.sectorSize,
         )
+        } catch (t: Throwable) {
+            if (t is VentoyMutationFailedException) throw t
+            // Disk already mutated — even cancel is Partial, never untouched Cancelled.
+            throw VentoyMutationFailedException(
+                "Ventoy update failed after the disk was modified: ${t.message}",
+                t,
+            )
+        }
+    }
+
+
+
+    /**
+     * Format Ventoy data partition (partition 1) as exFAT.
+     * Call only after geometry/payload preflight + layout writes.
+     * No test seam — real [Formatter.format] + FatFs.probe only.
+     */
+    private fun formatDataPartitionExfat(disk: BlockDevice, startLba: ULong, sectorCount: ULong) {
+        require(sectorCount > 0UL) { "part1 sectorCount must be positive" }
+        val partition = VirtualPartition(startLba, sectorCount, disk)
+        try {
+            Formatter.format(partition, FilesystemId.EXFAT)
+        } catch (e: UnsatisfiedLinkError) {
+            throw usb.EngineMissingException("FatFs")
+        }
+        disk.sync()
+        val kind = FatFs.probe(
+            BlockDeviceFatCallback(partition),
+            partition.sectorSize,
+            partition.sectorCount.toLong(),
+        )
+        if (kind != FatKind.EXFAT) {
+            throw IllegalStateException(
+                "Ventoy part1 format verify failed: probe=$kind, expected EXFAT",
+            )
+        }
+    }
+
+    /**
+     * Pure geometry + bounds for Ventoy install. Throws before any disk mutation.
+     */
+    internal fun computeInstallGeometry(
+        diskSectorCount: ULong,
+        gpt: Boolean,
+        reserveBytes: Long = 0L,
+        align4k: Boolean = true,
+    ): VentoyInstallGeometry {
+        require(diskSectorCount <= Long.MAX_VALUE.toULong()) { "Disk sector count exceeds signed geometry range" }
+        val diskSectors = diskSectorCount.toLong()
+        require(reserveBytes >= 0L) { "reserveBytes must be >= 0, got $reserveBytes" }
+        require(gpt || diskSectorCount <= 0xFFFFFFFFUL) {
+            "Disks larger than 2TB require GPT; MBR cannot address > 0xFFFFFFFF sectors"
+        }
+        val reserveSectors = reserveBytes / VentoyLayout.SECTOR_SIZE
+        val minNeeded =
+            VentoyLayout.PART1_START_SECTOR + VentoyLayout.EFI_PART_SECTORS + (if (gpt) 35L else 1L) + 2047L + if (align4k) 7L else 0L
+        require(diskSectors >= minNeeded && reserveSectors <= diskSectors - minNeeded) {
+            "Disk too small for Ventoy after reserve/alignment: sectors=$diskSectors reserve=$reserveSectors minimum=$minNeeded"
+        }
+        val part1Start = VentoyLayout.PART1_START_SECTOR
+        var part1End = diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - if (gpt) 35L else 1L
+        var part2Start = part1End + 1L
+        if (align4k) {
+            val misalignment = (part2Start % 8L).toInt()
+            part1End -= misalignment.toLong()
+            part2Start = part1End + 1L
+        }
+        val part2End = part2Start + VentoyLayout.EFI_PART_SECTORS - 1L
+        val part1Count = part1End - part1Start + 1L
+        require(part1Count >= 2048L) {
+            "Ventoy data partition needs at least 2048 sectors after reserve/alignment; got $part1Count"
+        }
+        require(part2Start > part1End && part2End >= part2Start) {
+            "VTOYEFI geometry invalid: start=$part2Start end=$part2End"
+        }
+        if (gpt) {
+            require(part2End < diskSectors - 33L) {
+                "VTOYEFI would overlap GPT backup area (part2End=$part2End disk=$diskSectors)"
+            }
+        } else {
+            require(part2End < diskSectors) {
+                "VTOYEFI exceeds disk (part2End=$part2End disk=$diskSectors)"
+            }
+        }
+        return VentoyInstallGeometry(part1Start, part1End, part1Count, part2Start, part2End, diskSectors, gpt)
+    }
+
+
+    /** Payload size checks only; no disk I/O. */
+    internal fun preflightInstallPayloads(
+        gpt: Boolean,
+        decompressedCore: ByteArray,
+        decompressedEfi: ByteArray,
+    ) {
+        val efiSectors =
+            (decompressedEfi.size.toLong() + VentoyLayout.SECTOR_SIZE - 1) / VentoyLayout.SECTOR_SIZE
+        if (efiSectors > VentoyLayout.EFI_PART_SECTORS) {
+            throw VentoyPayloadTooLargeException(
+                "EFI payload needs $efiSectors sectors but VTOYEFI partition has only " +
+                    "${VentoyLayout.EFI_PART_SECTORS}; install would truncate the boot image",
+            )
+        }
+        val coreLimit = 2047L * VentoyLayout.SECTOR_SIZE
+        if (decompressedCore.size > coreLimit) {
+            throw VentoyPayloadTooLargeException(
+                "core.img is ${decompressedCore.size} bytes; boot gap holds only $coreLimit",
+            )
+        }
+        if (decompressedCore.size % VentoyLayout.SECTOR_SIZE != 0 ||
+            decompressedEfi.size % VentoyLayout.SECTOR_SIZE != 0
+        ) {
+            throw VentoyPayloadTooLargeException(
+                "Ventoy payload sizes must be multiples of ${VentoyLayout.SECTOR_SIZE}",
+            )
+        }
     }
 
     private fun writeBufferToDisk(
@@ -511,42 +756,31 @@ object VentoyInstaller {
         val chunkSectors = 64
         val chunkBytes = chunkSectors * VentoyLayout.SECTOR_SIZE
         val buf = ByteBuffer.allocate(chunkBytes).order(ByteOrder.LITTLE_ENDIAN)
-        var remSectors = totalSectors
-        var curLba = startLba
+        var remaining = totalSectors
+        var currentLba = startLba
         var offset = 0
         var written = 0L
-
-        while (remSectors > 0L) {
-            val count = minOf(remSectors, chunkSectors.toLong()).toInt()
-            val bytesToWrite = count * VentoyLayout.SECTOR_SIZE
+        while (remaining > 0L) {
+            val count = minOf(remaining, chunkSectors.toLong()).toInt()
+            val bytes = count * VentoyLayout.SECTOR_SIZE
             buf.clear()
-            if (offset < data.size) {
-                val available = minOf(data.size - offset, bytesToWrite)
+            val available = minOf(data.size - offset, bytes).coerceAtLeast(0)
+            if (available > 0) {
                 buf.put(data, offset, available)
-                if (available < bytesToWrite) {
-                    buf.put(ByteArray(bytesToWrite - available))
-                }
                 offset += available
-            } else {
-                buf.put(ByteArray(bytesToWrite))
             }
+            repeat(bytes - available) { buf.put(0) }
             buf.flip()
-            disk.write(curLba, buf)
-            curLba += count.toLong()
-            remSectors -= count.toLong()
-            written += bytesToWrite.toLong()
+            disk.write(currentLba, buf)
+            currentLba += count
+            remaining -= count
+            written += bytes
             onWritten(written)
         }
     }
 
-    /**
-     * Cancellation is honoured between payload phases, never inside one, so a
-     * cancelled run leaves a disk that re-running the same action repairs.
-     */
     private fun checkActive(isActive: () -> Boolean, action: String) {
-        if (!isActive()) {
-            throw java.util.concurrent.CancellationException("$action cancelled")
-        }
+        if (!isActive()) throw java.util.concurrent.CancellationException("$action cancelled")
     }
 
     private fun putGuid(dest: ByteArray, offset: Int, data1: Int, data2: Short, data3: Short, data4: ByteArray) {
@@ -569,9 +803,10 @@ object VentoyInstaller {
 }
 
 data class SetupOptions(
-    val tpmBypass: Boolean = false,
-    val bypassRamCheck: Boolean = false,
-    val localAccount: Boolean = false,
+    /** null = leave existing ventoy.json control flag unchanged. */
+    val tpmBypass: Boolean? = null,
+    val bypassRamCheck: Boolean? = null,
+    val localAccount: Boolean? = null,
 )
 
 object WindowsSetup {
@@ -618,9 +853,17 @@ object WindowsSetup {
         val rootMap: MutableMap<String, Any?> = if (!existingJson.isNullOrBlank()) {
             try {
                 @Suppress("UNCHECKED_CAST")
-                (MiniJson.parse(existingJson) as? MutableMap<String, Any?>) ?: linkedMapOf()
-            } catch (_: Throwable) {
-                linkedMapOf()
+                (MiniJson.parse(existingJson) as? MutableMap<String, Any?>)
+                    ?: throw IllegalStateException(
+                        "ventoy.json parsed but root is not an object; refusing to overwrite",
+                    )
+            } catch (e: IllegalStateException) {
+                throw e
+            } catch (e: Throwable) {
+                throw IllegalStateException(
+                    "ventoy.json is not valid JSON; refusing to destroy existing config: ${e.message}",
+                    e,
+                )
             }
         } else {
             linkedMapOf()
@@ -657,9 +900,12 @@ object WindowsSetup {
             controlList.add(linkedMapOf("VTOY_DEFAULT_SEARCH_ROOT" to "/ISO"))
         }
 
-        setControlFlag("VTOY_WIN11_BYPASS_TPM", if (options.tpmBypass) "1" else "0")
-        setControlFlag("VTOY_WIN11_BYPASS_RAM", if (options.bypassRamCheck) "1" else "0")
-        setControlFlag("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT", if (options.localAccount) "1" else "0")
+        // Only touch flags the caller set; null means preserve existing ventoy.json values.
+        options.tpmBypass?.let { setControlFlag("VTOY_WIN11_BYPASS_TPM", if (it) "1" else "0") }
+        options.bypassRamCheck?.let { setControlFlag("VTOY_WIN11_BYPASS_RAM", if (it) "1" else "0") }
+        options.localAccount?.let {
+            setControlFlag("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT", if (it) "1" else "0")
+        }
 
         rootMap["control"] = controlList
 
@@ -726,10 +972,10 @@ object WindowsSetup {
         appendLine("        <AcceptEula>true</AcceptEula>")
         appendLine("        <FullName>${escapeXml(name)}</FullName>")
         appendLine("      </UserData>")
-        if (options.tpmBypass || options.bypassRamCheck) {
+        if (options.tpmBypass == true || options.bypassRamCheck == true) {
             appendLine("      <RunSynchronous>")
             var order = 1
-            if (options.tpmBypass) {
+            if (options.tpmBypass == true) {
                 appendLine("        <RunSynchronousCommand>")
                 appendLine("          <Order>$order</Order>")
                 appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>")
@@ -741,7 +987,7 @@ object WindowsSetup {
                 appendLine("        </RunSynchronousCommand>")
                 order++
             }
-            if (options.bypassRamCheck) {
+            if (options.bypassRamCheck == true) {
                 appendLine("        <RunSynchronousCommand>")
                 appendLine("          <Order>$order</Order>")
                 appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>")
@@ -752,7 +998,7 @@ object WindowsSetup {
         }
         appendLine("    </component>")
         appendLine("  </settings>")
-        if (options.localAccount) {
+        if (options.localAccount == true) {
             appendLine("  <settings pass=\"oobeSystem\">")
             appendLine("    <component name=\"Microsoft-Windows-Shell-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">")
             appendLine("      <OOBE>")
@@ -773,10 +1019,22 @@ object WindowsSetup {
 }
 
 internal object MiniJson {
-    fun parse(input: String): Any? = Parser(input.trim()).parseValue()
+    fun parse(input: String): Any? {
+        val parser = Parser(input.trim())
+        val value = parser.parseValue()
+        parser.skipWhitespacePublic()
+        if (!parser.exhausted()) {
+            throw IllegalArgumentException("Trailing junk after JSON value at ${parser.position()}")
+        }
+        return value
+    }
 
     private class Parser(private val s: String) {
         private var pos = 0
+
+        fun exhausted(): Boolean = pos >= s.length
+        fun position(): Int = pos
+        fun skipWhitespacePublic() = skipWhitespace()
 
         private fun skipWhitespace() {
             while (pos < s.length && s[pos].isWhitespace()) pos++
@@ -803,13 +1061,16 @@ internal object MiniJson {
                             pos += 4
                             sb.append(hex.toInt(16).toChar())
                         }
-                        else -> sb.append(esc)
+                        else -> throw IllegalArgumentException("Bad escape \\$esc at $pos")
                     }
                 } else {
+                    if (c.code < 0x20) {
+                        throw IllegalArgumentException("Unescaped control char in string at ${pos - 1}")
+                    }
                     sb.append(c)
                 }
             }
-            return sb.toString()
+            throw IllegalArgumentException("Unterminated string at $pos")
         }
 
         fun parseObject(): MutableMap<String, Any?> {
@@ -817,18 +1078,26 @@ internal object MiniJson {
             val map = linkedMapOf<String, Any?>()
             skipWhitespace()
             if (pos < s.length && s[pos] == '}') { pos++; return map }
-            while (pos < s.length) {
+            while (true) {
                 skipWhitespace()
+                if (pos >= s.length || s[pos] != '"') {
+                    throw IllegalArgumentException("Expected object key string at $pos")
+                }
                 val key = parseString()
                 skipWhitespace()
-                if (pos < s.length && s[pos] == ':') pos++
+                if (pos >= s.length || s[pos] != ':') {
+                    throw IllegalArgumentException("Expected ':' after object key at $pos")
+                }
+                pos++
                 val value = parseValue()
                 map[key] = value
                 skipWhitespace()
-                if (pos < s.length && s[pos] == ',') { pos++; continue }
-                if (pos < s.length && s[pos] == '}') { pos++; break }
+                when {
+                    pos < s.length && s[pos] == ',' -> { pos++; continue }
+                    pos < s.length && s[pos] == '}' -> { pos++; return map }
+                    else -> throw IllegalArgumentException("Expected ',' or '}' in object at $pos")
+                }
             }
-            return map
         }
 
         fun parseArray(): MutableList<Any?> {
@@ -836,14 +1105,16 @@ internal object MiniJson {
             val list = mutableListOf<Any?>()
             skipWhitespace()
             if (pos < s.length && s[pos] == ']') { pos++; return list }
-            while (pos < s.length) {
+            while (true) {
                 val value = parseValue()
                 list.add(value)
                 skipWhitespace()
-                if (pos < s.length && s[pos] == ',') { pos++; continue }
-                if (pos < s.length && s[pos] == ']') { pos++; break }
+                when {
+                    pos < s.length && s[pos] == ',' -> { pos++; continue }
+                    pos < s.length && s[pos] == ']' -> { pos++; return list }
+                    else -> throw IllegalArgumentException("Expected ',' or ']' in array at $pos")
+                }
             }
-            return list
         }
 
         fun parseValue(): Any? {
@@ -863,10 +1134,45 @@ internal object MiniJson {
                     else throw IllegalArgumentException("Unexpected token at $pos")
                 }
                 else -> {
+                    if (c != '-' && !c.isDigit()) {
+                        throw IllegalArgumentException("Unexpected token at $pos")
+                    }
                     val start = pos
                     if (c == '-') pos++
-                    while (pos < s.length && (s[pos].isDigit() || s[pos] == '.' || s[pos] == 'e' || s[pos] == 'E' || s[pos] == '+' || s[pos] == '-')) pos++
-                    s.substring(start, pos)
+                    val digitsStart = pos
+                    if (pos < s.length && s[pos] == '0') {
+                        pos++
+                        if (pos < s.length && s[pos].isDigit()) {
+                            throw IllegalArgumentException("Leading zeros in number at $start")
+                        }
+                    } else {
+                        while (pos < s.length && s[pos].isDigit()) pos++
+                        if (pos == digitsStart) {
+                            throw IllegalArgumentException("Expected digit in number at $pos")
+                        }
+                    }
+                    var isFloat = false
+                    if (pos < s.length && s[pos] == '.') {
+                        isFloat = true
+                        pos++
+                        val fracStart = pos
+                        while (pos < s.length && s[pos].isDigit()) pos++
+                        if (pos == fracStart) {
+                            throw IllegalArgumentException("Expected digit after '.' at $pos")
+                        }
+                    }
+                    if (pos < s.length && (s[pos] == 'e' || s[pos] == 'E')) {
+                        isFloat = true
+                        pos++
+                        if (pos < s.length && (s[pos] == '+' || s[pos] == '-')) pos++
+                        val expStart = pos
+                        while (pos < s.length && s[pos].isDigit()) pos++
+                        if (pos == expStart) {
+                            throw IllegalArgumentException("Expected digit in exponent at $pos")
+                        }
+                    }
+                    val token = s.substring(start, pos)
+                    if (isFloat) token.toDouble() else token.toLong()
                 }
             }
         }
@@ -877,14 +1183,14 @@ internal object MiniJson {
         val innerSpaces = "  ".repeat(indent + 1)
         return when (value) {
             null -> "null"
-            is String -> "\"${value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")}\""
+            is String -> "\"${escapeJsonString(value)}\""
             is Boolean -> value.toString()
             is Number -> value.toString()
             is Map<*, *> -> {
                 if (value.isEmpty()) "{}"
                 else {
                     val entries = value.entries.joinToString(",\n") { (k, v) ->
-                        "$innerSpaces\"$k\": ${stringify(v, indent + 1)}"
+                        "$innerSpaces\"${escapeJsonString(k.toString())}\": ${stringify(v, indent + 1)}"
                     }
                     "{\n$entries\n$spaces}"
                 }
@@ -898,7 +1204,32 @@ internal object MiniJson {
                     "[\n$items\n$spaces]"
                 }
             }
-            else -> "\"$value\""
+            else -> "\"${escapeJsonString(value.toString())}\""
         }
+    }
+
+    /** RFC 8259 string escapes; control chars as \\uXXXX. */
+    private fun escapeJsonString(text: String): String {
+        val sb = StringBuilder(text.length + 8)
+        for (ch in text) {
+            when (ch) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\b' -> sb.append("\\b")
+                '\u000C' -> sb.append("\\f")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> {
+                    val code = ch.code
+                    if (code < 0x20) {
+                        sb.append("\\u").append("%04x".format(code))
+                    } else {
+                        sb.append(ch)
+                    }
+                }
+            }
+        }
+        return sb.toString()
     }
 }

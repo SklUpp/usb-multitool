@@ -28,6 +28,34 @@
 #include "ntfs-3g/inode.h"
 #include "ntfs-3g/unistr.h"
 #define NTFS_CLEAR_DIRTY_CONFIRMATION "CONFIRM_NTFS_CLEAR_DIRTY"
+#ifndef EUCLEAN
+#define EUCLEAN 117
+#endif
+
+/* System metadata parents ($Extend, $MFT, …) refuse create/link; FILE_root allowed. */
+static int refuse_system_parent(ntfs_inode *dir_ni)
+{
+	if (!dir_ni) return -EINVAL;
+	if (dir_ni->mft_no != FILE_root && dir_ni->mft_no < FILE_first_user)
+		return -EPERM;
+	return 0;
+}
+
+#ifdef NTFS_TEST_HOOKS
+static int g_ntfs_test_fail_rename_unlink;
+static int g_ntfs_test_fail_still_from_lookup;
+
+void ntfs_test_set_fail_rename_unlink(int enabled)
+{
+	g_ntfs_test_fail_rename_unlink = enabled ? 1 : 0;
+}
+
+void ntfs_test_set_fail_still_from_lookup(int enabled)
+{
+	g_ntfs_test_fail_still_from_lookup = enabled ? 1 : 0;
+}
+#endif
+
 
 typedef struct NtfsDeviceContext {
     uint64_t block_handle;
@@ -356,6 +384,13 @@ uint64_t ntfs_engine_mount(uint64_t block_handle, bool read_only)
         free(v);
         return 0;
     }
+    if (!read_only && (v->vol->flags & VOLUME_IS_DIRTY)) {
+        /* Fail closed: never hand out a writable handle on a dirty volume. */
+        ntfs_umount(v->vol, 0);
+        free(v);
+        errno = EBUSY;
+        return 0;
+    }
     return (uint64_t)(uintptr_t)v;
 }
 
@@ -468,8 +503,10 @@ int ntfs_engine_list(uint64_t vol_handle, const char *path,
 
     *out_entries = NULL;
     *out_count = 0;
+    errno = 0;
     ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, path);
-    if (!dir_ni) return -ENOENT;
+    if (!dir_ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+
 
     if (!(dir_ni->mrec && (dir_ni->mrec->flags & MFT_RECORD_IS_DIRECTORY))) {
         ntfs_inode_close(dir_ni);
@@ -507,8 +544,9 @@ int ntfs_engine_stat(uint64_t vol_handle, const char *path, NtfsStat *out_stat)
     NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
     if (!v || !v->vol || !path || !out_stat) return -EINVAL;
 
+    errno = 0;
     ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
-    if (!ni) return -ENOENT;
+    if (!ni) return (errno == ENOENT) ? -ENOENT : -EIO;
 
     out_stat->size = (uint64_t)ni->data_size;
     out_stat->is_directory = (ni->mrec && (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY)) != 0;
@@ -526,8 +564,13 @@ int ntfs_engine_read(uint64_t vol_handle, const char *path,
     if (!v || !v->vol || !path || !buf || !out_read) return -EINVAL;
 
     *out_read = 0;
+    errno = 0;
     ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
-    if (!ni) return -ENOENT;
+    if (!ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+    if (ni->mft_no < FILE_first_user) {
+        ntfs_inode_close(ni);
+        return -EPERM;
+    }
 
     ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
     if (!na) {
@@ -563,65 +606,368 @@ static void split_path(const char *path, char *parent, size_t parent_sz, const c
 }
 
 int ntfs_engine_write(uint64_t vol_handle, const char *path,
-                      uint64_t offset, const void *buf, size_t count,
-                      bool create, size_t *out_written)
+		      uint64_t offset, const void *buf, size_t count,
+		      bool create, size_t *out_written)
+{
+	NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
+	if (!v || !v->vol || !path || !out_written) return -EINVAL;
+	if (!buf && count != 0) return -EINVAL;
+
+	*out_written = 0;
+	/* libntfs-3g silently skips the device write under NVolReadOnly() yet
+	 * reports the full length as written; refuse instead of faking success. */
+	if (NVolReadOnly(v->vol)) return -EROFS;
+
+	int created = 0;
+	errno = 0;
+	ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
+	if (!ni) {
+		int e = errno;
+		if (!create) return (e == ENOENT) ? -ENOENT : -EIO;
+		if (e != 0 && e != ENOENT) return -EIO;
+
+		char parent[512];
+		const char *filename = NULL;
+		split_path(path, parent, sizeof(parent), &filename);
+		if (!filename || !*filename) return -EINVAL;
+
+		errno = 0;
+		ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
+		if (!dir_ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+		{
+			int deny = refuse_system_parent(dir_ni);
+			if (deny != 0) {
+				ntfs_inode_close(dir_ni);
+				return deny;
+			}
+		}
+
+
+		ntfschar *uname = NULL;
+		int ulen = ntfs_mbstoucs(filename, &uname);
+		if (ulen < 0 || !uname) {
+			ntfs_inode_close(dir_ni);
+			return -EINVAL;
+		}
+
+		ni = ntfs_create(dir_ni, 0, uname, (u8)ulen, S_IFREG);
+		free(uname);
+		ntfs_inode_close(dir_ni);
+		if (!ni) return -EIO;
+		created = 1;
+	}
+
+	if (ni->mft_no < FILE_first_user) {
+		ntfs_inode_close(ni);
+		return -EPERM;
+	}
+
+	ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+	if (!na) {
+		ntfs_inode_close(ni);
+		return -EIO;
+	}
+
+	/* create=true on an existing file at offset 0 matches FAT FA_CREATE_ALWAYS:
+	 * replace contents. Non-zero offset keeps append/overwrite-at-offset. */
+	if (create && !created && offset == 0) {
+		if (ntfs_attr_truncate(na, 0) != 0) {
+			ntfs_attr_close(na);
+			ntfs_inode_close(ni);
+			return -EIO;
+		}
+	}
+
+	s64 written = 0;
+	if (count > 0) {
+		written = ntfs_attr_pwrite(na, (s64)offset, (s64)count, buf);
+	}
+	ntfs_attr_close(na);
+	ntfs_inode_close(ni);
+
+	if (written < 0) return -EIO;
+	*out_written = (size_t)written;
+	return 0;
+}
+
+int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
 {
     NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
-    if (!v || !v->vol || !path || !buf || !out_written) return -EINVAL;
-
-    *out_written = 0;
-    /* libntfs-3g silently skips the device write under NVolReadOnly() yet
-     * reports the full length as written; refuse instead of faking success. */
+    if (!v || !v->vol || !path) return -EINVAL;
     if (NVolReadOnly(v->vol)) return -EROFS;
 
-    int created = 0;
-    ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
-    if (!ni && create) {
-        char parent[512];
-        const char *filename = NULL;
-        split_path(path, parent, sizeof(parent), &filename);
+    errno = 0;
+    ntfs_inode *existing = ntfs_pathname_to_inode(v->vol, NULL, path);
+    if (existing) {
+        ntfs_inode_close(existing);
+        return -EEXIST;
+    }
+    if (errno != 0 && errno != ENOENT) return -EIO;
 
-        ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
-        if (!dir_ni) return -ENOENT;
+    char parent[512];
+    const char *filename = NULL;
+    split_path(path, parent, sizeof(parent), &filename);
+    if (!filename || !*filename) return -EINVAL;
 
-        ntfschar *uname = NULL;
-        int ulen = ntfs_mbstoucs(filename, &uname);
-        if (ulen < 0 || !uname) {
+    errno = 0;
+    ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
+    if (!dir_ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+    {
+        int deny = refuse_system_parent(dir_ni);
+        if (deny != 0) {
             ntfs_inode_close(dir_ni);
-            return -EINVAL;
+            return deny;
         }
+    }
 
-        ni = ntfs_create(dir_ni, 0, uname, (u8)ulen, S_IFREG);
-        free(uname);
+
+    ntfschar *uname = NULL;
+    int ulen = ntfs_mbstoucs(filename, &uname);
+    if (ulen < 0 || !uname) {
         ntfs_inode_close(dir_ni);
-        created = 1;
+        return -EINVAL;
     }
 
-    if (!ni) return -ENOENT;
-
-    ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-    if (!na) {
-        ntfs_inode_close(ni);
-        return -EIO;
-    }
-
-    /* create=true on an existing file at offset 0 matches FAT FA_CREATE_ALWAYS:
-     * replace contents. Non-zero offset keeps append/overwrite-at-offset. */
-    if (create && !created && offset == 0) {
-        if (ntfs_attr_truncate(na, 0) != 0) {
-            ntfs_attr_close(na);
-            ntfs_inode_close(ni);
-            return -EIO;
-        }
-    }
-
-    s64 written = ntfs_attr_pwrite(na, (s64)offset, (s64)count, buf);
-    ntfs_attr_close(na);
+    ntfs_inode *ni = ntfs_create(dir_ni, 0, uname, (u8)ulen, S_IFDIR);
+    free(uname);
+    ntfs_inode_close(dir_ni);
+    if (!ni) return -EIO;
     ntfs_inode_close(ni);
-
-    if (written < 0) return -EIO;
-    *out_written = (size_t)written;
     return 0;
+}
+
+int ntfs_engine_delete(uint64_t vol_handle, const char *path)
+{
+	NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
+	if (!v || !v->vol || !path) return -EINVAL;
+	if (NVolReadOnly(v->vol)) return -EROFS;
+	if (!path[0] || (path[0] == '/' && path[1] == '\0')) return -EINVAL;
+
+	errno = 0;
+	ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
+	if (!ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+
+	/* Refuse system metadata inodes ($MFT, $LogFile, ...). */
+	if (ni->mft_no < FILE_first_user) {
+		ntfs_inode_close(ni);
+		return -EPERM;
+	}
+
+	if (ni->mrec && (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY)) {
+		errno = 0;
+		if (ntfs_check_empty_dir(ni) != 0) {
+			int e = errno;
+			ntfs_inode_close(ni);
+			return (e == ENOTEMPTY) ? -ENOTEMPTY : -EIO;
+		}
+	}
+
+	char parent[512];
+	const char *filename = NULL;
+	split_path(path, parent, sizeof(parent), &filename);
+	if (!filename || !*filename) {
+		ntfs_inode_close(ni);
+		return -EINVAL;
+	}
+
+	errno = 0;
+	ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
+	if (!dir_ni) {
+		int e = errno;
+		ntfs_inode_close(ni);
+		return (e == ENOENT) ? -ENOENT : -EIO;
+	}
+
+	ntfschar *uname = NULL;
+	int ulen = ntfs_mbstoucs(filename, &uname);
+	if (ulen < 0 || !uname) {
+		ntfs_inode_close(dir_ni);
+		ntfs_inode_close(ni);
+		return -EINVAL;
+	}
+
+	/* ntfs_delete always closes ni and dir_ni (success or failure). */
+	int rc = ntfs_delete(v->vol, path, ni, dir_ni, uname, (u8)ulen);
+	free(uname);
+	return (rc == 0) ? 0 : -EIO;
+}
+
+int ntfs_engine_rename(uint64_t vol_handle, const char *from, const char *to)
+{
+	NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
+	if (!v || !v->vol || !from || !to) return -EINVAL;
+	if (NVolReadOnly(v->vol)) return -EROFS;
+	if (!from[0] || !to[0]) return -EINVAL;
+
+	errno = 0;
+	ntfs_inode *dest = ntfs_pathname_to_inode(v->vol, NULL, to);
+	if (dest) {
+		ntfs_inode_close(dest);
+		return -EEXIST;
+	}
+	/* dest miss must be ENOENT; other errors are I/O. */
+	if (errno != 0 && errno != ENOENT) return -EIO;
+
+	errno = 0;
+	ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, from);
+	if (!ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+
+	if (ni->mft_no < FILE_first_user) {
+		ntfs_inode_close(ni);
+		return -EPERM;
+	}
+
+	char from_parent[512], to_parent[512];
+	const char *from_name = NULL;
+	const char *to_name = NULL;
+	split_path(from, from_parent, sizeof(from_parent), &from_name);
+	split_path(to, to_parent, sizeof(to_parent), &to_name);
+	if (!from_name || !*from_name || !to_name || !*to_name) {
+		ntfs_inode_close(ni);
+		return -EINVAL;
+	}
+
+	/* Directory cross-parent rename would leave stale '..' — refuse. */
+	if (ni->mrec && (ni->mrec->flags & MFT_RECORD_IS_DIRECTORY)) {
+		if (strcmp(from_parent, to_parent) != 0) {
+			ntfs_inode_close(ni);
+			return -EXDEV;
+		}
+	}
+
+	errno = 0;
+	ntfs_inode *to_dir = ntfs_pathname_to_inode(v->vol, NULL, to_parent);
+	if (!to_dir) {
+		int e = errno;
+		ntfs_inode_close(ni);
+		return (e == ENOENT) ? -ENOENT : -EIO;
+	}
+	{
+		int deny = refuse_system_parent(to_dir);
+		if (deny != 0) {
+			ntfs_inode_close(to_dir);
+			ntfs_inode_close(ni);
+			return deny;
+		}
+	}
+
+	/* Same parent: one dir inode. Two opens of root confuse link+unlink. */
+	ntfs_inode *from_dir = NULL;
+	int shared_parent = (strcmp(from_parent, to_parent) == 0);
+	if (shared_parent) {
+		from_dir = to_dir;
+	} else {
+		errno = 0;
+		from_dir = ntfs_pathname_to_inode(v->vol, NULL, from_parent);
+		if (!from_dir) {
+			int e = errno;
+			ntfs_inode_close(to_dir);
+			ntfs_inode_close(ni);
+			return (e == ENOENT) ? -ENOENT : -EIO;
+		}
+	}
+
+	ntfschar *new_uname = NULL;
+	int new_ulen = ntfs_mbstoucs(to_name, &new_uname);
+	if (new_ulen < 0 || !new_uname) {
+		if (!shared_parent) ntfs_inode_close(from_dir);
+		ntfs_inode_close(to_dir);
+		ntfs_inode_close(ni);
+		return -EINVAL;
+	}
+
+	ntfschar *old_uname = NULL;
+	int old_ulen = ntfs_mbstoucs(from_name, &old_uname);
+	if (old_ulen < 0 || !old_uname) {
+		free(new_uname);
+		if (!shared_parent) ntfs_inode_close(from_dir);
+		ntfs_inode_close(to_dir);
+		ntfs_inode_close(ni);
+		return -EINVAL;
+	}
+
+	if (ntfs_link(ni, to_dir, new_uname, (u8)new_ulen) != 0) {
+		free(new_uname);
+		free(old_uname);
+		if (!shared_parent) ntfs_inode_close(from_dir);
+		ntfs_inode_close(to_dir);
+		ntfs_inode_close(ni);
+		return -EIO;
+	}
+
+	/* ntfs_delete closes ni + from_dir. When parents match, that also
+	 * closes to_dir — clear so success/rollback paths do not double-close. */
+#ifdef NTFS_TEST_HOOKS
+	int rc;
+	if (g_ntfs_test_fail_rename_unlink) {
+		/* Simulate unlink failure after successful link; keep both names. */
+		ntfs_inode_close(ni);
+		if (!shared_parent) ntfs_inode_close(from_dir);
+		/* shared: leave to_dir open for rollback */
+		rc = -1;
+	} else {
+		rc = ntfs_delete(v->vol, from, ni, from_dir, old_uname, (u8)old_ulen);
+		if (shared_parent) to_dir = NULL; /* closed inside ntfs_delete */
+	}
+#else
+	int rc = ntfs_delete(v->vol, from, ni, from_dir, old_uname, (u8)old_ulen);
+	if (shared_parent) to_dir = NULL; /* closed inside ntfs_delete */
+#endif
+
+
+
+	free(old_uname);
+	if (rc != 0) {
+		/*
+		 * Roll back `to` only when `from` still resolves cleanly.
+		 * Ambiguous lookup (I/O) keeps both names and reports partial
+		 * so callers do not delete surviving data.
+		 */
+		errno = 0;
+#ifdef NTFS_TEST_HOOKS
+		ntfs_inode *still_from = NULL;
+		if (g_ntfs_test_fail_still_from_lookup) {
+			errno = EIO;
+		} else {
+			still_from = ntfs_pathname_to_inode(v->vol, NULL, from);
+		}
+#else
+		ntfs_inode *still_from = ntfs_pathname_to_inode(v->vol, NULL, from);
+#endif
+		if (!still_from) {
+			int lookup_err = errno;
+			free(new_uname);
+			if (to_dir) ntfs_inode_close(to_dir);
+			/* from already gone → keep `to` (no orphan). Ambiguous → keep both. */
+			return (lookup_err == ENOENT) ? -EIO : -EUCLEAN;
+		}
+		ntfs_inode_close(still_from);
+		errno = 0;
+		ntfs_inode *linked = ntfs_pathname_to_inode(v->vol, NULL, to);
+		if (!linked) {
+			free(new_uname);
+			if (to_dir) ntfs_inode_close(to_dir);
+			return -EUCLEAN;
+		}
+		ntfs_inode *to_dir2 = to_dir;
+		if (!to_dir2) {
+			to_dir2 = ntfs_pathname_to_inode(v->vol, NULL, to_parent);
+			if (!to_dir2) {
+				ntfs_inode_close(linked);
+				free(new_uname);
+				return -EUCLEAN;
+			}
+		} else {
+			to_dir = NULL; /* ownership moves into ntfs_delete via to_dir2 */
+		}
+		int roll_rc = ntfs_delete(v->vol, to, linked, to_dir2, new_uname, (u8)new_ulen);
+		free(new_uname);
+		if (to_dir) ntfs_inode_close(to_dir);
+		return (roll_rc == 0) ? -EIO : -EUCLEAN;
+	}
+	free(new_uname);
+	if (to_dir) ntfs_inode_close(to_dir);
+	return 0;
 }
 
 int ntfs_engine_is_dirty(uint64_t vol_handle)

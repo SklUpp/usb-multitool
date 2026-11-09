@@ -5,8 +5,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.EngineMissingException
 import usb.device.BlockDevice
 import java.nio.ByteBuffer
+
 
 /**
  * Pure JVM gate tests verifying confirmation and volume closure rules.
@@ -52,11 +54,14 @@ class NtfsFsGateTest {
         try {
             // Will fail at native loading/call if in pure JVM, but gate must have executed first!
             NtfsFs.clearDirtyFlag(dev, NtfsFs.CLEAR_DIRTY_CONFIRMATION, gate)
+        } catch (_: EngineMissingException) {
+            // Native NTFS symbols absent when USB_WITH_NTFS=OFF / host JVM.
         } catch (_: UnsatisfiedLinkError) {
             // Native library absent in pure JVM test runner
         } catch (_: Exception) {
             // Native invocation or mock failure
         }
         assertTrue("Gate closeAll must be called before write path", gateCalled)
+
     }
 }

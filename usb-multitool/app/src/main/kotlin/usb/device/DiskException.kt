@@ -37,6 +37,9 @@ sealed class DiskException(message: String, cause: Throwable? = null) : Exceptio
     ) {
         val isIllegalRequest: Boolean get() = senseKey == 0x05
         val isUnitAttention: Boolean get() = senseKey == 0x06
+        /** Medium error / unrecovered read — the only class Rescue marks FAILED. */
+        val isMediumError: Boolean
+            get() = senseKey == 0x03 || (senseKey == 0x01 && asc == 0x11)
 
         override fun equals(other: Any?): Boolean {
             if (this === other) return true

@@ -72,7 +72,7 @@ fun VentoyScreen(
                 }
 
                 Text(
-                    text = "Deploy Ventoy bootloader to USB. Boot multiple ISO/IMG images directly without reformatting disk partitions.",
+                    text = "Install writes a fresh Ventoy layout and formats the data partition as exFAT (destroys existing partitions). Update refreshes boot files and keeps the ISO data partition.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -143,7 +143,7 @@ fun VentoyScreen(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "Automatically bypass TPM/Secure Boot and configure autounattend.xml for Windows ISOs.",
+                    text = "Link autounattend.xml and merge ventoy.json for Windows ISOs. Choose TPM, RAM bypass, and local-account options. Existing links require explicit overwrite confirmation.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -201,6 +201,18 @@ fun VentoyScreen(
                                         Switch(
                                             checked = state.vtoyBypassTpm,
                                             onCheckedChange = { onIntent(UiIntent.SetVtoyBypassTpm(it)) },
+                                            enabled = state.actionsEnabled,
+                                        )
+                                        Text("Bypass RAM", style = MaterialTheme.typography.labelSmall)
+                                        Switch(
+                                            checked = state.vtoyBypassRam,
+                                            onCheckedChange = { onIntent(UiIntent.SetVtoyBypassRam(it)) },
+                                            enabled = state.actionsEnabled,
+                                        )
+                                        Text("Local account", style = MaterialTheme.typography.labelSmall)
+                                        Switch(
+                                            checked = state.vtoyLocalAccount,
+                                            onCheckedChange = { onIntent(UiIntent.SetVtoyLocalAccount(it)) },
                                             enabled = state.actionsEnabled,
                                         )
                                         OutlinedButton(

@@ -88,11 +88,14 @@ static int unpack_fixture(const char *fixture_xz, const char *out_img)
     return system(cmd) == 0 ? 0 : -1;
 }
 
-/* Type matching NtfsVolumeContext in ntfs_engine.c */
+/* Must match NtfsVolumeContext layout in ntfs_engine.c (vol first). */
 typedef struct NtfsVolumeContext {
     ntfs_volume *vol;
     struct ntfs_device *dev;
+    /* trailing fields unused by host tests; keep size ≥ engine for cast safety */
+    char opaque[64];
 } NtfsVolumeContext;
+
 
 int main(int argc, char **argv)
 {
@@ -351,6 +354,13 @@ int main(int argc, char **argv)
     assert(dirty == 1);
     printf("PASS: detected dirty flag on device (dirty=%d)\n", dirty);
 
+    /* Engine must refuse RW mount while dirty (fail-closed). */
+    {
+        uint64_t dirty_rw = ntfs_engine_mount(bhandle, false);
+        assert(dirty_rw == 0);
+        printf("PASS: RW mount refused while volume dirty\n");
+    }
+
     /* 10. Confirmation token enforcement */
     rc = ntfs_engine_clear_dirty(bhandle, "WRONG_TOKEN");
     assert(rc != 0);
@@ -410,6 +420,151 @@ int main(int argc, char **argv)
         uint64_t hash_after = hash_image(fd, (uint64_t)st.st_size);
         assert(hash_after == hash_before);
         printf("PASS: read-only mount rejected writes with -EROFS, image unchanged\n");
+    }
+
+
+    /* --- mkdir / delete / rename / metadata guards (fixture only) --- */
+    {
+        uint64_t vol = ntfs_engine_mount(bhandle, false);
+        assert(vol != 0);
+
+        int rc = ntfs_engine_mkdir(vol, "/host_mut_dir");
+        assert(rc == 0);
+        rc = ntfs_engine_mkdir(vol, "/host_mut_dir");
+        assert(rc == -EEXIST);
+
+        size_t wrote = 0;
+        rc = ntfs_engine_write(vol, "/host_mut_dir/file.txt", 0, "abc", 3, true, &wrote);
+        assert(rc == 0 && wrote == 3);
+
+        rc = ntfs_engine_delete(vol, "/host_mut_dir");
+        assert(rc == -ENOTEMPTY);
+        printf("PASS: nonempty directory delete returns -ENOTEMPTY\n");
+
+        rc = ntfs_engine_delete(vol, "/host_mut_dir/file.txt");
+        assert(rc == 0);
+        rc = ntfs_engine_delete(vol, "/host_mut_dir");
+        assert(rc == 0);
+        printf("PASS: empty directory delete succeeds\n");
+
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/rename_src.txt", 0, "xy", 2, true, &wrote);
+        assert(rc == 0);
+        rc = ntfs_engine_rename(vol, "/rename_src.txt", "/rename_dst.txt");
+        assert(rc == 0);
+        NtfsStat st;
+        rc = ntfs_engine_stat(vol, "/rename_src.txt", &st);
+        assert(rc == -ENOENT);
+        rc = ntfs_engine_stat(vol, "/rename_dst.txt", &st);
+        assert(rc == 0 && st.size == 2);
+        printf("PASS: file rename moves path\n");
+
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/rename_exists.txt", 0, "z", 1, true, &wrote);
+        assert(rc == 0);
+        rc = ntfs_engine_rename(vol, "/rename_dst.txt", "/rename_exists.txt");
+        assert(rc == -EEXIST);
+        printf("PASS: rename onto existing path returns -EEXIST\n");
+
+        rc = ntfs_engine_mkdir(vol, "/dir_a");
+        assert(rc == 0);
+        rc = ntfs_engine_mkdir(vol, "/dir_b");
+        assert(rc == 0);
+        rc = ntfs_engine_rename(vol, "/dir_a", "/dir_b/dir_a");
+        assert(rc == -EXDEV);
+        printf("PASS: cross-directory directory rename refused (-EXDEV)\n");
+
+        rc = ntfs_engine_delete(vol, "/$MFT");
+        assert(rc == -EPERM);
+        rc = ntfs_engine_rename(vol, "/$MFT", "/$MFT_renamed");
+        assert(rc == -EPERM);
+        printf("PASS: $MFT delete/rename refused (-EPERM)\n");
+
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/$MFT", 0, "X", 1, true, &wrote);
+        assert(rc == -EPERM);
+        printf("PASS: $MFT write refused (-EPERM)\n");
+
+        /* Parent system dirs refuse create/mkdir/rename-into. Root stays allowed. */
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/$Extend/host_forbid.txt", 0, "X", 1, true, &wrote);
+        assert(rc == -EPERM);
+        rc = ntfs_engine_mkdir(vol, "/$Extend/host_forbid_dir");
+        assert(rc == -EPERM);
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/parent_guard_src.txt", 0, "P", 1, true, &wrote);
+        assert(rc == 0);
+        rc = ntfs_engine_rename(vol, "/parent_guard_src.txt", "/$Extend/parent_guard_dst.txt");
+        assert(rc == -EPERM);
+        {
+            NtfsStat stg;
+            assert(ntfs_engine_stat(vol, "/parent_guard_src.txt", &stg) == 0);
+        }
+        printf("PASS: $Extend parent create/mkdir/rename refused; root still writable\n");
+
+        /* Same-parent directory rename must succeed. */
+        rc = ntfs_engine_mkdir(vol, "/same_parent_a");
+        assert(rc == 0);
+        rc = ntfs_engine_rename(vol, "/same_parent_a", "/same_parent_b");
+        assert(rc == 0);
+        {
+            NtfsStat st2;
+            assert(ntfs_engine_stat(vol, "/same_parent_a", &st2) == -ENOENT);
+            assert(ntfs_engine_stat(vol, "/same_parent_b", &st2) == 0);
+        }
+        printf("PASS: same-parent directory rename\n");
+
+        /*
+         * Rename rollback: unlink-fail after link rolls back `to` when `from`
+         * still resolves. Ambiguous still_from lookup keeps both + -EUCLEAN.
+         */
+#ifdef NTFS_TEST_HOOKS
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/rb_src.txt", 0, "R", 1, true, &wrote);
+        assert(rc == 0 && wrote == 1);
+        ntfs_test_set_fail_rename_unlink(1);
+        rc = ntfs_engine_rename(vol, "/rb_src.txt", "/rb_dst.txt");
+        ntfs_test_set_fail_rename_unlink(0);
+        assert(rc == -EIO);
+        {
+            NtfsStat st3;
+            assert(ntfs_engine_stat(vol, "/rb_src.txt", &st3) == 0);
+            assert(ntfs_engine_stat(vol, "/rb_dst.txt", &st3) == -ENOENT);
+        }
+        printf("PASS: rename unlink-fail rolls back destination\n");
+
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/partial_src.txt", 0, "Q", 1, true, &wrote);
+        assert(rc == 0 && wrote == 1);
+        ntfs_test_set_fail_rename_unlink(1);
+        ntfs_test_set_fail_still_from_lookup(1);
+        rc = ntfs_engine_rename(vol, "/partial_src.txt", "/partial_dst.txt");
+        ntfs_test_set_fail_still_from_lookup(0);
+        ntfs_test_set_fail_rename_unlink(0);
+        assert(rc == -EUCLEAN);
+        {
+            NtfsStat st4;
+            assert(ntfs_engine_stat(vol, "/partial_src.txt", &st4) == 0);
+            assert(ntfs_engine_stat(vol, "/partial_dst.txt", &st4) == 0);
+        }
+        printf("PASS: ambiguous rename keeps both names (-EUCLEAN)\n");
+#else
+        wrote = 0;
+        rc = ntfs_engine_write(vol, "/keep_src.txt", 0, "K", 1, true, &wrote);
+        assert(rc == 0 && wrote == 1);
+        rc = ntfs_engine_rename(vol, "/keep_src.txt", "/keep_dst.txt");
+        assert(rc == 0);
+        {
+            NtfsStat st3;
+            assert(ntfs_engine_stat(vol, "/keep_src.txt", &st3) == -ENOENT);
+            assert(ntfs_engine_stat(vol, "/keep_dst.txt", &st3) == 0 && st3.size == 1);
+        }
+        printf("PASS: rename leaves surviving destination name\n");
+#endif
+
+
+        rc = ntfs_engine_close(vol);
+        assert(rc == 0);
     }
 
     close(fd);

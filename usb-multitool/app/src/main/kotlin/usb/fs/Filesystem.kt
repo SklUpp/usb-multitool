@@ -4,13 +4,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import usb.partition.VirtualPartition
 
-enum class FilesystemId {
-    FAT,
-    EXFAT,
-    NTFS,
-    EXT,
-}
-
 class VolumeFile(
     val path: String,
     val isDirectory: Boolean,

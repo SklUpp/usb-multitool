@@ -1,5 +1,8 @@
 package usb.ui
 
+import usb.fs.FilesystemId
+import usb.fs.FormatCatalog
+
 /**
  * Pure UI/domain models. No Android USB imports.
  * Compose screens and JVM tests share these types.
@@ -8,9 +11,22 @@ package usb.ui
 data class DeviceIdentity(
     val label: String,
     val capacityBytes: ULong,
+    /** USB serial when the OS exposes it; null/blank → resume refused. */
+    val serialNumber: String? = null,
 ) {
-    /** Stable identity string for confirmations and logs. */
-    val identity: String get() = label
+    /**
+     * Stable identity for confirmations and rescue maps.
+     * Prefers serial so two sticks of the same model do not collide.
+     */
+    val identity: String
+        get() {
+            val serial = serialNumber?.trim().orEmpty()
+            return if (serial.isNotEmpty()) "$label#$serial" else label
+        }
+
+    /** True when a serial is present — required to resume a RESTORE map. */
+    val hasStableSerial: Boolean
+        get() = !serialNumber.isNullOrBlank()
 
     val capacityLabel: String get() = formatCapacity(capacityBytes)
 
@@ -58,29 +74,71 @@ enum class DestructiveAction {
     CREATE_PARTITION,
     GPT_REPAIR,
     GPT_RESTORE,
-    WRITE_BENCHMARK,
+    RESCUE_RESTORE,
+    VENTOY_LINK_XML,
 }
 
 data class DestructiveConfirmation(
     val action: String,
     val identity: DeviceIdentity,
     val message: String,
+    /** Pinned at confirm-request time for FORMAT_PARTITION; executed FS must match. */
+    val formatId: FilesystemId? = null,
+    /** ISO basename for VENTOY_LINK_XML. */
+    val isoName: String? = null,
+    /** Explicit overwrite permission for an existing ISO→XML link. */
+    val linkOverwrite: Boolean = false,
 ) {
     companion object {
         fun request(
             device: DeviceIdentity,
             action: DestructiveAction,
             targetPartition: String? = null,
+            formatId: FilesystemId? = null,
+            isoName: String? = null,
+            linkOverwrite: Boolean = false,
         ): DestructiveConfirmation {
             val actionLabel = action.displayName()
             val targetSuffix = if (targetPartition != null) " (partition $targetPartition)" else ""
+            val formatSuffix =
+                if (action == DestructiveAction.FORMAT_PARTITION && formatId != null) {
+                    " as ${FormatCatalog.label(formatId)}"
+                } else {
+                    ""
+                }
+            val rescueHint =
+                if (action == DestructiveAction.RESCUE_RESTORE) {
+                    " Restores onto the currently attached disk (${device.identity}). " +
+                        "If the map names a different stick, that is a disk swap — " +
+                        "all NON_TRIED gaps and FAILED sectors become zeros on this disk. " +
+                        "Partial COPY maps are refused."
+                } else {
+                    ""
+                }
+            val linkHint =
+                if (action == DestructiveAction.VENTOY_LINK_XML) {
+                    val iso = isoName?.substringAfterLast('/') ?: "(ISO)"
+                    if (linkOverwrite) {
+                        " Overwrites existing autounattend.xml / ventoy.json link for $iso."
+                    } else {
+                        " Writes autounattend.xml and merges ventoy.json for $iso " +
+                            "(refuses if a link already exists — confirm overwrite)."
+                    }
+                } else {
+                    ""
+                }
             val message =
-                "Confirm $actionLabel$targetSuffix on ${device.identity} (${device.capacityLabel}). " +
-                    "This changes the USB device and cannot be undone from this app."
+                "Confirm $actionLabel$formatSuffix$targetSuffix on ${device.identity} (${device.capacityLabel}). " +
+                    "This changes the USB device and cannot be undone from this app." +
+                    rescueHint +
+                    linkHint
             return DestructiveConfirmation(
                 action = actionLabel,
                 identity = device,
                 message = message,
+                formatId = if (action == DestructiveAction.FORMAT_PARTITION) formatId else null,
+                isoName = if (action == DestructiveAction.VENTOY_LINK_XML) isoName else null,
+                linkOverwrite = linkOverwrite,
             )
         }
     }
@@ -98,7 +156,8 @@ fun DestructiveAction.displayName(): String =
         DestructiveAction.CREATE_PARTITION -> "create partition"
         DestructiveAction.GPT_REPAIR -> "GPT backup repair"
         DestructiveAction.GPT_RESTORE -> "restore GPT backup"
-        DestructiveAction.WRITE_BENCHMARK -> "write throughput benchmark"
+        DestructiveAction.RESCUE_RESTORE -> "restore rescue image"
+        DestructiveAction.VENTOY_LINK_XML -> "link Ventoy Windows setup XML"
     }
 
 enum class ShellTab {
@@ -113,7 +172,17 @@ data class PartitionTab(
     val name: String,
     val readOnly: Boolean,
     val isVtoyEfi: Boolean = false,
-)
+    val filesystemId: FilesystemId? = null,
+) {
+    val filesystemLabel: String
+        get() = when (filesystemId) {
+            FilesystemId.FAT -> "FAT"
+            FilesystemId.EXFAT -> "exFAT"
+            FilesystemId.NTFS -> "NTFS"
+            FilesystemId.EXT -> "EXT"
+            null -> ""
+        }
+}
 
 data class FileEntry(
     val name: String,
@@ -126,6 +195,8 @@ data class FileEntry(
 
 enum class IsoAction {
     LinkXml,
+    /** Stage USB file into app filesDir, then queue raw write (Partitions confirm). */
+    SendToRawWriter,
 }
 
 data class OperationProgress(
@@ -155,17 +226,34 @@ data class AppUiState(
     val partitions: List<PartitionTab> = emptyList(),
     val selectedPartitionId: String? = null,
     val vtoyEfiWriteEnabled: Boolean = false,
-    val vtoyBypassTpm: Boolean = true,
+    val vtoyBypassTpm: Boolean = false,
+    val vtoyBypassRam: Boolean = false,
+    val vtoyLocalAccount: Boolean = false,
     val tableValid: Boolean = true,
     /** Absolute FAT path currently displayed; [files] are the entries of this directory. */
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
     val operation: OperationProgress? = null,
     val pendingConfirmation: DestructiveConfirmation? = null,
+    val linkOverwriteCandidate: String? = null,
+    /** Device identity that produced [linkOverwriteCandidate]. */
+    val linkOverwriteCandidateIdentity: String? = null,
     val statusMessage: String? = null,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
+    /**
+     * Absolute path under app filesDir/staging for a USB→raw staging copy.
+     * Preferred over [imageUri] when set. Cleared after apply/cancel + file delete.
+     */
+    val stagedRawImagePath: String? = null,
+    val stagedRawImageLabel: String? = null,
     val backupUri: String? = null,
+    /** SAF URI of a dense rescue .img chosen for restore. */
+    val rescueImageUri: String? = null,
+    /** SAF URI of the matching .map (v2 RESTORE or converted from COPY). */
+    val rescueMapUri: String? = null,
+    /** User-selected target FS for the next Format action (picker). */
+    val selectedFormatId: FilesystemId = FilesystemId.FAT,
     /** Dark theme preference: null = system default, true = dark, false = light. */
     val darkTheme: Boolean? = null,
 ) {

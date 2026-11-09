@@ -4,6 +4,12 @@ import usb.EngineMissingException
 import usb.partition.VirtualPartition
 
 object Formatter {
+    fun supportedFormatIds(): List<FilesystemId> = FormatCatalog.supportedFormatIds()
+
+    fun requireSupported(id: FilesystemId): FilesystemId = FormatCatalog.requireSupported(id)
+
+    fun label(id: FilesystemId): String = FormatCatalog.label(id)
+
     /**
      * Format [partition] with upstream engine selected by [id].
      * Closes any open [MountedVolume] views first.
@@ -13,6 +19,7 @@ object Formatter {
         id: FilesystemId,
         openVolumes: List<MountedVolume> = emptyList(),
     ) {
+        requireSupported(id)
         openVolumes.filter { it.partition === partition || sameRange(it.partition, partition) }
             .forEach { volume ->
                 volume.sync()
@@ -31,10 +38,6 @@ object Formatter {
 
 internal object FormatNative {
     fun fat(partition: VirtualPartition, id: FilesystemId) {
-        if (FormatProbe.testMode) {
-            FormatProbe.record(partition, id)
-            return
-        }
         FatFs.mkfs(
             callback = BlockDeviceFatCallback(partition),
             sectorSize = partition.sectorSize,
@@ -44,19 +47,11 @@ internal object FormatNative {
     }
 
     fun ntfs(partition: VirtualPartition) {
-        if (FormatProbe.testMode) {
-            FormatProbe.record(partition, FilesystemId.NTFS)
-            return
-        }
         throw EngineMissingException("ntfs-3g")
     }
 
     fun ext(partition: VirtualPartition) {
-        if (FormatProbe.testMode) {
-            FormatProbe.record(partition, FilesystemId.EXT)
-            return
-        }
-        throw EngineMissingException("lwext4")
+        ExtFs.mkfs(partition)
     }
 }
 
@@ -68,25 +63,4 @@ internal fun fatMkfsType(id: FilesystemId, partition: VirtualPartition? = null):
     }
     FilesystemId.EXFAT -> FatMkfsType.EXFAT
     else -> throw IllegalArgumentException("$id is not a FAT-family filesystem")
-}
-
-/** Test seam recording last format request. Production keeps testMode=false. */
-object FormatProbe {
-    data class Request(val startLba: ULong, val sectorCount: ULong, val id: FilesystemId)
-
-    @Volatile
-    var testMode: Boolean = false
-
-    @Volatile
-    var last: Request? = null
-        private set
-
-    fun record(partition: VirtualPartition, id: FilesystemId) {
-        last = Request(partition.startLba, partition.sectorCount, id)
-    }
-
-    fun reset() {
-        last = null
-        testMode = false
-    }
 }

@@ -6,7 +6,7 @@ set(CMAKE_C_EXTENSIONS ON)
 set(FATFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/fatfs/source)
 set(EXFAT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/exfatprogs)
 set(NTFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/ntfs-3g)
-
+set(LWEXT4_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/lwext4)
 add_library(exfatprogs_fsck STATIC
     ${EXFAT_ROOT}/lib/libexfat.c
     ${EXFAT_ROOT}/lib/exfat_fs.c
@@ -31,36 +31,97 @@ target_compile_options(exfatprogs_fsck PRIVATE
 file(GLOB NTFS_SOURCES ${NTFS_DIR}/libntfs-3g/*.c)
 list(FILTER NTFS_SOURCES EXCLUDE REGEX ".*win32_io\\.c$")
 
-add_library(usb_native SHARED
+file(GLOB LWEXT4_SOURCES ${LWEXT4_DIR}/src/*.c)
+
+
+option(USB_REQUIRE_ENGINES "Fail configure when third_party engines are missing" ON)
+option(USB_WITH_NTFS "Build NTFS engine (requires third_party/ntfs-3g)" ON)
+option(USB_WITH_LWEXT4 "Build EXT engine (requires third_party/lwext4)" ON)
+option(USB_WITH_FATFS "Build FatFs engine (requires third_party/fatfs)" ON)
+
+# REQUIRE implies every WITH flag: configure must fail if any engine source is absent.
+if(USB_REQUIRE_ENGINES)
+    set(USB_WITH_NTFS ON CACHE BOOL "Build NTFS engine (requires third_party/ntfs-3g)" FORCE)
+    set(USB_WITH_LWEXT4 ON CACHE BOOL "Build EXT engine (requires third_party/lwext4)" FORCE)
+    set(USB_WITH_FATFS ON CACHE BOOL "Build FatFs engine (requires third_party/fatfs)" FORCE)
+endif()
+
+if(NOT EXISTS "${FATFS_DIR}/ff.c")
+    if(USB_REQUIRE_ENGINES OR USB_WITH_FATFS)
+        message(FATAL_ERROR
+            "FatFs sources missing at ${FATFS_DIR}/ff.c — run scripts/fetch-third-party.sh")
+    endif()
+endif()
+if(USB_WITH_NTFS AND NOT NTFS_SOURCES)
+    message(FATAL_ERROR
+        "ntfs-3g sources missing under ${NTFS_DIR}/libntfs-3g — run scripts/fetch-third-party.sh")
+endif()
+if(USB_WITH_LWEXT4 AND NOT LWEXT4_SOURCES)
+    message(FATAL_ERROR
+        "lwext4 sources missing under ${LWEXT4_DIR}/src — run scripts/fetch-third-party.sh")
+endif()
+
+
+set(USB_NATIVE_SOURCES
     native-lib.cpp
     usb_block.c
-    fat_engine.c
-    fat_jni.cpp
-    ${FATFS_DIR}/ff.c
-    ${FATFS_DIR}/ffunicode.c
-    ${FATFS_DIR}/ffsystem.c
-    ${FATFS_DIR}/diskio.c
     exfat_fsck_jni.cpp
-    ntfs_engine.c
-    ntfs_jni.cpp
-    ${NTFS_SOURCES}
 )
-
-target_include_directories(usb_native PRIVATE
+set(USB_NATIVE_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${NTFS_DIR}/libntfs-3g
-    ${NTFS_DIR}/include
-    ${NTFS_DIR}/include/ntfs-3g
-    ${FATFS_DIR}
     ${EXFAT_ROOT}/include
     ${EXFAT_ROOT}/fsck
 )
-
-target_compile_definitions(usb_native PRIVATE
-    HAVE_CONFIG_H=1
+set(USB_NATIVE_DEFS
     _GNU_SOURCE
     _FILE_OFFSET_BITS=64
 )
+
+if(USB_WITH_FATFS)
+    list(APPEND USB_NATIVE_SOURCES
+        fat_engine.c
+        fat_jni.cpp
+        ${FATFS_DIR}/ff.c
+        ${FATFS_DIR}/ffunicode.c
+        ${FATFS_DIR}/ffsystem.c
+        ${FATFS_DIR}/diskio.c
+    )
+    list(APPEND USB_NATIVE_INCLUDES ${FATFS_DIR})
+endif()
+
+if(USB_WITH_NTFS)
+    list(APPEND USB_NATIVE_SOURCES
+        ntfs_engine.c
+        ntfs_jni.cpp
+        ${NTFS_SOURCES}
+    )
+    list(APPEND USB_NATIVE_INCLUDES
+        ${NTFS_DIR}/libntfs-3g
+        ${NTFS_DIR}/include
+        ${NTFS_DIR}/include/ntfs-3g
+    )
+    list(APPEND USB_NATIVE_DEFS HAVE_CONFIG_H=1)
+endif()
+
+if(USB_WITH_LWEXT4)
+    list(APPEND USB_NATIVE_SOURCES
+        ext_engine.c
+        ext_jni.cpp
+        ${LWEXT4_SOURCES}
+    )
+    list(APPEND USB_NATIVE_INCLUDES ${LWEXT4_DIR}/include)
+    list(APPEND USB_NATIVE_DEFS
+        CONFIG_USE_DEFAULT_CFG=1
+        CONFIG_DEBUG_ASSERT=0
+        CONFIG_EXT4_MOUNTPOINTS_COUNT=8
+    )
+endif()
+
+add_library(usb_native SHARED ${USB_NATIVE_SOURCES})
+
+target_include_directories(usb_native PRIVATE ${USB_NATIVE_INCLUDES})
+
+target_compile_definitions(usb_native PRIVATE ${USB_NATIVE_DEFS})
 
 find_package(Threads REQUIRED)
 

@@ -60,9 +60,13 @@ open class RecordingDisk(
         }
     }
 
+    /** Optional hook; thrown after counting the write attempt (disk already counted as mutated). */
+    var writeHook: ((lba: ULong) -> Unit)? = null
+
     override fun write(lba: ULong, source: ByteBuffer) {
         writes.add(lba)
         writeCount++
+        writeHook?.invoke(lba)
         val count = source.remaining() / sectorSize
         writtenRanges.add(Pair(lba.toLong(), count))
         val n = source.remaining()
@@ -76,8 +80,12 @@ open class RecordingDisk(
         }
     }
 
+    /** Optional hook; thrown after counting the sync attempt. */
+    var syncHook: (() -> Unit)? = null
+
     override fun sync() {
         syncCount++
+        syncHook?.invoke()
     }
 
     override fun read(lba: Long, destination: ByteBuffer) = read(lba.toULong(), destination)

@@ -55,6 +55,7 @@ class UiStateMachineTest {
                     FileEntry("ubuntu.iso", isDirectory = false, sizeBytes = 2_000_000_000uL),
                     FileEntry("docs", isDirectory = true, sizeBytes = 0uL),
                 ),
+            vtoyBypassTpm = true,
         )
 
     @Test
@@ -188,14 +189,13 @@ class UiStateMachineTest {
     }
 
     @Test
-    fun isoActionsExposeLinkXml() {
-        val link =
-            UiReducer.reduce(
-                ready(),
-                UiIntent.IsoActionRequested("ubuntu.iso", IsoAction.LinkXml),
-            )
-        assertEquals(UiEffect.Kind.LinkXml, link.effects.single().kind)
-        assertEquals("ubuntu.iso", link.effects.single().isoName)
+    fun isoActionsExposeLinkXmlConfirmation() {
+        val link = UiReducer.reduce(ready(), UiIntent.IsoActionRequested("ubuntu.iso", IsoAction.LinkXml))
+        assertTrue(link.effects.isEmpty())
+        assertEquals("ubuntu.iso", link.state.pendingConfirmation?.isoName)
+        val confirmed = UiReducer.reduce(link.state, UiIntent.ConfirmDestructive)
+        assertEquals(UiEffect.Kind.LinkXml, confirmed.effects.single().kind)
+        assertEquals("ubuntu.iso", confirmed.effects.single().isoName)
     }
 
     @Test

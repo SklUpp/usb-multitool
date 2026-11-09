@@ -52,6 +52,8 @@ fun AppShell(
     onPickImage: () -> Unit = {},
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
+    onPickRescueImage: () -> Unit = {},
+    onPickRescueMap: () -> Unit = {},
 ) {
     val isDark = when (state.darkTheme) {
         true -> true
@@ -107,6 +109,8 @@ fun AppShell(
                         onIntent = onIntent,
                         modifier = Modifier.weight(1f),
                         onPickBackup = onPickBackup,
+                        onPickRescueImage = onPickRescueImage,
+                        onPickRescueMap = onPickRescueMap,
                     )
                 }
             }
@@ -128,6 +132,11 @@ fun AppShell(
                     }
                 },
             )
+        }
+        state.linkOverwriteCandidate?.let { iso ->
+            Button(onClick = { onIntent(UiIntent.RequestLinkOverwrite(iso)) }) {
+                Text("Confirm overwrite existing link")
+            }
         }
     }
 }

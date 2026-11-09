@@ -1,4 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <errno.h>
+#ifndef EUCLEAN
+#define EUCLEAN 117
+#endif
+
 #include <jni.h>
 #include <cerrno>
 #include <cstdint>
@@ -182,29 +187,51 @@ std::u16string utf8_to_utf16(const char *s)
     return out;
 }
 
+void throw_ntfs(JNIEnv *env, const char *msg)
+{
+    jclass exCls = env->FindClass("usb/fs/NtfsException");
+    if (exCls) env->ThrowNew(exCls, msg);
+}
+
 } // namespace
 
 extern "C" {
 
 JNIEXPORT jlong JNICALL
 Java_usb_fs_NtfsFs_nativeMount(JNIEnv *env, jclass, jobject device,
-                               jint sectorSize, jlong sectorCount, jboolean readOnly)
+                               jint sectorSize, jlong sectorCount, jboolean readOnly,
+                               jintArray outErrno)
 {
-    JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
-    if (!bdev) return 0;
+    auto set_err = [&](int e) {
+        if (outErrno) {
+            jint v = e;
+            env->SetIntArrayRegion(outErrno, 0, 1, &v);
+        }
+    };
 
-    uint64_t bhandle = usb_block_register(&bdev->ops);
-    uint64_t vol_handle = ntfs_engine_mount(bhandle, readOnly != JNI_FALSE);
-    if (vol_handle == 0) {
-        destroy_block_device(env, bdev);
+    JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
+    if (!bdev) {
+        set_err(EINVAL);
         return 0;
     }
 
+    uint64_t bhandle = usb_block_register(&bdev->ops);
+    errno = 0;
+    uint64_t vol_handle = ntfs_engine_mount(bhandle, readOnly != JNI_FALSE);
+    if (vol_handle == 0) {
+        int e = errno;
+        destroy_block_device(env, bdev);
+        set_err(e != 0 ? e : EIO);
+        return 0;
+    }
+
+    set_err(0);
     auto *wrapper = new MountedVolumeWrapper();
     wrapper->vol_handle = vol_handle;
     wrapper->block_dev = bdev;
     return reinterpret_cast<jlong>(wrapper);
 }
+
 
 JNIEXPORT jint JNICALL
 Java_usb_fs_NtfsFs_nativeClose(JNIEnv *env, jclass, jlong handle)
@@ -243,6 +270,8 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
             const char *msg = "directory listing failed";
             if (rc == -EOVERFLOW) msg = "directory listing exceeds the supported entry count";
             else if (rc == -EIO) msg = "directory listing failed: unreadable directory";
+            else if (rc == -ENOENT) msg = "Path not found";
+            else if (rc == -ENOTDIR) msg = "Not a directory";
             env->ThrowNew(exCls, msg);
         }
         return nullptr;
@@ -289,15 +318,32 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
 }
 
 JNIEXPORT jobject JNICALL
-Java_usb_fs_NtfsFs_nativeStat(JNIEnv *env, jclass, jlong handle, jstring path)
+Java_usb_fs_NtfsFs_nativeStat(JNIEnv *env, jclass, jlong handle, jstring path,
+                             jintArray outErrno)
 {
     auto *wrapper = reinterpret_cast<MountedVolumeWrapper *>(handle);
-    if (!wrapper) return nullptr;
+    if (!wrapper) {
+        if (outErrno) {
+            jint e = EINVAL;
+            env->SetIntArrayRegion(outErrno, 0, 1, &e);
+        }
+        return nullptr;
+    }
 
     std::string p = jstring_to_string(env, path);
     NtfsStat st{};
     int rc = ntfs_engine_stat(wrapper->vol_handle, p.c_str(), &st);
-    if (rc != 0) return nullptr;
+    if (rc != 0) {
+        if (outErrno) {
+            jint e = -rc;
+            env->SetIntArrayRegion(outErrno, 0, 1, &e);
+        }
+        return nullptr;
+    }
+    if (outErrno) {
+        jint e = 0;
+        env->SetIntArrayRegion(outErrno, 0, 1, &e);
+    }
 
     jclass statCls = env->FindClass("usb/fs/NtfsStat");
     if (!statCls) return nullptr;
@@ -310,10 +356,21 @@ Java_usb_fs_NtfsFs_nativeStat(JNIEnv *env, jclass, jlong handle, jstring path)
 }
 
 JNIEXPORT jbyteArray JNICALL
-Java_usb_fs_NtfsFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path, jlong offset, jint length)
+Java_usb_fs_NtfsFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path,
+                              jlong offset, jint length, jintArray outErrno)
 {
+    auto set_err = [&](int e) {
+        if (outErrno) {
+            jint v = e;
+            env->SetIntArrayRegion(outErrno, 0, 1, &v);
+        }
+    };
+
     auto *wrapper = reinterpret_cast<MountedVolumeWrapper *>(handle);
-    if (!wrapper || length < 0) return nullptr;
+    if (!wrapper || length < 0) {
+        set_err(EINVAL);
+        return nullptr;
+    }
 
     std::string p = jstring_to_string(env, path);
     std::vector<uint8_t> buf(static_cast<size_t>(length));
@@ -321,8 +378,12 @@ Java_usb_fs_NtfsFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path, j
 
     int rc = ntfs_engine_read(wrapper->vol_handle, p.c_str(), static_cast<uint64_t>(offset),
                               buf.data(), static_cast<size_t>(length), &out_read);
-    if (rc != 0) return nullptr;
+    if (rc != 0) {
+        set_err(-rc);
+        return nullptr;
+    }
 
+    set_err(0);
     jbyteArray arr = env->NewByteArray(static_cast<jsize>(out_read));
     if (out_read > 0) {
         env->SetByteArrayRegion(arr, 0, static_cast<jsize>(out_read),
@@ -330,6 +391,7 @@ Java_usb_fs_NtfsFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path, j
     }
     return arr;
 }
+
 
 JNIEXPORT jint JNICALL
 Java_usb_fs_NtfsFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
@@ -361,11 +423,18 @@ Java_usb_fs_NtfsFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
 }
 
 JNIEXPORT jboolean JNICALL
-Java_usb_fs_NtfsFs_nativeIsVolumeDirty(JNIEnv *, jclass, jlong handle)
+Java_usb_fs_NtfsFs_nativeIsVolumeDirty(JNIEnv *env, jclass, jlong handle)
 {
     auto *wrapper = reinterpret_cast<MountedVolumeWrapper *>(handle);
-    if (!wrapper) return JNI_FALSE;
+    if (!wrapper) {
+        throw_ntfs(env, "dirty query failed: bad handle");
+        return JNI_FALSE;
+    }
     int rc = ntfs_engine_is_dirty(wrapper->vol_handle);
+    if (rc < 0) {
+        throw_ntfs(env, "dirty query failed");
+        return JNI_FALSE;
+    }
     return (rc == 1) ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -374,11 +443,18 @@ Java_usb_fs_NtfsFs_nativeCheckDirty(JNIEnv *env, jclass, jobject device,
                                     jint sectorSize, jlong sectorCount)
 {
     JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
-    if (!bdev) return JNI_FALSE;
+    if (!bdev) {
+        throw_ntfs(env, "dirty check failed: bad device");
+        return JNI_FALSE;
+    }
 
     uint64_t bhandle = usb_block_register(&bdev->ops);
     int rc = ntfs_engine_check_dirty_dev(bhandle);
     destroy_block_device(env, bdev);
+    if (rc < 0) {
+        throw_ntfs(env, "dirty check failed: I/O or mount error");
+        return JNI_FALSE;
+    }
     return (rc == 1) ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -388,13 +464,83 @@ Java_usb_fs_NtfsFs_nativeClearDirty(JNIEnv *env, jclass, jobject device,
                                     jstring confirmationToken)
 {
     JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
-    if (!bdev) return JNI_FALSE;
+    if (!bdev) {
+        throw_ntfs(env, "clear dirty failed: bad device");
+        return JNI_FALSE;
+    }
 
     std::string token = jstring_to_string(env, confirmationToken);
     uint64_t bhandle = usb_block_register(&bdev->ops);
     int rc = ntfs_engine_clear_dirty(bhandle, token.c_str());
     destroy_block_device(env, bdev);
+    if (rc < 0) {
+        throw_ntfs(env, "clear dirty failed");
+        return JNI_FALSE;
+    }
     return (rc == 0) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_usb_fs_NtfsFs_nativeMkdir(JNIEnv *env, jclass, jlong handle, jstring path)
+{
+    auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
+    if (!w) {
+        throw_ntfs(env, "mkdir failed: bad handle");
+        return;
+    }
+    int rc = ntfs_engine_mkdir(w->vol_handle, jstring_to_string(env, path).c_str());
+    if (rc != 0) {
+        const char *msg = "mkdir failed";
+        if (rc == -EROFS) msg = "Read-only NTFS volume";
+        else if (rc == -EEXIST) msg = "Path exists";
+        else if (rc == -ENOENT) msg = "Parent not found";
+        else if (rc == -EPERM) msg = "Refusing to mutate NTFS metadata";
+        throw_ntfs(env, msg);
+    }
+
+}
+
+JNIEXPORT void JNICALL
+Java_usb_fs_NtfsFs_nativeDelete(JNIEnv *env, jclass, jlong handle, jstring path)
+{
+    auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
+    if (!w) {
+        throw_ntfs(env, "delete failed: bad handle");
+        return;
+    }
+    int rc = ntfs_engine_delete(w->vol_handle, jstring_to_string(env, path).c_str());
+    if (rc != 0) {
+        const char *msg = "delete failed";
+        if (rc == -ENOENT) msg = "Path not found";
+        else if (rc == -ENOTEMPTY) msg = "Directory not empty";
+        else if (rc == -EROFS) msg = "Read-only NTFS volume";
+        else if (rc == -EPERM) msg = "Refusing to mutate NTFS metadata";
+        throw_ntfs(env, msg);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_usb_fs_NtfsFs_nativeRename(JNIEnv *env, jclass, jlong handle, jstring from, jstring to)
+{
+    auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
+    if (!w) {
+        throw_ntfs(env, "rename failed: bad handle");
+        return;
+    }
+    int rc = ntfs_engine_rename(w->vol_handle,
+                                jstring_to_string(env, from).c_str(),
+                                jstring_to_string(env, to).c_str());
+    if (rc != 0) {
+        const char *msg = "rename failed";
+        if (rc == -EEXIST) msg = "Destination exists";
+        else if (rc == -ENOENT) msg = "Path not found";
+        else if (rc == -EROFS) msg = "Read-only NTFS volume";
+        else if (rc == -EXDEV) msg = "Cross-directory directory rename not supported";
+        else if (rc == -EPERM) msg = "Refusing to mutate NTFS metadata";
+        else if (rc == -EUCLEAN) msg = "Rename partial: both names may exist";
+        throw_ntfs(env, msg);
+    }
+
 }
 
 } // extern "C"

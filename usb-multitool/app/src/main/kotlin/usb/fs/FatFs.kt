@@ -1,5 +1,34 @@
 package usb.fs
 
+/** FatFs R0.16 FR_NO_FILE. */
+internal const val FR_NO_FILE: Int = 4
+
+/** FatFs R0.16 FR_DENIED — nonempty directory unlink, write-protect, etc. */
+internal const val FR_DENIED: Int = 7
+
+/**
+ * Shared by [FatVolume.statOrNull] and host tests: FR_NO_FILE → null (absent);
+ * any other FatFsException → IllegalStateException (never look creatable).
+ */
+internal fun mapFatStatOrNullFailure(path: String, failure: FatFsException): UsbFsDirEntry? {
+    if (failure.message.orEmpty().endsWith("stat failed: $FR_NO_FILE")) {
+        return null
+    }
+    throw IllegalStateException(
+        "cannot stat $path: ${failure.message ?: "stat failed"}",
+        failure,
+    )
+}
+
+/** User-facing delete failure; nonempty dirs must not look like a generic "delete failed". */
+internal fun mapFatDeleteFailure(path: String, failure: FatFsException): Nothing {
+    val msg = failure.message.orEmpty()
+    if (msg.endsWith("delete failed: $FR_DENIED")) {
+        throw FatFsException("Directory not empty: $path")
+    }
+    throw failure
+}
+
 /**
  * FatFs R0.16 facade. Block callbacks use relative LBAs only;
  * VirtualPartition (or image file) applies the partition start once.
@@ -97,47 +126,61 @@ class FatVolume internal constructor(
     private val volumeHandle: Long,
     private val blockHandle: Long,
     private val ownsBlock: Boolean,
-) : AutoCloseable {
+) : AutoCloseable, UsbFsVolume {
     @Volatile private var open = true
 
     fun isOpen(): Boolean = open
 
-    fun list(path: String = "/"): List<FatDirEntry> {
+    override fun list(path: String): List<UsbFsDirEntry> {
         ensureOpen()
-        return FatFsNative.nativeList(volumeHandle, path).toList()
+        return FatFsNative.nativeList(volumeHandle, path).map {
+            UsbFsDirEntry(it.name, it.isDirectory, it.size)
+        }
     }
 
-    fun stat(path: String): FatDirEntry {
+    override fun stat(path: String): UsbFsDirEntry {
         ensureOpen()
-        return FatFsNative.nativeStat(volumeHandle, path)
+        val e = FatFsNative.nativeStat(volumeHandle, path)
+        return UsbFsDirEntry(e.name, e.isDirectory, e.size)
     }
 
-    fun mkdir(path: String) {
+    override fun statOrNull(path: String): UsbFsDirEntry? =
+        try {
+            stat(path)
+        } catch (failure: FatFsException) {
+            mapFatStatOrNullFailure(path, failure)
+        }
+
+    override fun mkdir(path: String) {
         ensureOpen()
         FatFsNative.nativeMkdir(volumeHandle, path)
     }
 
-    fun delete(path: String) {
+    override fun delete(path: String) {
         ensureOpen()
-        FatFsNative.nativeDelete(volumeHandle, path)
+        try {
+            FatFsNative.nativeDelete(volumeHandle, path)
+        } catch (failure: FatFsException) {
+            mapFatDeleteFailure(path, failure)
+        }
     }
 
-    fun rename(from: String, to: String) {
+    override fun rename(from: String, to: String) {
         ensureOpen()
         FatFsNative.nativeRename(volumeHandle, from, to)
     }
 
-    fun read(path: String, offset: Long = 0L, length: Int): ByteArray {
+    override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
         return FatFsNative.nativeRead(volumeHandle, path, offset, length)
     }
 
-    fun write(
+    override fun write(
         path: String,
         data: ByteArray,
-        offset: Long = 0L,
-        create: Boolean = true,
-        plannedTotalSize: Long = offset + data.size.toLong(),
+        offset: Long,
+        create: Boolean,
+        plannedTotalSize: Long,
     ) {
         ensureOpen()
         val planned = resolvePlannedTotal(offset, data.size, plannedTotalSize)
@@ -146,9 +189,7 @@ class FatVolume internal constructor(
         requireFullWrite(wrote, data.size)
     }
 
-
-
-    fun sync() {
+    override fun sync() {
         ensureOpen()
         FatFsNative.nativeSync(volumeHandle)
     }

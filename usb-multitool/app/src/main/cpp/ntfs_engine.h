@@ -73,6 +73,29 @@ int ntfs_engine_write(uint64_t vol_handle, const char *path,
                       uint64_t offset, const void *buf, size_t count,
                       bool create, size_t *out_written);
 
+/* Create a directory. Returns 0 on success, -EROFS on RO mount, -EEXIST if present. */
+int ntfs_engine_mkdir(uint64_t vol_handle, const char *path);
+
+/* Delete a file or empty directory. Returns 0 on success;
+ * -ENOTEMPTY when the directory still has children. */
+int ntfs_engine_delete(uint64_t vol_handle, const char *path);
+
+/* Rename/move within the volume (same-directory and cross-directory via link+unlink).
+ * Fails with -EEXIST if [to] already exists.
+ * On unlink failure after link: rolls back `to` when `from` still resolves;
+ * if `from` is already gone keeps `to` (-EIO); ambiguous lookup/rollback keeps
+ * both names and returns -EUCLEAN (partial).
+ */
+int ntfs_engine_rename(uint64_t vol_handle, const char *from, const char *to);
+
+#ifdef NTFS_TEST_HOOKS
+/* Host-test only: force rename unlink failure after successful link. */
+void ntfs_test_set_fail_rename_unlink(int enabled);
+/* Host-test only: force still_from lookup to fail as I/O (ambiguous). */
+void ntfs_test_set_fail_still_from_lookup(int enabled);
+#endif
+
+
 /* Check if mounted volume is marked dirty.
  * Returns 1 if dirty, 0 if clean, negative on error.
  */

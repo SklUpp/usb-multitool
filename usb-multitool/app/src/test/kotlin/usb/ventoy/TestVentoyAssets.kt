@@ -12,13 +12,17 @@ fun syntheticVentoyAssets(
     commit: String = VentoyAssets.PINNED_COMMIT,
     efiPartSectors: Int = 65536,
     supports4Kn: Boolean = false,
+    coreBytes: ByteArray? = null,
 ): VentoyAssets {
     val boot = ByteArray(512) { 0x90.toByte() }
     boot[510] = 0x55.toByte()
     boot[511] = 0xAA.toByte()
 
-    val core = ByteArray(2048) { 0xCC.toByte() }
-    core[500] = 1
+    val core = if (coreBytes != null) {
+        coreBytes
+    } else {
+        ByteArray(2048) { 0xCC.toByte() }.also { it[500] = 1 }
+    }
 
     // Minimal EFI image structure with a FAT boot sector
     val efi = ByteArray(efiPartSectors * 512)

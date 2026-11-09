@@ -15,6 +15,8 @@ CP="$STDLIB:$JDK7:$JDK8"
 kotlinc \
   -cp "$CP" \
   -d "$OUT" \
+  "$ROOT/app/src/main/kotlin/usb/fs/FilesystemId.kt" \
+  "$ROOT/app/src/main/kotlin/usb/fs/FormatCatalog.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiStateHostCheck.kt"

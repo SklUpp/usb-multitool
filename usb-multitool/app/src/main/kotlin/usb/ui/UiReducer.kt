@@ -1,5 +1,8 @@
 package usb.ui
 
+import usb.fs.FilesystemId
+import usb.fs.FormatCatalog
+
 /**
  * Pure state transitions for the four-screen shell.
  * Compose and JVM tests drive the same reducer; no USB I/O here.
@@ -8,9 +11,13 @@ sealed class UiIntent {
     data class SelectTab(val tab: ShellTab) : UiIntent()
 
     data class SelectPartition(val partitionId: String) : UiIntent()
-
     data class SetVtoyEfiWritable(val enabled: Boolean) : UiIntent()
     data class SetVtoyBypassTpm(val enabled: Boolean) : UiIntent()
+    data class SetVtoyBypassRam(val enabled: Boolean) : UiIntent()
+    data class SetVtoyLocalAccount(val enabled: Boolean) : UiIntent()
+
+    /** Choose filesystem for the next Format action (must be in FormatCatalog.supportedFormatIds). */
+    data class SelectFormatFilesystem(val id: FilesystemId) : UiIntent()
 
     data class DeviceChanged(
         val presence: DevicePresence,
@@ -28,15 +35,23 @@ sealed class UiIntent {
 
     data object DismissConfirmation : UiIntent()
 
+    data class RequestLinkOverwrite(val fileName: String) : UiIntent()
+
+    data class LinkOverwriteAvailable(val fileName: String) : UiIntent()
+
     data class IsoActionRequested(
         val fileName: String,
         val action: IsoAction,
     ) : UiIntent()
 
     data class SetImage(val uri: String?) : UiIntent()
+    data class SetStagedRawImage(val path: String, val label: String) : UiIntent()
+    data class ClearStagedRawImage(val deleteFile: Boolean = true) : UiIntent()
 
     /** SAF [uri] of the GPT critical-sector backup chosen for the next restore. */
     data class SetBackupFile(val uri: String?) : UiIntent()
+    data class SetRescueImage(val uri: String?) : UiIntent()
+    data class SetRescueMap(val uri: String?) : UiIntent()
 
     /** Read-only scan of every sector; reports unreadable ranges. */
     data object StartReadScan : UiIntent()
@@ -102,6 +117,10 @@ data class UiEffect(
     val path: String? = null,
     val name: String? = null,
     val uri: String? = null,
+    /** Pinned FORMAT_PARTITION filesystem from the confirmation dialog. */
+    val formatId: FilesystemId? = null,
+    /** Explicit overwrite for LinkXml / VENTOY_LINK_XML. */
+    val linkOverwrite: Boolean = false,
 ) {
     enum class Kind {
         SubmitDestructive,
@@ -112,6 +131,7 @@ data class UiEffect(
         DeleteEntry,
         UploadFile,
         DownloadFile,
+        StageUsbImageForRawWrite,
         ReadScan,
         RescueBackup,
         CaptureGptBackup,
@@ -150,6 +170,27 @@ object UiReducer {
                 ReduceResult(state.copy(vtoyEfiWriteEnabled = intent.enabled))
             is UiIntent.SetVtoyBypassTpm ->
                 ReduceResult(state.copy(vtoyBypassTpm = intent.enabled))
+            is UiIntent.SetVtoyBypassRam ->
+                ReduceResult(state.copy(vtoyBypassRam = intent.enabled))
+            is UiIntent.SetVtoyLocalAccount ->
+                ReduceResult(state.copy(vtoyLocalAccount = intent.enabled))
+
+            is UiIntent.SelectFormatFilesystem -> {
+                if (!state.actionsEnabled) {
+                    ReduceResult(state)
+                } else {
+                    val id = intent.id
+                    if (id !in FormatCatalog.supportedFormatIds()) {
+                        ReduceResult(
+                            state.copy(
+                                statusMessage = "Format as ${FormatCatalog.label(id)} is not supported",
+                            ),
+                        )
+                    } else {
+                        ReduceResult(state.copy(selectedFormatId = id, statusMessage = null))
+                    }
+                }
+            }
 
             is UiIntent.DeviceChanged -> {
                 val selected =
@@ -157,6 +198,9 @@ object UiReducer {
                         .firstOrNull { it.id == state.selectedPartitionId }
                         ?.id
                         ?: intent.partitions.firstOrNull()?.id
+                val candidateMatchesDevice =
+                    intent.presence == DevicePresence.Ready &&
+                        intent.device?.identity == state.linkOverwriteCandidateIdentity
                 ReduceResult(
                     state.copy(
                         presence = intent.presence,
@@ -167,6 +211,8 @@ object UiReducer {
                         currentPath = "/",
                         files = intent.files,
                         pendingConfirmation = null,
+                        linkOverwriteCandidate = state.linkOverwriteCandidate.takeIf { candidateMatchesDevice },
+                        linkOverwriteCandidateIdentity = state.linkOverwriteCandidateIdentity.takeIf { candidateMatchesDevice },
                         statusMessage =
                             when (intent.presence) {
                                 DevicePresence.Absent -> "No USB mass-storage device"
@@ -207,7 +253,13 @@ object UiReducer {
                         statusMessage =
                             when (intent.progress?.state) {
                                 OperationState.Completed ->
-                                    intent.progress.resultMessage ?: "Success"
+                                    // Keep a more specific status (e.g. staged-image hint) when
+                                    // the operation itself has no resultMessage.
+                                    intent.progress.resultMessage
+                                        ?: state.statusMessage?.takeIf {
+                                            it.isNotBlank() && it != "Running" && it != "Queued"
+                                        }
+                                        ?: "Success"
                                 OperationState.Cancelled -> "Cancelled"
                                 OperationState.Failed ->
                                     intent.progress.errorMessage ?: "Failed"
@@ -224,10 +276,14 @@ object UiReducer {
                 val device = state.device
                 val missingInput =
                     when {
-                        intent.action == DestructiveAction.RAW_WRITE && state.imageUri == null ->
-                            "Select an ISO/IMG file first"
+                        intent.action == DestructiveAction.RAW_WRITE &&
+                            state.imageUri == null && state.stagedRawImagePath == null ->
+                            "Select or stage an ISO/IMG file first"
                         intent.action == DestructiveAction.GPT_RESTORE && state.backupUri == null ->
                             "Choose a GPT backup file first"
+                        intent.action == DestructiveAction.RESCUE_RESTORE &&
+                            (state.rescueImageUri == null || state.rescueMapUri == null) ->
+                            "Choose a rescue image and its map first"
                         (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) &&
                             state.selectedPartitionId == null ->
                             "Select a partition first"
@@ -256,10 +312,21 @@ object UiReducer {
                     } else {
                         null
                     }
+                    val formatId =
+                        if (intent.action == DestructiveAction.FORMAT_PARTITION) {
+                            state.selectedFormatId
+                        } else {
+                            null
+                        }
                     ReduceResult(
                         state.copy(
                             pendingConfirmation =
-                                DestructiveConfirmation.request(device, intent.action, targetPart),
+                                DestructiveConfirmation.request(
+                                    device,
+                                    intent.action,
+                                    targetPart,
+                                    formatId = formatId,
+                                ),
                         ),
                     )
                 }
@@ -283,49 +350,156 @@ object UiReducer {
                 }
                 if (invalidState || action == null) {
                     ReduceResult(state.copy(pendingConfirmation = null))
+                } else if (action == DestructiveAction.VENTOY_LINK_XML) {
+                    val iso = pending.isoName
+                    if (iso.isNullOrBlank()) {
+                        ReduceResult(
+                            state.copy(
+                                pendingConfirmation = null,
+                                statusMessage = "No ISO selected for the Windows setup link",
+                            ),
+                        )
+                    } else {
+                        ReduceResult(
+                            state.copy(
+                                pendingConfirmation = null,
+                                statusMessage =
+                                    "Writing autounattend.xml and ventoy.json for " +
+                                        "${iso.substringAfterLast('/')}…",
+                            ),
+                            effects = listOf(
+                                UiEffect(
+                                    UiEffect.Kind.LinkXml,
+                                    isoName = iso,
+                                    isoAction = IsoAction.LinkXml,
+                                    linkOverwrite = pending.linkOverwrite,
+                                ),
+                            ),
+                        )
+                    }
                 } else {
                     ReduceResult(
                         state.copy(pendingConfirmation = null),
-                        effects = listOf(UiEffect(UiEffect.Kind.SubmitDestructive, action = action)),
+                        effects = listOf(
+                            UiEffect(
+                                UiEffect.Kind.SubmitDestructive,
+                                action = action,
+                                formatId = pending.formatId,
+                            ),
+                        ),
                     )
                 }
             }
 
             UiIntent.DismissConfirmation ->
                 ReduceResult(state.copy(pendingConfirmation = null))
+            is UiIntent.RequestLinkOverwrite -> {
+                val device = state.device
+                val candidateMatches = state.linkOverwriteCandidate == intent.fileName && state.linkOverwriteCandidateIdentity == device?.identity
+                if (!state.actionsEnabled || device == null) {
+                    ReduceResult(state.copy(statusMessage = "No USB device for Ventoy setup link"))
+                } else if (!candidateMatches) {
+                    ReduceResult(state.copy(linkOverwriteCandidate = null, linkOverwriteCandidateIdentity = null, statusMessage = "Existing Ventoy link no longer matches connected device"))
+                } else {
+                    ReduceResult(state.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.VENTOY_LINK_XML, isoName = intent.fileName, linkOverwrite = true), linkOverwriteCandidate = null, linkOverwriteCandidateIdentity = null, statusMessage = null))
+                }
+            }
+            is UiIntent.LinkOverwriteAvailable -> {
+                val device = state.device
+                if (!state.actionsEnabled || device == null) {
+                    ReduceResult(state.copy(linkOverwriteCandidate = null, linkOverwriteCandidateIdentity = null))
+                } else {
+                    ReduceResult(state.copy(linkOverwriteCandidate = intent.fileName, linkOverwriteCandidateIdentity = device.identity, statusMessage = "Existing Ventoy link detected; choose explicit overwrite"))
+                }
+            }
 
             is UiIntent.IsoActionRequested -> {
                 if (!state.actionsEnabled) {
                     ReduceResult(
                         state.copy(statusMessage = presenceMessage(state.presence)),
                     )
-                } else {
-                    val effect =
-                        UiEffect(
-                            UiEffect.Kind.LinkXml,
-                            isoName = intent.fileName,
-                            isoAction = intent.action,
+                } else when (intent.action) {
+                    IsoAction.SendToRawWriter -> {
+                        val name = intent.fileName.substringAfterLast('/')
+                        ReduceResult(
+                            state.copy(statusMessage = "Staging $name for raw write…"),
+                            listOf(
+                                UiEffect(
+                                    UiEffect.Kind.StageUsbImageForRawWrite,
+                                    name = name,
+                                    path = state.currentPath,
+                                    isoName = name,
+                                    isoAction = intent.action,
+                                ),
+                            ),
                         )
-                    ReduceResult(
-                        state.copy(
-                            statusMessage =
-                                "Writing autounattend.xml and ventoy.json for " +
-                                    "${intent.fileName.substringAfterLast('/')}…",
-                        ),
-                        listOf(effect),
-                    )
+                    }
+                    IsoAction.LinkXml -> {
+                        val device = state.device
+                        if (device == null) {
+                            ReduceResult(
+                                state.copy(statusMessage = "No USB device for Ventoy setup link"),
+                            )
+                        } else {
+                            ReduceResult(
+                                state.copy(
+                                    pendingConfirmation =
+                                        DestructiveConfirmation.request(
+                                            device = device,
+                                            action = DestructiveAction.VENTOY_LINK_XML,
+                                            isoName = intent.fileName,
+                                            linkOverwrite = false,
+                                        ),
+                                    statusMessage = null,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
 
             is UiIntent.SetImage ->
-                ReduceResult(
-                    state.copy(
-                        imageUri = intent.uri,
-                        statusMessage =
-                            if (intent.uri == null) "Image cleared" else "Image ready for raw write",
-                    ),
-                )
+                if (!state.actionsEnabled) {
+                    // Busy / pending confirm — do not clear staged source under a live raw write.
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            imageUri = intent.uri,
+                            stagedRawImagePath = if (intent.uri != null) null else state.stagedRawImagePath,
+                            stagedRawImageLabel = if (intent.uri != null) null else state.stagedRawImageLabel,
+                            statusMessage =
+                                if (intent.uri == null) "Image cleared" else "Image ready for raw write",
+                        ),
+                    )
+                }
 
+            is UiIntent.SetStagedRawImage ->
+                if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
+                    ReduceResult(state.copy(statusMessage = "Cannot change staged image while operation is active"))
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            stagedRawImagePath = intent.path,
+                            stagedRawImageLabel = intent.label,
+                            imageUri = null,
+                            statusMessage = "Staged ${intent.label} — confirm raw write on Partitions",
+                        ),
+                    )
+                }
+
+            is UiIntent.ClearStagedRawImage ->
+                if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
+                    ReduceResult(state.copy(statusMessage = "Cannot clear staged image while operation is active"))
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            stagedRawImagePath = null,
+                            stagedRawImageLabel = null,
+                            statusMessage = "Staged raw image cleared",
+                        ),
+                    )
+                }
             is UiIntent.SetBackupFile ->
                 ReduceResult(
                     state.copy(
@@ -363,6 +537,26 @@ object UiReducer {
                         effects = listOf(UiEffect(UiEffect.Kind.RunSelfTest)),
                     )
                 }
+
+            is UiIntent.SetRescueImage ->
+                ReduceResult(
+                    state.copy(
+                        rescueImageUri = intent.uri,
+                        statusMessage =
+                            if (intent.uri == null) "Rescue image cleared"
+                            else "Rescue image ready: ${intent.uri.substringAfterLast('/')}",
+                    ),
+                )
+
+            is UiIntent.SetRescueMap ->
+                ReduceResult(
+                    state.copy(
+                        rescueMapUri = intent.uri,
+                        statusMessage =
+                            if (intent.uri == null) "Rescue map cleared"
+                            else "Rescue map ready: ${intent.uri.substringAfterLast('/')}",
+                    ),
+                )
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 

@@ -1,8 +1,8 @@
 package usb.fs
 
+import usb.EngineMissingException
 import usb.device.BlockDevice
 import java.io.Closeable
-import java.nio.ByteBuffer
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -19,9 +19,16 @@ data class NtfsStat(
 
 class NtfsException(message: String) : Exception(message)
 
+/** Map NTFS nativeStat miss: null only for absence; I/O still throws. */
+internal fun mapNtfsStatOrNullMiss(path: String, errno: Int): UsbFsDirEntry? {
+    // Android/Bionic ENOENT is 2.
+    if (errno == 2 /* ENOENT */) return null
+    throw NtfsException("stat failed for $path (errno=$errno)")
+}
+
 /**
  * NTFS-3G filesystem facade over relative-LBA [BlockDevice].
- * All byte offsets are translated to sectors without second partition offsets.
+ * Default mount is read-only; RW requires a clean volume (dirty → refuse RW).
  */
 object NtfsFs {
     const val CLEAR_DIRTY_CONFIRMATION: String = "CONFIRM_NTFS_CLEAR_DIRTY"
@@ -35,8 +42,12 @@ object NtfsFs {
                 if (!nativeLoaded) {
                     try {
                         System.loadLibrary("usb_native")
-                    } catch (_: UnsatisfiedLinkError) {
-                        // Pure JVM test environments
+                    } catch (failure: UnsatisfiedLinkError) {
+                        // Pure JVM unit tests lack the shared library; keep going so
+                        // confirmation-token gates can still run. Device/host paths
+                        // that actually call externals map UnsatisfiedLinkError below.
+                        nativeLoaded = true
+                        return
                     }
                     nativeLoaded = true
                 }
@@ -44,9 +55,16 @@ object NtfsFs {
         }
     }
 
-    /**
-     * Gate invoked before dirty-flag clear writes to close all active volumes.
-     */
+    private fun <T> withNativeEngine(op: () -> T): T {
+        ensureNative()
+        return try {
+            op()
+        } catch (failure: UnsatisfiedLinkError) {
+            throw EngineMissingException("ntfs-3g")
+        }
+    }
+
+
     fun interface MountedVolumeGate {
         fun closeAll(device: BlockDevice)
 
@@ -57,42 +75,64 @@ object NtfsFs {
 
     private val openVolumes = Collections.synchronizedMap(WeakHashMap<BlockDevice, NtfsVolume>())
 
-    fun mount(device: BlockDevice, readOnly: Boolean = false): NtfsVolume {
-        ensureNative()
-        require(device.sectorSize in 512..4096) { "Unsupported sector size: \${device.sectorSize}" }
-        require(device.sectorCount > 0uL) { "Invalid sector count: \${device.sectorCount}" }
-
-        val handle = nativeMount(device, device.sectorSize, device.sectorCount.toLong(), readOnly)
-        if (handle == 0L) {
-            throw NtfsException("Failed to mount NTFS volume")
-        }
-        val volume = NtfsVolume(handle, device)
-        openVolumes[device] = volume
-        return volume
-    }
-
-    fun isDirty(device: BlockDevice): Boolean {
-        ensureNative()
-        require(device.sectorSize in 512..4096) { "Unsupported sector size: \${device.sectorSize}" }
-        require(device.sectorCount > 0uL) { "Invalid sector count: \${device.sectorCount}" }
-        return nativeCheckDirty(device, device.sectorSize, device.sectorCount.toLong())
-    }
-
     /**
-     * Clear volume dirty flag (ntfsfix equivalent).
-     * Requires [confirmationToken] matching [CLEAR_DIRTY_CONFIRMATION].
-     * Closes mounted volumes before clearing.
+     * @param readOnly default true (browse-safe). RW mount refused when the on-disk
+     *   dirty flag is set — clear via [clearDirtyFlag] first (ntfsfix equivalent).
      */
+    fun mount(device: BlockDevice, readOnly: Boolean = true): NtfsVolume {
+        require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
+        require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
+
+        return withNativeEngine {
+            if (!readOnly && isDirty(device)) {
+                throw NtfsException(
+                    "NTFS volume is dirty; refusing read-write mount. " +
+                        "Run ntfsfix on a PC, or clear the dirty flag only if you accept the risk.",
+                )
+            }
+
+            val err = IntArray(1)
+            val handle = nativeMount(
+                device,
+                device.sectorSize,
+                device.sectorCount.toLong(),
+                readOnly,
+                err,
+            )
+            if (handle == 0L) {
+                throw when (err[0]) {
+                    16 /* EBUSY */ -> NtfsException(
+                        "NTFS volume is dirty; refusing read-write mount. " +
+                            "Run ntfsfix on a PC, or clear the dirty flag only if you accept the risk.",
+                    )
+                    else -> NtfsException("Failed to mount NTFS volume (errno=${err[0]})")
+                }
+            }
+            val volume = NtfsVolume(handle, device, readOnly)
+            openVolumes[device] = volume
+            volume
+        }
+    }
+
+
+    fun isDirty(device: BlockDevice): Boolean = withNativeEngine {
+        require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
+        require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
+        nativeCheckDirty(device, device.sectorSize, device.sectorCount.toLong())
+    }
+
+
     fun clearDirtyFlag(
         device: BlockDevice,
         confirmationToken: String,
         volumeGate: MountedVolumeGate = MountedVolumeGate.NOOP,
     ): Boolean {
         if (confirmationToken != CLEAR_DIRTY_CONFIRMATION) {
-            throw IllegalArgumentException("Confirmation token mismatch: expected \$CLEAR_DIRTY_CONFIRMATION")
+            throw IllegalArgumentException(
+                "Confirmation token mismatch: expected $CLEAR_DIRTY_CONFIRMATION",
+            )
         }
 
-        // Close any tracked open volumes on this device
         synchronized(openVolumes) {
             openVolumes[device]?.let { vol ->
                 if (vol.isOpen()) {
@@ -101,17 +141,18 @@ object NtfsFs {
                 openVolumes.remove(device)
             }
         }
-        // Notify gate to close all other filesystem / disk references
         volumeGate.closeAll(device)
 
-        ensureNative()
-        return nativeClearDirty(
-            device,
-            device.sectorSize,
-            device.sectorCount.toLong(),
-            confirmationToken,
-        )
+        return withNativeEngine {
+            nativeClearDirty(
+                device,
+                device.sectorSize,
+                device.sectorCount.toLong(),
+                confirmationToken,
+            )
+        }
     }
+
 
     internal fun unregisterVolume(device: BlockDevice) {
         openVolumes.remove(device)
@@ -122,6 +163,7 @@ object NtfsFs {
         sectorSize: Int,
         sectorCount: Long,
         readOnly: Boolean,
+        outErrno: IntArray,
     ): Long
 
     @JvmStatic private external fun nativeCheckDirty(
@@ -139,9 +181,16 @@ object NtfsFs {
 
     @JvmStatic internal external fun nativeClose(handle: Long): Int
     @JvmStatic internal external fun nativeSync(handle: Long): Int
-    @JvmStatic internal external fun nativeList(handle: Long, path: String): Array<NtfsDirEntry>
-    @JvmStatic internal external fun nativeStat(handle: Long, path: String): NtfsStat
-    @JvmStatic internal external fun nativeRead(handle: Long, path: String, offset: Long, length: Int): ByteArray
+    @JvmStatic internal external fun nativeList(handle: Long, path: String): Array<NtfsDirEntry>?
+    @JvmStatic internal external fun nativeStat(handle: Long, path: String, outErrno: IntArray): NtfsStat?
+    @JvmStatic internal external fun nativeRead(
+        handle: Long,
+        path: String,
+        offset: Long,
+        length: Int,
+        outErrno: IntArray,
+    ): ByteArray?
+
     @JvmStatic internal external fun nativeWrite(
         handle: Long,
         path: String,
@@ -149,13 +198,17 @@ object NtfsFs {
         data: ByteArray,
         create: Boolean,
     ): Int
+    @JvmStatic internal external fun nativeMkdir(handle: Long, path: String)
+    @JvmStatic internal external fun nativeDelete(handle: Long, path: String)
+    @JvmStatic internal external fun nativeRename(handle: Long, from: String, to: String)
     @JvmStatic internal external fun nativeIsVolumeDirty(handle: Long): Boolean
 }
 
 class NtfsVolume internal constructor(
     private val handle: Long,
     val device: BlockDevice,
-) : Closeable, AutoCloseable {
+    val readOnly: Boolean,
+) : Closeable, AutoCloseable, UsbFsVolume {
     @Volatile private var open: Boolean = true
 
     fun isOpen(): Boolean = open
@@ -164,35 +217,83 @@ class NtfsVolume internal constructor(
         check(open) { "NTFS volume closed" }
     }
 
-    fun list(path: String = "/"): List<NtfsDirEntry> {
+    private fun ensureWritable() {
+        ensureOpen()
+        if (readOnly) throw NtfsException("Read-only NTFS volume")
+    }
+
+    override fun list(path: String): List<UsbFsDirEntry> {
         ensureOpen()
         val entries = NtfsFs.nativeList(handle, path)
             ?: throw NtfsException("Failed to list: $path")
-        return entries.toList()
+        return entries.map { UsbFsDirEntry(it.name, it.isDirectory, it.size) }
     }
 
-    fun stat(path: String): NtfsStat {
+    override fun stat(path: String): UsbFsDirEntry =
+        statOrNull(path) ?: throw NtfsException("Path not found: $path")
+
+    override fun statOrNull(path: String): UsbFsDirEntry? {
         ensureOpen()
-        return NtfsFs.nativeStat(handle, path)
-            ?: throw NtfsException("Path not found: $path")
+        val err = IntArray(1)
+        val st = NtfsFs.nativeStat(handle, path, err) ?: return mapNtfsStatOrNullMiss(path, err[0])
+        val name = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
+        return UsbFsDirEntry(name, st.isDirectory, st.size)
     }
 
-    fun read(path: String, offset: Long = 0L, length: Int): ByteArray {
+    override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
-        return NtfsFs.nativeRead(handle, path, offset, length)
-            ?: throw NtfsException("Failed to read: $path")
+        val err = IntArray(1)
+        val data = NtfsFs.nativeRead(handle, path, offset, length, err)
+            ?: throw when (err[0]) {
+                2 /* ENOENT */ -> NtfsException("Path not found: $path")
+                1 /* EPERM */ -> NtfsException("Refusing to read NTFS metadata: $path")
+                else -> NtfsException("Failed to read: $path (errno=${err[0]})")
+            }
+        return data
     }
 
-    fun write(path: String, data: ByteArray, offset: Long = 0L, create: Boolean = true): Int {
-        ensureOpen()
-        return NtfsFs.nativeWrite(handle, path, offset, data, create)
+
+    override fun write(
+        path: String,
+        data: ByteArray,
+        offset: Long,
+        create: Boolean,
+        plannedTotalSize: Long,
+    ) {
+        ensureWritable()
+        val wrote = NtfsFs.nativeWrite(handle, path, offset, data, create)
+        if (wrote < 0 || wrote != data.size) {
+            throw NtfsException("short write on $path: $wrote of ${data.size}")
+        }
     }
 
-    fun sync() {
+    override fun mkdir(path: String) {
+        ensureWritable()
+        NtfsFs.nativeMkdir(handle, path)
+    }
+
+    override fun delete(path: String) {
+        ensureWritable()
+        try {
+            NtfsFs.nativeDelete(handle, path)
+        } catch (failure: NtfsException) {
+            if (failure.message == "Directory not empty") {
+                throw NtfsException("Directory not empty: $path")
+            }
+            throw failure
+        }
+    }
+
+    override fun rename(from: String, to: String) {
+        ensureWritable()
+        NtfsFs.nativeRename(handle, from, to)
+    }
+
+    override fun sync() {
         ensureOpen()
         val rc = NtfsFs.nativeSync(handle)
         if (rc != 0) {
-            throw NtfsException("Failed to sync NTFS volume: rc=\$rc")
+            throw NtfsException("Failed to sync NTFS volume: rc=$rc")
         }
     }
 

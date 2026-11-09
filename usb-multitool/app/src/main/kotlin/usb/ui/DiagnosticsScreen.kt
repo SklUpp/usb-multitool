@@ -32,6 +32,8 @@ fun DiagnosticsScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickBackup: () -> Unit = {},
+    onPickRescueImage: () -> Unit = {},
+    onPickRescueMap: () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -111,6 +113,51 @@ fun DiagnosticsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Backup Image + Rescue Map (ddrescue Copy)")
+                }
+
+                Text(
+                    text = "Restore writes the dense image back to the stick. " +
+                        "Sector geometry must match. Resume skips COPIED only when map identity " +
+                        "matches the attached disk; otherwise full rewrite (disk swap OK with confirm). " +
+                        "Partial COPY maps refused (unread → zeros). FAILED sectors are zeros.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = state.rescueImageUri?.substringAfterLast('/') ?: "No rescue image selected",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = state.rescueMapUri?.substringAfterLast('/') ?: "No rescue map selected",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onPickRescueImage,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Choose Image") }
+                    OutlinedButton(
+                        onClick = onPickRescueMap,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Choose Map") }
+                }
+                Button(
+                    onClick = {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+                    },
+                    enabled = state.actionsEnabled &&
+                        state.rescueImageUri != null &&
+                        state.rescueMapUri != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Restore Rescue Image")
                 }
 
                 OutlinedButton(
@@ -195,7 +242,7 @@ fun DiagnosticsScreen(
             }
         }
 
-        // P3 Danger Zone: Benchmarks & Device Wipe
+        // P3 Danger Zone: Device Wipe only (fixed-LBA write benchmark removed).
         OutlinedCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -213,30 +260,19 @@ fun DiagnosticsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Danger Zone: Write Tests & Wipe",
+                        text = "Danger Zone: Device Wipe",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
                 Text(
-                    text = "Warning: Direct sector write operations modify or erase stored data permanently.",
+                    text = "Warning: Wipe erases every sector on the attached USB device permanently.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.error.copy(alpha = 0.2f))
-
-                OutlinedButton(
-                    onClick = {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.WRITE_BENCHMARK))
-                    },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Write Throughput Benchmark")
-                }
-
                 Button(
                     onClick = {
                         onIntent(UiIntent.RequestDestructive(DestructiveAction.WIPE))
