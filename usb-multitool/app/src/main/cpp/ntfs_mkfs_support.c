@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "utils.h"
+#include "volume.h"
 #include "unistr.h"
 
 const char *ntfs_bugs = "";
