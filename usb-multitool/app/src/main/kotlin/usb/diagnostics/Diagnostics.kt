@@ -129,6 +129,7 @@ object Diagnostics {
             }
             throw failure
         }
+    }
 }
 
 /**
