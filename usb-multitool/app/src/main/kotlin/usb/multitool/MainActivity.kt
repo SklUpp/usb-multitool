@@ -507,8 +507,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (isCooperative) activeHandle = handle
                 activeHandles.add(handle)
                 scope.launch {
+                    val ticker = launch {
+                        while (true) {
+                            delay(LOG_TICK_MS)
+                            val done = op.bytesDone
+                            val total = op.bytesTotal
+                            onIntent(UiIntent.OperationUpdated(OperationProgress(
+                                state = OperationState.Running,
+                                label = actionName,
+                                bytesDone = done,
+                                bytesTotal = total,
+                                cancelable = isCooperative,
+                            )))
+                            val progress = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $done bytes"
+                            val message = "$actionName$progress"
+                            android.util.Log.i("UsbMultitool", message)
+                            onIntent(UiIntent.AppendLog(logLine(message)))
+                        }
+                    }
                     try {
                         val outcome = handle.await()
+                        ticker.cancel()
                         val mappedState = usb.operation.OperationCoordination.uiState(outcome)
                         val errorMsg = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
                         onIntent(
@@ -548,6 +567,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             else -> Unit
                         }
                     } finally {
+                        ticker.cancel()
                         if (activeHandle === handle) activeHandle = null
                         activeHandles.remove(handle)
                     }
@@ -1455,6 +1475,8 @@ private fun downloadFile(path: String, name: String, uri: String) {
         activeHandles.add(handle)
         scope.launch {
             val ticker = launch {
+                var lastLogAt = android.os.SystemClock.elapsedRealtime()
+                var lastLogged = -1L
                 while (true) {
                     delay(PROGRESS_TICK_MS)
                     onIntent(
@@ -1467,6 +1489,16 @@ private fun downloadFile(path: String, name: String, uri: String) {
                             ),
                         ),
                     )
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - lastLogAt >= LOG_TICK_MS && operation.bytesDone != lastLogged) {
+                        lastLogAt = now
+                        lastLogged = operation.bytesDone
+                        val total = operation.bytesTotal
+                        val detail = if (total > 0) " ${(lastLogged.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $lastLogged bytes"
+                        val message = "$label$detail"
+                        android.util.Log.i("UsbMultitool", message)
+                        onIntent(UiIntent.AppendLog(logLine(message)))
+                    }
                 }
             }
             try {
