@@ -3,25 +3,29 @@ package usb.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -34,6 +38,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -41,8 +48,8 @@ import androidx.compose.ui.unit.dp
 /**
  * Files tab over the real FAT volume of the selected partition.
  *
- * Prioritized for file browsing: maximum viewport height dedicated to the file list.
- * Partitions and toolbars take minimal, compact rows at the top.
+ * The list owns the viewport; partition chips, breadcrumb and selection actions are
+ * compact rows above it. Upload is a single FAB overlaying the list bottom.
  */
 @Composable
 fun FilesScreen(
@@ -70,227 +77,277 @@ fun FilesScreen(
     val canAct = state.actionsEnabled && selected != null
     val selection = state.files.firstOrNull { it.name == selectedFile?.name }
 
-    Column(
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        // P1: Compact partition selector row
-        if (state.partitions.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                state.partitions.forEach { partition ->
-                    FilterChip(
-                        selected = partition.id == state.selectedPartitionId,
-                        onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
-                        label = {
-                            val fsTag = partition.filesystemLabel.let { if (it.isNotEmpty()) " · $it" else "" }
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (state.partitions.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    state.partitions.forEach { partition ->
+                        FilterChip(
+                            selected = partition.id == state.selectedPartitionId,
+                            onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
+                            label = {
+                                val fsTag = partition.filesystemLabel.let { if (it.isNotEmpty()) " · $it" else "" }
+                                Text(
+                                    if (partition.isVtoyEfi) "${partition.name} (EFI)$fsTag"
+                                    else "${partition.name}$fsTag",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            },
+                        )
+                    }
+
+                    if (selected?.isVtoyEfi == true) {
+                        Row(
+                            modifier = Modifier.toggleable(
+                                value = state.vtoyEfiWriteEnabled,
+                                enabled = state.actionsEnabled,
+                                role = Role.Switch,
+                                onValueChange = { onIntent(UiIntent.SetVtoyEfiWritable(it)) },
+                            ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
                             Text(
-                                if (partition.isVtoyEfi) "${partition.name} (EFI)$fsTag"
-                                else "${partition.name}$fsTag",
-                                style = MaterialTheme.typography.labelMedium,
+                                "Запись EFI",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (state.vtoyEfiWriteEnabled) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                             )
-                        },
+                            Switch(
+                                checked = state.vtoyEfiWriteEnabled,
+                                onCheckedChange = null,
+                                enabled = state.actionsEnabled,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    IconButton(
+                        onClick = { onIntent(UiIntent.NavigateUp) },
+                        enabled = canAct && state.currentPath != "/",
+                        modifier = Modifier.semantics { contentDescription = "На уровень выше" },
+                    ) {
+                        GlyphIcon(Glyph.ChevronLeft, size = 20.dp)
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = breadcrumbLabel(state.currentPath),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
+                IconButton(
+                    onClick = { showNewFolderDialog = true },
+                    enabled = canAct,
+                    modifier = Modifier.semantics { contentDescription = "Создать папку" },
+                ) {
+                    GlyphIcon(Glyph.Plus, size = 20.dp)
+                }
+            }
 
-                if (selected?.isVtoyEfi == true) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            if (selection != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text(
+                                text = selection.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(
+                                onClick = { selectedFile = null },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text("Отмена", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (!selection.isDirectory) {
+                                TextButton(
+                                    onClick = { onRequestDownload(selection.name) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                ) {
+                                    Text("Сохранить", style = MaterialTheme.typography.labelMedium)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        onIntent(
+                                            UiIntent.IsoActionRequested(
+                                                selection.name,
+                                                IsoAction.SendToRawWriter,
+                                            ),
+                                        )
+                                    },
+                                    enabled = state.actionsEnabled,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                ) {
+                                    Text("В raw", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                            if (selection.isIso) {
+                                TextButton(
+                                    onClick = {
+                                        onIntent(
+                                            UiIntent.IsoActionRequested(
+                                                selection.name,
+                                                IsoAction.LinkXml,
+                                            ),
+                                        )
+                                    },
+                                    enabled = state.actionsEnabled,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                ) {
+                                    Text("XML", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                            TextButton(
+                                onClick = { showDeleteConfirmDialog = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    "Удалить",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text(
+                text = if (state.partitions.isEmpty()) {
+                    "Разделы не найдены"
+                } else {
+                    "${state.files.size} ${elementsLabel(state.files.size)}"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 2.dp),
+            )
+
+            when {
+                !state.actionsEnabled -> EmptyHint(UiReducer.presenceMessage(state.presence))
+                state.files.isEmpty() -> Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        val status = state.statusMessage
+                        val isError = state.operation?.state == OperationState.Failed ||
+                            (status != null && (status.contains("error", ignoreCase = true) ||
+                                status.contains("cannot", ignoreCase = true) ||
+                                status.contains("failed", ignoreCase = true)))
                         Text(
-                            "EFI Write",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (state.vtoyEfiWriteEnabled) {
-                                MaterialTheme.colorScheme.primary
+                            text = if (isError) (status ?: "Не удалось прочитать папку") else "Папка пуста",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isError) {
+                                MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
                         )
-                        Switch(
-                            checked = state.vtoyEfiWriteEnabled,
-                            onCheckedChange = { onIntent(UiIntent.SetVtoyEfiWritable(it)) },
-                            enabled = state.actionsEnabled,
+                    }
+                }
+                else -> LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    contentPadding = PaddingValues(bottom = 76.dp),
+                ) {
+                    items(state.files, key = { it.name }) { entry ->
+                        FileRow(
+                            entry = entry,
+                            isSelected = entry == selectedFile,
+                            actionsEnabled = canAct,
+                            onSelect = {
+                                selectedFile = if (selectedFile == entry) null else entry
+                            },
+                            onNavigate = {
+                                onIntent(
+                                    UiIntent.OpenDirectory(
+                                        fatChildPath(state.currentPath, entry.name),
+                                    ),
+                                )
+                            },
                         )
                     }
                 }
             }
         }
 
-        // P1: Navigation path and primary actions row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            OutlinedButton(
-                onClick = { onIntent(UiIntent.NavigateUp) },
-                enabled = canAct && state.currentPath != "/",
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Text("Up ..", style = MaterialTheme.typography.labelMedium)
-            }
-
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(
-                    text = state.currentPath,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            Button(
+        if (canAct) {
+            ExtendedFloatingActionButton(
+                text = { Text("Загрузить") },
+                icon = { Text("+", style = MaterialTheme.typography.titleLarge) },
                 onClick = { uploadLauncher.launch("*/*") },
-                enabled = canAct,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Text("Upload", style = MaterialTheme.typography.labelMedium)
-            }
-
-            OutlinedButton(
-                onClick = { showNewFolderDialog = true },
-                enabled = canAct,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-            ) {
-                Text("+Dir", style = MaterialTheme.typography.labelMedium)
-            }
-        }
-
-        // Contextual action bar if item selected
-        if (selection != null) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = selection.name,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (!selection.isDirectory) {
-                            TextButton(
-                                onClick = { onRequestDownload(selection.name) },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) {
-                                Text("Save", style = MaterialTheme.typography.labelMedium)
-                            }
-                            TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.IsoActionRequested(
-                                            selection.name,
-                                            IsoAction.SendToRawWriter,
-                                        ),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) {
-                                Text("Send to raw", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                        TextButton(
-                            onClick = { showDeleteConfirmDialog = true },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                "Delete",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
-
-        // P1 Main Work Area: File List fills available screen height
-        if (!state.actionsEnabled) {
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = UiReducer.presenceMessage(state.presence),
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else if (state.files.isEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    val status = state.statusMessage
-                    val isError = state.operation?.state == OperationState.Failed ||
-                        (status != null && (status.contains("error", ignoreCase = true) ||
-                            status.contains("cannot", ignoreCase = true) ||
-                            status.contains("failed", ignoreCase = true)))
-                    Text(
-                        text = if (isError) (status ?: "Failed to list folder") else "Folder is empty",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                items(state.files, key = { it.name }) { entry ->
-                    FileRow(
-                        entry = entry,
-                        isSelected = entry == selectedFile,
-                        actionsEnabled = canAct,
-                        onSelect = {
-                            selectedFile = if (selectedFile == entry) null else entry
-                        },
-                        onNavigate = {
-                            onIntent(UiIntent.OpenDirectory(fatChildPath(state.currentPath, entry.name)))
-                        },
-                        onIntent = onIntent,
-                    )
-                }
-            }
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 4.dp, bottom = 8.dp),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     }
 
@@ -300,12 +357,12 @@ fun FilesScreen(
                 showNewFolderDialog = false
                 newFolderName = ""
             },
-            title = { Text("New folder") },
+            title = { Text("Новая папка") },
             text = {
                 OutlinedTextField(
                     value = newFolderName,
                     onValueChange = { newFolderName = it },
-                    label = { Text("Folder name") },
+                    label = { Text("Имя папки") },
                     singleLine = true,
                 )
             },
@@ -320,7 +377,7 @@ fun FilesScreen(
                         newFolderName = ""
                     },
                 ) {
-                    Text("Create")
+                    Text("Создать")
                 }
             },
             dismissButton = {
@@ -330,7 +387,7 @@ fun FilesScreen(
                         newFolderName = ""
                     },
                 ) {
-                    Text("Cancel")
+                    Text("Отмена")
                 }
             },
         )
@@ -340,13 +397,13 @@ fun FilesScreen(
         val entry = state.files.firstOrNull { it.name == selectedFile?.name }
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
-            title = { Text("Delete") },
+            title = { Text("Удалить") },
             text = {
                 Text(
                     if (entry?.isDirectory == true) {
-                        "Delete folder ${entry.name}? It must be empty — nonempty folders are refused."
+                        "Удалить папку ${entry.name}? Она должна быть пустой — непустые папки отклоняются."
                     } else {
-                        "Delete ${entry?.name}?"
+                        "Удалить ${entry?.name}?"
                     },
                 )
             },
@@ -356,20 +413,20 @@ fun FilesScreen(
                         if (entry != null) {
                             onIntent(UiIntent.DeleteEntry(entry.name))
                         } else {
-                            onIntent(UiIntent.Status("Selected file not found"))
+                            onIntent(UiIntent.Status("Выбранный файл не найден"))
                         }
                         selectedFile = null
                         showDeleteConfirmDialog = false
                     },
                 ) {
-                    Text("Delete")
+                    Text("Удалить")
                 }
             },
             dismissButton = {
                 TextButton(
                     onClick = { showDeleteConfirmDialog = false },
                 ) {
-                    Text("Cancel")
+                    Text("Отмена")
                 }
             },
         )
@@ -383,104 +440,80 @@ private fun FileRow(
     actionsEnabled: Boolean,
     onSelect: () -> Unit,
     onNavigate: () -> Unit,
-    onIntent: (UiIntent) -> Unit,
 ) {
+    val glyph = when {
+        entry.isDirectory -> Glyph.Folder
+        entry.isIso -> Glyph.Iso
+        else -> Glyph.File
+    }
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(14.dp),
         color = if (isSelected) {
             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
         } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        },
+        border = if (isSelected) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
         },
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = actionsEnabled) {
-                if (entry.isDirectory) {
-                    onNavigate()
-                } else {
-                    onSelect()
-                }
+            .clickable(
+                enabled = actionsEnabled,
+                onClickLabel = if (entry.isDirectory) "Открыть папку" else "Выбрать файл",
+                role = Role.Button,
+            ) {
+                if (entry.isDirectory) onNavigate() else onSelect()
             },
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (entry.isDirectory) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                        ) {
-                            Text(
-                                text = "DIR",
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else if (entry.isIso) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                        ) {
-                            Text(
-                                text = "ISO",
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = if (entry.isDirectory) "${entry.name}/" else entry.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (entry.isDirectory || isSelected) FontWeight.Bold else FontWeight.Normal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                if (!entry.isDirectory) {
-                    Text(
-                        text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            GlyphIcon(glyph, size = 22.dp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (entry.isDirectory) "${entry.name}/" else entry.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (entry.isDirectory || isSelected) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = when {
+                        entry.isDirectory -> "Папка"
+                        entry.isIso -> "ISO-образ"
+                        else -> "Файл"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-
-            if (entry.isIso) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        onClick = {
-                            onIntent(UiIntent.IsoActionRequested(entry.name, IsoAction.LinkXml))
-                        },
-                        enabled = actionsEnabled,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                        Text("Link XML", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
+            if (!entry.isDirectory) {
+                Text(
+                    text = DeviceIdentity.formatCapacity(entry.sizeBytes),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
         }
     }
 }
+
+private fun breadcrumbLabel(path: String): String {
+    val trimmed = path.trim('/')
+    return if (trimmed.isEmpty()) "Корень" else "Корень / " + trimmed.replace("/", " / ")
+}
+
+private fun elementsLabel(count: Int): String =
+    when (count % 10) {
+        1 -> if (count % 100 == 11) "элементов" else "элемент"
+        2, 3, 4 -> if (count % 100 in 12..14) "элементов" else "элемента"
+        else -> "элементов"
+    }
