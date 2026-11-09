@@ -394,6 +394,24 @@ class OperationExecutorTest {
         })
         assertEquals(OperationState.Partial, handle.await())
     }
+    @Test fun partialStatePreservedOnCancellationAndGenericFailure() = runTest {
+        val executor = OperationExecutor(this)
+        val cancelled = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Partial
+                throw CancellationException("after partial")
+            }
+        })
+        assertEquals(OperationState.Partial, cancelled.await())
+        val failed = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Partial
+                throw IllegalStateException("after partial")
+            }
+        })
+        assertEquals(OperationState.Partial, failed.await())
+    }
+
 
     @Test fun foregroundServiceStartFailureFailsOperation() = runTest {
         val failingControl = object : ServiceControl {
@@ -616,6 +634,73 @@ class OperationExecutorTest {
         assertFalse(staleRan)
         assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
     }
+
+
+    @Test fun mutationReturnsCompletedNormally() = runTest {
+        val executor = OperationExecutor(this)
+        val op = object : DiskOperation() { override suspend fun run() { mutationAttempted = true } }
+        assertEquals(OperationState.Completed, executor.submit(op).await())
+    }
+
+    @Test fun lateCancelAfterMutationIsPartialButBeforeMutationIsCancelled() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() { mutationAttempted = true; started.complete(Unit); gate.await() }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        handle.cancel()
+        gate.complete(Unit)
+        assertEquals(OperationState.Partial, handle.await())
+        assertTrue(op.failureCause is CancellationException)
+
+        val clean = object : DiskOperation() { override suspend fun run() { throw CancellationException("before") } }
+        assertEquals(OperationState.Cancelled, executor.submit(clean).await())
+    }
+
+    @Test fun failureAfterMutationIsPartial() = runTest {
+        val executor = OperationExecutor(this)
+        val op = object : DiskOperation() { override suspend fun run() { mutationAttempted = true; error("close") } }
+        assertEquals(OperationState.Partial, executor.submit(op).await())
+    }
+    @Test fun lateDisconnectAfterMutationIsPartialWithCause() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation() {
+            override suspend fun run() { mutationAttempted = true; started.complete(Unit); gate.await() }
+        }
+        val handle = executor.submit(operation)
+        started.await()
+        executor.onDisconnected()
+        executor.onConnected("new-device")
+        gate.complete(Unit)
+        assertEquals(OperationState.Partial, handle.await())
+        assertTrue(operation.failureCause is DiskException.Disconnected)
+    }
+    @Test fun lateDisconnectPreservesExistingCause() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val original = IllegalStateException("original mutation failure")
+        val operation = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                failureCause = original
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(operation)
+        started.await()
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Partial, handle.await())
+        assertSame(original, operation.failureCause)
+    }
+
 
 
 }

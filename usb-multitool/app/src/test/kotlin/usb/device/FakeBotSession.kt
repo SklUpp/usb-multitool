@@ -79,8 +79,8 @@ class FakeBotSession(
     private val unitAttentionBeforeSuccess: Int = 0,
     private val unitAttentionOnOps: Set<Int> = emptySet(),
     private val stickyUnitAttention: Boolean = false,
+    private val requestSenseError: DiskException.SenseError? = null,
     private val residue: Int = 0,
-    /** When set, READ fills only this many bytes then returns PASSED with [residue]. */
     private val shortReadBytes: Int? = null,
 ) : BotSession {
     var resetCount: Int = 0
@@ -156,16 +156,20 @@ class FakeBotSession(
                     }
                     DiskException.SenseError(0x70, 0x06, 0x29, 0x00)
                 } else {
-                    syncSense ?: DiskException.SenseError(0x70, 0x00, 0x00, 0x00)
+                    requestSenseError ?: syncSense ?: DiskException.SenseError(0x70, 0x00, 0x00, 0x00)
                 }
                 val start = buf.position()
                 for (i in 0 until cdb.transferLength) {
                     buf.put(0)
                 }
-                buf.put(start, (sense.responseCode or 0x70).toByte())
-                buf.put(start + 2, sense.senseKey.toByte())
-                buf.put(start + 12, sense.asc.toByte())
-                buf.put(start + 13, sense.ascq.toByte())
+                val descriptor = (sense.responseCode and 0x7F) == 0x72 || (sense.responseCode and 0x7F) == 0x73
+                val response = sense.responseCode and 0x7F
+                val keyOffset = if (descriptor) 1 else 2
+                val ascOffset = if (descriptor) 2 else 12
+                buf.put(start, response.toByte())
+                buf.put(start + keyOffset, sense.senseKey.toByte())
+                buf.put(start + ascOffset, sense.asc.toByte())
+                buf.put(start + ascOffset + 1, sense.ascq.toByte())
                 CswResult(CswStatus.PASSED, 0, 0)
             }
             ScsiCommand.OP_SYNCHRONIZE_CACHE10 -> {

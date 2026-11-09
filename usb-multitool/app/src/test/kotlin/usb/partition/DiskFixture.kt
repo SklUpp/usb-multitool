@@ -26,6 +26,7 @@ class ImageBlockDevice(
     override val sectorSize: Int,
     override val sectorCount: ULong,
 ) : BlockDevice {
+    val writes: MutableList<ULong> = mutableListOf()
     override fun read(lba: ULong, destination: ByteBuffer) {
         val bytes = destination.remaining()
         require(bytes % sectorSize == 0)
@@ -36,6 +37,7 @@ class ImageBlockDevice(
     }
 
     override fun write(lba: ULong, source: ByteBuffer) {
+        writes.add(lba)
         val bytes = source.remaining()
         require(bytes % sectorSize == 0)
         val blocks = bytes / sectorSize

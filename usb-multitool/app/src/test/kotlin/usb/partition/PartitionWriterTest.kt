@@ -78,6 +78,106 @@ class PartitionWriterTest {
         }
     }
 
+    @Test
+    fun unsupportedGptEntrySizeWritesNothing() {
+        val disk = gptDisk()
+        val before = disk.snapshot()
+        val table = PartitionTable.read(disk)
+        val header = table.gptHeader!!.copy(entrySize = 256)
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table.copy(gptHeader = header)) }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun invalidGptBackupGeometryWritesNothing() {
+        val disk = gptDisk()
+        val before = disk.snapshot()
+        val table = PartitionTable.read(disk)
+        val header = table.gptHeader!!.copy(backupLba = 2UL)
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table.copy(gptHeader = header)) }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun overlappingGptEntryArraysWriteNothing() {
+        val disk = gptDisk()
+        val before = disk.snapshot()
+        val table = PartitionTable.read(disk)
+        val header = table.gptHeader!!.copy(entryLba = 16350UL, firstUsable = 100UL, lastUsable = 16000UL)
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table.copy(gptHeader = header)) }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun backupHeaderAtZeroWritesNothing() {
+        val disk = gptDisk()
+        val before = disk.snapshot()
+        val table = PartitionTable.read(disk)
+        assertThrows(IllegalArgumentException::class.java) {
+            PartitionWriter.commit(disk, table.copy(gptHeader = table.gptHeader!!.copy(backupLba = 0UL)))
+        }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun headerInsideUsableRangeWritesNothing() {
+        val disk = gptDisk()
+        val before = disk.snapshot()
+        val table = PartitionTable.read(disk)
+        assertThrows(IllegalArgumentException::class.java) {
+            PartitionWriter.commit(disk, table.copy(gptHeader = table.gptHeader!!.copy(currentLba = table.gptHeader!!.firstUsable)))
+        }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun mbr32BitOverflowWritesNothing() {
+        val disk = RecordingBlockDevice(0x1_0000_0001UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(0x1_0000_0000UL, 1UL)),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table) }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun mbrCountBeyond32BitWritesNothing() {
+        val disk = RecordingBlockDevice(0x1_0000_0001UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(1UL, 0x1_0000_0000UL)),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table) }
+        assertTrue(disk.writes.isEmpty())
+    }
+
+    @Test
+    fun mbr32BitBoundaryIsAccepted() {
+        val disk = RecordingBlockDevice(0x1_0000_0001UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(0UL, 0xFFFF_FFFFUL)),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        PartitionWriter.commit(disk, table)
+        assertTrue(disk.writes.isNotEmpty())
+        val encoded = disk.lastWrite!!
+        assertEquals(0x00, encoded[446 + 8].toInt() and 0xFF)
+        assertEquals(0x00, encoded[446 + 9].toInt() and 0xFF)
+        assertEquals(0x00, encoded[446 + 10].toInt() and 0xFF)
+        assertEquals(0x00, encoded[446 + 11].toInt() and 0xFF)
+        assertEquals(0xFF, encoded[446 + 12].toInt() and 0xFF)
+        assertEquals(0xFF, encoded[446 + 13].toInt() and 0xFF)
+        assertEquals(0xFF, encoded[446 + 14].toInt() and 0xFF)
+        assertEquals(0xFF, encoded[446 + 15].toInt() and 0xFF)
+    }
+
     private fun PartitionTable.partitionGuids(): List<String> =
         gptEntriesRaw!!
             .toList()

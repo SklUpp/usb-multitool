@@ -11,6 +11,9 @@ data class BlockGeometry(
         require(sectorSize.countOneBits() == 1) {
             "sectorSize must be a power of two, was $sectorSize"
         }
+        require(sectorCount <= ULong.MAX_VALUE / sectorSize.toULong()) {
+            "capacityBytes overflows ULong: sectorSize=$sectorSize sectorCount=$sectorCount"
+        }
     }
 
     val capacityBytes: ULong

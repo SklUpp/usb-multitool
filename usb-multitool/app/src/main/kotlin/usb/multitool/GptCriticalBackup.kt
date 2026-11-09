@@ -3,6 +3,7 @@ package usb.multitool
 import java.nio.ByteBuffer
 import java.util.zip.CRC32
 import usb.device.BlockDevice
+import usb.service.DiskOperation
 
 /**
  * Restore half of [usb.partition.GptBackup.backupCriticalSectors]: validate a captured
@@ -196,6 +197,7 @@ object GptCriticalBackup {
         blob: ByteArray,
         primarySectors: Int,
         backupSectors: Int,
+        operation: DiskOperation? = null,
     ): RestoreReport {
         val report = inspect(blob, disk, primarySectors, backupSectors)
         val sectorSize = disk.sectorSize
@@ -203,23 +205,31 @@ object GptCriticalBackup {
         val tailBytes = backupSectors * sectorSize
         val tailStart = disk.sectorCount - backupSectors.toULong()
 
-        disk.write(0UL, ByteBuffer.wrap(blob, 0, headBytes))
-        disk.write(tailStart, ByteBuffer.wrap(blob, headBytes, tailBytes))
-        disk.sync()
-
-        val head = ByteArray(headBytes)
-        disk.read(0UL, ByteBuffer.wrap(head))
-        val mismatchHead = firstMismatch(blob, 0, head)
-        require(mismatchHead < 0) {
-            "restore verification failed: LBA ${mismatchHead / sectorSize} does not match the backup"
+        operation?.let { it.state = usb.service.OperationState.Running }
+        try {
+            operation?.let { it.failureCause = null }
+            operation?.mutationAttempted = true
+            disk.write(0UL, ByteBuffer.wrap(blob, 0, headBytes))
+            operation?.mutationAttempted = true
+            disk.write(tailStart, ByteBuffer.wrap(blob, headBytes, tailBytes))
+        } catch (failure: Throwable) {
+            operation?.let { it.state = usb.service.OperationState.Partial; it.failureCause = failure }
+            throw failure
         }
 
-        val tail = ByteArray(tailBytes)
-        disk.read(tailStart, ByteBuffer.wrap(tail))
-        val mismatchTail = firstMismatch(blob, headBytes, tail)
-        require(mismatchTail < 0) {
-            "restore verification failed: LBA " +
-                "${tailStart + (mismatchTail / sectorSize).toULong()} does not match the backup"
+        try {
+            disk.sync()
+            val head = ByteArray(headBytes)
+            disk.read(0UL, ByteBuffer.wrap(head))
+            val mismatchHead = firstMismatch(blob, 0, head)
+            if (mismatchHead >= 0) throw IllegalArgumentException("restore verification failed: LBA ${mismatchHead / sectorSize} does not match the backup")
+            val tail = ByteArray(tailBytes)
+            disk.read(tailStart, ByteBuffer.wrap(tail))
+            val mismatchTail = firstMismatch(blob, headBytes, tail)
+            if (mismatchTail >= 0) throw IllegalArgumentException("restore verification failed: LBA ${tailStart + (mismatchTail / sectorSize).toULong()} does not match the backup")
+        } catch (failure: Throwable) {
+            operation?.let { it.state = usb.service.OperationState.Partial; it.failureCause = failure }
+            throw failure
         }
         return report
     }

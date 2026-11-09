@@ -265,6 +265,30 @@ class UsbDiskTest {
     }
 
     @Test
+    fun geometryRejectsCapacityOverflow() {
+        assertThrows(IllegalArgumentException::class.java) {
+            BlockGeometry(4096, ULong.MAX_VALUE)
+        }
+    }
+
+    @Test
+    fun geometryAcceptsLargestNonOverflowingCapacity() {
+        val geometry = BlockGeometry(4096, ULong.MAX_VALUE / 4096UL)
+        assertEquals(ULong.MAX_VALUE - 4095UL, geometry.capacityBytes)
+    }
+
+
+    @Test
+    fun capacity16RejectsMaximumLastLba() {
+        val session = FakeBotSession(
+            capacityLastLba10 = 0xFFFF_FFFFUL,
+            capacity16LastLba = ULong.MAX_VALUE,
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            UsbDisk.probeCapacity(session)
+        }
+    }
+    @Test
     fun syncUsesTheLongFlushTimeoutWhileReadsKeepTheShortOne() {
         val session = FakeBotSession()
         val disk = UsbDisk(session, BlockGeometry(512, 100UL))

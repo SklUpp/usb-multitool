@@ -1,4 +1,6 @@
 package usb.multitool
+import usb.files.MountedFilesVolume
+import usb.files.FilesOperationPolicy
 
 import android.Manifest
 import android.app.PendingIntent
@@ -56,6 +58,9 @@ import usb.device.UsbDiskSession
 import usb.diagnostics.Diagnostics
 import usb.diagnostics.Rescue
 import usb.diagnostics.RescueMap
+import usb.diagnostics.RescueOperations
+import usb.files.FilesOperations
+import usb.diagnostics.RescueBackupOperations
 import usb.diagnostics.RescueRestorePrep
 import usb.diagnostics.RescueSink
 import usb.fs.UsbFsDirEntry
@@ -80,7 +85,8 @@ import usb.image.stageRawImageChunks
 import usb.image.RawWriter
 import usb.ventoy.VentoyAssets
 import usb.ventoy.VentoyDownloader
-import usb.ventoy.VentoyInstaller
+import usb.ventoy.VentoyOperations
+import usb.ventoy.VentoyAssetOperations
 import usb.ventoy.VentoySetup
 import java.io.File
 import java.io.RandomAccessFile
@@ -133,33 +139,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var filesVolume: MountedFilesVolume? = null
     @Volatile private var stagedConsumedPath: String? = null
 
-    private class MountedFilesVolume(
-        val partitionId: String,
-        private val disk: UsbDisk,
-        val volume: UsbFsVolume,
-        /** EXT: false for browse; true only while a mutation holds the volume. */
-        val writable: Boolean,
-    ) : AutoCloseable {
-        override fun close() {
-            var volumeError: Throwable? = null
-            try {
-                volume.close()
-            } catch (t: Throwable) {
-                volumeError = t
-            } finally {
-                try {
-                    disk.close()
-                } catch (diskError: Throwable) {
-                    if (volumeError != null) {
-                        volumeError.addSuppressed(diskError)
-                    } else {
-                        volumeError = diskError
-                    }
-                }
-            }
-            if (volumeError != null) throw volumeError
-        }
-    }
 
     override fun onCleared() {
         // Detach/clear must not crash the process if umount/sync fails on a yanked stick.
@@ -334,6 +313,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         blob = blob,
                                         primarySectors = pSectors,
                                         backupSectors = bSectors,
+                                        operation = this,
                                     )
                                     report(blob.size.toLong())
                                     result = "Restored ${restored.sectorsRestored} GPT critical " +
@@ -372,8 +352,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                             sectorSize = disk.sectorSize,
                                             liveHasSerial = liveHasSerial,
                                         )
-                                    val expected =
-                                        restoreMap.sectorCount.toLong() * disk.sectorSize.toLong()
+                                    require(restoreMap.sectorCount <= (Long.MAX_VALUE.toULong() / disk.sectorSize.toULong())) {
+                                        "rescue image size exceeds signed progress range"
+                                    }
+                                    val expected = (restoreMap.sectorCount * disk.sectorSize.toULong()).toLong()
                                     bytesTotal = expected
                                     val source =
                                         ImageSource.fromContentUri(
@@ -385,15 +367,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                             backupDirectory(),
                                             "rescue-restore-${timestamp()}-${System.nanoTime()}.map",
                                         )
-                                    Rescue.restore(
+                                    val rescueResult = RescueOperations.restore(
                                         source = source,
                                         disk = disk,
                                         map = restoreMap,
                                         identity = liveId,
                                         confirmation = confirmation,
-                                        checkpoint = { snap ->
-                                            usb.diagnostics.RescueCheckpoint.save(snap, checkpointFile)
-                                        },
+                                        checkpointFile = checkpointFile,
                                         operation = this,
                                     )
                                     result =
@@ -417,21 +397,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
-                                    try {
-                                        VentoyInstaller.install(
-                                            disk = disk,
-                                            assets = assets,
-                                            isActive = { isActive() },
-                                            onProgress = { done, total ->
-                                                bytesTotal = total
-                                                report(done)
-                                            },
-                                        )
-                                    } catch (e: usb.ventoy.VentoyMutationFailedException) {
-                                        state = usb.service.OperationState.Partial
-                                        failureCause = e
-                                        throw e
-                                    }
+                                    VentoyOperations.install(disk, assets, this)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_UPDATE -> {
@@ -443,49 +409,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
-                                    try {
-                                        VentoyInstaller.update(
-                                            disk = disk,
-                                            assets = assets,
-                                            isActive = { isActive() },
-                                            onProgress = { done, total ->
-                                                bytesTotal = total
-                                                report(done)
-                                            },
-                                        )
-                                    } catch (e: usb.ventoy.VentoyMutationFailedException) {
-                                        state = usb.service.OperationState.Partial
-                                        failureCause = e
-                                        throw e
-                                    }
+                                    VentoyOperations.update(disk, assets, this)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> {
-                                    val released = VentoyDownloader.downloadRelease(
+                                    val released = VentoyAssetOperations.download(
                                         cacheDir = getApplication<Application>().cacheDir,
-                                        release = VentoyAssets.PINNED_RELEASE,
-                                        onProgress = { done, total ->
-                                            if (total > 0) bytesTotal = total
-                                            report(done)
-                                        },
+                                        operation = this,
                                         isActive = { isActive() },
                                     )
                                     bytesTotal = -1L
-                                    try {
-                                        VentoyInstaller.install(
-                                            disk = disk,
-                                            assets = released.assets,
-                                            isActive = { isActive() },
-                                            onProgress = { done, total ->
-                                                bytesTotal = total
-                                                report(done)
-                                            },
-                                        )
-                                    } catch (e: usb.ventoy.VentoyMutationFailedException) {
-                                        state = usb.service.OperationState.Partial
-                                        failureCause = e
-                                        throw e
-                                    }
+                                    VentoyOperations.install(disk, released.assets, this)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.RAW_WRITE -> {
@@ -531,15 +465,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     throw IllegalStateException("Ventoy XML links use dedicated link flow")
                                 null -> throw IllegalArgumentException("no destructive action selected")
                             }
-                            disk.sync()
+                            try {
+                                disk.sync()
+                            } catch (syncFailure: Throwable) {
+                                if (this.mutationAttempted) {
+                                    state = usb.service.OperationState.Partial
+                                    failureCause = syncFailure
+                                }
+                                throw syncFailure
+                            }
                         } finally {
                             disk.close()
                         }
                     }
                 }
-                val isCooperative = action == DestructiveAction.RAW_WRITE ||
-                    action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL ||
-                    action == DestructiveAction.RESCUE_RESTORE
+                val isCooperative = usb.operation.OperationLifecyclePolicy.isCooperative(action)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -555,17 +495,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 scope.launch {
                     try {
                         val outcome = handle.await()
-                        val mappedState = when (outcome) {
-                            is usb.service.OperationState.Completed -> OperationState.Completed
-                            is usb.service.OperationState.Cancelled -> OperationState.Cancelled
-                            is usb.service.OperationState.Partial -> OperationState.Partial
-                            is usb.service.OperationState.Failed -> OperationState.Failed
-                            else -> OperationState.Completed
-                        }
-                        val errorMsg = (outcome as? usb.service.OperationState.Failed)?.cause?.message
-                            ?: op.failureCause?.message
-                            ?: (outcome as? usb.service.OperationState.Failed)?.cause?.javaClass?.simpleName
-                            ?: op.failureCause?.javaClass?.simpleName
+                        val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                        val errorMsg = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
@@ -636,9 +567,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     val identity = deviceId.identity
-                    operation.bytesTotal = disk.geometry.capacityBytes.toLong()
+                    val need = usb.diagnostics.RescueRangePolicy.requireSignedBytes(
+                        disk.geometry.sectorCount,
+                        disk.geometry.sectorSize,
+                    )
+                    operation.bytesTotal = need
                     // usableSpace is an estimate, not a reservation.
-                    val need = disk.geometry.capacityBytes.toLong()
                     val usable = dir.usableSpace
                     if (usable in 1 until need) {
                         throw java.io.IOException(
@@ -651,24 +585,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             sectorSize = sectorSize,
                             identity = identity,
                         )
-                    RandomAccessFile(image, "rw").use { file ->
-                        Rescue.copy(
-                            disk = disk,
-                            destination = RescueSink { lba, sector ->
-                                file.seek((lba * sectorSize.toULong()).toLong())
-                                file.write(sector)
-                            },
-                            map = copyMap,
-                            checkpoint = { snap ->
-                                // Data before map: sync image FD, then atomic map publish.
-                                file.fd.sync()
-                                usb.diagnostics.RescueCheckpoint.save(snap, mapFile)
-                            },
-                            operation = operation,
-                        )
-                        file.fd.sync()
-                    }
-                    usb.diagnostics.RescueCheckpoint.save(copyMap, mapFile)
+                    RescueBackupOperations.copy(
+                        disk = disk,
+                        image = image,
+                        mapFile = mapFile,
+                        map = copyMap,
+                        operation = operation,
+                    )
                     val copied = copyMap.copied.sumOf { it.last - it.first + 1UL }
                     val unreadable = copyMap.failed.sumOf { it.last - it.first + 1UL }
                     val note =
@@ -793,15 +716,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 scope.launch {
                     try {
                         val outcome = handle.await()
-                        val mappedState = when (outcome) {
-                            is usb.service.OperationState.Completed -> OperationState.Completed
-                            is usb.service.OperationState.Cancelled -> OperationState.Cancelled
-                            is usb.service.OperationState.Partial -> OperationState.Partial
-                            is usb.service.OperationState.Failed -> OperationState.Failed
-                            else -> OperationState.Completed
-                        }
+                        val mappedState = usb.operation.OperationCoordination.uiState(outcome)
                         val failure = (outcome as? usb.service.OperationState.Failed)?.cause
-                        val errorMsg = failure?.message ?: failure?.javaClass?.simpleName
+                        val errorMsg = usb.operation.OperationCoordination.errorMessage(outcome)
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
@@ -894,7 +811,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val isNewDevice = prevKey != null && prevKey != key
         val gen = ++attachGeneration
         if (isNewDevice) {
-            activeHandles.forEach { it.cancel() }
+            usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
             activeHandles.clear()
             activeHandle = null
             scope.launch(Dispatchers.IO) {
@@ -1104,7 +1021,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
         val gen = ++attachGeneration
         attachedDevice = null
-        activeHandles.forEach { it.cancel() }
+        usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         activeHandles.clear()
         activeHandle = null
         scope.launch(Dispatchers.IO) {
@@ -1256,7 +1173,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             failurePath = path,
             onSuccess = { status?.let { onIntent(UiIntent.Status(it)) } },
         ) {
-            val entries = volumeForLocked(partitionId).list(path)
+            val entries = usb.files.FilesOperations.list(volumeForLocked(partitionId), path)
             post(UiIntent.FilesListed(path, entries.map { it.toFileEntry() }))
         }
     }
@@ -1285,8 +1202,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ) { operation ->
                 withWritableVolume(partitionId, operation) { volume ->
                     try {
-                        volume.delete(target)
-                        volume.sync()
+                        usb.files.FilesOperations.delete(volume, target)
                     } catch (failure: Throwable) {
                         throw userVisibleDeleteError(name, target, failure)
                     }
@@ -1297,14 +1213,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Map engine delete failures to a clear status line (nonempty dir, missing, …). */
     private fun userVisibleDeleteError(name: String, target: String, failure: Throwable): Throwable {
-        val msg = failure.message.orEmpty()
-        if (msg.startsWith("Directory not empty") || msg.contains("Directory not empty")) {
-            return IllegalStateException(
-                "Cannot delete \"$name\": directory is not empty — remove its contents first",
-                failure,
-            )
-        }
-        return failure
+        val friendly = FilesOperationPolicy.deleteError(name, target, failure.message.orEmpty())
+        return if (friendly != null) IllegalStateException(friendly, failure) else failure
     }
 
     /** Stream a SAF document into [path] in fixed-size chunks, reporting real bytes. */
@@ -1319,71 +1229,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val document = Uri.parse(uri)
                 val (reportedName, reportedSize) = contentInfo(resolver, document)
                 val rawName = reportedName ?: document.lastPathSegment ?: uri
-                val name = rawName.substringAfterLast('/').trim()
-                require(name.isNotEmpty() && name != "." && name != "..") {
-                    "invalid file name \"$rawName\" for $uri"
-                }
+                val name = FilesOperationPolicy.requireChildName(rawName, uri)
                 uploaded = name
                 val target = fatChildPath(path, name)
                 operation.bytesTotal = reportedSize ?: -1L
 
                 withWritableVolume(partitionId, operation) { volume ->
-                    // create = true maps to FA_CREATE_ALWAYS, so an existing same-named file
-                    // would be truncated before the new copy is complete. Refuse instead.
-                    if (volume.statOrNull(target) != null) {
-                        throw IllegalStateException(
-                            "$target already exists: delete it first (delete asks for confirmation)",
-                        )
-                    }
-                    val input = resolver.openInputStream(document)
-                        ?: throw IllegalStateException("cannot open $uri for reading")
-                    input.use { stream ->
-                        val buffer = ByteArray(COPY_CHUNK_BYTES)
-                        var offset = 0L
-                        var createAttempted = false
-                        try {
-                            while (true) {
-                                if (!operation.isActive()) {
-                                    throw kotlinx.coroutines.CancellationException("Upload cancelled")
-                                }
-                                val read = stream.read(buffer)
-                                if (read <= 0) break
-                                val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
-                                val isFirstWrite = !createAttempted
-                                if (isFirstWrite) {
-                                    createAttempted = true
-                                }
-                                volume.write(target, chunk, offset = offset, create = isFirstWrite)
-                                offset += read
-                                operation.report(offset)
-                            }
-                            if (!createAttempted) {
-                                createAttempted = true
-                                volume.write(target, ByteArray(0), offset = 0L, create = true)
-                            }
-                            volume.sync()
-                        } catch (t: Throwable) {
-                            if (createAttempted) {
-                                try {
-                                    // Already gone → no cleanup needed (FAT FR_NO_FILE / EXT ENOENT).
-                                    if (volume.statOrNull(target) != null) {
-                                        volume.delete(target)
-                                        volume.sync()
-                                    }
-                                } catch (cleanupError: Throwable) {
-                                    if (!isAbsentPathError(cleanupError)) {
-                                        t.addSuppressed(cleanupError)
-                                        post(
-                                            UiIntent.Status(
-                                                "Failed to clean up incomplete upload $name: ${cleanupError.message ?: cleanupError.javaClass.simpleName}",
-                                            ),
-                                        )
-                                    }
-                                }
-                            }
-                            throw t
-                        }
-                    }
+                    FilesOperations.upload(
+                        resolver = resolver,
+                        uri = document,
+                        target = target,
+                        volume = volume,
+                        operation = operation,
+                        chunkBytes = COPY_CHUNK_BYTES,
+                        onCleanupFailure = { cleanupError ->
+                            post(UiIntent.Status("Failed to clean up incomplete upload $name: ${cleanupError.message ?: cleanupError.javaClass.simpleName}"))
+                        },
+                    )
                 }
             }
         }
@@ -1501,47 +1363,15 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 onSuccess = { onIntent(UiIntent.Status("Saved $name")) },
             ) { operation ->
                 val target = fatChildPath(path, name)
-                val volume = volumeForLocked(partitionId)
-                val size = volume.stat(target).size
-                operation.bytesTotal = size
-
                 val destination = Uri.parse(uri)
-                val output = resolver.openOutputStream(destination, "wt")
-                    ?: throw IllegalStateException("cannot open $uri for writing")
-                output.use { stream ->
-                    var offset = 0L
-                    try {
-                        while (offset < size) {
-                            if (!operation.isActive()) {
-                                throw kotlinx.coroutines.CancellationException("Download cancelled")
-                            }
-                            val want = minOf(COPY_CHUNK_BYTES.toLong(), size - offset).toInt()
-                            val data = volume.read(target, offset, want)
-                            if (data.isEmpty()) {
-                                throw IllegalStateException("short read at $offset of $size bytes")
-                            }
-                            stream.write(data)
-                            offset += data.size
-                            operation.report(offset)
-                        }
-                        stream.flush()
-                    } catch (t: Throwable) {
-                        operation.state = usb.service.OperationState.Partial
-                        val detail = if (offset > 0L) {
-                            "$offset of $size bytes written"
-                        } else {
-                            "0 bytes written, document truncated"
-                        }
-                        val baseMsg = t.message ?: t.javaClass.simpleName
-                        val warning = if (t is kotlinx.coroutines.CancellationException) {
-                            "Download cancelled: destination document was truncated ($detail)"
-                        } else {
-                            "Download failed ($baseMsg): destination document was truncated ($detail)"
-                        }
-                        operation.failureCause = DiskException.IoFailure(warning, t)
-                        throw t
-                    }
-                }
+                val volume = volumeForLocked(partitionId)
+                FilesOperations.download(
+                    resolver = resolver,
+                    target = target,
+                    destination = destination,
+                    volume = volume,
+                    operation = operation,
+                )
             }
         }
     }
@@ -1918,7 +1748,9 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Entry name waiting for the SAF destination chosen in [downloadLauncher]. */
+    private var pendingUsbPermissionKey: String? = null
     private var pendingDownloadName: String? = null
+    private var selectedUsbDeviceKey: String? = null
 
     private val downloadLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
@@ -1943,20 +1775,26 @@ class MainActivity : ComponentActivity() {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     if (device != null && usbManager != null && MassStorageDiscovery.findBotInterface(device) != null) {
+                        selectUsbDevice(device)
                         val hasPerm = usbManager.hasPermission(device)
                         viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
-                        if (!hasPerm) {
-                            requestUsbPermission(usbManager, device)
-                        }
+                        if (!hasPerm) requestUsbPermission(usbManager, device)
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    if (device == null || selectedUsbDeviceKey == usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)) {
+                        selectedUsbDeviceKey = null
+                        pendingUsbPermissionKey = null
+                    }
                     viewModel.onUsbDeviceDetached(device)
                 }
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    if (device != null && MassStorageDiscovery.findBotInterface(device) != null) {
-                        viewModel.onUsbDeviceAttached(device, granted, usbManager)
+                    val callbackKey = device?.let { usb.device.UsbPermissionPolicy.key(it.deviceId, it.deviceName) }
+                    val liveDevice = usb.device.UsbPermissionPolicy.currentMatch(device, usbManager?.deviceList?.values.orEmpty())
+                    if (liveDevice != null && usb.device.UsbPermissionPolicy.accepts(pendingUsbPermissionKey, callbackKey, selectedUsbDeviceKey) && MassStorageDiscovery.findBotInterface(liveDevice) != null) {
+                        pendingUsbPermissionKey = null
+                        viewModel.onUsbDeviceAttached(liveDevice, granted, usbManager)
                     }
                 }
             }
@@ -2053,18 +1891,28 @@ class MainActivity : ComponentActivity() {
         val device = validFromIntent
             ?: currentDevices.values.firstOrNull { MassStorageDiscovery.findBotInterface(it) != null }
         if (device != null) {
+            selectUsbDevice(device)
             val hasPerm = usbManager.hasPermission(device)
             viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
             if (!hasPerm) {
                 requestUsbPermission(usbManager, device)
             }
         } else {
+            selectedUsbDeviceKey = null
+            pendingUsbPermissionKey = null
             viewModel.onUsbDeviceDetached()
             viewModel.onIntent(UiIntent.DeviceChanged(DevicePresence.Absent))
         }
     }
 
+    private fun selectUsbDevice(device: UsbDevice) {
+        val key = usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)
+        if (selectedUsbDeviceKey != key) pendingUsbPermissionKey = null
+        selectedUsbDeviceKey = key
+    }
+
     private fun requestUsbPermission(usbManager: UsbManager, device: UsbDevice) {
+        pendingUsbPermissionKey = "${device.deviceId}:${device.deviceName}"
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
         val permissionIntent = PendingIntent.getBroadcast(
             this,

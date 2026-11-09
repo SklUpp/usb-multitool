@@ -36,7 +36,7 @@ class BotSessionImpl(
         }
 
         val tag = tagCounter.getAndIncrement()
-        sendCbw(tag, cdb)
+        sendCbw(tag, cdb, timeoutMs)
 
         when (cdb.direction) {
             ScsiDirection.IN -> {
@@ -78,7 +78,7 @@ class BotSessionImpl(
         channel.close()
     }
 
-    private fun sendCbw(tag: Int, cdb: ScsiCdb) {
+    private fun sendCbw(tag: Int, cdb: ScsiCdb, timeoutMs: Int) {
         cbwBuffer.clear()
         cbwBuffer.order(ByteOrder.LITTLE_ENDIAN)
         cbwBuffer.putInt(BotConstants.CBW_SIGNATURE)
@@ -97,7 +97,7 @@ class BotSessionImpl(
             cbwBuffer.put(0)
         }
         cbwBuffer.flip()
-        transferExactOut(cbwBuffer, BotConstants.CBW_SIZE, BotConstants.TRANSFER_TIMEOUT_MS)
+        transferExactOut(cbwBuffer, BotConstants.CBW_SIZE, timeoutMs)
     }
 
     private fun readCsw(expectedTag: Int, timeoutMs: Int): CswResult {

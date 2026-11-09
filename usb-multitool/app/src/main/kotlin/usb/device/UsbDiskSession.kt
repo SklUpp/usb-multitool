@@ -14,19 +14,33 @@ object UsbDiskSession {
         val channel = AndroidUsbBulkChannel.open(manager, target)
         val session = BotSessionImpl(channel, lun = lun)
         return try {
-            // Optional TUR; ignore unit-attention once via sense then continue.
-            runCatching {
-                val tur = session.transfer(ScsiCommand.testUnitReady(), null)
-                if (tur.status == CswStatus.FAILED) {
-                    session.transfer(ScsiCommand.requestSense(18), java.nio.ByteBuffer.allocate(18))
-                } else if (tur.status == CswStatus.PHASE_ERROR) {
-                    session.bulkOnlyReset()
-                }
-            }
+            initialize(session)
             UsbDisk(session)
         } catch (e: Exception) {
             session.close()
             throw e
+        }
+    }
+
+    internal fun initialize(session: BotSession) {
+        // TUR may report UNIT ATTENTION while media settles; clear it once.
+        val tur = session.transfer(ScsiCommand.testUnitReady(), null)
+        when (tur.status) {
+            CswStatus.PASSED -> Unit
+            CswStatus.FAILED -> {
+                val senseBuffer = java.nio.ByteBuffer.allocate(18)
+                val sense = session.transfer(ScsiCommand.requestSense(18), senseBuffer)
+                if (sense.status != CswStatus.PASSED) {
+                    throw DiskException.IoFailure("REQUEST SENSE failed during USB initialization: ${sense.status}")
+                }
+                senseBuffer.flip()
+                val parsed = UsbDisk.parseSense(senseBuffer)
+                if (!parsed.isUnitAttention && !(parsed.senseKey == 0x02 && parsed.asc == 0x04)) throw parsed
+            }
+            CswStatus.PHASE_ERROR -> {
+                session.bulkOnlyReset()
+                throw DiskException.IoFailure("phase error on TEST UNIT READY")
+            }
         }
     }
 }

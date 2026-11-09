@@ -2,6 +2,7 @@ package usb.ui
 
 import java.nio.ByteBuffer
 import org.junit.Test
+import usb.service.DiskOperation
 import usb.device.BlockDevice
 import usb.multitool.GptCriticalBackup
 
@@ -177,8 +178,30 @@ class GptCriticalBackupTest {
         )
         require(overlapTarget.syncs == 0) { "overlap restore must not write" }
     }
-
-
+    @Test
+    fun writeVerificationFailureMarksPartialButPreflightStaysClean() {
+        val source = syntheticGpt(2048UL)
+        val blob = capture(source)
+        val target = MemoryDisk(2048UL).also { it.dropWritesAt = 0UL }
+        val operation = DiskOperation("gpt")
+        runCatching { GptCriticalBackup.restore(target, blob, PRIMARY_SECTORS, BACKUP_SECTORS, operation) }
+        require(operation.state == usb.service.OperationState.Partial) { "readback mismatch must be Partial" }
+        val bad = blob.copyOf(blob.size - 1)
+        val clean = DiskOperation("gpt")
+        runCatching { GptCriticalBackup.restore(target, bad, PRIMARY_SECTORS, BACKUP_SECTORS, clean) }
+        require(clean.state == usb.service.OperationState.Queued) { "preflight failure must stay clean" }
+    }
+    @Test
+    fun firstSecondWriteAndSyncFailuresBecomePartial() {
+        val source = syntheticGpt(2048UL)
+        val blob = capture(source)
+        for (fault in listOf<MemoryDisk.() -> Unit>({ failWritesAt = 0UL }, { failWritesAt = 2015UL }, { failSync = true })) {
+            val target = MemoryDisk(2048UL).apply(fault)
+            val operation = DiskOperation("gpt")
+            runCatching { GptCriticalBackup.restore(target, blob, PRIMARY_SECTORS, BACKUP_SECTORS, operation) }
+            require(operation.state == usb.service.OperationState.Partial) { "fault must yield Partial" }
+        }
+    }
     private fun expectFailure(blob: ByteArray, disk: BlockDevice, needle: String) {
         val failure =
             runCatching {
@@ -295,18 +318,22 @@ class GptCriticalBackupTest {
         var syncs = 0
             private set
         var dropWritesAt: ULong? = null
+        var failWritesAt: ULong? = null
+        var failSync = false
 
         override fun read(lba: ULong, destination: ByteBuffer) {
             destination.put(image, (lba * sectorSize.toULong()).toInt(), destination.remaining())
         }
 
         override fun write(lba: ULong, source: ByteBuffer) {
+            if (failWritesAt == lba) error("write-$lba")
             if (dropWritesAt == lba) return
             source.get(image, (lba * sectorSize.toULong()).toInt(), source.remaining())
         }
 
         override fun sync() {
             syncs++
+            if (failSync) error("sync")
         }
 
         fun range(lba: Int, bytes: Int): ByteArray =

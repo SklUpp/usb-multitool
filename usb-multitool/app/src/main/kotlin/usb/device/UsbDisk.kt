@@ -277,6 +277,9 @@ open class UsbDisk(
                         buf.flip()
                         buf.order(ByteOrder.BIG_ENDIAN)
                         val lastLba = buf.long.toULong()
+                        require(lastLba != ULong.MAX_VALUE) {
+                            "READ CAPACITY(16) last LBA overflows sector count"
+                        }
                         val blockLength = buf.int
                         require(blockLength in 512..4096 && blockLength.countOneBits() == 1) {
                             "illegal block length $blockLength"
@@ -310,11 +313,14 @@ open class UsbDisk(
         }
 
         fun parseSense(buffer: ByteBuffer): DiskException.SenseError {
-            require(buffer.remaining() >= 14) { "sense buffer too short" }
+            require(buffer.remaining() >= 8) { "sense buffer too short" }
             val responseCode = buffer.get(0).toInt() and 0x7F
-            val senseKey = buffer.get(2).toInt() and 0x0F
-            val asc = buffer.get(12).toInt() and 0xFF
-            val ascq = buffer.get(13).toInt() and 0xFF
+            val descriptor = responseCode == 0x72 || responseCode == 0x73
+            val senseKey = buffer.get(if (descriptor) 1 else 2).toInt() and 0x0F
+            val ascOffset = if (descriptor) 2 else 12
+            require(buffer.remaining() > ascOffset + 1) { "sense buffer missing ASC/ASCQ" }
+            val asc = buffer.get(ascOffset).toInt() and 0xFF
+            val ascq = buffer.get(ascOffset + 1).toInt() and 0xFF
             return DiskException.SenseError(responseCode, senseKey, asc, ascq)
         }
     }

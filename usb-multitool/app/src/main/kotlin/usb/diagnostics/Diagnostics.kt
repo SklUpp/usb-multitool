@@ -109,14 +109,26 @@ object Diagnostics {
         closeMountedVolumes(openVolumes)
         val zeros = ByteBuffer.allocate(disk.geometry.sectorSize)
         var lba = 0UL
-        while (lba < disk.geometry.sectorCount) {
-            if (!operation.isActive()) break
-            zeros.clear()
-            disk.write(lba, zeros)
-            lba++
-            operation.report((lba * disk.geometry.sectorSize.toULong()).toLong())
+        try {
+            while (lba < disk.geometry.sectorCount) {
+                if (!operation.isActive()) {
+                    if (operation.mutationAttempted) operation.state = OperationState.Partial
+                    break
+                }
+                zeros.clear()
+                operation.mutationAttempted = true
+                disk.write(lba, zeros)
+                lba++
+                operation.report((lba * disk.geometry.sectorSize.toULong()).toLong())
+            }
+            // Coordinator performs single disk.sync after mutation.
+        } catch (failure: Throwable) {
+            if (operation.mutationAttempted && operation.state != OperationState.Partial) {
+                operation.state = OperationState.Partial
+                operation.failureCause = failure
+            }
+            throw failure
         }
-    }
 }
 
 /**

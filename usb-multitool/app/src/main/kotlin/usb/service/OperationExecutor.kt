@@ -247,8 +247,18 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
-                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
-                    op.cancelled.get() || !op.operation.isActive() -> OperationState.Cancelled
+                    op.generation != connectionGeneration.get() || disconnected.get() -> {
+                        val cause = DiskException.Disconnected()
+                        if (op.operation.failureCause == null) op.operation.failureCause = cause
+                        if (op.operation.mutationAttempted) OperationState.Partial else OperationState.Failed(cause)
+                    }
+                    op.cancelled.get() || !op.operation.isActive() -> {
+                        if (op.operation.mutationAttempted) {
+                            val cause = kotlinx.coroutines.CancellationException("Operation cancelled")
+                            if (op.operation.failureCause == null) op.operation.failureCause = cause
+                            OperationState.Partial
+                        } else OperationState.Cancelled
+                    }
                     op.operation.state is OperationState.Failed -> op.operation.state
                     else -> OperationState.Completed
                 }
@@ -259,14 +269,19 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
+                    op.operation.mutationAttempted -> OperationState.Partial
                     op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
                     else -> OperationState.Failed(e)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Do not wrap cooperative/cancellation as IoFailure.
+                if (op.operation.failureCause == null && op.operation.mutationAttempted) {
+                    op.operation.failureCause = e
+                }
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
+                    op.operation.mutationAttempted -> OperationState.Partial
                     op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
                     else -> OperationState.Cancelled
                 }
@@ -277,6 +292,7 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
+                    op.operation.mutationAttempted -> OperationState.Partial
                     op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
                     else -> OperationState.Failed(DiskException.IoFailure(t.message ?: t.javaClass.name, t))
                 }

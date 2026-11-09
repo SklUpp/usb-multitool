@@ -14,8 +14,9 @@ class BotSessionImplTest {
     ) : UsbBulkChannel {
         override val interfaceId: Int = 0
         val inCalls = mutableListOf<Int>()
+        val inTimeouts = mutableListOf<Int>()
         val outCalls = mutableListOf<ByteArray>()
-
+        val outTimeouts = mutableListOf<Int>()
         // Queued responses for bulkIn
         private val inResponses = ArrayDeque<ByteArray>()
 
@@ -35,18 +36,17 @@ class BotSessionImplTest {
         override fun bulkIn(destination: ByteBuffer, length: Int, timeoutMs: Int): Int {
             if (!connected) throw DiskException.Disconnected()
             inCalls.add(length)
+            inTimeouts.add(timeoutMs)
             val resp = if (inResponses.isNotEmpty()) inResponses.removeFirst() else ByteArray(0)
             val toTake = minOf(length, resp.size)
             destination.put(resp, 0, toTake)
-            // If response was larger than length, put remainder back
-            if (resp.size > toTake) {
-                inResponses.addFirst(resp.copyOfRange(toTake, resp.size))
-            }
+            if (resp.size > toTake) inResponses.addFirst(resp.copyOfRange(toTake, resp.size))
             return toTake
         }
 
         override fun bulkOut(source: ByteBuffer, length: Int, timeoutMs: Int): Int {
             if (!connected) throw DiskException.Disconnected()
+            outTimeouts.add(timeoutMs)
             val bytes = ByteArray(length)
             source.get(bytes)
             outCalls.add(bytes)
@@ -180,5 +180,14 @@ class BotSessionImplTest {
         assertThrows(DiskException.Disconnected::class.java) {
             session.transfer(ScsiCommand.testUnitReady(), null)
         }
+    }
+
+    @Test
+    fun callerTimeoutAppliesToCbwAndCsw() {
+        val channel = ScriptedBulkChannel()
+        channel.queueCsw(1)
+        BotSessionImpl(channel).transfer(ScsiCommand.testUnitReady(), null, timeoutMs = 37)
+        assertEquals(listOf(37), channel.outTimeouts)
+        assertEquals(listOf(37), channel.inTimeouts)
     }
 }

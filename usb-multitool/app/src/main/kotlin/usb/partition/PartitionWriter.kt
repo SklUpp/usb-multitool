@@ -28,7 +28,7 @@ object PartitionWriter {
             require(partition.sectorCount > 0UL) {
                 "zero-length partition at LBA ${partition.startLba}"
             }
-            require(partition.startLba + partition.sectorCount > partition.startLba) {
+            require(partition.startLba <= ULong.MAX_VALUE - partition.sectorCount) {
                 "partition at LBA ${partition.startLba} overflows the address space"
             }
         }
@@ -44,6 +44,42 @@ object PartitionWriter {
         return PartitionTable.read(disk)
     }
 
+    private fun validateGptGeometry(disk: BlockDevice, header: GptHeader, entrySectors: ULong) {
+        require(header.entrySize == ENTRY_SIZE) {
+            "unsupported GPT entry size ${header.entrySize}; only $ENTRY_SIZE is writable"
+        }
+        require(header.entryCount > 0) { "GPT entry count must be positive" }
+        require(header.currentLba < disk.sectorCount && header.backupLba < disk.sectorCount) {
+            "GPT header outside disk"
+        }
+        require(header.currentLba != header.backupLba && header.currentLba != 0UL && header.backupLba != 0UL) {
+            "GPT headers overlap protected metadata"
+        }
+        require(header.firstUsable <= header.lastUsable && header.lastUsable < disk.sectorCount) {
+            "invalid GPT usable range"
+        }
+        require(header.currentLba !in header.firstUsable..header.lastUsable && header.backupLba !in header.firstUsable..header.lastUsable) {
+            "GPT header overlaps usable range"
+        }
+        require(entrySectors > 0UL && entrySectors <= disk.sectorCount) { "invalid GPT entry geometry" }
+        require(header.entryLba <= disk.sectorCount - entrySectors) { "GPT primary entries outside disk" }
+        require(header.backupLba >= entrySectors) { "GPT backup entries overlap disk start" }
+        val primaryEnd = header.entryLba + entrySectors
+        val backupStart = header.backupLba - entrySectors
+        val backupEnd = header.backupLba
+        fun overlaps(start: ULong, end: ULong, otherStart: ULong, otherEnd: ULong) =
+            start < otherEnd && otherStart < end
+        require(!overlaps(header.entryLba, primaryEnd, 0UL, 1UL)) { "GPT entries overlap LBA 0" }
+        require(!overlaps(backupStart, backupEnd, 0UL, 1UL)) { "GPT entries overlap LBA 0" }
+        require(!overlaps(header.entryLba, primaryEnd, header.currentLba, header.currentLba + 1UL)) { "GPT primary entries overlap header" }
+        require(!overlaps(header.entryLba, primaryEnd, header.backupLba, header.backupLba + 1UL)) { "GPT primary entries overlap header" }
+        require(!overlaps(backupStart, backupEnd, header.currentLba, header.currentLba + 1UL)) { "GPT backup entries overlap header" }
+        require(!overlaps(backupStart, backupEnd, header.backupLba, header.backupLba + 1UL)) { "GPT backup entries overlap header" }
+        require(!overlaps(header.entryLba, primaryEnd, backupStart, backupEnd)) { "GPT entry arrays overlap" }
+        require(!overlaps(header.entryLba, primaryEnd, header.firstUsable, header.lastUsable + 1UL)) { "GPT entries overlap usable range" }
+        require(!overlaps(backupStart, backupEnd, header.firstUsable, header.lastUsable + 1UL)) { "GPT entries overlap usable range" }
+    }
+
     private fun commitGpt(disk: BlockDevice, table: PartitionTable) {
         val header =
             table.gptHeader
@@ -53,11 +89,13 @@ object PartitionWriter {
         require(table.partitions.size <= entryCount) {
             "too many partitions: ${table.partitions.size} > $entryCount"
         }
+        require(entryCount <= Int.MAX_VALUE / ENTRY_SIZE) { "GPT entry count too large" }
         val entryBytes = entryCount * ENTRY_SIZE
-        val entrySectors = (entryBytes + sectorSize - 1) / sectorSize
+        val entrySectors = (entryBytes.toULong() + sectorSize.toULong() - 1UL) / sectorSize.toULong()
+        validateGptGeometry(disk, header, entrySectors)
         val backupLba = header.backupLba
-        val backupEntriesLba = backupLba - entrySectors.toULong()
-        require(entrySectors.toULong() < backupLba) { "GPT backup entries overlap header" }
+        val backupEntriesLba = backupLba - entrySectors
+        require(entrySectors < backupLba) { "GPT backup entries overlap header" }
 
         for (partition in table.partitions) {
             val last = partition.startLba + partition.sectorCount - 1UL
@@ -113,6 +151,9 @@ object PartitionWriter {
     private fun commitMbr(disk: BlockDevice, table: PartitionTable) {
         require(table.partitions.size <= 4) {
             "MBR supports at most 4 primary partitions, got ${table.partitions.size}"
+        }
+        require(table.partitions.all { it.startLba <= 0xFFFF_FFFFUL && it.sectorCount <= 0xFFFF_FFFFUL }) {
+            "MBR partition geometry exceeds 32-bit LBA fields"
         }
         val sectorSize = disk.sectorSize
         require(sectorSize >= 512) { "sector size $sectorSize too small for MBR" }

@@ -9,6 +9,7 @@ class RecordingBlockDevice(
 ) : BlockDevice {
     val reads = mutableListOf<ULong>()
     val writes = mutableListOf<ULong>()
+    var lastWrite: ByteArray? = null
     var syncCount: Int = 0
         private set
 
@@ -20,9 +21,12 @@ class RecordingBlockDevice(
 
     override fun write(lba: ULong, source: ByteBuffer) {
         writes.add(lba)
-        source.position(source.position() + source.remaining())
+        val copy = source.slice()
+        val bytes = ByteArray(copy.remaining())
+        copy.get(bytes)
+        lastWrite = bytes
+        source.position(source.limit())
     }
-
     override fun sync() {
         syncCount++
     }
