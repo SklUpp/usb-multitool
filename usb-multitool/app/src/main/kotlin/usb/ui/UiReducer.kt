@@ -117,10 +117,9 @@ data class UiEffect(
     val path: String? = null,
     val name: String? = null,
     val uri: String? = null,
-    /** Pinned FORMAT_PARTITION filesystem from the confirmation dialog. */
     val formatId: FilesystemId? = null,
-    /** Explicit overwrite for LinkXml / VENTOY_LINK_XML. */
     val linkOverwrite: Boolean = false,
+    val confirmation: DestructiveConfirmation? = null,
 ) {
     enum class Kind {
         SubmitDestructive,
@@ -326,6 +325,7 @@ object UiReducer {
                                     intent.action,
                                     targetPart,
                                     formatId = formatId,
+                                    target = state.selectedPartition(),
                                 ),
                         ),
                     )
@@ -373,6 +373,7 @@ object UiReducer {
                                     isoName = iso,
                                     isoAction = IsoAction.LinkXml,
                                     linkOverwrite = pending.linkOverwrite,
+                                    confirmation = pending,
                                 ),
                             ),
                         )
@@ -385,6 +386,9 @@ object UiReducer {
                                 UiEffect.Kind.SubmitDestructive,
                                 action = action,
                                 formatId = pending.formatId,
+                                confirmation = pending,
+                                isoName = pending.isoName,
+                                linkOverwrite = pending.linkOverwrite,
                             ),
                         ),
                     )

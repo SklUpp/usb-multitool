@@ -13,6 +13,8 @@ data class DeviceIdentity(
     val capacityBytes: ULong,
     /** USB serial when the OS exposes it; null/blank → resume refused. */
     val serialNumber: String? = null,
+    /** Attach generation distinguishes same-model devices without serial. */
+    val attachGeneration: Long = 0L,
 ) {
     /**
      * Stable identity for confirmations and rescue maps.
@@ -44,6 +46,7 @@ data class DeviceIdentity(
         }
     }
 }
+
 
 enum class OperationState {
     Queued,
@@ -82,12 +85,12 @@ data class DestructiveConfirmation(
     val action: String,
     val identity: DeviceIdentity,
     val message: String,
-    /** Pinned at confirm-request time for FORMAT_PARTITION; executed FS must match. */
     val formatId: FilesystemId? = null,
-    /** ISO basename for VENTOY_LINK_XML. */
     val isoName: String? = null,
-    /** Explicit overwrite permission for an existing ISO→XML link. */
     val linkOverwrite: Boolean = false,
+    val partitionId: String? = null,
+    val partitionStartLba: ULong? = null,
+    val partitionSectorCount: ULong? = null,
 ) {
     companion object {
         fun request(
@@ -97,6 +100,7 @@ data class DestructiveConfirmation(
             formatId: FilesystemId? = null,
             isoName: String? = null,
             linkOverwrite: Boolean = false,
+            target: PartitionTab? = null,
         ): DestructiveConfirmation {
             val actionLabel = action.displayName()
             val targetSuffix = if (targetPartition != null) " (partition $targetPartition)" else ""
@@ -129,9 +133,7 @@ data class DestructiveConfirmation(
                 }
             val message =
                 "Confirm $actionLabel$formatSuffix$targetSuffix on ${device.identity} (${device.capacityLabel}). " +
-                    "This changes the USB device and cannot be undone from this app." +
-                    rescueHint +
-                    linkHint
+                    "This changes the USB device and cannot be undone from this app." + rescueHint + linkHint
             return DestructiveConfirmation(
                 action = actionLabel,
                 identity = device,
@@ -139,11 +141,13 @@ data class DestructiveConfirmation(
                 formatId = if (action == DestructiveAction.FORMAT_PARTITION) formatId else null,
                 isoName = if (action == DestructiveAction.VENTOY_LINK_XML) isoName else null,
                 linkOverwrite = linkOverwrite,
+                partitionId = target?.id,
+                partitionStartLba = target?.startLba,
+                partitionSectorCount = target?.sectorCount,
             )
         }
     }
 }
-
 fun DestructiveAction.displayName(): String =
     when (this) {
         DestructiveAction.WIPE -> "wipe"
@@ -173,6 +177,8 @@ data class PartitionTab(
     val readOnly: Boolean,
     val isVtoyEfi: Boolean = false,
     val filesystemId: FilesystemId? = null,
+    val startLba: ULong? = null,
+    val sectorCount: ULong? = null,
 ) {
     val filesystemLabel: String
         get() = when (filesystemId) {

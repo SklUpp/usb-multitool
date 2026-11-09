@@ -302,11 +302,12 @@ object UiStateHostCheck {
         require(fmtReq.state.pendingConfirmation!!.message.contains("exFAT"))
         val fmtGo = UiReducer.reduce(fmtReq.state, UiIntent.ConfirmDestructive)
         require(fmtGo.effects.single().formatId == FilesystemId.EXFAT)
+        require(fmtGo.effects.single().confirmation?.partitionId == "1")
+        require(fmtGo.effects.single().confirmation?.partitionStartLba == null) { "missing geometry must remain explicit" }
         val blockedSel =
             UiReducer.reduce(fmtReq.state, UiIntent.SelectFormatFilesystem(FilesystemId.EXT))
         require(blockedSel.state.selectedFormatId == FilesystemId.EXFAT)
         require(blockedSel.state.pendingConfirmation != null)
-
         // Choose Image / SetImage must not clear staged source while busy.
         run {
             val device = DeviceIdentity(

@@ -215,8 +215,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val action = effect.action
                 val actionName = action?.displayName() ?: "destructive"
                 val uiState = state
-                // Pinned at confirmation time — never re-read selectedFormatId after confirm.
-                val confirmedFormatId = effect.formatId
+                val confirmed = effect.confirmation
+                    ?: throw IllegalStateException("destructive confirmation missing")
+                val confirmedFormatId = confirmed.formatId
                 val op = object : DiskOperation(name = actionName) {
                     /** Concrete outcome surfaced instead of the bare "Success" label. */
                     @Volatile var result: String? = null
@@ -230,12 +231,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         try {
                             // Prefer confirmed DeviceIdentity.identity (label#serial) so
                             // requireMatch / rescue resume cannot collide on productName alone.
-                            val identity =
-                                uiState.device?.identity
-                                    ?: (dev.productName ?: dev.deviceName ?: "USB Storage")
+                            val identity = confirmed.identity.identity
+                            require(confirmed.identity.attachGeneration == attachGeneration) { "USB attach generation changed" }
+                            require(confirmed.identity.capacityBytes == disk.geometry.capacityBytes) { "confirmed capacity does not match live device" }
                             val confirmation = usb.diagnostics.DestructiveConfirmation(
                                 identity = identity,
-                                capacityBytes = uiState.device?.capacityBytes ?: disk.geometry.capacityBytes,
+                                capacityBytes = confirmed.identity.capacityBytes,
                             )
                             if (action == DestructiveAction.RESCUE_RESTORE) {
                                 val serial = uiState.device?.serialNumber?.trim().orEmpty()
@@ -249,9 +250,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             val table = runCatching { PartitionTable.read(disk) }.getOrNull()
-                            val selected = table?.let { t ->
-                                val index = uiState.selectedPartitionId?.toIntOrNull() ?: 1
-                                t.partitions.getOrNull(index - 1)
+                            val selected = table?.partitions?.firstOrNull { part ->
+                                confirmed.partitionStartLba != null && confirmed.partitionSectorCount != null &&
+                                    part.startLba == confirmed.partitionStartLba && part.sectorCount == confirmed.partitionSectorCount
                             }
                             when (action) {
                                 DestructiveAction.WIPE -> {
@@ -272,14 +273,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.DELETE_PARTITION -> {
                                     val current = table ?: throw IllegalStateException("no partition table")
-                                    val partId = uiState.selectedPartitionId
-                                        ?: throw IllegalStateException("no partition selected for deletion")
-                                    val index = (partId.toIntOrNull()
-                                        ?: throw IllegalStateException("invalid partition id: $partId")) - 1
-                                    if (current.partitions.getOrNull(index) == null) {
-                                        throw IllegalStateException("no partition selected for deletion")
-                                    }
-                                    PartitionWriter.commit(disk, PartitionEditor.delete(current, index))
+                                    val target = selected ?: throw usb.diagnostics.ConfirmationMismatchException("confirmed partition geometry missing")
+                                    val index = (table ?: throw IllegalStateException("no partition table")).partitions.indexOf(target)
+                                    require(index >= 0) { "confirmed partition geometry missing" }
+                                    PartitionWriter.commit(disk, PartitionEditor.delete(table, index))
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.CREATE_PARTITION -> {
@@ -296,12 +293,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.FORMAT_PARTITION -> {
-                                    val partId = uiState.selectedPartitionId
-                                        ?: throw IllegalStateException("no partition selected to format")
-                                    val index = (partId.toIntOrNull()
-                                        ?: throw IllegalStateException("invalid partition id: $partId")) - 1
-                                    val target = table?.partitions?.getOrNull(index)
-                                        ?: throw IllegalStateException("no partition selected to format")
+                                    val target = selected ?: throw usb.diagnostics.ConfirmationMismatchException("confirmed partition geometry missing")
                                     val partition = VirtualPartition(
                                         startLba = target.startLba,
                                         sectorCount = target.sectorCount,
@@ -750,26 +742,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     return
                 }
+                val confirmed = effect.confirmation ?: throw IllegalStateException("Ventoy link confirmation missing")
                 val operationGeneration = attachGeneration
-                val deviceIdentity = state.device?.identity
+                val deviceIdentity = confirmed.identity.identity
                 val tpmBypass = state.vtoyBypassTpm
                 val bypassRam = state.vtoyBypassRam
                 val localAccount = state.vtoyLocalAccount
                 val op = object : DiskOperation(name = "autounattend.xml link") {
                     override suspend fun run() {
                         closeFilesVolume()
+                        require(attachGeneration == confirmed.identity.attachGeneration) { "USB attach generation changed" }
                         val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
                         val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
                         val disk = UsbDiskSession.open(mgr, dev)
                         try {
+                            require(disk.geometry.capacityBytes == confirmed.identity.capacityBytes) { "confirmed capacity does not match live device" }
+                            val liveIdentity = (dev.productName ?: dev.deviceName ?: "USB Storage") + (dev.serialNumber?.trim()?.takeIf { it.isNotEmpty() }?.let { "#$it" } ?: "")
+                            require(liveIdentity == deviceIdentity) { "confirmed identity does not match live USB" }
                             VentoySetup.linkXml(
                                 disk = disk,
                                 isoName = isoName,
-                                options = usb.ventoy.SetupOptions(
-                                    tpmBypass = tpmBypass,
-                                    bypassRamCheck = bypassRam,
-                                    localAccount = localAccount,
-                                ),
+                                options = usb.ventoy.SetupOptions(tpmBypass = tpmBypass, bypassRamCheck = bypassRam, localAccount = localAccount),
                                 overwrite = effect.linkOverwrite,
                             )
                         } finally {
@@ -951,6 +944,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             name = p.name.ifBlank { "Partition ${idx + 1}" },
                             readOnly = isEfi,
                             isVtoyEfi = isEfi,
+                            startLba = p.startLba,
+                            sectorCount = p.sectorCount,
                             filesystemId = runCatching {
                                 val region = usb.partition.VirtualPartition(
                                     startLba = p.startLba,
@@ -966,10 +961,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             return@withContext
                         }
                         val probedIdentity = DeviceIdentity(
-     label = device.productName ?: device.deviceName ?: "USB Storage",
-     capacityBytes = capacity,
-     serialNumber = runCatching { device.serialNumber }.getOrNull(),
- )
+                            label = device.productName ?: device.deviceName ?: "USB Storage",
+                            capacityBytes = capacity,
+                            serialNumber = runCatching { device.serialNumber }.getOrNull(),
+                            attachGeneration = gen,
+                        )
                         onIntent(
                             UiIntent.DeviceChanged(
                                 presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
@@ -1060,6 +1056,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             name = p.name.ifBlank { "Partition ${idx + 1}" },
                             readOnly = isEfi,
                             isVtoyEfi = isEfi,
+                            startLba = p.startLba,
+                            sectorCount = p.sectorCount,
                             filesystemId = runCatching {
                                 val region = usb.partition.VirtualPartition(
                                     startLba = p.startLba,
@@ -1075,10 +1073,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             return@withContext
                         }
                         val identity = DeviceIdentity(
-     label = dev.productName ?: dev.deviceName ?: "USB Storage",
-     capacityBytes = capacity,
-     serialNumber = runCatching { dev.serialNumber }.getOrNull(),
- )
+                            label = dev.productName ?: dev.deviceName ?: "USB Storage",
+                            capacityBytes = capacity,
+                            serialNumber = runCatching { dev.serialNumber }.getOrNull(),
+                            attachGeneration = gen,
+                        )
                         onIntent(
                             UiIntent.DeviceChanged(
                                 presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
