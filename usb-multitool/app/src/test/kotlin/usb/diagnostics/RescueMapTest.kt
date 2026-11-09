@@ -497,7 +497,7 @@ class RescueMapTest {
                 operation = op,
             )
         assertTrue(published.isEmpty())
-        assertTrue(op.state == usb.service.OperationState.Partial || op.state == usb.service.OperationState.Failed)
+        assertTrue(op.state == usb.service.OperationState.Partial || op.state is usb.service.OperationState.Failed)
         assertTrue(disk.bytesWritten > 0)
         assertTrue(out.copied.isNotEmpty())
         assertNotNull(op.failureCause)
@@ -566,16 +566,10 @@ class RescueMapTest {
     @Test fun decodeRejectsTooManyRunLines() {
         val n = 50
         val header =
-            "usb-rescue-map 2
-kind=COPY
-sectorSize=512
-sectorCount=1000
-identity=X
-"
+            "usb-rescue-map 2\nkind=COPY\nsectorSize=512\nsectorCount=1000\nidentity=X\n"
         val sb = StringBuilder(header)
         for (i in 0 until n) {
-            sb.append(i).append(" 1 COPIED
-")
+            sb.append(i).append(" 1 COPIED\n")
         }
         // Sanity: small map still decodes.
         val ok = RescueMap.decode(sb.toString())
@@ -583,15 +577,10 @@ identity=X
         // Over-limit: reuse decoder require by temporarily... can't change const.
         // Build string claiming MAX_RUN_LINES+1 lines without materializing all if too big:
         // 250_001 short lines ~4MB — acceptable for unit test memory.
-        val big = StringBuilder("usb-rescue-map 2
-kind=COPY
-sectorSize=512
-sectorCount=1000000
-")
+        val big = StringBuilder("usb-rescue-map 2\nkind=COPY\nsectorSize=512\nsectorCount=1000000\n")
         val limit = RescueMap.MAX_RUN_LINES + 1
         repeat(limit) { i ->
-            big.append(i).append(" 1 COPIED
-")
+            big.append(i).append(" 1 COPIED\n")
         }
         try {
             RescueMap.decode(big.toString())
