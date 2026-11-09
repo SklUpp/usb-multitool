@@ -157,6 +157,20 @@ class PartitionWriterTest {
     }
 
     @Test
+    fun mbrKeepsExistingFilesystemTypeWhenAddingPartition() {
+        val disk = RecordingBlockDevice(20000UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(2048UL, 2048UL, type = "0x07"), Partition(8192UL, 2048UL, type = "BASIC")),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        PartitionWriter.commit(disk, table)
+        assertEquals(0x07, disk.lastWrite!![450].toInt() and 0xFF)
+        assertEquals(0x83, disk.lastWrite!![466].toInt() and 0xFF)
+    }
+
+    @Test
     fun mbr32BitBoundaryIsAccepted() {
         val disk = RecordingBlockDevice(0x1_0000_0001UL)
         val table = PartitionTable(

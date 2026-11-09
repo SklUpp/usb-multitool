@@ -255,7 +255,7 @@ object PartitionWriter {
     private fun mbrType(partition: Partition): Int =
         when (partition.type.uppercase()) {
             "EFI", "VTOYEFI", EFI_SYSTEM_GUID -> MBR_TYPE_EFI
-            "BASIC" -> MBR_TYPE_LINUX
+            "", "BASIC" -> MBR_TYPE_LINUX
             else -> partition.type.removePrefix("0x").removePrefix("0X").toIntOrNull(16)
                 ?.takeIf { it in 1..255 && it != 0xEE }
                 ?: throw IllegalArgumentException("unsupported MBR partition type '${partition.type}'")
