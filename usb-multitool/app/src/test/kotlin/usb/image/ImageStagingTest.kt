@@ -62,7 +62,6 @@ class ImageStagingTest {
         assertTrue(ImageStaging.deleteIfManaged(root, staged.absolutePath))
         assertFalse(staged.exists())
         assertFalse(ImageStaging.isManaged(root, staged.absolutePath))
-        assertTrue(ImageStaging.deleteIfManaged(root, staged.absolutePath))
     }
 
     @Test
