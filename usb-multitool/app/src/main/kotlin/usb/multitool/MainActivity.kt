@@ -46,6 +46,7 @@ import usb.ui.DeviceIdentity
 import usb.ui.DevicePresence
 import usb.ui.FileEntry
 import usb.ui.OperationProgress
+import usb.ui.readOnlyOperationProgress
 import usb.ui.OperationState
 import usb.ui.UiEffect
 import usb.ui.UiIntent
@@ -1802,15 +1803,17 @@ private fun downloadFile(path: String, name: String, uri: String) {
             try {
                 when (val outcome = handle.await()) {
                     is usb.service.OperationState.Failed -> {
-                        val message =
-                            outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                        val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                         onIntent(UiIntent.Status(message))
                         onIntent(
                             UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Failed,
+                                readOnlyOperationProgress(
+                                    outcome = outcome,
                                     label = label,
-                                    errorMessage = message,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                    resultMessage = operation.result,
+                                    failureCause = operation.failureCause,
                                     cancelable = cancelable,
                                 ),
                             ),
@@ -1818,35 +1821,16 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         // The USB claim may be gone; reopen for the next attempt.
                         scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
                     }
-                    is usb.service.OperationState.Cancelled ->
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(state = OperationState.Cancelled, label = label, cancelable = cancelable),
-                            ),
-                        )
-                    is usb.service.OperationState.Partial ->
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Partial,
-                                    label = label,
-                                    bytesDone = operation.bytesDone,
-                                    bytesTotal = operation.bytesTotal,
-                                    resultMessage = operation.result,
-                                    errorMessage = operation.failureCause?.message ?: operation.failureCause?.javaClass?.simpleName,
-                                    cancelable = cancelable,
-                                ),
-                            ),
-                        )
                     else ->
                         onIntent(
                             UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Completed,
+                                readOnlyOperationProgress(
+                                    outcome = outcome,
                                     label = label,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
                                     resultMessage = operation.result,
+                                    failureCause = operation.failureCause,
                                     cancelable = cancelable,
                                 ),
                             ),
