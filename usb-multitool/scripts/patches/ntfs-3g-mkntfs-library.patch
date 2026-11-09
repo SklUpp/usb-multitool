@@ -1,0 +1,137 @@
+--- a/ntfsprogs/mkntfs.c
++++ b/ntfsprogs/mkntfs.c
+@@ -68,7 +68,7 @@
+ #ifdef HAVE_LIBGEN_H
+ #include <libgen.h>
+ #endif
+-#ifdef ENABLE_UUID
++#if defined(ENABLE_UUID) && !defined(MKNTFS_NO_UUID_LIB)
+ #include <uuid/uuid.h>
+ #endif
+ 
+@@ -206,6 +206,9 @@
+ 
+ static struct BITMAP_ALLOCATION *g_allocation	  = NULL;	/* Head of cluster allocations */
+ 
++/* Library integration: device already owned by the caller (USB block ops). */
++static struct ntfs_device *g_injected_device	  = NULL;
++
+ /**
+  * struct mkntfs_options
+  */
+@@ -3452,6 +3455,7 @@
+ 	free(g_rl_mft);		g_rl_mft	= NULL;
+ 	free(g_rl_mft_bmp);	g_rl_mft_bmp	= NULL;
+ 	free(g_rl_mftmirr);	g_rl_mftmirr	= NULL;
++	free(g_upcaseinfo);	g_upcaseinfo	= NULL;
+ 
+ 	p = g_allocation;
+ 	while (p) {
+@@ -3459,6 +3463,21 @@
+ 		free(p);
+ 		p = q;
+ 	}
++	/* Library use calls mkntfs more than once per process. Clear the list
++	 * head and every cached scalar/layout value; g_mft_lcn in particular is
++	 * only computed when zero, so a stale value silently reuses the previous
++	 * volume's layout. */
++	g_allocation = NULL;
++	g_num_bad_blocks = 0;
++	g_mft_bitmap_byte_size = 0;
++	g_lcn_bitmap_byte_size = 0;
++	g_dynamic_buf_size = 0;
++	g_mft_size = 0;
++	g_mft_lcn = 0;
++	g_mftmirr_lcn = 0;
++	g_logfile_lcn = 0;
++	g_logfile_size = 0;
++	g_mft_zone_end = 0;
+ }
+ 
+ 
+@@ -3473,6 +3492,23 @@
+ 	unsigned long mnt_flags;
+ 
+ 	/*
++	 * Library integration: a caller-supplied device skips path opening,
++	 * block-device checks and mount-table probing. Its ioctl callbacks must
++	 * report BLKGETSIZE64/BLKSSZGET for geometry detection.
++	 */
++	if (g_injected_device) {
++		vol->dev = g_injected_device;
++		g_injected_device = NULL;
++		if (vol->dev->d_ops->open(vol->dev, O_RDWR) ||
++		    vol->dev->d_ops->stat(vol->dev, &sbuf) ||
++		    !S_ISBLK(sbuf.st_mode))
++			goto done;
++		NDevSetOpen(vol->dev);
++		result = TRUE;
++		goto done;
++	}
++
++	/*
+ 	 * Allocate and initialize an ntfs device structure and attach it to
+ 	 * the volume.
+ 	 */
+@@ -4759,7 +4795,7 @@
+ 	 */
+ 	if (!opts.use_epoch_time) {
+ 		/* Generate a GUID for the volume. */
+-#ifdef ENABLE_UUID
++#if defined(ENABLE_UUID) && !defined(MKNTFS_NO_UUID_LIB)
+ 		uuid_generate((void*)&vol_guid);
+ #else
+ 		ntfs_generate_guid(&vol_guid);
+@@ -5186,7 +5222,11 @@
+  * Return:  0  Success, the program worked
+  *	    1  Error, something went wrong
+  */
++#ifdef MKNTFS_LIBRARY
++int mkntfs_cli_main(int argc, char *argv[])
++#else
+ int main(int argc, char *argv[])
++#endif
+ {
+ 	int result = 1;
+ 
+@@ -5203,3 +5243,40 @@
+ 
+ 	return result;
+ }
++
++#ifdef MKNTFS_LIBRARY
++/*
++ * Format a caller-supplied ntfs_device (e.g. USB block callbacks) without a
++ * path, root, FUSE or mount table. Takes ownership of @dev: mkntfs_cleanup()
++ * frees it on every return path. @quick skips the full-volume zero fill.
++ * Returns 0 on success, otherwise -errno.
++ */
++int mkntfs_format_device(struct ntfs_device *dev, const char *label, int quick)
++{
++	int result;
++
++	if (!dev) {
++		errno = EINVAL;
++		return -EINVAL;
++	}
++
++	errno = 0;
++	mkntfs_init_options(&opts);
++	opts.dev_name = (char *)"usb_block";
++	opts.quick_format = quick ? TRUE : FALSE;
++	opts.force = TRUE;
++	opts.label = (char *)label;
++	opts.no_action = FALSE;
++
++	g_injected_device = dev;
++	result = mkntfs_redirect(&opts);
++	if (g_injected_device) {
++		/* Rejected before mkntfs took ownership. */
++		ntfs_device_free(g_injected_device);
++		g_injected_device = NULL;
++	}
++	if (result == 0)
++		return 0;
++	return -(errno ? errno : EIO);
++}
++#endif

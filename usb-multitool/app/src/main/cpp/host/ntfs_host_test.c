@@ -30,6 +30,9 @@ typedef struct FileBlockCtx {
      * returning a short listing. */
     uint64_t fail_lba_from;
     uint64_t fail_lba_to;
+    /* Write-failure injection over an LBA range (fail_write_lba_to == 0 disables). */
+    uint64_t fail_write_lba_from;
+    uint64_t fail_write_lba_to;
 } FileBlockCtx;
 
 static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
@@ -48,6 +51,11 @@ static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 static int file_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors)
 {
     FileBlockCtx *f = (FileBlockCtx *)ctx;
+    if (f->fail_write_lba_to > f->fail_write_lba_from &&
+        lba >= f->fail_write_lba_from && lba < f->fail_write_lba_to) {
+        errno = EIO;
+        return -1;
+    }
     off_t off = (off_t)(lba * f->sector_size);
     size_t bytes = (size_t)sectors * f->sector_size;
     ssize_t n = pwrite(f->fd, buf, bytes, off);
@@ -569,6 +577,196 @@ int main(int argc, char **argv)
 
     close(fd);
     unlink(tmp_img);
+
+    /* --- upstream mkntfs over usb_block: format → mount → read/write → remount --- */
+    {
+        char fmt_img[] = "/tmp/ntfs_mkfs_XXXXXX.img";
+        int fmt_fd = mkstemps(fmt_img, 4);
+        assert(fmt_fd >= 0);
+
+        const uint32_t fss = 512;
+        const uint64_t fsc = (32ull * 1024 * 1024) / fss;
+        assert(ftruncate(fmt_fd, (off_t)fsc * fss) == 0);
+
+        FileBlockCtx fctx_fmt = {
+            .fd = fmt_fd,
+            .sector_size = fss,
+            .sector_count = fsc,
+        };
+        UsbBlockOps fmt_ops = {
+            .read = file_read,
+            .write = file_write,
+            .sync = file_sync,
+            .ctx = &fctx_fmt,
+            .sector_size = fss,
+            .sector_count = fsc,
+        };
+        uint64_t fmt_block = usb_block_register(&fmt_ops);
+        assert(fmt_block != 0);
+
+        /* Geometry smaller than mkntfs' 1 MiB minimum is refused up front. */
+        char tiny_img[] = "/tmp/ntfs_tiny_XXXXXX.img";
+        int tiny_fd = mkstemps(tiny_img, 4);
+        assert(tiny_fd >= 0);
+        assert(ftruncate(tiny_fd, 8 * 1024) == 0);
+        FileBlockCtx tiny_ctx = {
+            .fd = tiny_fd,
+            .sector_size = fss,
+            .sector_count = 16,
+        };
+        UsbBlockOps tiny_ops = {
+            .read = file_read,
+            .write = file_write,
+            .sync = file_sync,
+            .ctx = &tiny_ctx,
+            .sector_size = fss,
+            .sector_count = 16,
+        };
+        uint64_t tiny_block = usb_block_register(&tiny_ops);
+        assert(ntfs_engine_mkfs(tiny_block, "TINY", true) == -EINVAL);
+        usb_block_unregister(tiny_block);
+        close(tiny_fd);
+        unlink(tiny_img);
+        printf("PASS: mkfs rejects geometry below the NTFS minimum\n");
+
+        /* Upstream mkntfs only marks the volume dirty when the backup boot
+         * sector write fails and still returns success. Engine must fail
+         * closed instead of reporting a formatted volume. */
+        char bad_img[] = "/tmp/ntfs_backupfail_XXXXXX.img";
+        int bad_fd = mkstemps(bad_img, 4);
+        assert(bad_fd >= 0);
+        assert(ftruncate(bad_fd, (off_t)fsc * fss) == 0);
+        FileBlockCtx bad_ctx = {
+            .fd = bad_fd,
+            .sector_size = fss,
+            .sector_count = fsc,
+            .fail_write_lba_from = fsc - 1,
+            .fail_write_lba_to = fsc,
+        };
+        UsbBlockOps bad_ops = {
+            .read = file_read,
+            .write = file_write,
+            .sync = file_sync,
+            .ctx = &bad_ctx,
+            .sector_size = fss,
+            .sector_count = fsc,
+        };
+        uint64_t bad_block = usb_block_register(&bad_ops);
+        assert(bad_block != 0);
+        assert(ntfs_engine_mkfs(bad_block, "BACKUPFAIL", true) == -EIO);
+        usb_block_unregister(bad_block);
+        close(bad_fd);
+        unlink(bad_img);
+        printf("PASS: failed backup boot sector is reported as mkfs failure\n");
+
+        /* Full (non-quick) format exercises mkntfs' zero-fill path too. */
+        int mrc = ntfs_engine_mkfs(fmt_block, "HOSTMKFS", false);
+        assert(mrc == 0);
+
+        uint64_t mv = ntfs_engine_mount(fmt_block, false);
+        assert(mv != 0);
+        assert(ntfs_engine_is_dirty(mv) == 0);
+
+        const char *mkfs_payload = "mkfs round trip over usb_block";
+        size_t mkfs_len = strlen(mkfs_payload);
+        size_t mkfs_written = 0;
+        rc = ntfs_engine_write(mv, "/mkfs.txt", 0, mkfs_payload, mkfs_len, true,
+                               &mkfs_written);
+        assert(rc == 0);
+        assert(mkfs_written == mkfs_len);
+        assert(ntfs_engine_sync(mv) == 0);
+        assert(ntfs_engine_close(mv) == 0);
+        printf("PASS: mkntfs formatted volume mounts rw and accepts a write\n");
+
+        mv = ntfs_engine_mount(fmt_block, true);
+        assert(mv != 0);
+        char mkfs_read[64] = {0};
+        size_t mkfs_read_len = 0;
+        rc = ntfs_engine_read(mv, "/mkfs.txt", 0, mkfs_read, sizeof(mkfs_read) - 1,
+                              &mkfs_read_len);
+        assert(rc == 0);
+        assert(mkfs_read_len == mkfs_len);
+        assert(strcmp(mkfs_read, mkfs_payload) == 0);
+        assert(ntfs_engine_close(mv) == 0);
+        printf("PASS: remounted formatted volume reads data back\n");
+
+        /* Second mkntfs in the same process: formatter globals must be reset
+         * (allocation list head, bad-block count) or this reuses freed memory. */
+        assert(ntfs_engine_mkfs(fmt_block, "SECOND", true) == 0);
+        mv = ntfs_engine_mount(fmt_block, true);
+        assert(mv != 0);
+        NtfsStat root_stat;
+        assert(ntfs_engine_stat(mv, "/", &root_stat) == 0);
+        assert(root_stat.is_directory);
+        assert(ntfs_engine_close(mv) == 0);
+        printf("PASS: repeated mkntfs succeeds and produces a mountable volume\n");
+
+        usb_block_unregister(fmt_block);
+        close(fmt_fd);
+        unlink(fmt_img);
+    }
+
+    /* Different sector sizes and volume sizes: mkntfs must take geometry from
+     * the block callbacks, and each result must mount and round-trip data. */
+    {
+        static const uint32_t geom_ss[] = {512, 1024, 2048, 4096};
+        static const uint64_t geom_mib[] = {2, 4, 8, 16};
+        for (size_t g = 0; g < sizeof(geom_ss) / sizeof(geom_ss[0]); g++) {
+            char gimg[] = "/tmp/ntfs_geom_XXXXXX.img";
+            int gfd = mkstemps(gimg, 4);
+            assert(gfd >= 0);
+            uint32_t gss = geom_ss[g];
+            uint64_t gsc = (geom_mib[g] << 20) / gss;
+            assert(ftruncate(gfd, (off_t)gsc * gss) == 0);
+
+            FileBlockCtx gctx = {
+                .fd = gfd,
+                .sector_size = gss,
+                .sector_count = gsc,
+            };
+            UsbBlockOps gops = {
+                .read = file_read,
+                .write = file_write,
+                .sync = file_sync,
+                .ctx = &gctx,
+                .sector_size = gss,
+                .sector_count = gsc,
+            };
+            uint64_t gblock = usb_block_register(&gops);
+            assert(gblock != 0);
+            assert(ntfs_engine_mkfs(gblock, "GEOM", true) == 0);
+
+            uint64_t gvol = ntfs_engine_mount(gblock, false);
+            assert(gvol != 0);
+            assert(ntfs_engine_is_dirty(gvol) == 0);
+            char payload[32];
+            int plen = snprintf(payload, sizeof(payload), "geom-%u", (unsigned)gss);
+            assert(plen > 0 && (size_t)plen < sizeof(payload));
+            size_t gw = 0;
+            assert(ntfs_engine_write(gvol, "/geometry.txt", 0, payload, (size_t)plen,
+                                     true, &gw) == 0);
+            assert(gw == (size_t)plen);
+            assert(ntfs_engine_sync(gvol) == 0);
+            assert(ntfs_engine_close(gvol) == 0);
+
+            gvol = ntfs_engine_mount(gblock, true);
+            assert(gvol != 0);
+            char rb[64] = {0};
+            size_t rl = 0;
+            assert(ntfs_engine_read(gvol, "/geometry.txt", 0, rb, sizeof(rb) - 1,
+                                    &rl) == 0);
+            assert(rl == (size_t)plen);
+            assert(strcmp(rb, payload) == 0);
+            assert(ntfs_engine_close(gvol) == 0);
+
+            usb_block_unregister(gblock);
+            close(gfd);
+            unlink(gimg);
+            printf("PASS: mkfs/mount/read/write with %u-byte sectors, %llu MiB\n",
+                   (unsigned)gss, (unsigned long long)geom_mib[g]);
+        }
+    }
+
     printf("ALL NTFS INTEGRATION TESTS PASSED SUCCESSFULLY!\n");
     return 0;
 }

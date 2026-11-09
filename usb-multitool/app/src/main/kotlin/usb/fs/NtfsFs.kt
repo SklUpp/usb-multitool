@@ -115,6 +115,24 @@ object NtfsFs {
     }
 
 
+    /**
+     * Format [device] as NTFS with the upstream mkntfs code over the same
+     * block callbacks used for mounting. Quick format (filesystem structures
+     * only), no root or FUSE. Closes nothing by itself — caller must close
+     * every mounted view first.
+     */
+    fun mkfs(device: BlockDevice, label: String = "") = withNativeEngine {
+        require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
+        require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
+        val rc = nativeMkfs(
+            device,
+            device.sectorSize,
+            device.sectorCount.toLong(),
+            label,
+        )
+        if (rc != 0) throw NtfsException("NTFS mkfs failed (errno=${-rc})")
+    }
+
     fun isDirty(device: BlockDevice): Boolean = withNativeEngine {
         require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
         require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
@@ -165,6 +183,13 @@ object NtfsFs {
         readOnly: Boolean,
         outErrno: IntArray,
     ): Long
+
+    @JvmStatic private external fun nativeMkfs(
+        device: BlockDevice,
+        sectorSize: Int,
+        sectorCount: Long,
+        label: String,
+    ): Int
 
     @JvmStatic private external fun nativeCheckDirty(
         device: BlockDevice,

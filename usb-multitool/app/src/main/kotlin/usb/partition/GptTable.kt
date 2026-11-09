@@ -108,7 +108,9 @@ object GptTable {
                     type = guid,
                     name = name,
                     flags = attrs,
+                    bootable = (attrs and GPT_LEGACY_BOOTABLE_FLAG) != 0L,
                     esp = guid.equals(EFI_SYSTEM_GUID, ignoreCase = true),
+                    slot = i,
                 ),
             )
         }

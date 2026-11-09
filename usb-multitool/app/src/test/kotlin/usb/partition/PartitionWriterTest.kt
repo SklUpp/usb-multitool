@@ -1,6 +1,7 @@
 package usb.partition
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -190,6 +191,197 @@ class PartitionWriterTest {
         assertEquals(0xFF, encoded[446 + 13].toInt() and 0xFF)
         assertEquals(0xFF, encoded[446 + 14].toInt() and 0xFF)
         assertEquals(0xFF, encoded[446 + 15].toInt() and 0xFF)
+    }
+
+    @Test
+    fun sparseGptSlotsAndMetadataSurviveRewrite() {
+        val disk = sparseGptDisk()
+        val table = PartitionTable.read(disk)
+        assertEquals(listOf(0, 2), table.partitions.map { it.slot })
+        val guids = uniqueGuidAt(table, 0) to uniqueGuidAt(table, 2)
+
+        val committed = PartitionWriter.commit(disk, table)
+
+        assertEquals(listOf(0, 2), committed.partitions.map { it.slot })
+        assertEquals(guids.first, uniqueGuidAt(committed, 0))
+        assertEquals(guids.second, uniqueGuidAt(committed, 2))
+        assertEquals(0x10L, committed.partitions.single { it.slot == 2 }.flags)
+        assertEquals(2048UL, committed.partitions.single { it.slot == 0 }.startLba)
+        assertTrue(committed.partitions.single { it.slot == 0 }.esp)
+    }
+
+    @Test
+    fun createAtAlignedStartBeforeExistingPartitionKeepsNeighborAndFreeSlot() {
+        val disk = sparseGptDisk()
+        val table = PartitionTable.read(disk)
+        val neighbor = table.partitions.single { it.slot == 2 }
+        val neighborGuid = uniqueGuidAt(table, 2)
+
+        val edited = PartitionEditor.create(
+            table,
+            size = 2048UL,
+            type = PartitionType.BASIC,
+            startLba = 4096UL,
+        )
+        assertEquals(1, edited.partitions.last().slot)
+
+        val committed = PartitionWriter.commit(disk, edited)
+
+        val created = committed.partitions.single { it.slot == 1 }
+        assertEquals(4096UL, created.startLba)
+        assertEquals(2048UL, created.sectorCount)
+        assertEquals(neighbor, committed.partitions.single { it.slot == 2 })
+        assertEquals(neighborGuid, uniqueGuidAt(committed, 2))
+    }
+
+    @Test
+    fun deleteClearsOnlyItsSlotAndKeepsTheRemainingOne() {
+        val disk = sparseGptDisk()
+        val table = PartitionTable.read(disk)
+        val dataGuid = uniqueGuidAt(table, 2)
+
+        val committed = PartitionWriter.commit(disk, PartitionEditor.delete(table, 0))
+
+        assertEquals(listOf(2), committed.partitions.map { it.slot })
+        assertEquals("DATA", committed.partitions.single().name)
+        assertEquals(dataGuid, uniqueGuidAt(committed, 2))
+        assertTrue(
+            "freed GPT slot must be zeroed",
+            committed.gptEntriesRaw!!.copyOfRange(0, 16).all { it == 0.toByte() },
+        )
+    }
+
+    @Test
+    fun createAfterDeleteReusesTheFreedSlot() {
+        val disk = sparseGptDisk()
+        val afterDelete = PartitionEditor.delete(PartitionTable.read(disk), 0)
+
+        val recreated = PartitionEditor.create(
+            afterDelete,
+            size = 1024UL,
+            type = PartitionType.BASIC,
+            startLba = 2048UL,
+        )
+        assertEquals(0, recreated.partitions.last().slot)
+
+        val committed = PartitionWriter.commit(disk, recreated)
+        assertEquals(listOf(0, 2), committed.partitions.map { it.slot })
+        assertEquals("DATA", committed.partitions.single { it.slot == 2 }.name)
+    }
+
+    @Test
+    fun gptLegacyBootFlagMapsToAttributeAndRoundTrips() {
+        val disk = sparseGptDisk()
+        val table = PartitionTable.read(disk)
+        assertFalse(table.partitions.single { it.slot == 2 }.bootable)
+
+        val booted = PartitionEditor.setFlags(table, 1, bootable = true)
+        assertEquals(0x14L, booted.partitions.single { it.slot == 2 }.flags)
+
+        val committed = PartitionWriter.commit(disk, booted)
+        assertTrue(committed.partitions.single { it.slot == 2 }.bootable)
+        assertEquals(0x14L, committed.partitions.single { it.slot == 2 }.flags)
+
+        val cleared = PartitionWriter.commit(
+            disk,
+            PartitionEditor.setFlags(committed, 1, bootable = false),
+        )
+        assertFalse(cleared.partitions.single { it.slot == 2 }.bootable)
+        assertEquals(0x10L, cleared.partitions.single { it.slot == 2 }.flags)
+    }
+
+    @Test
+    fun createBeforeFirstPartitionUsesAlignedStartWithoutMovingData() {
+        val disk = SyntheticGpt.build(
+            sectorCount = 16384UL,
+            layout = listOf(SyntheticGpt.Layout(2, 8192UL, 10239UL, "DATA")),
+        )
+        val table = PartitionTable.read(disk)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            PartitionEditor.create(table, size = 1024UL, type = PartitionType.BASIC, startLba = 2049UL)
+        }
+
+        val edited = PartitionEditor.create(
+            table,
+            size = 2048UL,
+            type = PartitionType.BASIC,
+            startLba = 2048UL,
+        )
+        assertEquals(0, edited.partitions.last().slot)
+
+        val committed = PartitionWriter.commit(disk, edited)
+        assertEquals(2048UL, committed.partitions.single { it.slot == 0 }.startLba)
+        assertEquals("DATA", committed.partitions.single { it.slot == 2 }.name)
+        assertEquals(8192UL, committed.partitions.single { it.slot == 2 }.startLba)
+    }
+
+    @Test
+    fun sparseMbrSlotsAndBootFlagSurviveDeleteAndCreate() {
+        val image = ByteArray(512 * 8192)
+        image[510] = 0x55.toByte()
+        image[511] = 0xAA.toByte()
+        putMbrEntry(image, slot = 1, boot = false, type = 0x07, start = 2048, count = 1024)
+        putMbrEntry(image, slot = 3, boot = true, type = 0x83, start = 6144, count = 1024)
+        val disk = ImageBlockDevice(image, 512, 8192UL)
+
+        val table = PartitionTable.read(disk)
+        assertEquals(listOf(1, 3), table.partitions.map { it.slot })
+        assertTrue(table.partitions.single { it.slot == 3 }.bootable)
+        assertFalse(table.partitions.single { it.slot == 1 }.bootable)
+
+        val edited = PartitionEditor.create(
+            table,
+            size = 2048UL,
+            type = PartitionType.BASIC,
+            startLba = 4096UL,
+        )
+        assertEquals(0, edited.partitions.last().slot)
+        assertEquals(4096UL, edited.partitions.last().startLba)
+        assertEquals(6144UL, edited.partitions.last().startLba + edited.partitions.last().sectorCount)
+        val committed = PartitionWriter.commit(disk, edited)
+
+        assertEquals(listOf(0, 1, 3), committed.partitions.map { it.slot })
+        assertEquals("0x07", committed.partitions.single { it.slot == 1 }.type)
+        assertEquals(6144UL, committed.partitions.single { it.slot == 3 }.startLba)
+        val raw = disk.snapshot()
+        assertEquals(0x80, raw[446 + 3 * 16].toInt() and 0xFF)
+        assertEquals(0x00, raw[446 + 1 * 16].toInt() and 0xFF)
+
+        val deleted = PartitionWriter.commit(disk, PartitionEditor.delete(committed, 1))
+        assertEquals(listOf(0, 3), deleted.partitions.map { it.slot })
+        val afterDelete = disk.snapshot()
+        assertEquals(0x00, afterDelete[446 + 1 * 16 + 4].toInt() and 0xFF)
+        assertEquals(0x83, afterDelete[446 + 3 * 16 + 4].toInt() and 0xFF)
+        assertEquals(0x80, afterDelete[446 + 3 * 16].toInt() and 0xFF)
+    }
+
+    private fun sparseGptDisk(): ImageBlockDevice = SyntheticGpt.build(
+        sectorCount = 16384UL,
+        layout = listOf(
+            SyntheticGpt.Layout(0, 2048UL, 4095UL, "EFI", efi = true),
+            SyntheticGpt.Layout(2, 8192UL, 10239UL, "DATA", attributes = 0x10UL),
+        ),
+    )
+
+    private fun uniqueGuidAt(table: PartitionTable, slot: Int): List<Byte> {
+        val offset = slot * 128 + 16
+        return table.gptEntriesRaw!!.copyOfRange(offset, offset + 16).toList()
+    }
+
+    private fun putMbrEntry(
+        bytes: ByteArray,
+        slot: Int,
+        boot: Boolean,
+        type: Int,
+        start: Int,
+        count: Int,
+    ) {
+        val offset = 446 + slot * 16
+        if (boot) bytes[offset] = 0x80.toByte()
+        bytes[offset + 4] = type.toByte()
+        putLe32(bytes, offset + 8, start)
+        putLe32(bytes, offset + 12, count)
     }
 
     private fun PartitionTable.partitionGuids(): List<String> =

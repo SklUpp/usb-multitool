@@ -438,6 +438,21 @@ Java_usb_fs_NtfsFs_nativeIsVolumeDirty(JNIEnv *env, jclass, jlong handle)
     return (rc == 1) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jint JNICALL
+Java_usb_fs_NtfsFs_nativeMkfs(JNIEnv *env, jclass, jobject device,
+                              jint sectorSize, jlong sectorCount, jstring label)
+{
+    JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
+    if (!bdev) return -EINVAL;
+
+    uint64_t bhandle = usb_block_register(&bdev->ops);
+    std::string volume_label = jstring_to_string(env, label);
+    int rc = ntfs_engine_mkfs(
+        bhandle, volume_label.empty() ? nullptr : volume_label.c_str(), true);
+    destroy_block_device(env, bdev);
+    return rc;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_usb_fs_NtfsFs_nativeCheckDirty(JNIEnv *env, jclass, jobject device,
                                     jint sectorSize, jlong sectorCount)

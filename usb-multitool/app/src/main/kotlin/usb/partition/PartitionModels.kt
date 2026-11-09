@@ -8,7 +8,12 @@ data class Partition(
     val flags: Long = 0L,
     val bootable: Boolean = false,
     val esp: Boolean = false,
+    /** Original MBR/GPT entry slot; -1 when the record has no on-disk slot yet. */
+    val slot: Int = -1,
 )
+
+/** GPT attribute bit 2: legacy BIOS bootable. */
+internal const val GPT_LEGACY_BOOTABLE_FLAG = 4L
 
 data class FreeRegion(
     val startLba: ULong,

@@ -8,10 +8,21 @@ object SyntheticGpt {
     private val DATA_TYPE = guidBytes("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
     private val DISK_GUID = guidBytes("12345678-1234-1234-1234-123456789ABC")
 
+    /** One GPT record; [slot] is the raw entry index, so sparse layouts are expressible. */
+    data class Layout(
+        val slot: Int,
+        val start: ULong,
+        val end: ULong,
+        val name: String,
+        val efi: Boolean = false,
+        val attributes: ULong = 0UL,
+    )
+
     fun build(
         sectorCount: ULong = 2048UL,
         sectorSize: Int = 512,
         entryCount: Int = 128,
+        layout: List<Layout>? = null,
     ): ImageBlockDevice {
         require(sectorCount >= 128UL)
         val entrySize = 128
@@ -34,10 +45,18 @@ object SyntheticGpt {
         putLeInt(image, 446 + 12, (sectorCount - 1UL).toInt())
 
         val entries = ByteArray(entryBytes)
-        // EFI partition: firstUsable .. firstUsable+9
-        writeEntry(entries, 0, EFI_TYPE, firstUsable, firstUsable + 9UL, "EFI")
-        // DATA partition: firstUsable+10 .. firstUsable+29
-        writeEntry(entries, 1, DATA_TYPE, firstUsable + 10UL, firstUsable + 29UL, "DATA")
+        val entriesLayout = layout ?: listOf(
+            Layout(0, firstUsable, firstUsable + 9UL, "EFI", efi = true),
+            Layout(1, firstUsable + 10UL, firstUsable + 29UL, "DATA"),
+        )
+        for (spec in entriesLayout) {
+            require(spec.slot in 0 until entryCount) { "slot ${spec.slot} out of range" }
+            require(spec.end >= spec.start) { "entry end < start at slot ${spec.slot}" }
+            require(spec.start >= firstUsable && spec.end <= lastUsable) {
+                "entry slot ${spec.slot} outside usable range"
+            }
+            writeEntry(entries, spec)
+        }
         val entriesCrc = GptTable.crc32(entries)
 
         fun writeHeader(lba: ULong, current: ULong, backup: ULong, entryLba: ULong) {
@@ -67,21 +86,16 @@ object SyntheticGpt {
         return ImageBlockDevice(image, sectorSize, sectorCount)
     }
 
-    private fun writeEntry(
-        entries: ByteArray,
-        index: Int,
-        type: ByteArray,
-        start: ULong,
-        end: ULong,
-        name: String,
-    ) {
-        val off = index * 128
-        type.copyInto(entries, off)
-        // unique GUID: vary by index
-        guidBytes("%08X-0000-0000-0000-000000000000".format(index + 1)).copyInto(entries, off + 16)
-        putLeU64(entries, off + 32, start)
-        putLeU64(entries, off + 40, end)
-        val nameBytes = name.toByteArray(StandardCharsets.UTF_16LE)
+    private fun writeEntry(entries: ByteArray, spec: Layout) {
+        val off = spec.slot * 128
+        (if (spec.efi) EFI_TYPE else DATA_TYPE).copyInto(entries, off)
+        // unique GUID: vary by slot
+        guidBytes("%08X-0000-0000-0000-000000000000".format(spec.slot + 1))
+            .copyInto(entries, off + 16)
+        putLeU64(entries, off + 32, spec.start)
+        putLeU64(entries, off + 40, spec.end)
+        putLeU64(entries, off + 48, spec.attributes)
+        val nameBytes = spec.name.toByteArray(StandardCharsets.UTF_16LE)
         nameBytes.copyInto(entries, off + 56, 0, minOf(nameBytes.size, 72))
     }
 

@@ -71,6 +71,13 @@ if ! have_marker "$TP/ntfs-3g/libntfs-3g/volume.c"; then
   have_marker "$TP/ntfs-3g/libntfs-3g/volume.c" || { echo "ntfs-3g fetch failed"; exit 1; }
 fi
 
+# mkntfs is a CLI program upstream. This patch adds a device-injection entry
+# point so the app links the real formatter without a path, root or FUSE.
+NTFS_MKNTFS_PATCH="$ROOT/scripts/patches/ntfs-3g-mkntfs-library.patch"
+if ! grep -q "mkntfs_format_device" "$TP/ntfs-3g/ntfsprogs/mkntfs.c"; then
+  patch -p1 -d "$TP/ntfs-3g" --batch < "$NTFS_MKNTFS_PATCH"
+fi
+
 echo "Fetching lwext4..."
 if ! have_marker "$TP/lwext4/include/ext4.h"; then
   curl -fsSL https://github.com/gkostka/lwext4/archive/58bcf89a121b72d4fb66334f1693d3b30e4cb9c5.tar.gz \

@@ -6,6 +6,7 @@ set(CMAKE_C_EXTENSIONS ON)
 set(FATFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/fatfs/source)
 set(EXFAT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/exfatprogs)
 set(NTFS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/ntfs-3g)
+set(NTFS_PROGS_DIR ${NTFS_DIR}/ntfsprogs)
 set(LWEXT4_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/lwext4)
 add_library(exfatprogs_fsck STATIC
     ${EXFAT_ROOT}/lib/libexfat.c
@@ -56,6 +57,18 @@ if(USB_WITH_NTFS AND NOT NTFS_SOURCES)
     message(FATAL_ERROR
         "ntfs-3g sources missing under ${NTFS_DIR}/libntfs-3g — run scripts/fetch-third-party.sh")
 endif()
+if(USB_WITH_NTFS AND NOT EXISTS "${NTFS_PROGS_DIR}/mkntfs.c")
+    message(FATAL_ERROR
+        "ntfs-3g ntfsprogs/mkntfs.c missing — run scripts/fetch-third-party.sh")
+endif()
+if(USB_WITH_NTFS)
+    file(STRINGS "${NTFS_PROGS_DIR}/mkntfs.c" NTFS_MKNTFS_LIB_MARKER
+        REGEX "mkntfs_format_device")
+    if(NOT NTFS_MKNTFS_LIB_MARKER)
+        message(FATAL_ERROR
+            "ntfs-3g mkntfs library patch missing — run scripts/fetch-third-party.sh")
+    endif()
+endif()
 if(USB_WITH_LWEXT4 AND NOT LWEXT4_SOURCES)
     message(FATAL_ERROR
         "lwext4 sources missing under ${LWEXT4_DIR}/src — run scripts/fetch-third-party.sh")
@@ -90,17 +103,30 @@ if(USB_WITH_FATFS)
 endif()
 
 if(USB_WITH_NTFS)
+    # mkntfs is the real upstream formatter; MKNTFS_LIBRARY removes its CLI
+    # main and MKNTFS_NO_UUID_LIB uses libntfs-3g's GUID generator instead of
+    # libuuid, which the NDK does not ship.
     list(APPEND USB_NATIVE_SOURCES
         ntfs_engine.c
         ntfs_jni.cpp
+        ntfs_mkfs_support.c
+        ${NTFS_PROGS_DIR}/mkntfs.c
+        ${NTFS_PROGS_DIR}/attrdef.c
+        ${NTFS_PROGS_DIR}/boot.c
+        ${NTFS_PROGS_DIR}/sd.c
         ${NTFS_SOURCES}
     )
     list(APPEND USB_NATIVE_INCLUDES
+        ${NTFS_PROGS_DIR}
         ${NTFS_DIR}/libntfs-3g
         ${NTFS_DIR}/include
         ${NTFS_DIR}/include/ntfs-3g
     )
-    list(APPEND USB_NATIVE_DEFS HAVE_CONFIG_H=1)
+    list(APPEND USB_NATIVE_DEFS
+        HAVE_CONFIG_H=1
+        MKNTFS_LIBRARY=1
+        MKNTFS_NO_UUID_LIB=1
+    )
 endif()
 
 if(USB_WITH_LWEXT4)

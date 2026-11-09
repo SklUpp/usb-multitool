@@ -18,6 +18,7 @@ object PartitionWriter {
     private const val HEADER_SIZE = 92
     private const val EFI_SYSTEM_GUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
     private const val LINUX_DATA_GUID = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+    private const val MBR_SLOTS = 4
     private const val MBR_TYPE_LINUX = 0x83
     private const val MBR_TYPE_EFI = 0xEF
     private val SIGNATURE = "EFI PART".toByteArray(StandardCharsets.US_ASCII)
@@ -107,13 +108,20 @@ object PartitionWriter {
 
         val entries = ByteArray(entryBytes)
         val previous = table.gptEntriesRaw
+        val slots = resolveSlots(table.partitions, entryCount, "GPT")
         table.partitions.forEachIndexed { index, partition ->
-            val offset = index * ENTRY_SIZE
+            val offset = slots[index] * ENTRY_SIZE
             typeGuidBytes(partition).copyInto(entries, offset)
-            uniqueGuid(previous, partition, header.entrySize).copyInto(entries, offset + 16)
+            uniqueGuid(previous, partition, slots[index], header.entrySize).copyInto(entries, offset + 16)
             putLeU64(entries, offset + 32, partition.startLba)
             putLeU64(entries, offset + 40, partition.startLba + partition.sectorCount - 1UL)
-            putLeU64(entries, offset + 48, partition.flags.toULong())
+            // Keep every attribute bit; make the legacy-bootable bit follow the model.
+            val attributes = if (partition.bootable) {
+                partition.flags or GPT_LEGACY_BOOTABLE_FLAG
+            } else {
+                partition.flags and GPT_LEGACY_BOOTABLE_FLAG.inv()
+            }
+            putLeU64(entries, offset + 48, attributes.toULong())
             val name = partition.name.toByteArray(StandardCharsets.UTF_16LE)
             name.copyInto(entries, offset + 56, 0, minOf(name.size, ENTRY_SIZE - 56))
         }
@@ -167,8 +175,9 @@ object PartitionWriter {
         buffer.get(sector)
         // Keep boot code (0..445); rebuild the 4 partition entries and signature.
         sector.fill(0.toByte(), 446, 510)
+        val slots = resolveSlots(table.partitions, MBR_SLOTS, "MBR")
         table.partitions.forEachIndexed { index, partition ->
-            val offset = 446 + index * 16
+            val offset = 446 + slots[index] * 16
             sector[offset] = if (partition.bootable) 0x80.toByte() else 0.toByte()
             // LBA-only addressing: CHS fields are set to their "use LBA" sentinels.
             sector[offset + 1] = 0xFE.toByte()
@@ -224,20 +233,65 @@ object PartitionWriter {
         disk.write(lba, buffer)
     }
 
-    /** Reuse the on-disk unique GUID when the partition already existed. */
-    private fun uniqueGuid(previous: ByteArray?, partition: Partition, entrySize: Int): ByteArray {
+    /**
+     * Reuse the on-disk unique GUID only when the same slot still holds the same
+     * geometry. Matching by start alone would also inherit the GUID of a deleted
+     * record that happened to use the same LBA.
+     */
+    private fun uniqueGuid(
+        previous: ByteArray?,
+        partition: Partition,
+        slot: Int,
+        entrySize: Int,
+    ): ByteArray {
         if (previous != null && entrySize >= ENTRY_SIZE) {
-            var index = 0
-            while ((index + 1) * entrySize <= previous.size) {
-                val offset = index * entrySize
+            val offset = slot * entrySize
+            if (offset + ENTRY_SIZE <= previous.size) {
                 val start = leU64(previous, offset + 32)
-                if (start == partition.startLba) {
+                val end = leU64(previous, offset + 40)
+                if (start == partition.startLba &&
+                    end == partition.startLba + partition.sectorCount - 1UL
+                ) {
                     return previous.copyOfRange(offset + 16, offset + 32)
                 }
-                index++
             }
         }
         return randomGuid()
+    }
+
+    /**
+     * Maps each record to its original entry slot and fills records that have none
+     * (`slot < 0`, e.g. hand-built tables) into the first free slots. Never moves a
+     * record that already owns a slot, so sparse layouts keep their positions.
+     */
+    private fun resolveSlots(
+        partitions: List<Partition>,
+        slotCount: Int,
+        label: String,
+    ): List<Int> {
+        val taken = BooleanArray(slotCount)
+        for (partition in partitions) {
+            if (partition.slot >= 0) {
+                require(partition.slot < slotCount) {
+                    "$label slot ${partition.slot} out of range 0..${slotCount - 1}"
+                }
+                require(!taken[partition.slot]) {
+                    "$label slot ${partition.slot} used by more than one partition"
+                }
+                taken[partition.slot] = true
+            }
+        }
+        var cursor = 0
+        return partitions.map { partition ->
+            if (partition.slot >= 0) {
+                partition.slot
+            } else {
+                while (cursor < slotCount && taken[cursor]) cursor++
+                require(cursor < slotCount) { "$label table has no free entry slot" }
+                taken[cursor] = true
+                cursor++
+            }
+        }
     }
 
     private fun typeGuidBytes(partition: Partition): ByteArray =

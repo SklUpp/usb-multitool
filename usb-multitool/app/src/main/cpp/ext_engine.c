@@ -48,6 +48,10 @@ typedef struct ExtVolumeContext {
 	bool read_only;
 	bool mounted;
 	bool registered;
+	/* Set by any failed block transfer. lwext4's directory iterator reports
+	 * an I/O failure as end-of-directory, so list() must check this to avoid
+	 * returning a short listing as if it were complete. */
+	bool io_error;
 } ExtVolumeContext;
 
 static pthread_mutex_t g_ext_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -89,7 +93,10 @@ static int bdev_bread(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id,
 {
 	ExtVolumeContext *v = (ExtVolumeContext *)bdev->bdif->p_user;
 	if (!v) return EIO;
-	if (usb_block_read(v->block_handle, blk_id, buf, blk_cnt) != 0) return EIO;
+	if (usb_block_read(v->block_handle, blk_id, buf, blk_cnt) != 0) {
+		v->io_error = true;
+		return EIO;
+	}
 	return EOK;
 }
 
@@ -99,7 +106,10 @@ static int bdev_bwrite(struct ext4_blockdev *bdev, const void *buf,
 	ExtVolumeContext *v = (ExtVolumeContext *)bdev->bdif->p_user;
 	if (!v) return EIO;
 	if (v->read_only) return EROFS;
-	if (usb_block_write(v->block_handle, blk_id, buf, blk_cnt) != 0) return EIO;
+	if (usb_block_write(v->block_handle, blk_id, buf, blk_cnt) != 0) {
+		v->io_error = true;
+		return EIO;
+	}
 	return EOK;
 }
 
@@ -285,7 +295,11 @@ uint64_t ext_engine_mount(uint64_t block_handle, bool read_only, int *out_errno)
 	}
 	v->mounted = true;
 
-	/* Journal start only when clean; never call recover. */
+	/* Journal start only when clean; never call recover. Do not fail the
+	 * mount on a journal-start error: ext4_umount() can itself fail, which
+	 * would leave lwext4's mountpoint pointing at this context after we
+	 * free it. Upstream's best-effort start is kept here until a teardown
+	 * that cannot leave a live lwext4 reference exists. */
 	if (!read_only) {
 		(void)ext4_journal_start(v->mount_point);
 	}
@@ -348,6 +362,7 @@ int ext_engine_list(uint64_t vol_handle, const char *path,
 	int j = join_path(full, sizeof(full), v, path);
 	if (j != 0) return j;
 
+	v->io_error = false;
 	ext4_dir dir;
 	int rc = ext4_dir_open(&dir, full);
 	if (rc != EOK) return map_lw(rc);
@@ -407,6 +422,12 @@ int ext_engine_list(uint64_t vol_handle, const char *path,
 		n++;
 	}
 	ext4_dir_close(&dir);
+	/* ext4_dir_entry_next() returns NULL on an I/O error too: a short
+	 * listing must never masquerade as a complete one. */
+	if (v->io_error) {
+		free(arr);
+		return -EIO;
+	}
 	*out_entries = arr;
 	*out_count = n;
 	return 0;
@@ -605,7 +626,8 @@ int ext_engine_mkfs(uint64_t block_handle)
 	pthread_mutex_unlock(&g_ext_mu);
 	free_volume(v);
 	if (rc != EOK) return map_lw(rc);
-	(void)usb_block_sync(block_handle);
+	/* Formatting is not complete until the metadata reaches the device. */
+	if (usb_block_sync(block_handle) != 0) return -EIO;
 	return 0;
 }
 

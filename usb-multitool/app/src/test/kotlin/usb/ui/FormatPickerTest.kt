@@ -5,10 +5,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import usb.fs.FilesystemId
-import usb.fs.FormatCatalog
 import usb.fs.Formatter
 
 class FormatPickerTest {
@@ -30,18 +28,16 @@ class FormatPickerTest {
     @Test
     fun supportedIdsAreRealEnginesOnly() {
         val ids = Formatter.supportedFormatIds()
-        assertEquals(listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT), ids)
-        assertFalse(ids.contains(FilesystemId.NTFS))
+        assertEquals(
+            listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT, FilesystemId.NTFS),
+            ids,
+        )
+        assertTrue(ids.contains(FilesystemId.NTFS))
     }
 
     @Test
-    fun requireSupportedRejectsNtfs() {
-        try {
-            Formatter.requireSupported(FilesystemId.NTFS)
-            fail("expected IllegalArgumentException")
-        } catch (_: IllegalArgumentException) {
-            // ok
-        }
+    fun requireSupportedAcceptsNtfs() {
+        assertEquals(FilesystemId.NTFS, Formatter.requireSupported(FilesystemId.NTFS))
     }
 
     @Test
@@ -54,12 +50,13 @@ class FormatPickerTest {
     }
 
     @Test
-    fun selectUnsupportedNtfsLeavesSelectionAndReports() {
+    fun selectNtfsUpdatesState() {
         val base = ready(FilesystemId.EXFAT)
         val next =
             UiReducer.reduce(base, UiIntent.SelectFormatFilesystem(FilesystemId.NTFS))
-        assertEquals(FilesystemId.EXFAT, next.state.selectedFormatId)
-        assertTrue(next.state.statusMessage!!.contains("not supported"))
+        assertEquals(FilesystemId.NTFS, next.state.selectedFormatId)
+        assertNull(next.state.statusMessage)
+        assertTrue(next.effects.isEmpty())
     }
 
     @Test

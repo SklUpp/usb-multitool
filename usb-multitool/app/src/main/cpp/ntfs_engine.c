@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <pthread.h>
 #include <time.h>
 #include <errno.h>
 #include <stdio.h>
@@ -31,6 +33,22 @@
 #ifndef EUCLEAN
 #define EUCLEAN 117
 #endif
+
+/* mkntfs asks the device for its geometry through these ioctls. Define the
+ * Linux numbers when <linux/fs.h> was not pulled in by the surrounding build. */
+#ifndef BLKGETSIZE64
+#define BLKGETSIZE64 _IOR(0x12, 114, size_t)
+#endif
+#ifndef BLKSSZGET
+#define BLKSSZGET _IO(0x12, 104)
+#endif
+
+/* mkntfs keeps formatter state in file-static globals: one at a time. */
+static pthread_mutex_t g_ntfs_mkfs_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Provided by third_party/ntfs-3g/ntfsprogs/mkntfs.c under MKNTFS_LIBRARY.
+ * Takes ownership of the device and frees it. */
+extern int mkntfs_format_device(struct ntfs_device *dev, const char *label, int quick);
 
 /* System metadata parents ($Extend, $MFT, …) refuse create/link; FILE_root allowed. */
 static int refuse_system_parent(ntfs_inode *dir_ni)
@@ -75,14 +93,16 @@ typedef struct NtfsVolumeContext {
 
 static int dev_op_open(struct ntfs_device *dev, int flags)
 {
-    (void)dev;
     (void)flags;
+    /* ntfs_device_free() refuses to free an "open" device, so the flag must
+     * be tracked here: no descriptor exists to manage it for us. */
+    NDevSetOpen(dev);
     return 0;
 }
 
 static int dev_op_close(struct ntfs_device *dev)
 {
-    (void)dev;
+    NDevClearOpen(dev);
     return 0;
 }
 
@@ -1018,4 +1038,44 @@ int ntfs_engine_clear_dirty(uint64_t block_handle, const char *confirmation_toke
     ntfs_umount(v->vol, 0);
     free(v);
     return (rc == 0) ? 0 : -EIO;
+}
+
+int ntfs_engine_mkfs(uint64_t block_handle, const char *label, bool quick)
+{
+    UsbBlockOps *bops = usb_block_ops(block_handle);
+    if (!bops || bops->sector_size < 512 || bops->sector_size > 4096 ||
+        (bops->sector_size & (bops->sector_size - 1)) != 0)
+        return -EINVAL;
+
+    /* mkntfs reserves the final sector for the backup boot sector and then
+     * requires at least 1 MiB, so reject geometry it cannot format up front. */
+    if (bops->sector_count < 2 ||
+        bops->sector_count > UINT64_MAX / bops->sector_size ||
+        (bops->sector_count - 1) * bops->sector_size < (1u << 20))
+        return -EINVAL;
+
+    ntfs_log_set_handler(ntfs_log_handler_null);
+
+    pthread_mutex_lock(&g_ntfs_mkfs_mu);
+    NtfsVolumeContext *v = alloc_volume_ctx(block_handle);
+    if (!v) {
+        pthread_mutex_unlock(&g_ntfs_mkfs_mu);
+        return -EINVAL;
+    }
+
+    /* mkntfs_format_device() takes ownership of the device and frees it, but
+     * the device's private context lives in v, so v must outlive the call. */
+    struct ntfs_device *dev = v->dev;
+    v->dev = NULL;
+    int rc = mkntfs_format_device(dev, label, quick ? 1 : 0);
+    free(v);
+
+    if (rc == 0 && usb_block_sync(block_handle) != 0) rc = -EIO;
+    /* Upstream mkntfs ignores a failed backup boot sector write and only
+     * marks the freshly created volume dirty. In the library path that is a
+     * failure: a volume that cannot hold its backup boot sector must not be
+     * reported as successfully formatted. */
+    if (rc == 0 && ntfs_engine_check_dirty_dev(block_handle) != 0) rc = -EIO;
+    pthread_mutex_unlock(&g_ntfs_mkfs_mu);
+    return rc;
 }

@@ -106,6 +106,16 @@ int ntfs_engine_is_dirty(uint64_t vol_handle);
  */
 int ntfs_engine_check_dirty_dev(uint64_t block_handle);
 
+/*
+ * Format the block device as NTFS using upstream mkntfs over usb_block.
+ * No root, path, FUSE or mount table; the device must not have an open volume.
+ * @quick skips the full-volume zero fill. @label may be NULL.
+ * Requires at least 1 MiB after reserving the backup boot sector.
+ * Returns 0 on success, otherwise a negative errno (-EINVAL for bad geometry,
+ * -EIO when a write/sync fails). On failure the device may be partially written.
+ */
+int ntfs_engine_mkfs(uint64_t block_handle, const char *label, bool quick);
+
 /* Clear dirty flag on NTFS volume (ntfsfix equivalent).
  * Requires confirmation token matching "CONFIRM_NTFS_CLEAR_DIRTY".
  * Underlying volume must be closed before calling.

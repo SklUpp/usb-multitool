@@ -5,9 +5,9 @@ package usb.fs
  * No partition/engine types — keeps scripts/run-ui-host-check.sh free of JNI deps.
  */
 object FormatCatalog {
-    /** Engines the app can actually format today. NTFS omitted (mkfs missing). */
+    /** Engines the app can actually format today (all four are real engines). */
     fun supportedFormatIds(): List<FilesystemId> =
-        listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT)
+        listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT, FilesystemId.NTFS)
 
     fun requireSupported(id: FilesystemId): FilesystemId {
         require(id in supportedFormatIds()) {

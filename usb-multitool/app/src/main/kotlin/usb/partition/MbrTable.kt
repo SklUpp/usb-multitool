@@ -47,6 +47,7 @@ object MbrTable {
                     name = "P${i + 1}",
                     flags = if (bootable) 1L else 0L,
                     bootable = bootable,
+                    slot = i,
                 ),
             )
         }

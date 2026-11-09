@@ -2,6 +2,8 @@ package usb.partition
 
 object PartitionEditor {
     private const val MIB_BYTES = 1024L * 1024L
+    private const val MBR_SLOTS = 4
+    private const val DEFAULT_GPT_SLOTS = 128
 
     fun create(
         table: PartitionTable,
@@ -28,6 +30,7 @@ object PartitionEditor {
             sectorCount = size,
             type = type.name,
             name = type.name,
+            slot = allocateSlot(table),
         )
         val partitions = table.partitions + created
         return table.copy(
@@ -54,13 +57,41 @@ object PartitionEditor {
     ): PartitionTable {
         require(index in table.partitions.indices) { "partition index out of range" }
         val partitions = table.partitions.mapIndexed { i, p ->
-            if (i != index) p
-            else p.copy(
-                bootable = bootable ?: p.bootable,
-                esp = esp ?: p.esp,
-            )
+            if (i != index) {
+                p
+            } else {
+                val nextBoot = bootable ?: p.bootable
+                val nextFlags = if (bootable == null) {
+                    p.flags
+                } else if (table.scheme == TableScheme.GPT) {
+                    // GPT carries the boot flag in the attribute word; keep other bits.
+                    if (nextBoot) p.flags or GPT_LEGACY_BOOTABLE_FLAG
+                    else p.flags and GPT_LEGACY_BOOTABLE_FLAG.inv()
+                } else {
+                    if (nextBoot) 1L else 0L
+                }
+                p.copy(
+                    bootable = nextBoot,
+                    esp = esp ?: p.esp,
+                    flags = nextFlags,
+                )
+            }
         }
         return table.copy(partitions = partitions)
+    }
+
+    /** First unused entry slot; existing records keep their original slot. */
+    private fun allocateSlot(table: PartitionTable): Int {
+        val slots = when (table.scheme) {
+            TableScheme.MBR -> MBR_SLOTS
+            TableScheme.GPT -> table.gptHeader?.entryCount ?: DEFAULT_GPT_SLOTS
+            TableScheme.HYBRID -> throw HybridAmbiguityException(
+                "hybrid MBR/GPT layout cannot be edited safely; repair it explicitly",
+            )
+        }
+        val used = table.partitions.map { it.slot }.filter { it >= 0 }.toHashSet()
+        return (0 until slots).firstOrNull { it !in used }
+            ?: throw NoFreeSpaceException("no free partition slot")
     }
 
     private fun alignmentSectors(sectorSize: Int): ULong {

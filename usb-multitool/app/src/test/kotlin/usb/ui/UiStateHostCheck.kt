@@ -292,7 +292,10 @@ object UiStateHostCheck {
         println("UiStateHostCheck PASS")
 
         // Format picker host invariants (FormatCatalog — no Formatter/JNI).
-        require(FormatCatalog.supportedFormatIds() == listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT))
+        require(
+            FormatCatalog.supportedFormatIds() ==
+                listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT, FilesystemId.NTFS),
+        )
         val fmtReady =
             AppUiState(
                 presence = DevicePresence.Ready,

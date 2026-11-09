@@ -1,6 +1,5 @@
 package usb.fs
 
-import usb.EngineMissingException
 import usb.partition.VirtualPartition
 
 object Formatter {
@@ -47,7 +46,7 @@ internal object FormatNative {
     }
 
     fun ntfs(partition: VirtualPartition) {
-        throw EngineMissingException("ntfs-3g")
+        NtfsFs.mkfs(partition)
     }
 
     fun ext(partition: VirtualPartition) {

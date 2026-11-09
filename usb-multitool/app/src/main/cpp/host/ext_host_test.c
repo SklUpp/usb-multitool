@@ -21,11 +21,18 @@ typedef struct FileBlockCtx {
 	uint32_t sector_size;
 	uint64_t sector_count;
 	uint64_t write_count;
+	/* Read-failure injection over an LBA range (fail_lba_to == 0 disables). */
+	uint64_t fail_lba_from;
+	uint64_t fail_lba_to;
 } FileBlockCtx;
 
 static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 {
 	FileBlockCtx *f = (FileBlockCtx *)ctx;
+	if (f->fail_lba_to > f->fail_lba_from && lba >= f->fail_lba_from &&
+	    lba < f->fail_lba_to) {
+		return -1;
+	}
 	off_t off = (off_t)(lba * f->sector_size);
 	size_t bytes = (size_t)sectors * f->sector_size;
 	ssize_t n = pread(f->fd, buf, bytes, off);
@@ -106,6 +113,36 @@ static void set_error_fs_state(FileBlockCtx *ctx)
 {
 	/* s_state at 0x3A within SB. */
 	patch_sb_u16(ctx, 0x3A, 0x0002); /* EXT4_SUPERBLOCK_STATE_ERROR_FS */
+}
+
+static int file_sync_fail(void *ctx)
+{
+	(void)ctx;
+	errno = EIO;
+	return -1;
+}
+
+/* Sector containing the first occurrence of marker, or UINT64_MAX. */
+static uint64_t find_marker_lba(FileBlockCtx *ctx, const char *marker)
+{
+	size_t mlen = strlen(marker);
+	uint8_t buf[65536 + 256];
+	uint64_t total = ctx->sector_count * ctx->sector_size;
+	uint64_t off = 0;
+	if (mlen == 0) return UINT64_MAX;
+	while (off < total) {
+		size_t want = sizeof(buf);
+		if (total - off < want) want = (size_t)(total - off);
+		ssize_t n = pread(ctx->fd, buf, want, (off_t)off);
+		if (n <= 0) break;
+		for (ssize_t i = 0; i + (ssize_t)mlen <= n; i++) {
+			if (memcmp(buf + i, marker, mlen) == 0)
+				return (off + (uint64_t)i) / ctx->sector_size;
+		}
+		if ((size_t)n <= mlen) break;
+		off += (uint64_t)n - (mlen - 1);
+	}
+	return UINT64_MAX;
 }
 
 int main(void)
@@ -277,6 +314,117 @@ int main(void)
 	usb_block_unregister(block);
 	close(ctx.fd);
 	unlink(img);
+
+	/* mkfs must report a failed flush instead of claiming success. */
+	block = open_image(img, ss, sc, &ctx);
+	g_ops.sync = file_sync_fail;
+	assert(ext_engine_mkfs(block) == -EIO);
+	g_ops.sync = file_sync;
+	usb_block_unregister(block);
+	close(ctx.fd);
+	unlink(img);
+	printf("PASS: mkfs reports sync failure (-EIO)\n");
+
+	/* A directory block that cannot be read must fail the listing, never
+	 * return a short listing that hides the remaining entries. */
+	block = open_image(img, ss, sc, &ctx);
+	assert(ext_engine_mkfs(block) == 0);
+	err = 0;
+	vol = ext_engine_mount(block, false, &err);
+	assert(vol != 0);
+	{
+		char nm[260];
+		for (int i = 0; i < 30; i++) {
+			memset(nm, 0, sizeof(nm));
+			snprintf(nm, sizeof(nm), "/entry_%02d_", i);
+			size_t cur = strlen(nm);
+			for (size_t j = 0; j < 180; j++) nm[cur + j] = 'q';
+			if (i == 29) memcpy(nm + cur + 170, "ZZMARKZZ", 8);
+			nm[cur + 180] = '\0';
+			size_t w = 0;
+			assert(ext_engine_write(vol, nm, 0, "x", 1, true, &w) == 0);
+			assert(w == 1);
+		}
+	}
+	assert(ext_engine_sync(vol) == 0);
+	assert(ext_engine_close(vol) == 0);
+
+	uint64_t marker_lba = find_marker_lba(&ctx, "ZZMARKZZ");
+	assert(marker_lba != UINT64_MAX);
+
+	{
+		uint8_t sb[4096];
+		uint64_t sb_lba = 1024 / ss;
+		uint32_t sb_off = 1024 % ss;
+		assert(pread(ctx.fd, sb, ss, (off_t)sb_lba * ss) == (ssize_t)ss);
+		uint32_t log_bs = *(uint32_t *)(sb + sb_off + 0x18);
+		uint64_t block_bytes = 1024ull << log_bs;
+		uint64_t block_sectors = block_bytes / ss;
+		assert(block_sectors > 0 && (block_sectors & (block_sectors - 1)) == 0);
+
+		err = 0;
+		vol = ext_engine_mount(block, true, &err);
+		assert(vol != 0 && err == 0);
+		ctx.fail_lba_from = marker_lba & ~(block_sectors - 1);
+		ctx.fail_lba_to = ctx.fail_lba_from + block_sectors;
+		ExtDirEntry *le = (ExtDirEntry *)0x1;
+		size_t lc = 99;
+		assert(ext_engine_list(vol, "/", &le, &lc) == -EIO);
+		assert(le == NULL);
+		assert(lc == 0);
+		ctx.fail_lba_from = 0;
+		ctx.fail_lba_to = 0;
+		assert(ext_engine_list(vol, "/", &le, &lc) == 0);
+		assert(lc >= 2);
+		free(le);
+		assert(ext_engine_close(vol) == 0);
+	}
+	usb_block_unregister(block);
+	close(ctx.fd);
+	unlink(img);
+	printf("PASS: unreadable directory block reports -EIO, not a short listing\n");
+
+	/* Different sector sizes: mkfs must select a compatible ext4 block size,
+	 * and the result must mount and round-trip data. */
+	{
+		static const uint32_t geom_ss[] = {512, 1024, 2048, 4096};
+		for (size_t g = 0; g < sizeof(geom_ss) / sizeof(geom_ss[0]); g++) {
+			uint32_t gss = geom_ss[g];
+			uint64_t gsc = (8ull * 1024 * 1024) / gss;
+			FileBlockCtx gctx;
+			uint64_t gb = open_image(img, gss, gsc, &gctx);
+			assert(ext_engine_mkfs(gb) == 0);
+			assert(ext_engine_probe(gb) == 1);
+
+			err = 0;
+			uint64_t gv = ext_engine_mount(gb, false, &err);
+			assert(gv != 0 && err == 0);
+			const char *gp = "ext-geom";
+			size_t gw = 0;
+			assert(ext_engine_write(gv, "/geom.txt", 0, gp, strlen(gp), true,
+						&gw) == 0);
+			assert(gw == strlen(gp));
+			assert(ext_engine_sync(gv) == 0);
+			assert(ext_engine_close(gv) == 0);
+
+			err = 0;
+			gv = ext_engine_mount(gb, true, &err);
+			assert(gv != 0 && err == 0);
+			char gr[32] = {0};
+			size_t grl = 0;
+			assert(ext_engine_read(gv, "/geom.txt", 0, gr, sizeof(gr) - 1,
+					       &grl) == 0);
+			assert(grl == strlen(gp));
+			assert(strcmp(gr, gp) == 0);
+			assert(ext_engine_close(gv) == 0);
+
+			usb_block_unregister(gb);
+			close(gctx.fd);
+			unlink(img);
+			printf("PASS: ext mkfs/mount/read/write with %u-byte sectors\n",
+			       (unsigned)gss);
+		}
+	}
 
 	/* Optional: real mkfs.ext4 image (metadata_csum etc.). Skip if tool missing. */
 	{
