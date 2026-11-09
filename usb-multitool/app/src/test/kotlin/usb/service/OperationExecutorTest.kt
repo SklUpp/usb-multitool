@@ -16,24 +16,94 @@ import org.junit.Test
 import usb.device.DiskException
 
 class OperationExecutorTest {
-    @Test fun secondOperationWaitsAndDisconnectStopsBoth() = runTest {
+    @Test fun disconnectWaitsForRunningWorkerAndPreservesPartial() = runTest {
         val executor = OperationExecutor(this)
         val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var runs = 0
+        val operation = object : DiskOperation() {
+            override suspend fun run() {
+                runs++
+                started.complete(Unit)
+                release.await()
+                state = OperationState.Partial
+                failureCause = DiskException.Disconnected()
+            }
+        }
+        val first = executor.submit(operation)
+        started.await()
+        val awaiting = launch { first.await() }
+        executor.onDisconnected()
+        advanceUntilIdle()
+        assertTrue("running handle completed before worker return", awaiting.isActive)
+        release.complete(Unit)
+        assertEquals(OperationState.Partial, first.await())
+        assertEquals(1, runs)
+        assertTrue(operation.failureCause is DiskException.Disconnected)
+        awaiting.join()
+    }
+
+    @Test fun disconnectFailsQueuedOperationWithoutStartingIt() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() { started.complete(Unit); release.await() }
+        })
+        started.await()
+        var queuedRuns = 0
+        val queued = executor.submit(object : DiskOperation() {
+            override suspend fun run() { queuedRuns++ }
+        })
+        executor.onDisconnected()
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), queued.await())
+        assertEquals(0, queuedRuns)
+        release.complete(Unit)
+        first.await()
+    }
+
+    @Test fun secondOperationWaitsAndDisconnectStopsQueuedOnly() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
         val first = executor.submit(object : DiskOperation() {
             override suspend fun run() {
                 started.complete(Unit)
-                awaitInactive()
+                release.await()
+                state = OperationState.Partial
             }
         })
         started.await()
         val second = executor.submit(object : DiskOperation() {
             override suspend fun run() {
-                // queued behind first; disconnect should fail it before run
+                fail("queued operation must not start after disconnect")
             }
         })
         executor.onDisconnected()
-        assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
         assertEquals(OperationState.Failed(DiskException.Disconnected()), second.await())
+        release.complete(Unit)
+        assertEquals(OperationState.Partial, first.await())
+    }
+    @Test fun disconnectReconnectNormalReturnFailsWithoutPrematureCompletion() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation() {
+            override suspend fun run() {
+                started.complete(Unit)
+                release.await()
+            }
+        }
+        val handle = executor.submit(operation)
+        started.await()
+        val awaiting = launch { handle.await() }
+        executor.onDisconnected()
+        executor.onConnected("replacement")
+        advanceUntilIdle()
+        assertTrue(awaiting.isActive)
+        release.complete(Unit)
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), handle.await())
+        awaiting.join()
     }
 
     @Test fun operationsRunSerially() = runTest {

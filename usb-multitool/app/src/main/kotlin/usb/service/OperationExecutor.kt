@@ -131,7 +131,7 @@ class OperationExecutor(
                     }
                 }
             }
-            runningOp?.failDisconnected()
+            runningOp?.recordDisconnect()
             for (op in toFail) {
                 op.failDisconnected()
             }
@@ -165,7 +165,7 @@ class OperationExecutor(
                     }
                 }
             }
-            runningOp?.failDisconnected()
+            runningOp?.recordDisconnect()
             for (op in toFail) {
                 op.failDisconnected()
             }
@@ -247,10 +247,8 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
-                    disconnected.get() ->
-                        OperationState.Failed(DiskException.Disconnected())
-                    op.cancelled.get() || !op.operation.isActive() ->
-                        OperationState.Cancelled
+                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
+                    op.cancelled.get() || !op.operation.isActive() -> OperationState.Cancelled
                     op.operation.state is OperationState.Failed -> op.operation.state
                     else -> OperationState.Completed
                 }
@@ -261,6 +259,7 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
+                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
                     else -> OperationState.Failed(e)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -268,6 +267,7 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
+                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
                     else -> OperationState.Cancelled
                 }
             } catch (t: Throwable) {
@@ -277,6 +277,7 @@ class OperationExecutor(
                 terminal = when {
                     op.isDone() -> op.state
                     op.operation.state == OperationState.Partial -> OperationState.Partial
+                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
                     else -> OperationState.Failed(DiskException.IoFailure(t.message ?: t.javaClass.name, t))
                 }
             }
@@ -309,6 +310,11 @@ class OperationExecutor(
                 this.operation.state = state
                 if (counted.get()) outstanding.decrementAndGet()
             }
+        }
+
+        fun recordDisconnect() {
+            if (operation.failureCause == null) operation.failureCause = DiskException.Disconnected()
+            operation.markInactive()
         }
 
         fun failDisconnected() {
