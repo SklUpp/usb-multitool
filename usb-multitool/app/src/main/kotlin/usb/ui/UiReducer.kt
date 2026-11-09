@@ -110,6 +110,8 @@ sealed class UiIntent {
 
     /** Append a timestamped line to the bounded operation log. */
     data class AppendLog(val line: String) : UiIntent()
+    /** Store the latest Ventoy release tag fetched from GitHub (null = check failed). */
+    data class SetLatestVentoyRelease(val tag: String?) : UiIntent()
 }
 
 data class UiEffect(
@@ -714,6 +716,9 @@ object UiReducer {
                     }
                 ReduceResult(state.copy(logLines = updated))
             }
+
+            is UiIntent.SetLatestVentoyRelease ->
+                ReduceResult(state.copy(latestVentoyRelease = intent.tag))
         }
 
     /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */

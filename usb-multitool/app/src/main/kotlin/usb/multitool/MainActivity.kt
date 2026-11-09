@@ -128,6 +128,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+        scope.launch(Dispatchers.IO) {
+            val tag = usb.ventoy.VentoyDownloader.checkLatestRelease()
+            onIntent(UiIntent.SetLatestVentoyRelease(tag))
+        }
     }
     /**
      * Owns the mounted FAT volume of the selected partition. Guarded by [filesLock]:
@@ -1577,6 +1581,19 @@ private fun downloadFile(path: String, name: String, uri: String) {
                     )
                 }
             }
+            val logTicker = launch {
+                var lastLogged = -1L
+                while (true) {
+                    delay(LOG_TICK_MS)
+                    val done = operation.bytesDone
+                    val total = operation.bytesTotal
+                    if (done != lastLogged) {
+                        lastLogged = done
+                        val pct = if (total > 0) " ${(done * 100L / total)}%" else ""
+                        onIntent(UiIntent.AppendLog(logLine("  $label$pct")))
+                    }
+                }
+            }
             try {
                 when (val outcome = handle.await()) {
                     is usb.service.OperationState.Failed -> {
@@ -1619,6 +1636,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 }
             } finally {
                 ticker.cancel()
+                logTicker.cancel()
                 if (activeHandle === handle) activeHandle = null
                 activeHandles.remove(handle)
             }
@@ -1704,6 +1722,8 @@ private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
     private companion object {
         const val COPY_CHUNK_BYTES = 64 * 1024
         const val PROGRESS_TICK_MS = 120L
+        /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
+        const val LOG_TICK_MS = 3_000L
     }
 }
 

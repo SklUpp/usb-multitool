@@ -168,6 +168,31 @@ object VentoyDownloader {
         )
     }
 
+    /**
+     * Queries the GitHub Releases API for the latest Ventoy release tag.
+     * Returns the version string (e.g. "1.1.19") without the "v" prefix, or
+     * null if the check fails (network error, parse failure, timeout).
+     * Never throws; failures are silently swallowed so callers can fall back
+     * to [VentoyAssets.PINNED_RELEASE].
+     */
+    fun checkLatestRelease(timeoutMs: Int = 8_000): String? = runCatching {
+        val url = URL("https://api.github.com/repos/ventoy/Ventoy/releases/latest")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.connectTimeout = timeoutMs
+        conn.readTimeout = timeoutMs
+        conn.setRequestProperty("Accept", "application/vnd.github+json")
+        conn.setRequestProperty("User-Agent", "usb-multitool")
+        try {
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) return@runCatching null
+            val body = conn.inputStream.bufferedReader().readText()
+            // Parse "tag_name":"v1.1.19" without a JSON library.
+            val match = Regex(""""tag_name"\s*:\s*"v?([^"]+)"""").find(body)
+            match?.groupValues?.getOrNull(1)?.trim()
+        } finally {
+            conn.disconnect()
+        }
+    }.getOrNull()
+
     private fun fetch(
         url: String,
         destination: File,

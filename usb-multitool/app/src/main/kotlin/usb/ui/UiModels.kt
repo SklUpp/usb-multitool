@@ -268,6 +268,11 @@ data class AppUiState(
      * can scroll back after completion.
      */
     val logLines: List<String> = emptyList(),
+    /**
+     * Latest Ventoy release tag fetched from GitHub API at startup (null until checked).
+     * Shown in [VentoyScreen] alongside [VentoyAssets.PINNED_RELEASE].
+     */
+    val latestVentoyRelease: String? = null,
 ) {
     companion object { const val LOG_MAX_LINES = 200 }
     val actionsEnabled: Boolean
