@@ -26,27 +26,51 @@ data class BenchmarkReport(
 class UnsafeBenchmarkTargetException(message: String) : Exception(message)
 
 object Diagnostics {
+    /** One SCSI-sized batch per iteration; per-sector reads only after a medium error. */
+    internal const val SCAN_CHUNK_BYTES = 1 shl 20
+
+    /**
+     * Read-only surface scan. Reads [SCAN_CHUNK_BYTES] at a time and falls back to
+     * sector-by-sector inside a chunk only when the device reports a medium error.
+     * Disconnect, closed session and every other non-medium error abort the scan
+     * instead of painting the rest of the disk as unreadable.
+     */
     fun readScan(disk: UsbDisk, operation: DiskOperation = DiskOperation("read-scan")): ScanReport {
+        val sectorSize = disk.geometry.sectorSize
+        val total = disk.geometry.sectorCount
+        val chunkSectors = maxOf(1, SCAN_CHUNK_BYTES / sectorSize).toULong()
+        val buf = ByteBuffer.allocate(chunkSectors.toInt() * sectorSize)
         val failed = mutableListOf<ULongRange>()
-        val buf = ByteBuffer.allocate(disk.geometry.sectorSize)
-        var lba = 0UL
-        var failStart: ULong? = null
-        while (lba < disk.geometry.sectorCount) {
-            if (!operation.isActive()) break
-            try {
-                buf.clear()
-                disk.read(lba, buf) // never writes
-                if (failStart != null) {
-                    failed += failStart until lba
-                    failStart = null
-                }
-            } catch (_: Exception) {
-                if (failStart == null) failStart = lba
-            }
-            lba++
-            operation.report((lba * disk.geometry.sectorSize.toULong()).toLong())
+        fun markFailed(lba: ULong) {
+            val last = failed.lastOrNull()
+            if (last != null && last.last + 1UL == lba) failed[failed.lastIndex] = last.first..lba
+            else failed += lba..lba
         }
-        if (failStart != null) failed += failStart until disk.geometry.sectorCount
+        var lba = 0UL
+        while (lba < total) {
+            if (!operation.isActive()) break
+            val n = minOf(chunkSectors, total - lba).toInt()
+            buf.clear()
+            buf.limit(n * sectorSize)
+            try {
+                disk.read(lba, buf) // never writes
+            } catch (e: DiskException.SenseError) {
+                if (!e.isMediumError) throw e
+                for (i in 0 until n) {
+                    if (!operation.isActive()) break
+                    buf.clear()
+                    buf.limit(sectorSize)
+                    try {
+                        disk.read(lba + i.toULong(), buf)
+                    } catch (inner: DiskException.SenseError) {
+                        if (!inner.isMediumError) throw inner
+                        markFailed(lba + i.toULong())
+                    }
+                }
+            }
+            lba += n.toULong()
+            operation.report((lba * sectorSize.toULong()).toLong())
+        }
         return ScanReport(sectorsRead = lba, failed = failed)
     }
 
