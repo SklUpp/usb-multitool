@@ -79,10 +79,10 @@ if ! have_marker "$TP/lwext4/include/ext4.h"; then
 fi
 
 echo "Fetching F3 v10.0..."
-if ! have_marker "$TP/f3/f3probe.c"; then
+if ! have_marker "$TP/f3/src/f3probe.c"; then
   curl -fsSL https://github.com/AltraMayor/f3/archive/refs/tags/v10.0.tar.gz \
     | tar -xz --strip-components=1 -C "$TP/f3"
-  have_marker "$TP/f3/f3probe.c" || { echo "F3 fetch failed"; exit 1; }
+  have_marker "$TP/f3/src/f3probe.c" || { echo "F3 fetch failed"; exit 1; }
 fi
 
 echo "Fetching GNU ddrescue 1.30..."
