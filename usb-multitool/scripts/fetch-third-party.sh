@@ -65,10 +65,10 @@ if ! have_marker "$TP/fatfs/source/ff.c"; then
 fi
 
 echo "Fetching ntfs-3g 2026.9.28..."
-if ! have_marker "$TP/ntfs-3g/libntfs-3g/volume.c"; then
+if ! have_marker "$TP/ntfs-3g/libntfs-3g/volume.c" || ! have_marker "$TP/ntfs-3g/ntfsprogs/mkntfs.c"; then
   curl -fsSL https://github.com/tuxera/ntfs-3g/archive/refs/tags/2026.9.28.tar.gz \
     | tar -xz --strip-components=1 -C "$TP/ntfs-3g"
-  have_marker "$TP/ntfs-3g/libntfs-3g/volume.c" || { echo "ntfs-3g fetch failed"; exit 1; }
+  have_marker "$TP/ntfs-3g/libntfs-3g/volume.c" && have_marker "$TP/ntfs-3g/ntfsprogs/mkntfs.c" || { echo "ntfs-3g fetch failed"; exit 1; }
 fi
 
 # mkntfs is a CLI program upstream. This patch adds a device-injection entry
