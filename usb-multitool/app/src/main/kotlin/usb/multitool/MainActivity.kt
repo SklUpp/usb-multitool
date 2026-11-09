@@ -278,15 +278,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.CREATE_PARTITION -> {
                                     val current = table ?: throw IllegalStateException("no partition table")
-                                    val align = PartitionTable.alignmentSectors(current.sectorSize)
-                                    val region = current.freeRegions.firstOrNull {
-                                        PartitionEditor.alignedCapacity(it, align) > 0UL
-                                    } ?: throw usb.partition.NoFreeSpaceException("no free space")
-                                    val size = PartitionEditor.alignedCapacity(region, align)
-                                    PartitionWriter.commit(
-                                        disk,
-                                        PartitionEditor.create(current, size = size, type = PartitionType.BASIC),
-                                    )
+                                    val start = confirmed.createStartLba ?: throw IllegalStateException("partition start not confirmed")
+                                    val size = confirmed.createSectorCount ?: throw IllegalStateException("partition size not confirmed")
+                                    PartitionWriter.commit(disk, PartitionEditor.create(current, size, PartitionType.BASIC, start))
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.FORMAT_PARTITION -> {
@@ -912,6 +906,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
                                 device = if (isTransport) identity else probedIdentity,
                                 partitions = partitions,
+                                freeRegions = tableResult.getOrNull()?.freeRegions?.map { usb.ui.FreeRegionUi(it.startLba, it.sectorCount) } ?: emptyList(),
+                                sectorSize = disk.sectorSize,
                                 files = emptyList(),
                                 tableValid = !isTransport && tableResult.isSuccess,
                             ),
@@ -1005,6 +1001,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
                                 device = identity,
                                 partitions = partitions,
+                                freeRegions = tableResult.getOrNull()?.freeRegions?.map { usb.ui.FreeRegionUi(it.startLba, it.sectorCount) } ?: emptyList(),
+                                sectorSize = disk.sectorSize,
                                 files = emptyList(),
                                 tableValid = !isTransport && tableResult.isSuccess,
                             ),

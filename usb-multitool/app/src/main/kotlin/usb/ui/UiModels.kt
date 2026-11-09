@@ -91,6 +91,8 @@ data class DestructiveConfirmation(
     val partitionId: String? = null,
     val partitionStartLba: ULong? = null,
     val partitionSectorCount: ULong? = null,
+    val createStartLba: ULong? = null,
+    val createSectorCount: ULong? = null,
 ) {
     companion object {
         fun request(
@@ -190,6 +192,8 @@ data class PartitionTab(
         }
 }
 
+data class FreeRegionUi(val startLba: ULong, val sectorCount: ULong)
+
 data class FileEntry(
     val name: String,
     val isDirectory: Boolean,
@@ -230,6 +234,8 @@ data class AppUiState(
     val device: DeviceIdentity? = null,
     val tab: ShellTab = ShellTab.Files,
     val partitions: List<PartitionTab> = emptyList(),
+    val freeRegions: List<FreeRegionUi> = emptyList(),
+    val diskSectorSize: Int = 512,
     val selectedPartitionId: String? = null,
     val vtoyEfiWriteEnabled: Boolean = false,
     val vtoyBypassTpm: Boolean = false,

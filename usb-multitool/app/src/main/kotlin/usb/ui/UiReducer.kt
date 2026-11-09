@@ -24,12 +24,15 @@ sealed class UiIntent {
         val device: DeviceIdentity? = null,
         val partitions: List<PartitionTab> = emptyList(),
         val files: List<FileEntry> = emptyList(),
+        val freeRegions: List<FreeRegionUi> = emptyList(),
+        val sectorSize: Int = 512,
         val tableValid: Boolean = true,
     ) : UiIntent()
 
     data class OperationUpdated(val progress: OperationProgress?) : UiIntent()
 
     data class RequestDestructive(val action: DestructiveAction) : UiIntent()
+    data class RequestCreatePartition(val startLba: ULong, val sectorCount: ULong) : UiIntent()
 
     data object ConfirmDestructive : UiIntent()
 
@@ -210,6 +213,8 @@ object UiReducer {
                         presence = intent.presence,
                         device = intent.device,
                         partitions = intent.partitions,
+                        freeRegions = intent.freeRegions,
+                        diskSectorSize = intent.sectorSize,
                         tableValid = intent.tableValid,
                         selectedPartitionId = selected,
                         currentPath = "/",
@@ -275,6 +280,27 @@ object UiReducer {
                             },
                     ),
                 )
+
+            is UiIntent.RequestCreatePartition -> {
+                val device = state.device
+                val valid = intent.sectorCount > 0UL && intent.startLba <= ULong.MAX_VALUE - (intent.sectorCount - 1UL) &&
+                    state.diskSectorSize > 0 && (1024 * 1024) % state.diskSectorSize == 0 &&
+                    intent.startLba % (1024 * 1024 / state.diskSectorSize).toULong() == 0UL && state.freeRegions.any { region ->
+                    intent.startLba >= region.startLba &&
+                        intent.startLba - region.startLba < region.sectorCount &&
+                        intent.sectorCount <= region.sectorCount - (intent.startLba - region.startLba)
+                }
+                if (device == null || !state.actionsEnabled || !state.tableValid || !valid) {
+                    ReduceResult(state.copy(statusMessage = "Invalid or unavailable free region"))
+                } else {
+                    val base = DestructiveConfirmation.request(device, DestructiveAction.CREATE_PARTITION)
+                    ReduceResult(state.copy(pendingConfirmation = base.copy(
+                        message = base.message + " Create LBA ${intent.startLba} through ${intent.startLba + intent.sectorCount - 1UL} (${intent.sectorCount} sectors).",
+                        createStartLba = intent.startLba,
+                        createSectorCount = intent.sectorCount,
+                    )))
+                }
+            }
 
             is UiIntent.RequestDestructive -> {
                 val device = state.device

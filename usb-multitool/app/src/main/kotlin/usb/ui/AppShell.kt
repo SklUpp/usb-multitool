@@ -167,7 +167,7 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().heightIn(max = 88.dp),
     ) {
         Row(
             modifier = Modifier
@@ -316,18 +316,19 @@ private fun OperationBanner(
                     )
                 }
                 if (state.logLines.isNotEmpty()) {
-                    val tail = state.logLines.takeLast(if (expanded) 5 else 1)
-                    TextButton(onClick = { expanded = !expanded }) {
-                        Text(if (expanded) "Less" else "Log details", style = MaterialTheme.typography.labelSmall)
+                    TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                        Text(if (expanded) "Hide log" else "Show log", style = MaterialTheme.typography.labelSmall)
                     }
-                    tail.forEach { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    if (expanded) {
+                        state.logLines.takeLast(3).forEach { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }

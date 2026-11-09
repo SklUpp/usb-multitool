@@ -22,7 +22,13 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +42,32 @@ fun PartitionsScreen(
     modifier: Modifier = Modifier,
     onPickImage: () -> Unit = {},
 ) {
+    var createRegion by remember(state.device, state.freeRegions) { mutableStateOf<FreeRegionUi?>(null) }
+    var sectorCount by remember { mutableStateOf("") }
+    createRegion?.let { region ->
+        val align = (1024 * 1024 / state.diskSectorSize).toULong()
+        val remainder = region.startLba % align
+        val start = region.startLba + if (remainder == 0UL) 0UL else align - remainder
+        val available = region.sectorCount - (start - region.startLba)
+        val count = sectorCount.toULongOrNull()
+        AlertDialog(
+            onDismissRequest = { createRegion = null },
+            title = { Text("Create partition") },
+            text = {
+                Column {
+                    Text("Start LBA $start · up to $available sectors · ${state.diskSectorSize} bytes/sector")
+                    OutlinedTextField(value = sectorCount, onValueChange = { sectorCount = it }, label = { Text("Size in sectors") }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = count != null && count > 0UL && count <= available, onClick = {
+                    onIntent(UiIntent.RequestCreatePartition(start, count!!))
+                    createRegion = null
+                }) { Text("Continue") }
+            },
+            dismissButton = { TextButton(onClick = { createRegion = null }) { Text("Cancel") } },
+        )
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -122,14 +154,18 @@ fun PartitionsScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(
-                                        text = if (isSelected) "${partition.name} [Selected]" else partition.name,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (isSelected) "${partition.name} [Selected]" else partition.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        if (partition.startLba != null && partition.sectorCount != null) {
+                                            Text("LBA ${partition.startLba} · ${partition.sectorCount} sectors", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
                                     Text(
                                         text = (if (partition.readOnly) "Read-only" else "Read/write") +
                                             if (partition.isVtoyEfi) " · EFI" else "",
@@ -142,20 +178,24 @@ fun PartitionsScreen(
                     }
                 }
 
-                // Partition action buttons
+                state.freeRegions.forEach { region ->
+                    val align = (1024 * 1024 / state.diskSectorSize).toULong()
+                    val skip = (align - region.startLba % align) % align
+                    if (skip < region.sectorCount) {
+                        OutlinedButton(
+                            onClick = {
+                                createRegion = region
+                                sectorCount = (region.sectorCount - skip).toString()
+                            },
+                            enabled = state.actionsEnabled && state.tableValid,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Create in free space: LBA ${region.startLba + skip}, ${region.sectorCount - skip} sectors") }
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            onIntent(UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
-                        },
-                        enabled = state.actionsEnabled && state.tableValid,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Create")
-                    }
 
                     OutlinedButton(
                         onClick = {

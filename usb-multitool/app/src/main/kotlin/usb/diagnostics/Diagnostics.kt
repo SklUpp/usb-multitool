@@ -169,8 +169,13 @@ object Diagnostics {
  * [Rescue.restore] can walk the image LBA by LBA without shifting data.
  */
 fun interface RescueSink {
-    /** Write [sector] bytes at absolute [lba]. */
     fun writeSector(lba: ULong, sector: ByteArray)
+
+    fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
+        for (offset in 0 until length step sectorSize) {
+            writeSector(lba + (offset / sectorSize).toULong(), bytes.copyOfRange(offset, offset + sectorSize))
+        }
+    }
 }
 
 /**
@@ -179,13 +184,14 @@ fun interface RescueSink {
  */
 fun OutputStream.asRescueSink(sectorSize: Int): RescueSink {
     var next = 0UL
-    return RescueSink { lba, sector ->
-        require(sector.size == sectorSize)
-        check(lba == next) {
-            "rescue image is positional: expected LBA $next, got $lba"
+    return object : RescueSink {
+        override fun writeSector(lba: ULong, sector: ByteArray) = writeBatch(lba, sector, sector.size, sectorSize)
+        override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
+            require(length > 0 && length <= bytes.size && length % sectorSize == 0)
+            check(lba == next) { "rescue image is positional: expected LBA $next, got $lba" }
+            write(bytes, 0, length)
+            next += (length / sectorSize).toULong()
         }
-        write(sector)
-        next = lba + 1UL
     }
 }
 
@@ -214,47 +220,63 @@ object Rescue {
                 "COPY map sectorSize ${map.sectorSize} != disk $sectorSize"
             }
         }
-        val buf = ByteBuffer.allocate(sectorSize)
+        val chunkSectors = maxOf(1, Diagnostics.SCAN_CHUNK_BYTES / sectorSize)
+        val buf = ByteBuffer.allocate(chunkSectors * sectorSize)
         val zeros = ByteArray(sectorSize)
         var sinceCheckpoint = 0UL
         var aborted: Throwable? = null
         try {
             for (range in map.nonTried + map.failed) {
                 var lba = range.first
+                var fallbackUntil = 0UL
                 while (lba <= range.last) {
                     if (!operation.isActive()) {
                         aborted = ImageCancelledException("rescue copy cancelled")
                         return map
                     }
                     try {
+                        val count = minOf(chunkSectors.toULong(), range.last - lba + 1UL).toInt()
                         buf.clear()
-                        disk.read(lba, buf)
-                        destination.writeSector(lba, buf.array().copyOf(sectorSize))
-                        map.markCopied(lba, 1UL)
-                    } catch (e: DiskException.SenseError) {
-                        if (!e.isMediumError) {
-                            aborted = e
-                            throw e
+                        buf.limit(count * sectorSize)
+                        val batchOk = if (lba < fallbackUntil) {
+                            false
+                        } else try {
+                            disk.read(lba, buf)
+                            true
+                        } catch (e: DiskException.SenseError) {
+                            if (!e.isMediumError) throw e
+                            fallbackUntil = lba + count.toULong()
+                            false
                         }
-                        // Medium error only: keep dense image, mark FAILED.
-                        try {
-                            destination.writeSector(lba, zeros)
-                        } catch (sink: Exception) {
-                            aborted = sink
-                            throw sink // do not leave FAILED without a gap written
+                        if (batchOk) {
+                            destination.writeBatch(lba, buf.array(), count * sectorSize, sectorSize)
+                            map.markCopied(lba, count.toULong())
+                            lba += count.toULong()
+                            sinceCheckpoint += count.toULong()
+                        } else {
+                            buf.clear()
+                            buf.limit(sectorSize)
+                            val sectorOk = try {
+                                disk.read(lba, buf)
+                                true
+                            } catch (e: DiskException.SenseError) {
+                                if (!e.isMediumError) throw e
+                                false
+                            }
+                            if (sectorOk) {
+                                destination.writeBatch(lba, buf.array(), sectorSize, sectorSize)
+                                map.markCopied(lba, 1UL)
+                            } else {
+                                destination.writeSector(lba, zeros)
+                                map.markFailed(lba, 1UL)
+                            }
+                            lba++
+                            sinceCheckpoint++
                         }
-                        map.markFailed(lba, 1UL)
-                    } catch (e: DiskException) {
-                        // Disconnected / Closed / IoFailure / Unsupported — abort.
-                        aborted = e
-                        throw e
                     } catch (e: Exception) {
-                        // Sink / ENOSPC / unexpected — abort, do not mark FAILED.
                         aborted = e
                         throw e
                     }
-                    lba++
-                    sinceCheckpoint++
                     operation.report((lba * sectorSize.toULong()).toLong())
                     if (sinceCheckpoint >= checkpointEverySectors) {
                         checkpoint(map.snapshot())

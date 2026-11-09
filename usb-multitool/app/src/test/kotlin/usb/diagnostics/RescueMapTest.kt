@@ -174,6 +174,15 @@ class RescueMapTest {
         assertTrue(out.toByteArray().contentEquals(payload))
     }
 
+    @Test fun rescueCopyReadsContiguousSectorsInBatches() {
+        val payload = ByteArray(128 * 512) { (it % 251).toByte() }
+        val disk = RecordingDisk.fromBytes(payload)
+        val image = ByteArrayOutputStream()
+        Rescue.copy(disk, image.asRescueSink(512))
+        assertTrue(image.toByteArray().contentEquals(payload))
+        assertTrue("healthy disk should use fewer reads than sectors", disk.readCount < 128)
+    }
+
     @Test fun restoreEndsCleanlyOnShortEofWithoutZeroFill() {
         val seed = ByteArray(4 * 512) { 0x5A }
         val seeded = RecordingDisk.fromBytes(seed)
@@ -395,7 +404,7 @@ class RescueMapTest {
         private val badLba: ULong,
     ) : RecordingDisk(sectorCount = sectorCount, sectorSize = sectorSize) {
         override fun read(lba: ULong, destination: ByteBuffer) {
-            if (lba == badLba) {
+            if (badLba >= lba && badLba - lba < (destination.remaining() / sectorSize).toULong()) {
                 throw DiskException.SenseError(
                     responseCode = 0x70,
                     senseKey = 0x03, // medium error
@@ -414,7 +423,7 @@ class RescueMapTest {
         val disk =
             object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
                 override fun read(lba: ULong, destination: ByteBuffer) {
-                    if (lba == 1UL) throw DiskException.Disconnected()
+                    if (lba <= 1UL && 1UL - lba < (destination.remaining() / sectorSize).toULong()) throw DiskException.Disconnected()
                     super.read(lba, destination)
                 }
             }
@@ -426,7 +435,7 @@ class RescueMapTest {
             fail("expected Disconnected")
         } catch (_: DiskException.Disconnected) {
         }
-        assertEquals(listOf(0UL until 1UL), map.copied)
+        assertTrue(map.copied.isEmpty())
         assertTrue(map.failed.isEmpty())
         assertEquals(usb.service.OperationState.Partial, op.state)
         assertTrue(op.failureCause is DiskException.Disconnected)

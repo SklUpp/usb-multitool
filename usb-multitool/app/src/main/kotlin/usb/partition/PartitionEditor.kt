@@ -7,12 +7,17 @@ object PartitionEditor {
         table: PartitionTable,
         size: ULong,
         type: PartitionType,
+        startLba: ULong? = null,
     ): PartitionTable {
         require(size > 0UL) { "partition size must be positive" }
         val align = alignmentSectors(table.sectorSize)
-        val region = table.freeRegions.firstOrNull { alignedCapacity(it, align) >= size }
-            ?: throw NoFreeSpaceException("no free region large enough for $size sectors")
-        val alignedStart = alignUp(region.startLba, align)
+        val region = table.freeRegions.firstOrNull { candidate ->
+            if (startLba == null) alignedCapacity(candidate, align) >= size
+            else startLba >= candidate.startLba && startLba - candidate.startLba < candidate.sectorCount &&
+                size <= candidate.sectorCount - (startLba - candidate.startLba)
+        } ?: throw NoFreeSpaceException("no free region large enough for $size sectors")
+        val alignedStart = startLba ?: alignUp(region.startLba, align)
+        require(alignedStart % align == 0UL) { "partition start must be aligned to $align sectors" }
         val skip = alignedStart - region.startLba
         val available = if (skip < region.sectorCount) region.sectorCount - skip else 0UL
         require(available >= size) {

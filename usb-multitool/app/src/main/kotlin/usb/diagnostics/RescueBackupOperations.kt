@@ -14,9 +14,12 @@ object RescueBackupOperations {
         operation: DiskOperation,
     ) {
         RandomAccessFile(image, "rw").use { file ->
-            Rescue.copy(disk, RescueSink { lba, sector ->
-                file.seek((lba * disk.geometry.sectorSize.toULong()).toLong())
-                file.write(sector)
+            Rescue.copy(disk, object : RescueSink {
+                override fun writeSector(lba: ULong, sector: ByteArray) = writeBatch(lba, sector, sector.size, disk.sectorSize)
+                override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
+                    file.seek((lba * sectorSize.toULong()).toLong())
+                    file.write(bytes, 0, length)
+                }
             }, map, checkpoint = { snapshot ->
                 file.fd.sync()
                 RescueCheckpoint.save(snapshot, mapFile)

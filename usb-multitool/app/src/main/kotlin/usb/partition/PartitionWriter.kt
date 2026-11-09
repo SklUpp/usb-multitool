@@ -152,6 +152,9 @@ object PartitionWriter {
         require(table.partitions.size <= 4) {
             "MBR supports at most 4 primary partitions, got ${table.partitions.size}"
         }
+        require(table.partitions.none { it.type.uppercase() in setOf("0X05", "0X0F", "0X85") }) {
+            "editing extended MBR partitions is not supported"
+        }
         require(table.partitions.all { it.startLba <= 0xFFFF_FFFFUL && it.sectorCount <= 0xFFFF_FFFFUL }) {
             "MBR partition geometry exceeds 32-bit LBA fields"
         }
@@ -252,7 +255,10 @@ object PartitionWriter {
     private fun mbrType(partition: Partition): Int =
         when (partition.type.uppercase()) {
             "EFI", "VTOYEFI", EFI_SYSTEM_GUID -> MBR_TYPE_EFI
-            else -> MBR_TYPE_LINUX
+            "BASIC" -> MBR_TYPE_LINUX
+            else -> partition.type.removePrefix("0x").removePrefix("0X").toIntOrNull(16)
+                ?.takeIf { it in 1..255 && it != 0xEE }
+                ?: throw IllegalArgumentException("unsupported MBR partition type '${partition.type}'")
         }
 
     private fun guidBytes(text: String): ByteArray {
