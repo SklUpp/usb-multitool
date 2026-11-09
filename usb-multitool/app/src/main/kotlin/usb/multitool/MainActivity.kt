@@ -1556,6 +1556,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 OperationProgress(state = OperationState.Running, label = label, cancelable = cancelable),
             ),
         )
+        onIntent(UiIntent.AppendLog(logLine("▶ $label started")))
         val handle = DiskController.get().submit(operation)
         if (cancelable) activeHandle = handle
         activeHandles.add(handle)
@@ -1581,6 +1582,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                     is usb.service.OperationState.Failed -> {
                         val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                         onIntent(UiIntent.Status(message))
+                        onIntent(UiIntent.AppendLog(logLine("✗ $label failed: $message")))
                         onIntent(
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
@@ -1597,7 +1599,9 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         // The USB claim may be gone; reopen for the next attempt.
                         scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
                     }
-                    else ->
+                    else -> {
+                        val summary = operation.result ?: outcome.javaClass.simpleName
+                        onIntent(UiIntent.AppendLog(logLine("✓ $label: $summary")))
                         onIntent(
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
@@ -1611,6 +1615,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                                 ),
                             ),
                         )
+                    }
                 }
             } finally {
                 ticker.cancel()
@@ -1678,6 +1683,11 @@ private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
 
     private fun timestamp(): String =
         SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+
+    private fun logLine(message: String): String {
+        val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        return "[$ts] $message"
+    }
 
     /** Disk thread -> main thread hop for result intents. */
     private fun post(intent: UiIntent) {

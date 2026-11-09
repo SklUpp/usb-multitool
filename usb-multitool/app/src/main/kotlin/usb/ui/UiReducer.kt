@@ -107,6 +107,9 @@ sealed class UiIntent {
         val path: String,
         val message: String,
     ) : UiIntent()
+
+    /** Append a timestamped line to the bounded operation log. */
+    data class AppendLog(val line: String) : UiIntent()
 }
 
 data class UiEffect(
@@ -700,6 +703,17 @@ object UiReducer {
                         state.copy(files = emptyList(), statusMessage = intent.message),
                     )
                 }
+
+            is UiIntent.AppendLog -> {
+                val trimmed = intent.line.take(500) // guard runaway lines
+                val updated =
+                    if (state.logLines.size >= AppUiState.LOG_MAX_LINES) {
+                        state.logLines.drop(state.logLines.size - AppUiState.LOG_MAX_LINES + 1) + trimmed
+                    } else {
+                        state.logLines + trimmed
+                    }
+                ReduceResult(state.copy(logLines = updated))
+            }
         }
 
     /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */

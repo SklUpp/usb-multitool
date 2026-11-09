@@ -262,7 +262,14 @@ data class AppUiState(
     val selectedFormatId: FilesystemId = FilesystemId.FAT,
     /** Dark theme preference: null = system default, true = dark, false = light. */
     val darkTheme: Boolean? = null,
+    /**
+     * Bounded operation log. Ring-buffered to [LOG_MAX_LINES]; oldest lines dropped.
+     * Appended by [UiIntent.AppendLog]; never cleared across operations so the user
+     * can scroll back after completion.
+     */
+    val logLines: List<String> = emptyList(),
 ) {
+    companion object { const val LOG_MAX_LINES = 200 }
     val actionsEnabled: Boolean
         get() =
             presence == DevicePresence.Ready &&

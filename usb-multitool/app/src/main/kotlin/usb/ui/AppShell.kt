@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -249,10 +253,12 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
 @Composable
 private fun OperationBanner(
     state: AppUiState,
-    onIntent: (UiIntent) -> Unit,
+    onIntent: (UiIntent) -\u003e Unit,
 ) {
     val op = state.operation ?: return
-    var expanded by remember(op.label, op.state) { mutableStateOf(false) }
+    // Reset expanded only when the operation label changes, not on every state transition.
+    // This prevents the banner staying expanded when a same-label op re-fails.
+    var expanded by remember(op.label) { mutableStateOf(false) }
 
     if (op.state == OperationState.Running) {
         Surface(
@@ -314,6 +320,28 @@ private fun OperationBanner(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                // Realtime log tail: last 5 lines while running
+                val tail = state.logLines.takeLast(5)
+                if (tail.isNotEmpty()) {
+                    val logScroll = rememberScrollState()
+                    LaunchedEffect(tail.size) { logScroll.animateScrollTo(logScroll.maxValue) }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 80.dp)
+                            .verticalScroll(logScroll),
+                    ) {
+                        for (line in tail) {
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
             }
         }
     } else {
@@ -326,9 +354,11 @@ private fun OperationBanner(
             },
             modifier = Modifier.fillMaxWidth(),
         ) {
+            // heightIn caps overexpand: 8 lines of bodySmall ≈ 14sp × 1.4 × 8 ≈ 157dp; 240dp gives margin.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 240.dp)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
