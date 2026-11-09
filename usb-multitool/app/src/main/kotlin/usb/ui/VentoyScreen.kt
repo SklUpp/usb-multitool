@@ -47,60 +47,19 @@ fun VentoyScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Ventoy Multi-Boot",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                        ) {
-                            Text(
-                                text = "Built-in v${usb.ventoy.VentoyAssets.PINNED_RELEASE}",
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                        }
-                        val latest = state.latestVentoyRelease
-                        if (latest != null && latest != usb.ventoy.VentoyAssets.PINNED_RELEASE) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                            ) {
-                                Text(
-                                    text = "latest v$latest",
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                )
-                            }
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                        ) {
-                            Text(
-                                text = "GPT / MBR",
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = "Ventoy Multi-Boot",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                val latest = state.latestVentoyRelease
+                Text(
+                    text = "Built-in v${usb.ventoy.VentoyAssets.PINNED_RELEASE}" +
+                        (if (latest != null && latest != usb.ventoy.VentoyAssets.PINNED_RELEASE) " · Latest v$latest" else "") +
+                        " · GPT / MBR",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Text(
                     text = "Install writes a fresh Ventoy layout and formats the data partition as exFAT (destroys existing partitions). Update refreshes boot files and keeps the ISO data partition.",

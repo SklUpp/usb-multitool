@@ -27,7 +27,7 @@ class UnsafeBenchmarkTargetException(message: String) : Exception(message)
 
 object Diagnostics {
     /** One SCSI-sized batch per iteration; per-sector reads only after a medium error. */
-    internal const val SCAN_CHUNK_BYTES = 64 * 1024
+    internal const val SCAN_CHUNK_BYTES = 1024 * 1024
 
     /**
      * Read-only surface scan. Reads [SCAN_CHUNK_BYTES] at a time and falls back to

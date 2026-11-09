@@ -14,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -127,19 +126,16 @@ fun PartitionsScreen(
                                         text = if (isSelected) "${partition.name} [Selected]" else partition.name,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        AssistChip(
-                                            onClick = {},
-                                            label = { Text(if (partition.readOnly) "RO" else "RW") },
-                                        )
-                                        if (partition.isVtoyEfi) {
-                                            AssistChip(
-                                                onClick = {},
-                                                label = { Text("EFI") },
-                                            )
-                                        }
-                                    }
+                                    Text(
+                                        text = (if (partition.readOnly) "Read-only" else "Read/write") +
+                                            if (partition.isVtoyEfi) " · EFI" else "",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
                             }
                         }
