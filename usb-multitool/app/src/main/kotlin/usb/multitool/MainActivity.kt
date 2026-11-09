@@ -78,7 +78,6 @@ import usb.image.ImageSource
 import usb.image.ImageStaging
 import usb.image.stageRawImageChunks
 import usb.image.RawWriter
-import usb.partition.findConfirmedPartition
 import usb.ventoy.VentoyAssets
 import usb.ventoy.VentoyDownloader
 import usb.ventoy.VentoyInstaller
@@ -253,11 +252,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             val table = runCatching { PartitionTable.read(disk) }.getOrNull()
-                            val selected = findConfirmedPartition(
-                                partitions = table?.partitions.orEmpty(),
-                                confirmedStartLba = confirmed.partitionStartLba,
-                                confirmedSectorCount = confirmed.partitionSectorCount,
-                            )
                             when (action) {
                                 DestructiveAction.WIPE -> {
                                     Diagnostics.wipe(
@@ -277,10 +271,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.DELETE_PARTITION -> {
                                     val current = table ?: throw IllegalStateException("no partition table")
-                                    val target = selected ?: throw usb.diagnostics.ConfirmationMismatchException("confirmed partition geometry missing")
-                                    val index = (table ?: throw IllegalStateException("no partition table")).partitions.indexOf(target)
-                                    require(index >= 0) { "confirmed partition geometry missing" }
-                                    PartitionWriter.commit(disk, PartitionEditor.delete(table, index))
+                                    mutateConfirmedPartition(
+                                        current.partitions,
+                                        confirmed.partitionStartLba,
+                                        confirmed.partitionSectorCount,
+                                    ) { target ->
+                                        requirePartitionMutationAllowed(target, uiState.vtoyEfiWriteEnabled)
+                                        val index = current.partitions.indexOf(target)
+                                        require(index >= 0) { "confirmed partition geometry missing" }
+                                        PartitionWriter.commit(disk, PartitionEditor.delete(current, index))
+                                    }
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.CREATE_PARTITION -> {
@@ -297,20 +297,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.FORMAT_PARTITION -> {
-                                    val target = selected ?: throw usb.diagnostics.ConfirmationMismatchException("confirmed partition geometry missing")
-                                    val partition = VirtualPartition(
-                                        startLba = target.startLba,
-                                        sectorCount = target.sectorCount,
-                                        disk = disk,
-                                    )
-                                    // FS pinned in the confirmation payload (effect.formatId).
-                                    val formatId = Formatter.requireSupported(
-                                        confirmedFormatId
-                                            ?: throw IllegalStateException(
-                                                "format confirmation missing filesystem id",
-                                            ),
-                                    )
-                                    Formatter.format(partition, formatId)
+                                    val current = table ?: throw usb.diagnostics.ConfirmationMismatchException("confirmed partition geometry missing")
+                                    mutateConfirmedPartition(
+                                        current.partitions,
+                                        confirmed.partitionStartLba,
+                                        confirmed.partitionSectorCount,
+                                    ) { target ->
+                                        requirePartitionMutationAllowed(target, uiState.vtoyEfiWriteEnabled)
+                                        val partition = VirtualPartition(
+                                            startLba = target.startLba,
+                                            sectorCount = target.sectorCount,
+                                            disk = disk,
+                                        )
+                                        // FS pinned in the confirmation payload (effect.formatId).
+                                        val formatId = Formatter.requireSupported(
+                                            confirmedFormatId
+                                                ?: throw IllegalStateException("format confirmation missing filesystem id"),
+                                        )
+                                        Formatter.format(partition, formatId)
+                                    }
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.GPT_RESTORE -> {
@@ -940,26 +945,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val tableResult = runCatching { PartitionTable.read(disk) }
                     val failure = tableResult.exceptionOrNull()
                     val isTransport = failure is DiskException || failure?.cause is DiskException
-                    val partitions = tableResult.getOrNull()?.partitions?.mapIndexed { idx, p ->
-                        val isEfi = p.name.contains("VTOYEFI", ignoreCase = true) ||
-                            p.type.contains("EFI", ignoreCase = true)
-                        PartitionTab(
-                            id = (idx + 1).toString(),
-                            name = p.name.ifBlank { "Partition ${idx + 1}" },
-                            readOnly = isEfi,
-                            isVtoyEfi = isEfi,
-                            startLba = p.startLba,
-                            sectorCount = p.sectorCount,
-                            filesystemId = runCatching {
-                                val region = usb.partition.VirtualPartition(
-                                    startLba = p.startLba,
-                                    sectorCount = p.sectorCount,
-                                    disk = disk,
-                                )
-                                usb.fs.Filesystem.probe(region)
-                            }.getOrNull(),
-                        )
-                    } ?: emptyList()
+                    val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
                     withContext(Dispatchers.Main.immediate) {
                         if (attachGeneration != gen || attachedDevice?.deviceId != device.deviceId) {
                             return@withContext
@@ -1052,26 +1038,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val tableResult = runCatching { PartitionTable.read(disk) }
                     val failure = tableResult.exceptionOrNull()
                     val isTransport = failure is DiskException || failure?.cause is DiskException
-                    val partitions = tableResult.getOrNull()?.partitions?.mapIndexed { idx, p ->
-                        val isEfi = p.name.contains("VTOYEFI", ignoreCase = true) ||
-                            p.type.contains("EFI", ignoreCase = true)
-                        PartitionTab(
-                            id = (idx + 1).toString(),
-                            name = p.name.ifBlank { "Partition ${idx + 1}" },
-                            readOnly = isEfi,
-                            isVtoyEfi = isEfi,
-                            startLba = p.startLba,
-                            sectorCount = p.sectorCount,
-                            filesystemId = runCatching {
-                                val region = usb.partition.VirtualPartition(
-                                    startLba = p.startLba,
-                                    sectorCount = p.sectorCount,
-                                    disk = disk,
-                                )
-                                usb.fs.Filesystem.probe(region)
-                            }.getOrNull(),
-                        )
-                    } ?: emptyList()
+                    val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
                     withContext(Dispatchers.Main.immediate) {
                         if (attachGeneration != gen || attachedDevice?.deviceId != dev.deviceId) {
                             return@withContext

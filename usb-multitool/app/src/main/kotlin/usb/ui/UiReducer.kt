@@ -286,6 +286,8 @@ object UiReducer {
                         (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) &&
                             state.selectedPartitionId == null ->
                             "Select a partition first"
+                        (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) ->
+                            writeBlockMessage(state)
                         intent.action == DestructiveAction.CREATE_PARTITION && !state.tableValid ->
                             "Cannot create partition on corrupt table. Wipe or restore first."
                         else -> null

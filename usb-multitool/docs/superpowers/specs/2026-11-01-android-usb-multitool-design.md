@@ -109,7 +109,7 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
 
 ### Files
 
-Show one tab per recognized partition, including VTOYEFI. VTOYEFI is read-only until the user explicitly enables writing. Copy, delete, and rename bypass Android's mounted view by using the selected engine.
+Show one tab per recognized partition, including VTOYEFI. EFI system partitions and VTOYEFI are read-only until the user explicitly enables EFI writes; this also blocks partition deletion and formatting. Copy, delete, and rename bypass Android's mounted view by using the selected engine.
 
 A file larger than the destination filesystem or free space supports is rejected before writing begins. Context actions on `.iso` are raw-write and Windows autoinstall setup.
 
