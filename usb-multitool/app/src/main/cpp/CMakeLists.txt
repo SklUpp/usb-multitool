@@ -82,8 +82,6 @@ set(USB_NATIVE_SOURCES
 )
 set(USB_NATIVE_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${EXFAT_ROOT}/include
-    ${EXFAT_ROOT}/fsck
 )
 set(USB_NATIVE_DEFS
     _GNU_SOURCE
@@ -142,6 +140,8 @@ if(USB_WITH_LWEXT4)
         CONFIG_EXT4_MOUNTPOINTS_COUNT=8
     )
 endif()
+# Keep exfat's config.h after NTFS include paths; it lacks NTFS feature macros.
+list(APPEND USB_NATIVE_INCLUDES ${EXFAT_ROOT}/include ${EXFAT_ROOT}/fsck)
 
 add_library(usb_native SHARED ${USB_NATIVE_SOURCES})
 
