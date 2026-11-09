@@ -295,14 +295,20 @@ class RescueMapTest {
         val sectorSize = 512
         val disk = RecordingDisk(sectorCount = 4UL, sectorSize = sectorSize)
         val map = RescueMap.forRestore(4UL, sectorSize = sectorSize)
+        // Sectors 0 and 2 are already restored; only the non-contiguous holes 1 and 3
+        // still need a write, so batching cannot merge them into one command.
+        map.markCopied(0UL, 1UL)
+        map.markCopied(2UL, 1UL)
         val payload = ByteArray(4 * sectorSize) { 3 }
         val source = ImageSource.fromBytes(
             payload,
             format = ImageFormat.IMG,
             decodedSize = payload.size.toLong(),
         )
-        // Become inactive once two sectors committed; third write must not happen.
-        val op = DiskOperation("rescue-restore-cancel", active = { disk.writes.size < 2 })
+        var cancelled = false
+        // Hook fires after the first write is counted: the second run must not start.
+        disk.writeHook = { cancelled = true }
+        val op = DiskOperation("rescue-restore-cancel", active = { !cancelled })
 
         val returned = Rescue.restore(
             source, disk, map,
@@ -312,13 +318,13 @@ class RescueMapTest {
         )
 
         assertEquals(map, returned)
-        assertEquals(listOf(0UL, 1UL), disk.writes)
-        assertEquals(listOf(0UL until 2UL), map.copied)
-        assertEquals(listOf(2UL until 4UL), map.nonTried)
+        assertEquals(listOf(1UL), disk.writes)
+        assertEquals(listOf(0UL until 3UL), map.copied)
+        assertEquals(listOf(3UL until 4UL), map.nonTried)
         assertTrue(map.partial)
         assertEquals(usb.service.OperationState.Partial, op.state)
         assertNotNull(op.failureCause)
-        assertEquals(2 * sectorSize, disk.bytesWritten)
+        assertEquals(sectorSize, disk.bytesWritten)
     }
 
     /**
@@ -372,7 +378,8 @@ class RescueMapTest {
             confirmation = confirm(target),
         )
 
-        assertEquals((0 until sectorCount).map { it.toULong() }, target.writes)
+        assertEquals(listOf(0UL), target.writes)
+        assertEquals(listOf(0L to sectorCount), target.writtenRanges)
         assertEquals(listOf(0UL until sectorCount.toULong()), restoreMap.copied)
         val targetBytes = target.bytes()
         for (i in 0 until sectorCount) {
@@ -705,5 +712,208 @@ class RescueMapTest {
             assertNotNull((op.state as usb.service.OperationState.Failed).cause)
         }
         assertEquals(0, disk.bytesWritten)
+    }
+
+    @Test fun restoreWritesNonContiguousHolesAsOneCommandPerRun() {
+        val sectorSize = 512
+        val sectorCount = 8
+        val payload = ByteArray(sectorCount * sectorSize) { i -> ((i / sectorSize) + 1).toByte() }
+        val disk = RecordingDisk(sectorCount = sectorCount.toULong(), sectorSize = sectorSize)
+        val map = RescueMap.forRestore(sectorCount.toULong(), sectorSize = sectorSize)
+        // Already restored: 0 and 3..4. Holes: 1..2 and 5..7 — two disjoint runs.
+        map.markCopied(0UL, 1UL)
+        map.markCopied(3UL, 2UL)
+        val source = ImageSource.fromBytes(
+            payload,
+            format = ImageFormat.IMG,
+            decodedSize = payload.size.toLong(),
+        )
+        val op = DiskOperation("restore-holes")
+
+        Rescue.restore(
+            source, disk, map,
+            identity = "TEST-DISK",
+            confirmation = confirm(disk),
+            operation = op,
+        )
+
+        assertEquals(listOf(1L to 2, 5L to 3), disk.writtenRanges)
+        assertEquals(listOf(0UL until sectorCount.toULong()), map.copied)
+        assertFalse(map.partial)
+        assertEquals(usb.service.OperationState.Completed, op.state)
+        for (lba in listOf(1, 2, 5, 6, 7)) {
+            val slice = disk.bytes[lba.toULong()]!!
+            assertTrue(
+                "sector $lba has the wrong data",
+                slice.contentEquals(payload.copyOfRange(lba * sectorSize, (lba + 1) * sectorSize)),
+            )
+        }
+        // COPIED sectors are skipped, never rewritten.
+        assertTrue(disk.bytes[0UL] == null)
+        assertTrue(disk.bytes[3UL] == null)
+        assertTrue(disk.bytes[4UL] == null)
+    }
+
+    @Test fun restoreBatchMediumErrorMarksOnlyCulpritSector() {
+        val sectorSize = 512
+        val sectorCount = 4
+        val badLba = 2UL
+        val payload = ByteArray(sectorCount * sectorSize) { i -> ((i / sectorSize) + 1).toByte() }
+        val disk = OneBadWriteDisk(sectorCount.toULong(), sectorSize, badLba)
+        val map = RescueMap.forRestore(sectorCount.toULong(), sectorSize = sectorSize)
+        val source = ImageSource.fromBytes(
+            payload,
+            format = ImageFormat.IMG,
+            decodedSize = payload.size.toLong(),
+        )
+        val op = DiskOperation("restore-batch-medium")
+
+        Rescue.restore(
+            source, disk, map,
+            identity = "TEST-DISK",
+            confirmation = confirm(disk),
+            operation = op,
+        )
+
+        // The 4-sector command failed; only the culprit participates in the retry.
+        assertEquals(listOf(0UL, 1UL, 3UL), disk.writes)
+        assertEquals(listOf(0UL until 2UL, 3UL until 4UL), map.copied)
+        assertEquals(listOf(2UL until 3UL), map.failed)
+        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(3 * sectorSize, disk.bytesWritten)
+        assertTrue("failed sector must stay untouched", disk.bytes[badLba] == null)
+        for (lba in listOf(0, 1, 3)) {
+            val slice = disk.bytes[lba.toULong()]!!
+            assertTrue(slice.contentEquals(payload.copyOfRange(lba * sectorSize, (lba + 1) * sectorSize)))
+        }
+    }
+
+    @Test fun restoreSingleSectorMediumErrorIsNotRetried() {
+        val sectorSize = 512
+        var attempts = 0
+        val disk = object : RecordingDisk(sectorCount = 2UL, sectorSize = sectorSize) {
+            override fun write(lba: ULong, source: ByteBuffer) {
+                attempts++
+                throw DiskException.SenseError(
+                    responseCode = 0x70,
+                    senseKey = 0x03,
+                    asc = 0x11,
+                    ascq = 0x00,
+                )
+            }
+        }
+        val map = RescueMap.forRestore(2UL, sectorSize = sectorSize)
+        map.markCopied(0UL, 1UL)
+        val payload = ByteArray(2 * sectorSize) { 5 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = payload.size.toLong())
+        val op = DiskOperation("restore-single-medium")
+
+        Rescue.restore(
+            source, disk, map,
+            identity = "TEST-DISK",
+            confirmation = confirm(disk),
+            operation = op,
+        )
+
+        // A one-sector write already failed itself: no duplicate retry command.
+        assertEquals(1, attempts)
+        assertEquals(listOf(1UL until 2UL), map.failed)
+        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(0, disk.bytesWritten)
+    }
+
+    @Test fun restoreAbortsOnNonMediumBatchFailureWithoutMarkingCopied() {
+        val sectorSize = 512
+        var attempts = 0
+        val disk = object : RecordingDisk(sectorCount = 4UL, sectorSize = sectorSize) {
+            override fun write(lba: ULong, source: ByteBuffer) {
+                attempts++
+                throw DiskException.IoFailure("batch boom")
+            }
+        }
+        val map = RescueMap.forRestore(4UL, sectorSize = sectorSize, identity = "A#S")
+        val payload = ByteArray(4 * sectorSize) { 9 }
+        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = payload.size.toLong())
+        val op = DiskOperation("restore-batch-abort")
+        val thrown = try {
+            Rescue.restore(
+                source, disk, map,
+                identity = "A#S",
+                confirmation = confirm(disk, "A#S"),
+                operation = op,
+            )
+            null
+        } catch (e: DiskException.IoFailure) {
+            e
+        }
+
+        assertNotNull("transport failure must surface", thrown)
+        assertEquals(1, attempts)
+        // Unknown landing state must never be published as COPIED.
+        assertTrue(map.copied.isEmpty())
+        assertEquals(listOf(0UL until 4UL), map.nonTried)
+        assertTrue(op.state is usb.service.OperationState.Failed)
+        assertEquals(0, disk.bytesWritten)
+    }
+
+    @Test fun restoreCheckpointsOnlyAfterSyncAndAcrossBatchBoundary() {
+        val sectorSize = 4096
+        val sectorCount = 300 // two read batches: 0..255 and 256..299
+        val payload = ByteArray(sectorCount * sectorSize) { i -> ((i % 251) - 128).toByte() }
+        val disk = RecordingDisk(sectorCount = sectorCount.toULong(), sectorSize = sectorSize)
+        val map = RescueMap.forRestore(sectorCount.toULong(), sectorSize = sectorSize)
+        map.markCopied(0UL, 10UL) // resume: pre-restored prefix must not be rewritten
+        val source = ImageSource.fromBytes(
+            payload,
+            format = ImageFormat.IMG,
+            decodedSize = payload.size.toLong(),
+        )
+        val published = mutableListOf<Pair<Long, ULong>>()
+        val op = DiskOperation("restore-checkpoint-batches")
+
+        Rescue.restore(
+            source, disk, map,
+            identity = "TEST-DISK",
+            confirmation = confirm(disk),
+            checkpointEverySectors = 128UL,
+            checkpoint = { snapshot ->
+                published.add(disk.syncCount to snapshot.copied.sumOf { it.last - it.first + 1UL })
+            },
+            operation = op,
+        )
+
+        assertEquals(listOf(10L to 246, 256L to 44), disk.writtenRanges)
+        assertEquals(2, published.size)
+        assertTrue("checkpoint published before sync: $published", published.all { it.first >= 1L })
+        // Snapshot 1 covers batch 1 exactly; the final one covers the whole map.
+        assertEquals(listOf(256UL, 300UL), published.map { it.second })
+        assertEquals(2L, disk.syncCount)
+        assertEquals(listOf(0UL until 300UL), map.copied)
+        assertFalse(map.partial)
+        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertTrue(disk.bytes[0UL] == null)
+        assertTrue(
+            disk.bytes[299UL]!!.contentEquals(payload.copyOfRange(299 * sectorSize, 300 * sectorSize)),
+        )
+    }
+
+    /** Fails every write whose sector range contains [badLba], like a real medium error. */
+    private class OneBadWriteDisk(
+        sectorCount: ULong,
+        sectorSize: Int,
+        private val badLba: ULong,
+    ) : RecordingDisk(sectorCount = sectorCount, sectorSize = sectorSize) {
+        override fun write(lba: ULong, source: ByteBuffer) {
+            val count = source.remaining() / sectorSize
+            if (badLba >= lba && badLba - lba < count.toULong()) {
+                throw DiskException.SenseError(
+                    responseCode = 0x70,
+                    senseKey = 0x03, // medium error
+                    asc = 0x11,
+                    ascq = 0x00,
+                )
+            }
+            super.write(lba, source)
+        }
     }
 }

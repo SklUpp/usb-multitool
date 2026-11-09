@@ -359,54 +359,124 @@ object Rescue {
         var wroteAny = false
         try {
             source.open().use { input ->
-                val sector = ByteArray(sectorSize)
+                val chunkSectors =
+                    minOf(
+                        maxOf(1, Diagnostics.SCAN_CHUNK_BYTES / sectorSize).toULong(),
+                        map.sectorCount,
+                    )
+                val chunk = ByteArray((chunkSectors * sectorSize.toULong()).toInt())
+                // Sectors still needing a write, ascending. The image is dense, so every
+                // sector is read; only NON_TRIED/FAILED runs are written, each as one
+                // multi-sector write instead of one command per sector.
+                // ponytail: adjacent FAILED/NON_TRIED runs stay two commands; merge if a
+                // profile shows status-boundary chatter.
+                val toWrite =
+                    (map.nonTried + map.failed).sortedWith(compareBy<ULongRange> { it.first })
+                var planIndex = 0
                 var lba = 0UL
-                while (lba < map.sectorCount) {
-                    val n = readFully(input, sector)
-                    if (n == 0) {
-                        if (lba < map.sectorCount) {
-                            aborted =
-                                IllegalStateException(
-                                    "rescue image ended at LBA $lba; map expects ${map.sectorCount} sectors",
-                                )
+                batches@ while (lba < map.sectorCount) {
+                    val batchSectors = minOf(chunkSectors, map.sectorCount - lba).toInt()
+                    val wantBytes = batchSectors * sectorSize
+                    val have = readFully(input, chunk, wantBytes)
+                    val full = have / sectorSize
+                    var i = 0
+                    while (i < full) {
+                        if (!operation.isActive()) {
+                            aborted = ImageCancelledException("rescue restore cancelled")
+                            break@batches
                         }
-                        break
-                    }
-                    if (n < sectorSize) {
-                        aborted =
-                            IllegalStateException(
-                                "rescue image truncated mid-sector at LBA $lba ($n of $sectorSize bytes)",
-                            )
-                        break
-                    }
-                    if (!operation.isActive()) {
-                        aborted = ImageCancelledException("rescue restore cancelled")
-                        break
-                    }
-                    val status = map.statusAt(lba)
-                    if (status != RescueStatus.COPIED) {
+                        val cur = lba + i.toULong()
+                        while (planIndex < toWrite.size && toWrite[planIndex].last < cur) planIndex++
+                        val range = toWrite.getOrNull(planIndex)
+                        if (range == null) {
+                            // No more sectors need a write; the rest of this batch is COPIED.
+                            i = full
+                            continue
+                        }
+                        if (range.first > cur) {
+                            // Already COPIED: jump to the next sector that needs a write.
+                            val gap = range.first - lba
+                            i = if (gap > full.toULong()) full else gap.toInt()
+                            continue
+                        }
+                        val run =
+                            minOf((full - i).toULong(), range.last - cur + 1UL).toInt()
+                        val offset = i * sectorSize
                         try {
-                            disk.write(lba, ByteBuffer.wrap(sector))
-                            map.markCopied(lba, 1UL)
+                            disk.write(cur, ByteBuffer.wrap(chunk, offset, run * sectorSize))
+                            map.markCopied(cur, run.toULong())
                             wroteAny = true
                         } catch (e: DiskException.SenseError) {
                             if (!e.isMediumError) {
                                 aborted = e
-                                break
+                                break@batches
                             }
-                            map.markFailed(lba, 1UL)
+                            // A multi-sector command cannot attribute the medium error:
+                            // retry sector by sector so only the culprit becomes FAILED.
                             wroteAny = true
+                            if (run == 1) {
+                                map.markFailed(cur, 1UL)
+                            } else {
+                                var j = 0
+                                while (j < run) {
+                                    if (!operation.isActive()) {
+                                        aborted =
+                                            ImageCancelledException("rescue restore cancelled")
+                                        break@batches
+                                    }
+                                    val sub = cur + j.toULong()
+                                    try {
+                                        disk.write(
+                                            sub,
+                                            ByteBuffer.wrap(
+                                                chunk,
+                                                offset + j * sectorSize,
+                                                sectorSize,
+                                            ),
+                                        )
+                                        map.markCopied(sub, 1UL)
+                                    } catch (inner: DiskException.SenseError) {
+                                        if (!inner.isMediumError) {
+                                            aborted = inner
+                                            break@batches
+                                        }
+                                        map.markFailed(sub, 1UL)
+                                    } catch (inner: DiskException) {
+                                        aborted = inner
+                                        break@batches
+                                    } catch (inner: Exception) {
+                                        aborted = inner
+                                        break@batches
+                                    }
+                                    j++
+                                }
+                            }
                         } catch (e: DiskException) {
                             aborted = e
-                            break
+                            break@batches
                         } catch (e: Exception) {
                             aborted = e
-                            break
+                            break@batches
                         }
+                        i += run
                     }
-                    lba++
-                    sinceCheckpoint++
+                    lba += i.toULong()
+                    sinceCheckpoint += i.toULong()
                     operation.report((lba * sectorSize.toULong()).toLong())
+                    if (have < wantBytes) {
+                        val rem = have % sectorSize
+                        aborted =
+                            if (rem == 0) {
+                                IllegalStateException(
+                                    "rescue image ended at LBA $lba; map expects ${map.sectorCount} sectors",
+                                )
+                            } else {
+                                IllegalStateException(
+                                    "rescue image truncated mid-sector at LBA $lba ($rem of $sectorSize bytes)",
+                                )
+                            }
+                        break
+                    }
                     if (sinceCheckpoint >= checkpointEverySectors) {
                         try {
                             disk.sync()
@@ -473,10 +543,10 @@ object Rescue {
         return existing
     }
 
-    private fun readFully(input: CountedInputStream, buffer: ByteArray): Int {
+    private fun readFully(input: CountedInputStream, buffer: ByteArray, length: Int): Int {
         var off = 0
-        while (off < buffer.size) {
-            val n = input.read(buffer, off, buffer.size - off)
+        while (off < length) {
+            val n = input.read(buffer, off, length - off)
             if (n < 0) return off
             off += n
         }

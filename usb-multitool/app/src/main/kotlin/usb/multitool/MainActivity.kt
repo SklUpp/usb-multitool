@@ -1770,7 +1770,12 @@ private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
         )
 
     private companion object {
-        const val COPY_CHUNK_BYTES = 64 * 1024
+        /**
+         * One 1 MiB chunk per filesystem call. The FAT engine opens, seeks, writes and
+         * syncs per call, so a larger chunk cuts that overhead 16×. The buffer is
+         * allocated per operation and dropped when it returns — no idle retention.
+         */
+        const val COPY_CHUNK_BYTES = 1024 * 1024
         const val PROGRESS_TICK_MS = 120L
         /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
         const val LOG_TICK_MS = 3_000L
