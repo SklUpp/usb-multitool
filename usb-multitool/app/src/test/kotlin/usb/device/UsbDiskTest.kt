@@ -92,7 +92,7 @@ class UsbDiskTest {
     @Test
     fun lbaAdditionOverflowRejected() {
         val session = FakeBotSession()
-        val disk = UsbDisk(session, BlockGeometry(512, ULong.MAX_VALUE))
+        val disk = UsbDisk(session, BlockGeometry(512, ULong.MAX_VALUE / 512UL))
         val out = ByteBuffer.allocate(512)
         assertThrows(IllegalArgumentException::class.java) {
             disk.read(ULong.MAX_VALUE, out)
