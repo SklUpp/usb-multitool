@@ -72,6 +72,9 @@ jobs:
 
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Verify 16 KB page-size alignment
+        run: ./scripts/check-16kb-alignment.sh app/build/outputs/apk/debug/*.apk
       - name: Lint debug
         run: ./gradlew :app:lintDebug --no-daemon
 
