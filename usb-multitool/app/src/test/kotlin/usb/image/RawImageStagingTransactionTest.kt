@@ -2,11 +2,11 @@ package usb.image
 
 import java.io.File
 import java.nio.file.Files
-import kotlin.test.Test
-import kotlin.test.assertContentEquals
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import org.junit.Test
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
 import usb.service.DiskOperation
@@ -15,13 +15,13 @@ class RawImageStagingTransactionTest {
     private fun root() = Files.createTempDirectory("raw-stage-tx").toFile().also { it.deleteOnExit() }
 
     @Test
-    fun copiesChunksReportsProgressAndSyncsDurableOutput() {
+    fun copiesChunksAndReportsProgress() {
         val root = root()
         val bytes = "abcdefghij".encodeToByteArray()
         val volume = FakeVolume(bytes)
         val operation = DiskOperation()
         val result = stageRawImageChunks(root, volume, "/image", bytes.size.toLong(), "x.img", operation, 3)
-        assertContentEquals(bytes, result.readBytes())
+        assertArrayEquals(bytes, result.readBytes())
         assertEquals(bytes.size.toLong(), operation.bytesDone)
     }
 
@@ -29,7 +29,7 @@ class RawImageStagingTransactionTest {
     fun shortReadFailsAndRemovesOwnedPartialFile() {
         val root = root()
         val operation = DiskOperation()
-        assertFailsWith<IllegalStateException> {
+        assertThrows(IllegalStateException::class.java) {
             stageRawImageChunks(root, FakeVolume(byteArrayOf(1, 2)), "/image", 3, "x.img", operation, 3)
         }
         assertTrue(ImageStaging.listStagingFiles(root).isEmpty())
@@ -39,7 +39,7 @@ class RawImageStagingTransactionTest {
     fun inactiveOperationCancelsAndCleansPartialFile() {
         val root = root()
         val operation = DiskOperation(active = { false })
-        assertFailsWith<kotlinx.coroutines.CancellationException> {
+        assertThrows(kotlinx.coroutines.CancellationException::class.java) {
             stageRawImageChunks(root, FakeVolume(byteArrayOf(1)), "/image", 1, "x.img", operation)
         }
         assertTrue(ImageStaging.listStagingFiles(root).isEmpty())
