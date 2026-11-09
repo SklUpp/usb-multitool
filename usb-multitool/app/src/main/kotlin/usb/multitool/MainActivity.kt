@@ -76,7 +76,9 @@ import usb.partition.PartitionWriter
 import usb.partition.VirtualPartition
 import usb.image.ImageSource
 import usb.image.ImageStaging
+import usb.image.stageRawImageChunks
 import usb.image.RawWriter
+import usb.partition.findConfirmedPartition
 import usb.ventoy.VentoyAssets
 import usb.ventoy.VentoyDownloader
 import usb.ventoy.VentoyInstaller
@@ -251,10 +253,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             val table = runCatching { PartitionTable.read(disk) }.getOrNull()
-                            val selected = table?.partitions?.firstOrNull { part ->
-                                confirmed.partitionStartLba != null && confirmed.partitionSectorCount != null &&
-                                    part.startLba == confirmed.partitionStartLba && part.sectorCount == confirmed.partitionSectorCount
-                            }
+                            val selected = findConfirmedPartition(
+                                partitions = table?.partitions.orEmpty(),
+                                confirmedStartLba = confirmed.partitionStartLba,
+                                confirmedSectorCount = confirmed.partitionSectorCount,
+                            )
                             when (action) {
                                 DestructiveAction.WIPE -> {
                                     Diagnostics.wipe(
@@ -1490,45 +1493,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val size = volume.stat(target).size
                 operation.bytesTotal = size
                 ImageStaging.requireUsableSpaceEstimate(filesDir, size)
-                val staged = ImageStaging.createUnique(filesDir, name)
-                // createUnique already created the empty owned file — always eligible for cleanup.
-                var createAttempted = true
                 var primary: Throwable? = null
                 try {
-                    staged.outputStream().use { out ->
-                        var offset = 0L
-                        while (offset < size) {
-                            if (!operation.isActive()) {
-                                throw kotlinx.coroutines.CancellationException("Staging cancelled")
-                            }
-                            val want = minOf(COPY_CHUNK_BYTES.toLong(), size - offset).toInt()
-                            val data = volume.read(target, offset, want)
-                            if (data.isEmpty()) {
-                                throw IllegalStateException("short read at $offset of $size bytes")
-                            }
-                            out.write(data)
-                            offset += data.size
-                            operation.report(offset)
-                        }
-                        out.flush()
-                        out.fd.sync()
-                    }
-                    // Late cancel during last write/fsync — delete via catch, do not publish.
-                    if (!operation.isActive()) {
-                        throw kotlinx.coroutines.CancellationException("Staging cancelled")
-                    }
-                    if (staged.length() != size) {
-                        throw IllegalStateException(
-                            "staged size mismatch: got ${staged.length()}, expected $size",
-                        )
-                    }
-                    stagedPathHolder[0] = staged.absolutePath
+                    val stagedCopy = stageRawImageChunks(
+                        filesDir = filesDir,
+                        volume = volume,
+                        sourcePath = target,
+                        sourceSize = size,
+                        sourceName = name,
+                        operation = operation,
+                        chunkBytes = COPY_CHUNK_BYTES,
+                    )
+                    stagedPathHolder[0] = stagedCopy.absolutePath
                 } catch (t: Throwable) {
                     primary = t
                     stagedPathHolder[0] = null
-                    if (createAttempted) {
-                        ImageStaging.deleteIfManaged(filesDir, staged.absolutePath)
-                    }
                     throw t
                 } finally {
                     // Release USB before Partitions confirm / raw claim.
