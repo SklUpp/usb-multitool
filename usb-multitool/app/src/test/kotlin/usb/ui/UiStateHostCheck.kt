@@ -54,6 +54,12 @@ object UiStateHostCheck {
             )
         require(ready.actionsEnabled)
 
+        val withFree = ready.copy(freeRegions = listOf(FreeRegionUi(2048UL, 4096UL), FreeRegionUi(16384UL, 4096UL)))
+        val create = UiReducer.reduce(withFree, UiIntent.RequestCreatePartition(16384UL, 1024UL)).state.pendingConfirmation
+        require(create?.createStartLba == 16384UL && create.createSectorCount == 1024UL)
+        require(UiReducer.reduce(withFree, UiIntent.RequestCreatePartition(16385UL, 1024UL)).state.pendingConfirmation == null)
+        require(UiReducer.reduce(withFree, UiIntent.RequestCreatePartition(16384UL, 4097UL)).state.pendingConfirmation == null)
+
         val permission =
             ready.copy(presence = DevicePresence.PermissionRequired)
         require(!permission.actionsEnabled)

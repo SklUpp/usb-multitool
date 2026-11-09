@@ -245,6 +245,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             val table = runCatching { PartitionTable.read(disk) }.getOrNull()
+                            val partitionDisk = object : usb.device.BlockDevice by disk {
+                                override fun write(lba: ULong, source: java.nio.ByteBuffer) {
+                                    mutationAttempted = true
+                                    disk.write(lba, source)
+                                }
+                            }
                             when (action) {
                                 DestructiveAction.WIPE -> {
                                     Diagnostics.wipe(
@@ -272,7 +278,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         requirePartitionMutationAllowed(target, uiState.vtoyEfiWriteEnabled)
                                         val index = current.partitions.indexOf(target)
                                         require(index >= 0) { "confirmed partition geometry missing" }
-                                        PartitionWriter.commit(disk, PartitionEditor.delete(current, index))
+                                        PartitionWriter.commit(partitionDisk, PartitionEditor.delete(current, index))
                                     }
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
@@ -280,7 +286,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     val current = table ?: throw IllegalStateException("no partition table")
                                     val start = confirmed.createStartLba ?: throw IllegalStateException("partition start not confirmed")
                                     val size = confirmed.createSectorCount ?: throw IllegalStateException("partition size not confirmed")
-                                    PartitionWriter.commit(disk, PartitionEditor.create(current, size, PartitionType.BASIC, start))
+                                    PartitionWriter.commit(partitionDisk, PartitionEditor.create(current, size, PartitionType.BASIC, start))
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.FORMAT_PARTITION -> {
@@ -1452,6 +1458,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
         onTerminal: ((usb.service.OperationState) -> Unit)? = null,
         body: (DiskOperation) -> Unit,
     ) {
+        val quiet = failurePath != null
         val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
             override suspend fun run() {
                 synchronized(filesLock) {
@@ -1459,7 +1466,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 }
             }
         }
-        onIntent(
+        if (!quiet) onIntent(
             UiIntent.OperationUpdated(
                 OperationProgress(
                     state = OperationState.Running,
@@ -1477,7 +1484,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 var lastLogged = -1L
                 while (true) {
                     delay(PROGRESS_TICK_MS)
-                    onIntent(
+                    if (!quiet) onIntent(
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Running,
@@ -1500,7 +1507,9 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 }
             }
             try {
-                when (val outcome = handle.await()) {
+                val outcome = handle.await()
+                ticker.cancel()
+                when (outcome) {
                     is usb.service.OperationState.Failed -> {
                         val message =
                             outcome.cause.message
@@ -1548,7 +1557,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         onTerminal?.invoke(outcome)
                     }
                     else -> {
-                        onIntent(
+                        if (!quiet) onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = OperationState.Completed,
@@ -1636,7 +1645,10 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 }
             }
             try {
-                when (val outcome = handle.await()) {
+                val outcome = handle.await()
+                ticker.cancel()
+                logTicker.cancel()
+                when (outcome) {
                     is usb.service.OperationState.Failed -> {
                         val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                         onIntent(UiIntent.Status(message))
