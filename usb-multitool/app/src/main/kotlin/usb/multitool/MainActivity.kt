@@ -190,6 +190,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 (err.message ?: err.javaClass.simpleName),
                     )
                 }
+                .getOrDefault(false)
+        }
         when (intent) {
             is UiIntent.ClearStagedRawImage -> if (intent.deleteFile && !state.isRunning && state.operation?.state != OperationState.Queued && state.pendingConfirmation == null) deleteOwnedOrReport(state.stagedRawImagePath)
             is UiIntent.SetStagedRawImage -> if (!state.isRunning && state.operation?.state != OperationState.Queued && state.pendingConfirmation == null) {
@@ -1328,7 +1330,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val msg = failure.message.orEmpty()
         if (msg.startsWith("Directory not empty") || msg.contains("Directory not empty")) {
             return IllegalStateException(
-                "Cannot delete "$name": directory is not empty — remove its contents first",
+                "Cannot delete \"$name\": directory is not empty — remove its contents first",
                 failure,
             )
         }
