@@ -253,7 +253,7 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
 @Composable
 private fun OperationBanner(
     state: AppUiState,
-    onIntent: (UiIntent) -\u003e Unit,
+    onIntent: (UiIntent) -> Unit,
 ) {
     val op = state.operation ?: return
     // Reset expanded only when the operation label changes, not on every state transition.
