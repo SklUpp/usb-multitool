@@ -8,6 +8,7 @@ import usb.fs.MountedVolume
 import usb.image.CountedInputStream
 import usb.image.ImageCancelledException
 import usb.image.ImageSource
+import usb.image.ImageVerifyException
 import usb.service.DiskOperation
 import usb.service.OperationState
 
@@ -314,9 +315,19 @@ object Rescue {
     }
 
     /**
-     * Image → disk. Requires a [MapKind.RESTORE] map (never a COPY map). Confirmation
-     * and size checks must run before the first write (caller / [restore] preflight).
-     * Medium write errors → FAILED; disconnect/transport → abort Partial.
+     * Image → disk. Requires a [MapKind.RESTORE] map (never a COPY map). Confirmation,
+     * identity and size checks run before the first write.
+     * A COPIED range is skipped only after its disk content has been read back and
+     * compared with the image bytes in the same pass; whatever the selected image
+     * currently serves is compared, and ranges that differ are rewritten.
+     * After sync the whole restored region is read back and compared with a fresh full
+     * read of the image: Completed therefore means the disk matched that fresh read byte
+     * for byte. This is not a snapshot-consistency proof — a source modified during the
+     * operation is not guaranteed to be detected, and the source must be kept unchanged
+     * for the whole restore.
+     * Medium write errors → FAILED sectors; disconnect/transport → abort Partial.
+     * The first write attempt is recorded before `disk.write` runs, so a command that
+     * lands bytes and then fails is reported Partial instead of Failed.
      */
     fun restore(
         source: ImageSource,
@@ -354,9 +365,18 @@ object Rescue {
         }
 
         closeMountedVolumes(openVolumes)
+        // Resume only for the same destination. Without a proven disk identity, matching
+        // geometry and the checkpoint's own geometry the map may describe another stick,
+        // so inherited COPIED runs are discarded. Content is still verified per range.
+        if (map.copied.isNotEmpty() &&
+            (map.identity == null || map.identity != identity || map.sectorSize != sectorSize)
+        ) {
+            map.resetProgress()
+        }
         var sinceCheckpoint = 0UL
         var aborted: Throwable? = null
         var wroteAny = false
+        var coveredSectors = 0UL
         try {
             source.open().use { input ->
                 val chunkSectors =
@@ -365,14 +385,16 @@ object Rescue {
                         map.sectorCount,
                     )
                 val chunk = ByteArray((chunkSectors * sectorSize.toULong()).toInt())
-                // Sectors still needing a write, ascending. The image is dense, so every
-                // sector is read; only NON_TRIED/FAILED runs are written, each as one
-                // multi-sector write instead of one command per sector.
-                // ponytail: adjacent FAILED/NON_TRIED runs stay two commands; merge if a
+                // Every sector is visited in one dense pass. COPIED runs are read back
+                // from the disk and compared with the image bytes before they may be
+                // skipped, so a stale or differently-sourced checkpoint rewrites what no
+                // longer matches instead of being trusted. NON_TRIED/FAILED runs are
+                // written; each run becomes one multi-sector command, not per sector.
+                // ponytail: adjacent status runs stay separate commands; merge if a
                 // profile shows status-boundary chatter.
-                val toWrite =
-                    (map.nonTried + map.failed).sortedWith(compareBy<ULongRange> { it.first })
-                var planIndex = 0
+                val schedule = rescueSchedule(map)
+                val diskSectors by lazy { ByteArray(chunk.size) }
+                var scheduleIndex = 0
                 var lba = 0UL
                 batches@ while (lba < map.sectorCount) {
                     val batchSectors = minOf(chunkSectors, map.sectorCount - lba).toInt()
@@ -386,26 +408,63 @@ object Rescue {
                             break@batches
                         }
                         val cur = lba + i.toULong()
-                        while (planIndex < toWrite.size && toWrite[planIndex].last < cur) planIndex++
-                        val range = toWrite.getOrNull(planIndex)
-                        if (range == null) {
-                            // No more sectors need a write; the rest of this batch is COPIED.
-                            i = full
-                            continue
+                        while (scheduleIndex < schedule.size &&
+                            schedule[scheduleIndex].first.last < cur
+                        ) {
+                            scheduleIndex++
                         }
-                        if (range.first > cur) {
-                            // Already COPIED: jump to the next sector that needs a write.
-                            val gap = range.first - lba
-                            i = if (gap > full.toULong()) full else gap.toInt()
-                            continue
+                        val entry = schedule.getOrNull(scheduleIndex)
+                        if (entry == null || entry.first.first > cur) {
+                            // The map must cover every sector; never skip an unclassified one.
+                            aborted =
+                                IllegalStateException(
+                                    "rescue map has no status for LBA $cur; refusing to skip unverified sectors",
+                                )
+                            break@batches
                         }
                         val run =
-                            minOf((full - i).toULong(), range.last - cur + 1UL).toInt()
+                            minOf((full - i).toULong(), entry.first.last - cur + 1UL).toInt()
                         val offset = i * sectorSize
+                        val runBytes = run * sectorSize
+                        if (entry.second == RescueStatus.COPIED) {
+                            var matches = false
+                            try {
+                                matches =
+                                    diskRegionMatches(
+                                        disk,
+                                        diskSectors,
+                                        chunk,
+                                        offset,
+                                        cur,
+                                        runBytes,
+                                    )
+                            } catch (e: DiskException.SenseError) {
+                                if (!e.isMediumError) {
+                                    aborted = e
+                                    break@batches
+                                }
+                                // Unreadable sector: the checkpoint value cannot be
+                                // trusted, so fall through and rewrite it.
+                            } catch (e: Exception) {
+                                aborted = e
+                                break@batches
+                            }
+                            if (matches) {
+                                i += run
+                                continue
+                            }
+                        }
+                        // Attempt is recorded before the command, not after its return:
+                        // UsbDisk.write splits one call into several SCSI commands, so a
+                        // disconnect can land bytes and still throw. Such a partial
+                        // low-level write must report Partial, never a clean Failed.
+                        if (!wroteAny) {
+                            wroteAny = true
+                            operation.mutationAttempted = true
+                        }
                         try {
                             disk.write(cur, ByteBuffer.wrap(chunk, offset, run * sectorSize))
                             map.markCopied(cur, run.toULong())
-                            wroteAny = true
                         } catch (e: DiskException.SenseError) {
                             if (!e.isMediumError) {
                                 aborted = e
@@ -413,7 +472,6 @@ object Rescue {
                             }
                             // A multi-sector command cannot attribute the medium error:
                             // retry sector by sector so only the culprit becomes FAILED.
-                            wroteAny = true
                             if (run == 1) {
                                 map.markFailed(cur, 1UL)
                             } else {
@@ -488,7 +546,12 @@ object Rescue {
                         sinceCheckpoint = 0UL
                     }
                 }
+                coveredSectors = lba
             }
+        } catch (e: Exception) {
+            // Anything escaping the loop is still an aborted run: never publish Completed.
+            aborted = mergeAbort(aborted, e)
+            throw e
         } finally {
             var syncOk = !wroteAny
             try {
@@ -499,6 +562,21 @@ object Rescue {
             } catch (syncErr: Exception) {
                 aborted = mergeAbort(aborted, syncErr)
                 syncOk = false
+            }
+            // Compare the settled disk with a fresh read of the image (byte equality,
+            // the RawWriter standard). This does not prove the source stayed immutable;
+            // a concurrent modification is not guaranteed to be detected.
+            if (syncOk &&
+                aborted == null &&
+                coveredSectors >= map.sectorCount &&
+                map.failed.isEmpty() &&
+                operation.isActive()
+            ) {
+                try {
+                    verifyRestored(source, disk, expectedBytes, sectorSize, operation)
+                } catch (e: Exception) {
+                    aborted = mergeAbort(aborted, e)
+                }
             }
             // Data-before-map: never publish COPIED past an unconfirmed sync.
             if (syncOk) {
@@ -535,6 +613,92 @@ object Rescue {
             throw aborted
         }
         return map
+    }
+
+    /**
+     * Sorted status schedule covering every sector of [map] exactly once.
+     */
+    private fun rescueSchedule(map: RescueMap): List<Pair<ULongRange, RescueStatus>> {
+        val schedule = ArrayList<Pair<ULongRange, RescueStatus>>(3)
+        for (r in map.copied) schedule += r to RescueStatus.COPIED
+        for (r in map.failed) schedule += r to RescueStatus.FAILED
+        for (r in map.nonTried) schedule += r to RescueStatus.NON_TRIED
+        schedule.sortBy { it.first.first }
+        return schedule
+    }
+
+    /**
+     * Re-open the image and compare the whole restored region against the disk after
+     * sync, mirroring [usb.image.RawWriter]'s verify pass. This proves byte equality
+     * between the settled disk and one fresh read of the source; it does not prove
+     * snapshot consistency across the operation, and a concurrent source modification
+     * is not guaranteed to be detected. The source must not change during a restore.
+     * Read/cancel failures propagate.
+     */
+    private fun verifyRestored(
+        source: ImageSource,
+        disk: UsbDisk,
+        expectedBytes: Long,
+        sectorSize: Int,
+        operation: DiskOperation,
+    ) {
+        val chunkBytes = Diagnostics.SCAN_CHUNK_BYTES
+        require(chunkBytes % sectorSize == 0) {
+            "SCAN_CHUNK_BYTES must be a multiple of sectorSize"
+        }
+        val srcChunk = ByteArray(chunkBytes)
+        val diskChunk = ByteArray(chunkBytes)
+        source.open().use { input ->
+            var offset = 0L
+            var lba = 0UL
+            while (offset < expectedBytes) {
+                if (!operation.isActive()) {
+                    throw ImageCancelledException("rescue verification cancelled after sync")
+                }
+                val want = minOf(chunkBytes.toLong(), expectedBytes - offset).toInt()
+                val n = readFully(input, srcChunk, want)
+                if (n < want) {
+                    throw ImageVerifyException(
+                        "restore verify source short at byte ${offset + n}: got $n of $want",
+                    )
+                }
+                disk.read(lba, ByteBuffer.wrap(diskChunk, 0, want))
+                var k = 0
+                while (k < want) {
+                    if (srcChunk[k] != diskChunk[k]) {
+                        val abs = offset + k
+                        throw ImageVerifyException(
+                            "restore verification mismatch at byte $abs (LBA ${abs / sectorSize})",
+                        )
+                    }
+                    k++
+                }
+                offset += want
+                lba += (want / sectorSize).toULong()
+            }
+        }
+    }
+
+    /**
+     * Read back [bytes] at [lba] and compare them with the image bytes at
+     * [expectedOffset]. A checkpoint's COPIED range is skipped only on an exact match;
+     * read failures propagate so the caller fails closed instead of trusting the map.
+     */
+    private fun diskRegionMatches(
+        disk: UsbDisk,
+        scratch: ByteArray,
+        expected: ByteArray,
+        expectedOffset: Int,
+        lba: ULong,
+        bytes: Int,
+    ): Boolean {
+        disk.read(lba, ByteBuffer.wrap(scratch, 0, bytes))
+        var k = 0
+        while (k < bytes) {
+            if (scratch[k] != expected[expectedOffset + k]) return false
+            k++
+        }
+        return true
     }
 
     private fun mergeAbort(existing: Throwable?, next: Throwable): Throwable {

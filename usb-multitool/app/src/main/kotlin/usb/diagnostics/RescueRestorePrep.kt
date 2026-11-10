@@ -5,6 +5,14 @@ package usb.diagnostics
  */
 object RescueRestorePrep {
     /**
+     * Resume is allowed only for the same destination: the checkpoint's disk identity
+     * must match the live stick (and the live stick must expose a serial, otherwise a
+     * label alone collides across same-model sticks). Geometry is re-checked by
+     * [Rescue.restore]. Identity is only the admission gate — every inherited COPIED
+     * range is still read back from the disk and compared with the image before it may
+     * be skipped, so whatever the selected image currently provides is compared and
+     * ranges that differ are rewritten.
+     *
      * @param liveHasSerial when false, never resume — label-only identity collides across sticks.
      * @throws IllegalStateException on partial COPY with NON_TRIED (would write zeros).
      */
@@ -51,7 +59,9 @@ object RescueRestorePrep {
                     for (r in loaded.failed) {
                         restoreMap.markFailed(r.first, r.last - r.first + 1UL)
                     }
-                    note = "resuming RESTORE map (serial identity matched)"
+                    note =
+                        "resuming RESTORE map (disk identity matched); every copied range is re-read " +
+                            "from the disk and rewritten unless it matches the selected image."
                 } else {
                     note =
                         when {

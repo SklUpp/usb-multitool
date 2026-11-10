@@ -138,6 +138,14 @@ Read scans do not write. Fake-capacity testing, write benchmarks, and wipe are s
 
 Backup and restore use the image pipeline plus a rescue map. Unreadable ranges remain visible, and a partial image is never described as a verified full copy.
 
+A RESTORE map records the target disk identity and geometry. Resume requires the same disk identity (a stick without a stable serial never resumes) and matching geometry. After that admission gate, every COPIED range is read back from the disk and compared with the bytes the selected image currently provides in the same pass; it is skipped only on an exact match, otherwise it is rewritten. `COPIED` is recorded only after a successful write, and checkpoints are published only after sync, so an interrupted run reports partial and never claims completed over unverified sectors. A write command that lands bytes before failing is reported as partial, not as a clean failure.
+
+After sync, the whole restored region is read back once more and compared byte for byte with a fresh full read of the image (the same check `RawWriter` applies to raw writes). `Completed` therefore means the disk equals that second read; it is not a snapshot-consistency proof, and a source modified during the operation is not guaranteed to be detected. The source must not be changed while a restore runs. Verification is skipped when the run aborted, did not cover the map, or already has `FAILED` sectors, so those outcomes keep their original cause.
+
+Cost: resume reads the COPIED ranges back before skipping them (one read command per status run inside the normal 1 MiB batch), and every completed run pays one extra image pass plus one disk read of the restored region. A source backed by HTTP is therefore fetched twice — once to write, once to verify.
+
+An immutable staged snapshot would remove the second read but cannot be provided by the existing staging mechanism: `ImageStaging` ownership is session-scoped (files are not managed, resumable or deletable after process death), the checkpoint has no reference to a staged file, decoded size is unknown for SAF/content images so free space cannot be preflighted, and app-private `filesDir` capacity is unrelated to the image size. Staging restore would need an adoptable manifest plus a cleanup lifecycle owned by MainActivity/UI; it is not implemented.
+
 ## 8. Safety invariants
 
 1. Every destructive operation requires confirmation containing device identity and capacity.

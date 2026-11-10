@@ -588,12 +588,12 @@ Expected: FAIL with unresolved rescue types.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Port F3probe behavior and ddrescue map transitions without rewriting their algorithms. Read scan never writes. Wipe writes zeros only after confirmation. Backup and restore persist the map beside partial output and resume only from that map.
+Port F3probe behavior and ddrescue map transitions without rewriting their algorithms. Read scan never writes. Wipe writes zeros only after confirmation. Backup and restore persist the map beside partial output; a RESTORE checkpoint resumes only on the same disk identity and geometry, and every COPIED range is read back from the disk and compared with the selected image before it is skipped. Legacy maps stay readable but never resume without a stable destination identity.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run the same Gradle command.
-Expected: PASS for non-tried, copied, failed, resumed, and partial-output states.
+Expected: PASS for non-tried, copied, failed, verified resume, stale-content rewrite, replaced-disk rewrite, mutable-source verify failure, verification-read failure, and partial-output states.
 
 - [ ] **Step 5: Commit**
 

@@ -25,6 +25,7 @@ class RescueMap private constructor(
     val sectorCount: ULong,
     val kind: MapKind,
     val sectorSize: Int?,
+    /** Target disk identity (serial/label). Never binds COPIED runs to image content. */
     val identity: String?,
     private val runs: MutableList<Run>,
 ) {
@@ -56,6 +57,12 @@ class RescueMap private constructor(
     fun markCopied(start: ULong, count: ULong) = paint(start, count, RescueStatus.COPIED)
 
     fun markNonTried(start: ULong, count: ULong) = paint(start, count, RescueStatus.NON_TRIED)
+
+    /** Discard inherited progress (COPIED/FAILED) and restart from NON_TRIED. */
+    fun resetProgress() {
+        runs.clear()
+        runs += Run(0UL, sectorCount, RescueStatus.NON_TRIED)
+    }
 
     fun statusAt(lba: ULong): RescueStatus {
         require(lba < sectorCount)
