@@ -60,7 +60,7 @@ class CloseFailureTest {
     }
 
     /**
-     * Mirrors MainActivity.withWritableVolume finally when body succeeded:
+     * Mirrors FilesVolumeSession.withWritableVolume finally when body succeeded:
      * Partial + CloseAfterSuccessException thrown; never Completed.
      */
     @Test
@@ -163,7 +163,7 @@ class CloseFailureTest {
     }
 
 
-    /** Same control flow as MainActivity.withWritableVolume finally. */
+    /** Same control flow as FilesVolumeSession.withWritableVolume finally. */
     private fun simulateWritableVolumeFinally(
         operation: DiskOperation,
         primary: Throwable?,

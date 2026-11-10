@@ -1,4 +1,5 @@
 package usb.multitool
+import usb.files.FilesVolumeSession
 import usb.files.MountedFilesVolume
 import usb.files.requireFilesVolumeClosed
 import usb.files.FilesOperationPolicy
@@ -182,13 +183,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     /**
-     * Owns the mounted FAT volume of the selected partition. Guarded by [filesLock]:
-     * every files operation runs inside it, so a close can never race a mounted read.
-     * The ceiling of this coarse lock is that detach/onCleared can wait for one files
-     * operation to finish; upgrade only if a single FAT call ever becomes unbounded.
+     * Owns the mounted FAT volume of the selected partition via [FilesVolumeSession].
+     * Every files operation runs inside its lock, so a close can never race a mounted read.
+     * Ceiling: detach/onCleared can wait for one files operation; upgrade only if a single
+     * FAT call ever becomes unbounded.
      */
-    private val filesLock = Any()
-    private var filesVolume: MountedFilesVolume? = null
+    private val filesSession =
+        FilesVolumeSession { partitionId, writable -> openMountedFilesVolume(partitionId, writable) }
     /** Key of the newest free-space request; a different key asks again. */
     @Volatile private var lastUsageKey: FilesystemUsageKey? = null
     /** Key whose measurement has not reported back yet; prevents duplicate requests. */
@@ -1602,17 +1603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * (detach/onCleared use false — no crash, no orphaned status after clear).
      */
     private fun closeFilesVolume(reportStatus: Boolean = false): Throwable? {
-        val error =
-            synchronized(filesLock) {
-                val current = filesVolume
-                filesVolume = null
-                try {
-                    current?.close()
-                    null
-                } catch (t: Throwable) {
-                    t
-                }
-            }
+        val error = filesSession.close()
         if (error != null && reportStatus) {
             post(
                 UiIntent.Status(
@@ -1627,31 +1618,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Mounted volume of [partitionId], opened on first use. Must be called from inside
-     * a files operation (holding [filesLock]).
-     *
-     * [writable]=false → EXT RO browse (list/download). Mutations remount RW for the
-     * duration of the call, then drop the volume so the next browse is RO again.
+     * Open disk + filesystem for [partitionId]. Called only from [FilesVolumeSession]
+     * after any prior volume was closed. Failure path closes the disk claim.
      */
-    private fun volumeForLocked(partitionId: String, writable: Boolean = false): UsbFsVolume {
-        val current = filesVolume
-        if (current != null && current.partitionId == partitionId && current.writable == writable) {
-            return current.volume
-        }
-        // Mode change (RO↔RW) or partition change: close before reopen.
-        filesVolume = null
-        try {
-            current?.close()
-        } catch (closeErr: Throwable) {
-            // Do not remount and claim success — close/sync was not confirmed.
-            throw IllegalStateException(
-                "Volume close/sync was not confirmed; refusing remount: " +
-                    (closeErr.message ?: closeErr.javaClass.simpleName) +
-                    ". If the stick will not remount, run e2fsck on a PC",
-                closeErr,
-            )
-        }
-
+    private fun openMountedFilesVolume(partitionId: String, writable: Boolean): MountedFilesVolume {
         val device = attachedDevice ?: throw DiskException.Disconnected()
         val manager = usbManager ?: throw DiskException.Disconnected()
         val disk = UsbDiskSession.open(manager, device)
@@ -1678,41 +1648,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             throw failure
         }
-        filesVolume = MountedFilesVolume(partitionId, disk, volume, writable = writable)
-        return volume
-    }
-
-
-    /**
-     * RW mount for a mutation. Close/umount failure after a successful body →
-     * [OperationState.Partial] + [usb.fs.CloseAfterSuccessException] (never Completed).
-     * Body failure keeps primacy; close error is suppressed onto it. No Status race.
-     */
-    private inline fun <T> withWritableVolume(
-        partitionId: String,
-        operation: DiskOperation,
-        body: (UsbFsVolume) -> T,
-    ): T {
-        val volume = volumeForLocked(partitionId, writable = true)
-        var primary: Throwable? = null
-        try {
-            return body(volume)
-        } catch (t: Throwable) {
-            primary = t
-            throw t
-        } finally {
-            val closeErr = closeFilesVolume(reportStatus = false)
-            if (closeErr != null) {
-                if (primary != null) {
-                    usb.fs.mergeCloseFailure(primary, closeErr)
-                } else if (operation.state != usb.operation.OperationState.Partial) {
-                    val wrapped = usb.fs.CloseAfterSuccessException(closeErr)
-                    operation.state = usb.operation.OperationState.Partial
-                    operation.failureCause = wrapped
-                    throw wrapped
-                }
-            }
-        }
+        return MountedFilesVolume(partitionId, disk, volume, writable = writable)
     }
 
     /** Runs [action] with the partition selected at submit time, or reports why not. */
@@ -1771,7 +1707,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Read free/total bytes of the mounted volume on an IO thread while holding [filesLock],
+     * Read free/total bytes of the mounted volume on an IO thread while holding the files session lock,
      * so the read-only query cannot race a mount, a mutation or a close. A volume that will
      * not open reports "unavailable" instead of an invented value, and the answer is dropped
      * when the attachment changed since the request.
@@ -1785,25 +1721,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val expectedIdentity = state.device?.identity
         scope.launch(Dispatchers.IO) {
             val snapshot =
-                synchronized(filesLock) {
+                filesSession.withLock {
                     if (attachGeneration != expectedGeneration ||
                         attachGeneration != key.attachGeneration ||
                         expectedIdentity == null ||
                         expectedIdentity != key.identity
                     ) {
-                        return@launch
-                    }
-                    val volume =
+                        null
+                    } else {
                         try {
-                            volumeForLocked(partitionId)
+                            val volume = filesSession.volumeForLocked(partitionId)
+                            FilesystemUsageProbe.measureLocked(volume, key)
                         } catch (failure: Throwable) {
-                            return@synchronized FilesystemUsageSnapshot(
+                            FilesystemUsageSnapshot(
                                 key,
                                 FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
                             )
                         }
-                    FilesystemUsageProbe.measureLocked(volume, key)
-                }
+                    }
+                } ?: return@launch
             withContext(Dispatchers.Main.immediate) {
                 onIntent(UiIntent.FilesystemUsageResulted(generation, snapshot.key, snapshot.usage))
             }
@@ -1817,7 +1753,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             failurePath = path,
             onSuccess = { status?.let { onIntent(UiIntent.Status(it)) } },
         ) {
-            val entries = usb.files.FilesOperations.list(volumeForLocked(partitionId), path)
+            val entries = usb.files.FilesOperations.list(filesSession.volumeForLocked(partitionId), path)
             post(UiIntent.FilesListed(path, entries.map { it.toFileEntry() }))
         }
     }
@@ -1829,7 +1765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 label = "New folder $name",
                 onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.CreatedFolder, listOf(target))) },
             ) { operation ->
-                withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(partitionId, operation) { volume ->
                     operation.mutationAttempted = true
                     volume.mkdir(target)
                     volume.sync()
@@ -1846,7 +1782,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 label = "Delete $name",
                 onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.DeletedPath, listOf(target))) },
             ) { operation ->
-                withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(partitionId, operation) { volume ->
                     try {
                         operation.mutationAttempted = true
                         usb.files.FilesOperations.delete(volume, target)
@@ -1882,7 +1818,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 require(attachGeneration == expectedGeneration) { "USB attach generation changed" }
                 require(deviceKey(attachedDevice) == expectedDeviceKey) { "USB device changed" }
                 require(binding.matches(state)) { "rename target changed" }
-                withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(partitionId, operation) { volume ->
                     // The only mutation below; mark it after binding/policy checks and
                     // volume acquisition so a rename or post-rename sync failure is Partial.
                     operation.mutationAttempted = true
@@ -1925,7 +1861,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val target = fatChildPath(path, name)
                 operation.bytesTotal = reportedSize ?: -1L
 
-                withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(partitionId, operation) { volume ->
                     operation.mutationAttempted = true
                     FilesOperations.upload(
                         resolver = resolver,
@@ -2038,7 +1974,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
             require(binding.matches(state)) { "raw source target changed" }
             val target = fatChildPath(path, name)
-            val volume = volumeForLocked(binding.partitionId)
+            val volume = filesSession.volumeForLocked(binding.partitionId)
             val size = volume.stat(target).size
                 operation.bytesTotal = size
                 ImageStaging.requireUsableSpaceEstimate(filesDir, size)
@@ -2095,7 +2031,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             require(attachGeneration == expectedAttach) { "USB attach generation changed" }
             require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
             require(binding.matches(state)) { "raw source partition changed" }
-            val volume = volumeForLocked(binding.partitionId)
+            val volume = filesSession.volumeForLocked(binding.partitionId)
             val listing = usb.image.RawSourceChooser.list(
                 volume = volume,
                 root = "/",
@@ -3150,7 +3086,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
             ) { operation ->
                 val target = fatChildPath(path, name)
                 val destination = Uri.parse(uri)
-                val volume = volumeForLocked(partitionId)
+                val volume = filesSession.volumeForLocked(partitionId)
                 FilesOperations.download(
                     resolver = resolver,
                     target = target,
@@ -3195,7 +3131,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
 
     /**
      * Enqueue one real FAT operation on the shared disk thread. The mounted volume and
-     * the volume side of a mutation are serialized by [filesLock]; [onSuccess] re-lists
+     * the volume side of a mutation are serialized by the files session lock; [onSuccess] re-lists
      * the affected directory after a mutation so the UI never shows invented entries.
      */
     private fun submitFilesOperation(
@@ -3209,7 +3145,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
     ): OperationHandle {
         val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
             override suspend fun run() {
-                synchronized(filesLock) {
+                filesSession.withLock {
                     body(this)
                 }
             }
