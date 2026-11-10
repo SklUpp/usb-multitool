@@ -11,28 +11,68 @@ object Formatter {
 
     /**
      * Format [partition] with upstream engine selected by [id].
-     * Closes any open [MountedVolume] views first.
+     * Caller must release any [usb.files.MountedFilesVolume] on the disk first
+     * (ViewModel closeFilesVolume fail-closed). [label] is written by the same native
+     * path as the format where the engine supports it (see [FormatCatalog.supportsVolumeLabel]).
      */
     fun format(
         partition: VirtualPartition,
         id: FilesystemId,
-        openVolumes: List<MountedVolume> = emptyList(),
+        label: String = "",
     ) {
         requireSupported(id)
-        openVolumes.filter { it.partition === partition || sameRange(it.partition, partition) }
-            .forEach { volume ->
-                volume.sync()
-                volume.close()
-            }
+        val normalizedLabel = requireWritableLabel(id, label)
         when (id) {
-            FilesystemId.FAT, FilesystemId.EXFAT -> FormatNative.fat(partition, id)
-            FilesystemId.NTFS -> FormatNative.ntfs(partition)
-            FilesystemId.EXT -> FormatNative.ext(partition)
+            FilesystemId.FAT, FilesystemId.EXFAT -> {
+                FormatNative.fat(partition, id)
+                if (normalizedLabel.isNotEmpty()) {
+                    FatFs.setLabel(
+                        callback = BlockDeviceFatCallback(partition),
+                        sectorSize = partition.sectorSize,
+                        sectorCount = partition.sectorCount.toLong(),
+                        label = normalizedLabel,
+                    )
+                }
+            }
+            FilesystemId.NTFS -> NtfsFs.mkfs(partition, normalizedLabel)
+            FilesystemId.EXT -> ExtFs.mkfs(partition, normalizedLabel)
         }
     }
 
-    private fun sameRange(a: VirtualPartition, b: VirtualPartition): Boolean =
-        a.startLba == b.startLba && a.sectorCount == b.sectorCount
+    /**
+     * Replace the volume label of an already formatted partition. Refused for filesystems
+     * whose engine has no setter; [FormatCatalog.supportsVolumeLabelRename] is the gate.
+     */
+    fun setVolumeLabel(partition: VirtualPartition, id: FilesystemId, label: String) {
+        requireSupported(id)
+        require(FormatCatalog.supportsVolumeLabelRename(id)) {
+            "the $id volume label can only be written while formatting"
+        }
+        val normalizedLabel = requireWritableLabel(id, label)
+        when (id) {
+            FilesystemId.FAT, FilesystemId.EXFAT ->
+                FatFs.setLabel(
+                    callback = BlockDeviceFatCallback(partition),
+                    sectorSize = partition.sectorSize,
+                    sectorCount = partition.sectorCount.toLong(),
+                    label = normalizedLabel,
+                )
+            FilesystemId.NTFS -> NtfsFs.setLabel(partition, normalizedLabel)
+            FilesystemId.EXT ->
+                throw IllegalArgumentException("the EXT volume label can only be written while formatting")
+        }
+    }
+
+    /** Trimmed label, validated against the native writer limits; blank means "no label". */
+    private fun requireWritableLabel(id: FilesystemId, label: String): String {
+        val normalized = VolumeLabel.normalize(label)
+        if (normalized.isEmpty()) return normalized
+        require(FormatCatalog.supportsVolumeLabel(id)) { "$id cannot store a volume label" }
+        val problem = VolumeLabel.problem(normalized, id)
+        require(problem == null) { "invalid $id volume label '$normalized': $problem" }
+        return normalized
+    }
+
 }
 
 internal object FormatNative {
@@ -45,12 +85,12 @@ internal object FormatNative {
         )
     }
 
-    fun ntfs(partition: VirtualPartition) {
-        NtfsFs.mkfs(partition)
+    fun ntfs(partition: VirtualPartition, label: String) {
+        NtfsFs.mkfs(partition, label)
     }
 
-    fun ext(partition: VirtualPartition) {
-        ExtFs.mkfs(partition)
+    fun ext(partition: VirtualPartition, label: String) {
+        ExtFs.mkfs(partition, label)
     }
 }
 

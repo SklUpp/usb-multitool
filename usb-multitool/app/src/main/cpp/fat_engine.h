@@ -48,6 +48,15 @@ int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t secto
 int fat_engine_umount(uint64_t volume);
 int fat_engine_sync(uint64_t volume);
 
+/*
+ * Metadata-only space query: total and free bytes inside the mounted
+ * filesystem (FAT cluster count x cluster size, exFAT allocation bitmap).
+ * Read-only; never mounts/unmounts and never writes the media.
+ * Returns FR_OK and writes both outputs, or a FatFs FRESULT on failure.
+ */
+int fat_engine_usage(uint64_t volume, uint64_t *out_total_bytes,
+		     uint64_t *out_free_bytes);
+
 int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t cap, size_t *out_count);
 int fat_engine_stat(uint64_t volume, const char *path, FatStat *out);
 int fat_engine_mkdir(uint64_t volume, const char *path);
@@ -63,6 +72,14 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 
 int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
 		    FatMkfsType type);
+
+/* Writes the label of an already formatted FAT/exFAT volume via f_setlabel. */
+int fat_engine_set_label(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
+			 const char *label);
+
+/* Reads the label of a formatted FAT/exFAT volume via f_getlabel (UTF-8, NUL-terminated). */
+int fat_engine_get_label(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
+			 char *out, size_t cap);
 
 FatFsKind fat_engine_probe(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count);
 

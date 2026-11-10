@@ -320,6 +320,47 @@ static void test_path_overflow_preserves_neighbor(void)
 	printf("OK path overflow preserves neighbor\n");
 }
 
+static void exercise_label(const char *img, FatMkfsType type, uint32_t ss, uint64_t sc)
+{
+	uint64_t block;
+	char label[64];
+	int rc;
+
+	unlink(img);
+	block = image_block_open(img, ss, sc, 1);
+	if (!block) fail("label image_block_open", -1);
+	rc = fat_engine_mkfs(block, ss, sc, type);
+	if (rc != 0) fail("label mkfs", rc);
+
+	/* Regression: f_setlabel needs the "N:LABEL" form. Passing a bare "N:" is a valid
+	 * call that CLEARS the label, so only a read-back catches the wiring bug. */
+	rc = fat_engine_set_label(block, ss, sc, "NEWLABEL");
+	if (rc != 0) fail("label set", rc);
+	memset(label, 0, sizeof(label));
+	rc = fat_engine_get_label(block, ss, sc, label, sizeof(label));
+	if (rc != 0) fail("label get", rc);
+	if (strcmp(label, "NEWLABEL") != 0) {
+		fprintf(stderr, "FAIL: label persisted as '%s', expected NEWLABEL\n", label);
+		exit(1);
+	}
+
+	rc = fat_engine_set_label(block, ss, sc, "SECOND");
+	if (rc != 0) fail("label replace", rc);
+	memset(label, 0, sizeof(label));
+	rc = fat_engine_get_label(block, ss, sc, label, sizeof(label));
+	if (rc != 0 || strcmp(label, "SECOND") != 0) fail("label replace get", rc);
+
+	rc = fat_engine_set_label(block, ss, sc, "bad/name");
+	if (rc == 0) fail("invalid label accepted", rc);
+	memset(label, 0, sizeof(label));
+	rc = fat_engine_get_label(block, ss, sc, label, sizeof(label));
+	if (rc != 0 || strcmp(label, "SECOND") != 0) fail("invalid label changed volume", rc);
+
+	image_block_close(block);
+	unlink(img);
+	printf("OK %s label set/get/replace\n", type == FAT_MKFS_EXFAT ? "exFAT" : "FAT");
+}
+
 int main(void)
 {
 	const uint32_t ss = 512;
@@ -337,6 +378,8 @@ int main(void)
 	test_short_write();
 	test_format_over_existing_content();
 	test_path_overflow_preserves_neighbor();
+	exercise_label("label_fat.img", FAT_MKFS_FAT, ss, (32ull * 1024 * 1024) / ss);
+	exercise_label("label_exfat.img", FAT_MKFS_EXFAT, ss, (64ull * 1024 * 1024) / ss);
 
 	printf("all fat image tests passed\n");
 	return 0;

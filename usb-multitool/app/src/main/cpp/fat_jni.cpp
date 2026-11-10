@@ -388,6 +388,29 @@ Java_usb_fs_FatFsNative_nativeMkfs(JNIEnv *env, jclass, jlong blockHandle, jint 
 	if (rc != 0) throw_fat(env, "usb/fs/FatFsException", ("mkfs failed: " + std::to_string(rc)).c_str());
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_usb_fs_FatFsNative_nativeGetLabel(JNIEnv *env, jclass, jlong blockHandle, jint sectorSize,
+				       jlong sectorCount)
+{
+	char label[128];
+	int rc = fat_engine_get_label(static_cast<uint64_t>(blockHandle),
+				      static_cast<uint32_t>(sectorSize),
+				      static_cast<uint64_t>(sectorCount), label, sizeof(label));
+	if (rc != 0) throw_fat(env, "usb/fs/FatFsException", ("get label failed: " + std::to_string(rc)).c_str());
+	return to_jstring(env, label);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_usb_fs_FatFsNative_nativeSetLabel(JNIEnv *env, jclass, jlong blockHandle, jint sectorSize,
+				       jlong sectorCount, jstring label)
+{
+	std::string text = from_jstring(env, label);
+	int rc = fat_engine_set_label(static_cast<uint64_t>(blockHandle),
+				      static_cast<uint32_t>(sectorSize),
+				      static_cast<uint64_t>(sectorCount), text.c_str());
+	if (rc != 0) throw_fat(env, "usb/fs/FatFsException", ("set label failed: " + std::to_string(rc)).c_str());
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_usb_fs_FatFsNative_nativeProbe(JNIEnv *, jclass, jlong blockHandle, jint sectorSize,
 				    jlong sectorCount)
@@ -401,4 +424,24 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_usb_fs_FatFsNative_nativeMaxFileSize(JNIEnv *, jclass, jint kind)
 {
 	return static_cast<jlong>(fat_engine_max_file_size(static_cast<FatFsKind>(kind)));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_usb_fs_FatFsNative_nativeUsage(JNIEnv *env, jclass, jlong volume, jlongArray out)
+{
+	if (!out || env->GetArrayLength(out) < 2) {
+		throw_fat(env, "usb/fs/FatFsException", "usage: output array too small");
+		return JNI_FALSE;
+	}
+	uint64_t total = 0;
+	uint64_t free_bytes = 0;
+	int rc = fat_engine_usage(static_cast<uint64_t>(volume), &total, &free_bytes);
+	if (rc != 0) {
+		throw_fat(env, "usb/fs/FatFsException",
+			  ("space query failed: " + std::to_string(rc)).c_str());
+		return JNI_FALSE;
+	}
+	jlong values[2] = { static_cast<jlong>(total), static_cast<jlong>(free_bytes) };
+	env->SetLongArrayRegion(out, 0, 2, values);
+	return JNI_TRUE;
 }

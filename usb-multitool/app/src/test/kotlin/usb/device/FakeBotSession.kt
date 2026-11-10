@@ -64,7 +64,7 @@ class RecordingChannel(
  * Scriptable BOT session for UsbDisk unit tests.
  * Supports short data chunks, staged stalls, capacity responses, and sense scripts.
  */
-class FakeBotSession(
+open class FakeBotSession(
     private var stallsBeforeSuccess: Int = 0,
     private val disconnectOnCommand: Boolean = false,
     private val maxChunk: Int = Int.MAX_VALUE,
@@ -202,7 +202,7 @@ class FakeBotSession(
 
     override fun isConnected(): Boolean = connected
 
-    override fun close() {
+    open override fun close() {
         connected = false
     }
 

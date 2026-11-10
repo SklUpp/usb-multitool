@@ -12,13 +12,30 @@ JDK7="/data/data/com.termux/files/usr/opt/kotlin/lib/kotlin-stdlib-jdk7.jar"
 JDK8="/data/data/com.termux/files/usr/opt/kotlin/lib/kotlin-stdlib-jdk8.jar"
 CP="$STDLIB:$JDK7:$JDK8"
 
-kotlinc \
-  -cp "$CP" \
-  -d "$OUT" \
+# FilesystemSpace/FilesystemUsage come from the measurement backend; include them only once
+# that file exists, so this check keeps compiling while the backend lands separately.
+set -- \
+  "$ROOT/app/src/main/kotlin/usb/FormatBytes.kt" \
+  "$ROOT/app/src/main/kotlin/usb/diagnostics/ScanReport.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FilesystemId.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FormatCatalog.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/PartitionModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/PartitionClassification.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/BlockDevice.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/MbrTable.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/GptTable.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/PartitionTable.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/RawRangePlan.kt" \
+  "$ROOT/app/src/main/kotlin/usb/image/RawWriteOutcome.kt" \
+  "$ROOT/app/src/main/kotlin/usb/image/RawRangeProbe.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiStateHostCheck.kt"
+if [ -f "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt" ]; then
+  set -- "$@" "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt"
+fi
+kotlinc -cp "$CP" -d "$OUT" "$@"
 
 kotlin -cp "$OUT:$CP" usb.ui.UiStateHostCheck

@@ -10,8 +10,10 @@ object PartitionEditor {
         size: ULong,
         type: PartitionType,
         startLba: ULong? = null,
+        name: String? = null,
     ): PartitionTable {
         require(size > 0UL) { "partition size must be positive" }
+        val storedName = storedName(table, name)
         val align = alignmentSectors(table.sectorSize)
         val region = table.freeRegions.firstOrNull { candidate ->
             if (startLba == null) alignedCapacity(candidate, align) >= size
@@ -29,7 +31,7 @@ object PartitionEditor {
             startLba = alignedStart,
             sectorCount = size,
             type = type.name,
-            name = type.name,
+            name = storedName,
             slot = allocateSlot(table),
         )
         val partitions = table.partitions + created
@@ -95,6 +97,34 @@ object PartitionEditor {
                 }
             },
         )
+    }
+
+    /**
+     * Rename one GPT entry. MBR has no name field and HYBRID is never rewritten, so both
+     * are refused instead of silently dropping the name on the next write.
+     */
+    fun rename(table: PartitionTable, index: Int, name: String): PartitionTable {
+        require(index in table.partitions.indices) { "partition index out of range" }
+        val storedName = storedName(table, name)
+        return table.copy(
+            partitions = table.partitions.mapIndexed { i, p ->
+                if (i == index) p.copy(name = storedName) else p
+            },
+        )
+    }
+
+    /** GPT stores the trimmed name (or "" when none); MBR has no field to store it in. */
+    private fun storedName(table: PartitionTable, name: String?): String {
+        val normalized = name?.let(PartitionName::normalize).orEmpty()
+        if (normalized.isEmpty()) return ""
+        if (!PartitionName.supported(table.scheme)) {
+            throw IllegalArgumentException(
+                "${table.scheme} entries have no name field; refusing to drop '$normalized'",
+            )
+        }
+        val problem = PartitionName.problem(normalized)
+        require(problem == null) { "invalid GPT name '$normalized': $problem" }
+        return normalized
     }
 
     /** First unused entry slot; existing records keep their original slot. */

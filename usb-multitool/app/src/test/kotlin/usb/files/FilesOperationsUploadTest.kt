@@ -8,7 +8,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 class FilesOperationsUploadTest {
     @Test fun firstWriteFailureStillCleansCreatedTarget() {

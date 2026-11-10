@@ -29,6 +29,13 @@ object SyntheticGpt {
         layout: List<Layout>? = null,
         firstUsable: ULong? = null,
         lastUsable: ULong? = null,
+        /** Craft a backup array that is not adjacent to the backup header. */
+        backupEntriesLba: ULong? = null,
+        /**
+         * Craft a backup header whose recorded entry LBA differs from where the fixture
+         * writes the array (metadata overlaps, self-overlap, etc.).
+         */
+        backupHeaderEntryLba: ULong? = null,
     ): ImageBlockDevice {
         require(sectorCount >= 128UL)
         val entrySize = 128
@@ -36,9 +43,15 @@ object SyntheticGpt {
         val entrySectors = ((entryBytes + sectorSize - 1) / sectorSize).toULong()
         val primaryEntryLba = 2UL
         val backupHeaderLba = sectorCount - 1UL
-        val backupEntriesLba = backupHeaderLba - entrySectors
+        val backupEntryLba = backupEntriesLba ?: (backupHeaderLba - entrySectors)
+        require(backupEntryLba > primaryEntryLba + entrySectors) {
+            "backup entry array overlaps the primary metadata"
+        }
+        require(backupEntryLba + entrySectors <= backupHeaderLba) {
+            "backup entries must not overlap the backup header"
+        }
         val usableStart = firstUsable ?: (primaryEntryLba + entrySectors)
-        val usableEnd = lastUsable ?: (backupEntriesLba - 1UL)
+        val usableEnd = lastUsable ?: (backupEntryLba - 1UL)
         require(usableEnd > usableStart + 10UL)
 
         val image = ByteArray((sectorCount * sectorSize.toULong()).toInt())
@@ -85,9 +98,9 @@ object SyntheticGpt {
         }
 
         writeHeader(1UL, 1UL, backupHeaderLba, primaryEntryLba)
-        writeHeader(backupHeaderLba, backupHeaderLba, 1UL, backupEntriesLba)
+        writeHeader(backupHeaderLba, backupHeaderLba, 1UL, backupHeaderEntryLba ?: backupEntryLba)
         entries.copyInto(image, (primaryEntryLba * sectorSize.toULong()).toInt())
-        entries.copyInto(image, (backupEntriesLba * sectorSize.toULong()).toInt())
+        entries.copyInto(image, (backupEntryLba * sectorSize.toULong()).toInt())
 
         return ImageBlockDevice(image, sectorSize, sectorCount)
     }

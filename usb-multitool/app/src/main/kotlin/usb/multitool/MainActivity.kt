@@ -1,5 +1,6 @@
 package usb.multitool
 import usb.files.MountedFilesVolume
+import usb.files.requireFilesVolumeClosed
 import usb.files.FilesOperationPolicy
 
 import android.Manifest
@@ -28,6 +29,10 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
+import usb.ventoy.AutounattendBinding
+import usb.ventoy.AutounattendState
+import usb.ventoy.UnreadableProblem
+import usb.ventoy.VentoyGlobalSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,7 +44,7 @@ import usb.device.DiskException
 import usb.device.MassStorageDiscovery
 import usb.device.UsbDisk
 import usb.service.DiskController
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 import usb.service.OperationHandle
 import usb.service.DiskService
 import usb.ui.AppShell
@@ -48,6 +53,7 @@ import usb.ui.DeviceIdentity
 import usb.ui.DevicePresence
 import usb.ui.FileEntry
 import usb.ui.OperationProgress
+import usb.ui.ReadScanOutcome
 import usb.ui.readOnlyOperationProgress
 import usb.ui.OperationState
 import usb.ui.UiEffect
@@ -72,19 +78,32 @@ import usb.fs.NtfsException
 import usb.fs.FatFsException
 import usb.fs.UsbFsVolume
 import usb.fs.FilesystemId
+import usb.fs.Filesystem
+import usb.fs.FormatCatalog
 import usb.fs.Formatter
 import usb.fs.PartitionVolumeSession
+import usb.fs.FilesystemUsage
+import usb.fs.FilesystemUsageKey
+import usb.fs.FilesystemUsageProbe
+import usb.fs.FilesystemUsageReason
+import usb.fs.FilesystemUsageSnapshot
+import usb.ui.filesystemUsageKey
+import usb.ui.needsFilesystemUsageRequest
 import usb.ui.fatChildPath
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
 import usb.ui.PartitionBinding
+import usb.ui.PartitionRef
 import usb.ui.PartitionRole
 import usb.ui.matches
 import usb.ui.PartitionTab
+import usb.ui.toTableScheme
 import usb.partition.PartitionTable
 import usb.partition.PartitionType
 import usb.partition.PartitionWriter
+import usb.partition.TableInitializer
 import usb.partition.VirtualPartition
+import usb.partition.isProtectedSystemPartition
 import usb.image.ImageSource
 import usb.image.ImageStaging
 import usb.image.stageRawImageChunks
@@ -120,6 +139,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeHandle: OperationHandle? = null
+    private var rawSourceHandle: OperationHandle? = null
+    private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
     private var attachGeneration = 0L
     @Volatile
@@ -166,6 +187,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val filesLock = Any()
     private var filesVolume: MountedFilesVolume? = null
+    /** Key of the newest free-space request; a different key asks again. */
+    @Volatile private var lastUsageKey: FilesystemUsageKey? = null
+    /** Key whose measurement has not reported back yet; prevents duplicate requests. */
+    @Volatile private var usageInFlightKey: FilesystemUsageKey? = null
     @Volatile private var stagedConsumedPath: String? = null
 
 
@@ -227,7 +252,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val current = intent.progress
             val previous = state.operation
             if (previous?.state != current.state || previous?.label != current.label) {
-                val detail = current.errorMessage ?: current.resultMessage
+                val detail = current.errorMessage
+                    ?: current.resultMessage
+                    ?: current.readScanResult?.toLogLine()
                 val message = "${current.label}: ${current.state}" + if (detail.isNullOrBlank()) "" else " — $detail"
                 android.util.Log.i("UsbMultitool", message)
                 state = UiReducer.reduce(state, UiIntent.AppendLog(logLine(message))).state
@@ -237,6 +264,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         result.effects.forEach { effect ->
             handleEffect(effect)
         }
+        refreshFilesystemUsage(intent)
+    }
+
+    /** Post an intent to the main dispatcher; disk workers must never mutate state directly. */
+    private fun onIntentDeferred(intent: UiIntent) {
+        scope.launch(Dispatchers.Main.immediate) { onIntent(intent) }
     }
 
     fun handleEffect(effect: UiEffect) {
@@ -248,13 +281,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val confirmed = effect.confirmation
                     ?: throw IllegalStateException("destructive confirmation missing")
                 val confirmedFormatId = confirmed.formatId
+                var rawWriteOutcome: usb.image.RawWriteResult? = null
                 val op = object : DiskOperation(name = actionName) {
                     /** Concrete outcome surfaced instead of the bare "Success" label. */
                     @Volatile var result: String? = null
 
                     override suspend fun run() {
                         // Release the FAT session and its USB claim before raw/partition work.
-                        closeFilesVolume()
+                        requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                         val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
                         val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
                         val disk = UsbDiskSession.open(mgr, dev)
@@ -281,6 +315,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             val table = runCatching { PartitionTable.read(disk) }.getOrNull()
+                            if (action == DestructiveAction.RAW_WRITE) {
+                                confirmed.diskSectorCount?.let {
+                                    require(it == disk.geometry.sectorCount) {
+                                        "confirmed sector count $it does not match live ${disk.geometry.sectorCount}"
+                                    }
+                                }
+                                confirmed.diskSectorSize?.let {
+                                    require(it == disk.geometry.sectorSize) {
+                                        "confirmed sector size $it does not match live ${disk.geometry.sectorSize}"
+                                    }
+                                }
+                            }
                             val partitionDisk = object : usb.device.BlockDevice by disk {
                                 override fun write(lba: ULong, source: java.nio.ByteBuffer) {
                                     mutationAttempted = true
@@ -374,9 +420,131 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.CREATE_PARTITION -> {
                                     val current = table ?: throw IllegalStateException("no partition table")
+                                    current.requireUnambiguousLayout()
                                     val start = confirmed.createStartLba ?: throw IllegalStateException("partition start not confirmed")
                                     val size = confirmed.createSectorCount ?: throw IllegalStateException("partition size not confirmed")
-                                    PartitionWriter.commit(partitionDisk, PartitionEditor.create(current, size, PartitionType.BASIC, start))
+                                    val created = PartitionEditor.create(
+                                        current,
+                                        size,
+                                        PartitionType.BASIC,
+                                        start,
+                                        name = confirmed.createName,
+                                    )
+                                    PartitionWriter.commit(partitionDisk, created)
+                                    val formatId = confirmed.createFormatId
+                                    if (formatId != null) {
+                                        val supported = Formatter.requireSupported(formatId)
+                                        // Format the exact confirmed range, not a re-probed one.
+                                        val partition = VirtualPartition(start, size, partitionDisk)
+                                        try {
+                                            Formatter.format(
+                                                partition,
+                                                supported,
+                                                label = confirmed.volumeLabel,
+                                            )
+                                        } catch (formatFailure: Throwable) {
+                                            // The entry is already committed: never report "failed"
+                                            // as if nothing was created.
+                                            result = "Partition created at LBA $start ($size sectors); " +
+                                                "formatting as ${FormatCatalog.label(supported)} failed: " +
+                                                (formatFailure.message ?: formatFailure.javaClass.simpleName) +
+                                                ". The partition exists but is unformatted."
+                                            state = usb.operation.OperationState.Partial
+                                            failureCause = formatFailure
+                                            throw formatFailure
+                                        }
+                                        result = "Created partition at LBA $start ($size sectors), " +
+                                            "formatted as ${FormatCatalog.label(supported)}" +
+                                            if (confirmed.volumeLabel.isNotEmpty()) {
+                                                ", label '${confirmed.volumeLabel}'"
+                                            } else {
+                                                ""
+                                            }
+                                    } else {
+                                        result = "Created partition at LBA $start ($size sectors), unformatted"
+                                    }
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.RENAME_PARTITION -> {
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    current.requireUnambiguousLayout()
+                                    val name = confirmed.partitionName
+                                        ?: throw IllegalStateException("partition name not confirmed")
+                                    mutateConfirmedPartition(
+                                        current.partitions,
+                                        confirmed.partitionStartLba,
+                                        confirmed.partitionSectorCount,
+                                    ) { target ->
+                                        // An ESP/VTOYEFI rename would drop the name that protects it;
+                                        // the EFI write override never lifts this.
+                                        require(!isProtectedSystemPartition(target)) {
+                                            "${target.name} is a protected system partition and cannot be renamed"
+                                        }
+                                        val index = current.partitions.indexOf(target)
+                                        require(index >= 0) { "confirmed partition geometry missing" }
+                                        PartitionWriter.commit(
+                                            partitionDisk,
+                                            PartitionEditor.rename(current, index, name),
+                                        )
+                                    }
+                                    result = "Renamed partition at LBA ${confirmed.partitionStartLba} to '$name'"
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.RENAME_VOLUME_LABEL -> {
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    current.requireUnambiguousLayout()
+                                    val label = confirmed.volumeLabel
+                                    require(label.isNotEmpty()) { "volume label not confirmed" }
+                                    mutateConfirmedPartition(
+                                        current.partitions,
+                                        confirmed.partitionStartLba,
+                                        confirmed.partitionSectorCount,
+                                    ) { target ->
+                                        requirePartitionMutationAllowed(
+                                            target,
+                                            uiState.vtoyEfiWriteStartLba,
+                                            uiState.vtoyEfiWriteSectorCount,
+                                        )
+                                        val partition = VirtualPartition(
+                                            startLba = target.startLba,
+                                            sectorCount = target.sectorCount,
+                                            disk = partitionDisk,
+                                        )
+                                        val filesystemId = Filesystem.probe(partition)
+                                        Formatter.setVolumeLabel(partition, filesystemId, label)
+                                        result = "Volume label of ${target.name} changed to '$label' " +
+                                            "(${FormatCatalog.label(filesystemId)})"
+                                    }
+                                    report(disk.geometry.capacityBytes.toLong())
+                                }
+                                DestructiveAction.INITIALIZE_PARTITION_TABLE -> {
+                                    val target = confirmed.targetScheme
+                                        ?: throw IllegalStateException("target scheme not confirmed")
+                                    val expected = confirmed.initialScheme
+                                        ?: throw IllegalStateException("initial scheme not confirmed")
+                                    val current = table ?: throw IllegalStateException("no partition table")
+                                    current.requireUnambiguousLayout()
+                                    require(!current.gptPrimaryDamaged) {
+                                        "GPT primary is damaged; restore a matching GPT backup first"
+                                    }
+                                    if (current.scheme != expected.toTableScheme()) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "partition scheme changed since the confirmation " +
+                                                "(${current.scheme} != ${expected.toTableScheme()})",
+                                        )
+                                    }
+                                    val liveSnapshot =
+                                        current.partitions.map { PartitionRef(it.startLba, it.sectorCount) }
+                                    if (liveSnapshot != confirmed.initialPartitions) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "partition layout changed since the confirmation",
+                                        )
+                                    }
+                                    result = TableInitializer.initialize(
+                                        partitionDisk,
+                                        current,
+                                        target.toTableScheme(),
+                                    )
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.FORMAT_PARTITION -> {
@@ -561,12 +729,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         }
                                     // confirmation already bound to identity/capacity at dialog time;
                                     // requireMatch inside RawWriter re-checks the live disk.
-                                    RawWriter.write(
+                                    val range =
+                                        usb.partition.RawWriteRange(
+                                            startLba = confirmed.rawStartLba
+                                                ?: throw IllegalStateException(
+                                                    "raw write range start missing from confirmation",
+                                                ),
+                                            sectorCount = confirmed.rawSectorCount
+                                                ?: throw IllegalStateException(
+                                                    "raw write range size missing from confirmation",
+                                                ),
+                                        )
+                                    rawWriteOutcome = RawWriter.write(
                                         source = source,
                                         disk = partitionDisk,
                                         identity = identity,
                                         confirmation = confirmation,
                                         overwrite = true,
+                                        range = range,
                                         operation = this,
                                     )
                                     if (stagedPath != null) {
@@ -576,13 +756,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.VENTOY_LINK_XML ->
                                     throw IllegalStateException("Ventoy XML links use dedicated link flow")
+                                // Confirmation-only gates; execution is GenerateAutounattend /
+                                // ConfirmDiskLayout effects, never this destructive runner.
+                                DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+                                DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT ->
+                                    throw IllegalStateException(
+                                        "Unattend XML write/layout uses dedicated generate flow",
+                                    )
                                 null -> throw IllegalArgumentException("no destructive action selected")
                             }
                             try {
                                 disk.sync()
+                                // Final sync after mutation body: durable commit boundary.
+                                if (state != usb.operation.OperationState.Partial &&
+                                    state !is usb.operation.OperationState.Failed
+                                ) {
+                                    commitReached = true
+                                }
                             } catch (syncFailure: Throwable) {
                                 if (this.mutationAttempted) {
-                                    state = usb.service.OperationState.Partial
+                                    state = usb.operation.OperationState.Partial
                                     failureCause = syncFailure
                                 }
                                 throw syncFailure
@@ -636,6 +829,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     label = actionName,
                                     errorMessage = errorMsg,
                                     resultMessage = op.result,
+                                    rawWriteResult = rawWriteOutcome,
                                     cancelable = isCooperative,
                                 ),
                             ),
@@ -663,6 +857,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             DestructiveAction.VENTOY_DOWNLOAD_INSTALL,
                             DestructiveAction.SET_PARTITION_ROLE,
                             DestructiveAction.SET_PARTITION_BOOTABLE,
+                            DestructiveAction.RENAME_PARTITION,
+                            DestructiveAction.RENAME_VOLUME_LABEL,
+                            DestructiveAction.INITIALIZE_PARTITION_TABLE,
                             DestructiveAction.WIPE,
                             DestructiveAction.RAW_WRITE -> refreshPartitions()
                             else -> Unit
@@ -675,15 +872,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             UiEffect.Kind.ReadScan ->
-                submitReadOnlyDiskOperation("Read scan") { disk, operation ->
+                submitReadOnlyDiskOperation("Read scan") { disk, operation, sink ->
                     val report = Diagnostics.readScan(disk, operation = operation)
-                    val unreadable = report.failed.sumOf { it.last - it.first + 1UL }
-                    "Read scan: ${report.sectorsRead} of ${disk.geometry.sectorCount} " +
-                        "sectors read, $unreadable unreadable in ${report.failed.size} range(s)"
+                    sink.readScanResult = ReadScanOutcome.from(report, disk.geometry.sectorCount)
+                    // UI formats from sink; empty resultMessage avoids frozen language string.
+                    ""
                 }
 
+            UiEffect.Kind.RangeProbe -> {
+                val start = effect.startLba
+                val count = effect.sectorCount
+                if (start != null && count != null) {
+                    val device = state.device
+                    val attachment =
+                        device?.let {
+                            usb.image.RangeProbeAttachment(it.identity, it.attachGeneration)
+                        }
+                    submitReadOnlyDiskOperation("Check raw range") { disk, _, _ ->
+                        val result =
+                            usb.image.RangeProbe.sample(
+                                disk = disk,
+                                range = usb.partition.RawWriteRange(start, count),
+                                attachment = attachment,
+                                requestId = effect.probeRequestId ?: 0L,
+                            )
+                        onIntentDeferred(UiIntent.RangeProbeResulted(result))
+                        "Range probe: ${result.finding}, " +
+                            "${result.sampledSectors.size} sector(s) sampled"
+                    }
+                }
+            }
+
             UiEffect.Kind.RescueBackup ->
-                submitReadOnlyDiskOperation("Rescue backup") { disk, operation ->
+                submitReadOnlyDiskOperation("Rescue backup") { disk, operation, _ ->
                     val dir = backupDirectory()
                     val stamp = "${timestamp()}-${System.nanoTime()}"
                     val image = File(dir, "rescue-$stamp.img")
@@ -741,7 +962,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
             UiEffect.Kind.CaptureGptBackup ->
-                submitReadOnlyDiskOperation("GPT critical backup") { disk, operation ->
+                submitReadOnlyDiskOperation("GPT critical backup") { disk, operation, _ ->
                     val blob = GptBackup.backupCriticalSectors(disk)
                     val info = GptCriticalBackup.inspectCaptured(
                         blob = blob,
@@ -763,6 +984,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             UiEffect.Kind.LoadFiles -> {
                 listDirectory(effect.path ?: state.currentPath)
+            }
+            UiEffect.Kind.LoadFilesystemUsage -> {
+                val partitionId = effect.partitionId
+                val usageKey = effect.usageKey
+                val generation = effect.usageGeneration
+                if (partitionId != null && usageKey != null && generation != null) {
+                    measureFilesystemUsage(partitionId, usageKey, generation)
+                }
             }
             UiEffect.Kind.CreateFolder -> {
                 val name = effect.name
@@ -797,35 +1026,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UiEffect.Kind.StageUsbImageForRawWrite -> {
                 val name = effect.name
                 val path = effect.path
-                if (name != null && path != null) {
-                    stageUsbImageForRawWrite(path, name)
+                val binding = effect.binding
+                if (name != null && path != null && binding != null) {
+                    stageUsbImageForRawWrite(path, name, binding)
                 } else {
                     onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CannotStage)))
                 }
             }
 
+            UiEffect.Kind.LoadRawSources -> {
+                val binding = effect.binding
+                val generation = effect.requestGeneration
+                if (binding != null && generation != null) {
+                    loadRawSourceCandidates(binding, generation)
+                }
+            }
+
+            UiEffect.Kind.CancelRawSources -> {
+                rawSourceHandle?.cancel()
+                rawSourceHandle = null
+            }
+
+            UiEffect.Kind.LoadWindowsIsoCandidates -> {
+                val generation = effect.requestGeneration
+                if (generation != null) loadWindowsImageCandidates(generation)
+            }
+
+            UiEffect.Kind.InspectIsoImport -> {
+                val uri = effect.uri
+                val generation = effect.requestGeneration
+                if (uri != null && generation != null) {
+                    inspectImageImport(uri, generation, effect.importKind, effect.importDirectory)
+                }
+            }
+
+            UiEffect.Kind.ImportIso -> {
+                val proposal = effect.isoImport
+                if (proposal != null) importImage(proposal, effect.overwrite)
+            }
+
             UiEffect.Kind.LinkXml -> {
-                val isoName = effect.isoName?.substringAfterLast('/')
-                if (isoName.isNullOrBlank()) {
+                val imagePaths =
+                    effect.imagePaths.takeIf { it.isNotEmpty() }
+                        ?: effect.isoName?.takeIf { it.isNotBlank() }?.let { listOf(it) }
+                        ?: emptyList()
+                if (imagePaths.isEmpty()) {
                     onIntent(
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Failed,
                                 label = "autounattend.xml link",
-                                errorMessage = "No ISO selected for the Windows setup link",
+                                errorMessage = "No image selected for the Windows setup link",
                             ),
                         ),
                     )
                     return
                 }
+                val primaryImage = imagePaths.first()
                 val confirmed = effect.confirmation ?: throw IllegalStateException("Ventoy link confirmation missing")
                 val operationGeneration = attachGeneration
                 val deviceIdentity = confirmed.identity.identity
-                val bypassChecks = state.vtoyBypassChecks
-                val localAccount = state.vtoyLocalAccount
                 val op = object : DiskOperation(name = "autounattend.xml link") {
+                    @Volatile var result: String? = null
+
                     override suspend fun run() {
-                        closeFilesVolume()
+                        requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                         require(attachGeneration == confirmed.identity.attachGeneration) { "USB attach generation changed" }
                         val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
                         val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
@@ -834,15 +1099,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             require(disk.geometry.capacityBytes == confirmed.identity.capacityBytes) { "confirmed capacity does not match live device" }
                             val liveIdentity = (dev.productName ?: dev.deviceName ?: "USB Storage") + (dev.serialNumber?.trim()?.takeIf { it.isNotEmpty() }?.let { "#$it" } ?: "")
                             require(liveIdentity == deviceIdentity) { "confirmed identity does not match live USB" }
-                            VentoySetup.linkXml(
+                            val linked = VentoySetup.linkImages(
                                 disk = disk,
-                                isoName = isoName,
-                                options = usb.ventoy.SetupOptions(
-                                    bypassChecks = bypassChecks,
-                                    localAccount = localAccount,
-                                ),
+                                imagePaths = imagePaths,
+                                templatePath = effect.templatePath
+                                    ?: throw IllegalStateException(
+                                        "Select an existing XML template before linking",
+                                    ),
                                 overwrite = effect.linkOverwrite,
+                                allowDestructiveTemplate = effect.allowDestructiveTemplate,
+                                expectedTemplateSha256 = confirmed.templateSha256,
+                                onMutation = { this.mutationAttempted = true },
                             )
+                            if (mutationAttempted) commitReached = true
+                            result = "Linked ${imagePaths.size} image(s) to ${linked.templatePath}"
                         } finally {
                             disk.close()
                         }
@@ -863,7 +1133,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         val outcome = handle.await()
                         val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                        val failure = (outcome as? usb.service.OperationState.Failed)?.cause
+                        val failure = (outcome as? usb.operation.OperationState.Failed)?.cause
                         val errorMsg = usb.operation.OperationCoordination.errorMessage(outcome)
                         onIntent(
                             UiIntent.OperationUpdated(
@@ -871,6 +1141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     state = mappedState,
                                     label = "autounattend.xml link",
                                     errorMessage = errorMsg,
+                                    resultMessage = op.result,
                                     cancelable = false,
                                 ),
                             ),
@@ -884,11 +1155,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             attachedDevice != null &&
                             state.device?.identity == deviceIdentity
                         ) {
-                            onIntent(UiIntent.LinkOverwriteAvailable(isoName))
+                            onIntent(
+                                UiIntent.LinkOverwriteAvailable(
+                                    primaryImage,
+                                    imagePaths,
+                                    effect.templatePath,
+                                ),
+                            )
+                        }
+                        if (mappedState == OperationState.Completed) {
+                            onIntent(UiIntent.LoadWindowsImageLinks)
                         }
                     } finally {
                         activeHandles.remove(handle)
                     }
+                }
+            }
+
+            UiEffect.Kind.LoadWindowsLinks -> {
+                val generation = effect.requestGeneration
+                if (generation != null) loadWindowsImageLinks(generation)
+            }
+
+            UiEffect.Kind.UnlinkXml -> {
+                if (effect.imagePaths.isNotEmpty()) unlinkWindowsImages(effect.imagePaths)
+            }
+
+            UiEffect.Kind.SaveWindowsControls -> saveWindowsControls()
+
+            UiEffect.Kind.LoadAutounattend ->
+                effect.xmlName?.let { loadAutounattend(it, effect.requestGeneration ?: 0L) }
+
+            UiEffect.Kind.LoadAutounattendCandidates ->
+                effect.xmlName?.let {
+                    loadAutounattendCandidates(it, effect.requestGeneration ?: 0L)
+                }
+
+            UiEffect.Kind.GenerateAutounattend -> generateAutounattend(effect)
+
+            UiEffect.Kind.LoadVentoyGlobalSettings -> loadVentoyGlobalSettings()
+
+            UiEffect.Kind.LoadVentoyFolders -> loadVentoyFolders()
+
+            UiEffect.Kind.SetVentoyGlobalSetting -> {
+                val key = effect.settingKey
+                if (key != null) setVentoyGlobalSetting(key, effect.settingValue)
+            }
+
+            UiEffect.Kind.BindAutounattend -> {
+                val name = effect.xmlName
+                if (name != null && effect.imagePaths.isNotEmpty()) {
+                    bindAutounattend(
+                        name,
+                        effect.imagePaths,
+                        effect.allowDestructiveTemplate,
+                        effect.expectedTemplateSha256,
+                    )
+                }
+            }
+
+            UiEffect.Kind.UnbindAutounattend -> {
+                val name = effect.xmlName
+                if (name != null && effect.imagePaths.isNotEmpty()) {
+                    unbindAutounattend(name, effect.imagePaths.first())
                 }
             }
             UiEffect.Kind.RunSelfTest -> {
@@ -900,7 +1229,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dev = attachedDevice
         val mgr = usbManager
         if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
-            submitReadOnlyDiskOperation("Self-test", cancelable = false) { disk, _ ->
+            submitReadOnlyDiskOperation("Self-test", cancelable = false) { disk, _, _ ->
                 val report = usb.diagnostics.SelfTestRunner.runAll(disk)
                 check(report.allPassed) { report.summary() }
                 report.summary()
@@ -944,6 +1273,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    fun onSafImagePicked(uri: Uri) {
+        val resolver = getApplication<Application>().contentResolver
+        val (name, size) = contentInfo(resolver, uri)
+        onIntent(UiIntent.SetImage(uri.toString(), name, size))
     }
 
     fun onUsbDeviceAttached(
@@ -1006,7 +1341,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val op = object : DiskOperation(name = "Probe device") {
             override suspend fun run() {
-                closeFilesVolume()
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val disk = UsbDiskSession.open(mgr, device)
                 try {
                     val capacity = disk.geometry.capacityBytes
@@ -1041,6 +1376,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     !isTransport && tableResult.getOrNull()?.gptPrimaryDamaged == true,
                                 partitionTableAmbiguous =
                                     !isTransport && tableResult.getOrNull()?.hybridAmbiguous == true,
+                                partitionScheme = tableResult.getOrNull()?.scheme,
+                                rawGeometry =
+                                    usb.partition.RawRangeGeometry.from(
+                                        tableResult.getOrNull(),
+                                        disk.geometry.sectorCount,
+                                        disk.geometry.sectorSize,
+                                    ),
                             ),
                         )
                         tableResult.onSuccess {
@@ -1060,8 +1402,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ))
                         }
                     }
+                    failure?.let { err ->
+                        state = usb.operation.OperationState.Failed(err)
+                        failureCause = err
+                    }
                 } finally {
-                    disk.close()
+                    try {
+                        disk.close()
+                    } catch (closeErr: Throwable) {
+                        val primary = failureCause
+                        if (primary != null) {
+                            if (primary !== closeErr) primary.addSuppressed(closeErr)
+                        } else {
+                            throw closeErr
+                        }
+                    }
                 }
             }
         }
@@ -1070,27 +1425,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 when (val outcome = handle.await()) {
-                    is usb.service.OperationState.Failed -> {
+                    is usb.operation.OperationState.Failed -> {
                         withContext(Dispatchers.Main.immediate) {
                             if (attachGeneration == gen && attachedDevice?.deviceId == device.deviceId) {
-                                onIntent(
-                                    UiIntent.DeviceChanged(
-                                        presence = DevicePresence.Disconnected,
-                                        device = identity,
-                                        partitions = emptyList(),
-                                        files = emptyList(),
-                                    ),
-                                )
+                                val isTransport =
+                                    outcome.cause is DiskException ||
+                                        outcome.cause.cause is DiskException
+                                // Soft-table path already painted Ready/tableValid=false in run().
+                                if (state.presence != DevicePresence.Ready || isTransport) {
+                                    onIntent(
+                                        UiIntent.DeviceChanged(
+                                            presence =
+                                                if (isTransport) DevicePresence.Disconnected
+                                                else DevicePresence.Ready,
+                                            device = if (isTransport) identity else state.device ?: identity,
+                                            partitions = if (isTransport) emptyList() else state.partitions,
+                                            files = if (isTransport) emptyList() else state.files,
+                                            tableValid = false,
+                                        ),
+                                    )
+                                }
+                                val key =
+                                    if (isTransport) UiMessageKey.CannotOpenUsb
+                                    else UiMessageKey.CannotReadPartitionTable
                                 onIntent(UiIntent.Status(
                                     UiMessage.Key(
-                                        UiMessageKey.CannotOpenUsb,
+                                        key,
                                         listOf(outcome.cause.message ?: outcome.cause.javaClass.simpleName),
                                     ),
                                 ))
                             }
                         }
                     }
-                    is usb.service.OperationState.Cancelled -> {
+                    is usb.operation.OperationState.Cancelled -> {
                         withContext(Dispatchers.Main.immediate) {
                             if (attachGeneration == gen && attachedDevice?.deviceId == device.deviceId) {
                                 onIntent(
@@ -1119,7 +1486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val gen = attachGeneration
         val op = object : DiskOperation(name = "Refresh partitions") {
             override suspend fun run() {
-                closeFilesVolume()
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val disk = UsbDiskSession.open(mgr, dev)
                 try {
                     val capacity = disk.geometry.capacityBytes
@@ -1150,6 +1517,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     !isTransport && tableResult.getOrNull()?.gptPrimaryDamaged == true,
                                 partitionTableAmbiguous =
                                     !isTransport && tableResult.getOrNull()?.hybridAmbiguous == true,
+                                partitionScheme = tableResult.getOrNull()?.scheme,
+                                rawGeometry =
+                                    usb.partition.RawRangeGeometry.from(
+                                        tableResult.getOrNull(),
+                                        disk.geometry.sectorCount,
+                                        disk.geometry.sectorSize,
+                                    ),
                             ),
                         )
                         tableResult.onFailure { err ->
@@ -1163,8 +1537,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ))
                         }
                     }
+                    failure?.let { err ->
+                        state = usb.operation.OperationState.Failed(err)
+                        failureCause = err
+                    }
                 } finally {
-                    disk.close()
+                    try {
+                        disk.close()
+                    } catch (closeErr: Throwable) {
+                        val primary = failureCause
+                        if (primary != null) {
+                            if (primary !== closeErr) primary.addSuppressed(closeErr)
+                        } else {
+                            throw closeErr
+                        }
+                    }
                 }
             }
         }
@@ -1173,10 +1560,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 val outcome = handle.await()
-                if (outcome is usb.service.OperationState.Failed) {
+                if (outcome is usb.operation.OperationState.Failed) {
                     withContext(Dispatchers.Main.immediate) {
                         if (attachGeneration == gen && attachedDevice?.deviceId == dev.deviceId) {
-                            val isTransport = outcome.cause is DiskException
+                            val isTransport =
+                                outcome.cause is DiskException ||
+                                    outcome.cause.cause is DiskException
                             onIntent(
                                 UiIntent.DeviceChanged(
                                     presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
@@ -1213,6 +1602,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
         val gen = ++attachGeneration
         attachedDevice = null
+        lastUsageKey = null
+        usageInFlightKey = null
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         activeHandles.clear()
         activeHandle = null
@@ -1299,18 +1690,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 readOnly = !writable,
             )
         } catch (failure: Throwable) {
-            // PartitionVolumeSession already closes on mount failure; close() is idempotent.
-            runCatching { disk.close() }
+            // PartitionVolumeSession already closes on mount failure; a second close is
+            // idempotent, but if it still throws keep the mount cause and suppress close.
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== failure) failure.addSuppressed(closeErr)
+            }
             throw failure
         }
         filesVolume = MountedFilesVolume(partitionId, disk, volume, writable = writable)
         return volume
     }
 
-    /**
-     * Run [body] with a writable mount. After success or failure the RW volume is closed
-     * so a subsequent list remounts EXT read-only (avoids leaving ERROR_FS from a browse).
-     */
+
     /**
      * RW mount for a mutation. Close/umount failure after a successful body →
      * [OperationState.Partial] + [usb.fs.CloseAfterSuccessException] (never Completed).
@@ -1333,9 +1726,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (closeErr != null) {
                 if (primary != null) {
                     usb.fs.mergeCloseFailure(primary, closeErr)
-                } else if (operation.state != usb.service.OperationState.Partial) {
+                } else if (operation.state != usb.operation.OperationState.Partial) {
                     val wrapped = usb.fs.CloseAfterSuccessException(closeErr)
-                    operation.state = usb.service.OperationState.Partial
+                    operation.state = usb.operation.OperationState.Partial
                     operation.failureCause = wrapped
                     throw wrapped
                 }
@@ -1360,6 +1753,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (block == null) action(partitionId) else onIntent(UiIntent.Status(block))
         }
 
+    /**
+     * Ask for a filesystem-space measurement when the key the space row would render
+     * changed, and again after any invalidation — a finished operation, a partition
+     * refresh or a resume can clear the snapshot while the key stays identical, and a
+     * key-only dedupe would leave the row "unavailable" for good. A request for the same
+     * key is not repeated while its answer is still in flight.
+     */
+    private fun refreshFilesystemUsage(intent: UiIntent) {
+        if (intent is UiIntent.FilesystemUsageResulted &&
+            intent.generation == state.filesystemUsageGeneration
+        ) {
+            // The newest request answered (published or dropped as stale): nothing is in
+            // flight any more. An older answer must not clear a newer request's marker,
+            // or the next intent would ask again for a measurement already on its way.
+            usageInFlightKey = null
+        }
+        val partition = state.selectedPartition()
+        val key = partition?.let { state.filesystemUsageKey(it) }
+        if (key == null) {
+            // No measurable selection: forget the last key so a re-attach asks again.
+            lastUsageKey = null
+            usageInFlightKey = null
+            return
+        }
+        val finished =
+            intent is UiIntent.OperationUpdated &&
+                intent.progress?.state != null &&
+                intent.progress?.state != OperationState.Running &&
+                intent.progress?.state != OperationState.Queued
+        if (!state.needsFilesystemUsageRequest(key, lastUsageKey, usageInFlightKey, finished)) return
+        val result = UiReducer.reduce(state, UiIntent.RequestFilesystemUsage)
+        if (result.effects.isEmpty()) return
+        lastUsageKey = key
+        usageInFlightKey = key
+        state = result.state
+        result.effects.forEach { effect -> handleEffect(effect) }
+    }
+
+    /**
+     * Read free/total bytes of the mounted volume on an IO thread while holding [filesLock],
+     * so the read-only query cannot race a mount, a mutation or a close. A volume that will
+     * not open reports "unavailable" instead of an invented value, and the answer is dropped
+     * when the attachment changed since the request.
+     */
+    private fun measureFilesystemUsage(
+        partitionId: String,
+        key: FilesystemUsageKey,
+        generation: Long,
+    ) {
+        val expectedGeneration = attachGeneration
+        val expectedIdentity = state.device?.identity
+        scope.launch(Dispatchers.IO) {
+            val snapshot =
+                synchronized(filesLock) {
+                    if (attachGeneration != expectedGeneration ||
+                        attachGeneration != key.attachGeneration ||
+                        expectedIdentity == null ||
+                        expectedIdentity != key.identity
+                    ) {
+                        return@launch
+                    }
+                    val volume =
+                        try {
+                            volumeForLocked(partitionId)
+                        } catch (failure: Throwable) {
+                            return@synchronized FilesystemUsageSnapshot(
+                                key,
+                                FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
+                            )
+                        }
+                    FilesystemUsageProbe.measureLocked(volume, key)
+                }
+            withContext(Dispatchers.Main.immediate) {
+                onIntent(UiIntent.FilesystemUsageResulted(generation, snapshot.key, snapshot.usage))
+            }
+        }
+    }
+
     /** Re-list the displayed directory from the real volume. */
     fun listDirectory(path: String, status: UiMessage? = null) = withPartitionId { partitionId ->
         submitFilesOperation(
@@ -1380,8 +1851,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.CreatedFolder, listOf(target))) },
             ) { operation ->
                 withWritableVolume(partitionId, operation) { volume ->
+                    operation.mutationAttempted = true
                     volume.mkdir(target)
                     volume.sync()
+                    operation.commitReached = true
                 }
             }
         }
@@ -1396,7 +1869,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ) { operation ->
                 withWritableVolume(partitionId, operation) { volume ->
                     try {
+                        operation.mutationAttempted = true
                         usb.files.FilesOperations.delete(volume, target)
+                        volume.sync()
+                        operation.commitReached = true
                     } catch (failure: Throwable) {
                         throw userVisibleDeleteError(name, target, failure)
                     }
@@ -1433,6 +1909,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     operation.mutationAttempted = true
                     usb.files.FilesOperations.rename(volume, target, renamed)
                     volume.sync()
+                    operation.commitReached = true
                 }
             }
         }
@@ -1470,6 +1947,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 operation.bytesTotal = reportedSize ?: -1L
 
                 withWritableVolume(partitionId, operation) { volume ->
+                    operation.mutationAttempted = true
                     FilesOperations.upload(
                         resolver = resolver,
                         uri = document,
@@ -1493,6 +1971,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         },
                     )
+                    volume.sync()
+                    operation.commitReached = true
                 }
             }
         }
@@ -1532,51 +2012,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Stream [name] from the mounted USB volume into app filesDir/staging, then release the
      * volume so the user can confirm a destructive raw write on the (same) disk.
      */
-    private fun stageUsbImageForRawWrite(path: String, name: String) {
+    private fun stageUsbImageForRawWrite(path: String, name: String, binding: PartitionBinding) {
         val filesDir = getApplication<Application>().filesDir
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
         // Holder: publish SetStaged only after copy+sync+close succeed; onSuccess runs on Main.
         val stagedPathHolder = arrayOfNulls<String>(1)
-        withPartitionId { partitionId ->
-            submitFilesOperation(
-                label = "Stage $name for raw write",
-                onSuccess = {
-                    val stagedPath = stagedPathHolder[0]
-                    if (stagedPath != null) {
-                        onIntent(UiIntent.SetStagedRawImage(stagedPath, name))
-                    }
-                },
-                onTerminal = { outcome ->
-                    // Late-cancel race after last isActive check: executor may still mark
-                    // Cancelled/Failed without throwing — drop unpublished staged copy.
-                    // Never throw from terminal callback (would crash Main handler).
-                    if (outcome !is usb.service.OperationState.Completed) {
-                        val orphan = stagedPathHolder[0]
-                        stagedPathHolder[0] = null
-                        try {
-                            ImageStaging.deleteIfManaged(filesDir, orphan)
-                        } catch (err: Throwable) {
-                            // Keep the terminal state and its cause; expose cleanup as suppressed
-                            // plus a persistent log line so the warning is not lost.
-                            (outcome as? usb.service.OperationState.Failed)
-                                ?.cause
-                                ?.addSuppressed(err)
-                            val detail = err.message ?: err.javaClass.simpleName
-                            onIntent(UiIntent.AppendLog(logLine("Upload cleanup failed: $detail")))
-                            onIntent(
-                                UiIntent.Status(
-                                    UiMessage.Key(
-                                        UiMessageKey.DeleteStagingFailed,
-                                        listOf(detail),
-                                    ),
+        submitFilesOperation(
+            label = "Stage $name for raw write",
+            onSuccess = {
+                val stagedPath = stagedPathHolder[0]
+                if (stagedPath != null) {
+                    onIntent(UiIntent.SetStagedRawImage(stagedPath, name))
+                }
+            },
+            onTerminal = { outcome ->
+                // Late-cancel race after last isActive check: executor may still mark
+                // Cancelled/Failed without throwing — drop unpublished staged copy.
+                // Never throw from terminal callback (would crash Main handler).
+                if (outcome !is usb.operation.OperationState.Completed) {
+                    val orphan = stagedPathHolder[0]
+                    stagedPathHolder[0] = null
+                    try {
+                        ImageStaging.deleteIfManaged(filesDir, orphan)
+                    } catch (err: Throwable) {
+                        // Keep the terminal state and its cause; expose cleanup as suppressed
+                        // plus a persistent log line so the warning is not lost.
+                        (outcome as? usb.operation.OperationState.Failed)
+                            ?.cause
+                            ?.addSuppressed(err)
+                        val detail = err.message ?: err.javaClass.simpleName
+                        onIntent(UiIntent.AppendLog(logLine("Upload cleanup failed: $detail")))
+                        onIntent(
+                            UiIntent.Status(
+                                UiMessage.Key(
+                                    UiMessageKey.DeleteStagingFailed,
+                                    listOf(detail),
                                 ),
-                            )
-                        }
+                            ),
+                        )
                     }
-                },
-            ) { operation ->
-                val target = fatChildPath(path, name)
-                val volume = volumeForLocked(partitionId)
-                val size = volume.stat(target).size
+                }
+            },
+        ) { operation ->
+            require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+            require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+            require(binding.matches(state)) { "raw source target changed" }
+            val target = fatChildPath(path, name)
+            val volume = volumeForLocked(binding.partitionId)
+            val size = volume.stat(target).size
                 operation.bytesTotal = size
                 ImageStaging.requireUsableSpaceEstimate(filesDir, size)
                 var primary: Throwable? = null
@@ -1613,6 +2097,1067 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         throw usb.fs.mergeCloseFailure(primary, closeErr, cleanupErr)
                     }
                 }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Source choosers: raw image, Ventoy link candidates, and phone import.
+    // ---------------------------------------------------------------------
+
+    private fun loadRawSourceCandidates(binding: PartitionBinding, generation: Long) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val identity = state.device?.identity
+        rawSourceHandle?.cancel()
+        rawSourceHandle = submitFilesOperation(
+            label = "List raw sources",
+            quiet = true,
+        ) { operation ->
+            require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+            require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+            require(binding.matches(state)) { "raw source partition changed" }
+            val volume = volumeForLocked(binding.partitionId)
+            val listing = usb.image.RawSourceChooser.list(
+                volume = volume,
+                root = "/",
+                maxEntries = 1000,
+                maxDepth = 4,
+                isActive = { operation.isActive() },
+            )
+            if (attachGeneration == expectedAttach && state.device?.identity == identity) {
+                post(
+                    UiIntent.RawSourceCandidatesLoaded(
+                        generation = generation,
+                        identity = identity,
+                        candidates = listing.candidates.map {
+                            usb.ui.RawSourceCandidate(
+                                path = it.path,
+                                name = it.name,
+                                sizeBytes = it.sizeBytes,
+                                partitionId = binding.partitionId,
+                            )
+                        },
+                        truncated = listing.truncated,
+                        unreadable = listing.unreadable.size,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun loadWindowsImageCandidates(generation: Long) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val identity = state.device?.identity
+        windowsImageHandle?.cancel()
+        val op = object : DiskOperation("List data partition files") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val listing = usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
+                        usb.image.RawSourceChooser.list(
+                            volume = volume,
+                            root = "/",
+                            maxEntries = 1000,
+                            maxDepth = 5,
+                            isActive = { isActive() },
+                        )
+                    }
+                    if (attachGeneration == expectedAttach &&
+                        deviceKey(attachedDevice) == expectedKey &&
+                        this@MainViewModel.state.device?.identity == identity
+                    ) {
+                        post(
+                            UiIntent.WindowsIsoCandidatesLoaded(
+                                generation = generation,
+                                identity = identity,
+                                candidates = listing.candidates.map {
+                                    usb.ui.RawSourceCandidate(
+                                        path = it.path,
+                                        name = it.name,
+                                        sizeBytes = it.sizeBytes,
+                                        partitionId = "1",
+                                    )
+                                },
+                                error = listing.unreadable.firstOrNull()?.let {
+                                    "${listing.unreadable.size} folder(s) could not be read"
+                                },
+                            ),
+                        )
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        windowsImageHandle = handle
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    state.device?.identity == identity
+                ) {
+                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                    post(
+                        UiIntent.WindowsIsoCandidatesLoaded(
+                            generation = generation,
+                            identity = identity,
+                            candidates = emptyList(),
+                            error = message,
+                        ),
+                    )
+                    post(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun loadWindowsImageLinks(generation: Long) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val identity = state.device?.identity
+        val op = object : DiskOperation("Read XML bindings") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val links = usb.ventoy.VentoySetup.readLinks(disk)
+                    if (attachGeneration == expectedAttach &&
+                        deviceKey(attachedDevice) == expectedKey &&
+                        this@MainViewModel.state.device?.identity == identity
+                    ) {
+                        post(
+                            UiIntent.WindowsImageLinksLoaded(
+                                generation = generation,
+                                identity = identity,
+                                links = links.map {
+                                    usb.ui.WindowsImageLink(it.image, it.templates)
+                                },
+                            ),
+                        )
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    state.device?.identity == identity
+                ) {
+                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                    post(
+                        UiIntent.WindowsImageLinksLoaded(
+                            generation = generation,
+                            identity = identity,
+                            links = emptyList(),
+                            error = message,
+                        ),
+                    )
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun inspectImageImport(
+        uri: String,
+        generation: Long,
+        kind: usb.ui.WindowsImportKind,
+        destinationDirectory: String?,
+    ) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val identity = state.device?.identity
+        val resolver = getApplication<Application>().contentResolver
+        val document = Uri.parse(uri)
+        scope.launch(Dispatchers.IO) {
+            try {
+                val (reportedName, reportedSize) = contentInfo(resolver, document)
+                val rawName = reportedName ?: document.lastPathSegment
+                    ?: throw IllegalArgumentException("picker returned no file name")
+                val name = usb.ventoy.VentoyIsoLibrary.requireImportName(rawName)
+                val directory =
+                    destinationDirectory?.let {
+                        usb.ventoy.VentoyIsoLibrary.normalizeDirectory(it)
+                    } ?: if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                        "/ventoy"
+                    } else {
+                        "/ISO"
+                    }
+                val target = if (directory == "/") "/$name" else "$directory/$name"
+                require(
+                    !target.equals("/ventoy/ventoy.json", ignoreCase = true),
+                ) { "refusing to overwrite the Ventoy config with a template" }
+                val markers =
+                    if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                        inspectPhoneTemplate(resolver, document)
+                    } else {
+                        emptyList()
+                    }
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                val exists =
+                    try {
+                        usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
+                            if (destinationDirectory != null && directory != "/") {
+                                val chosen = volume.statOrNull(directory)
+                                require(chosen != null && chosen.isDirectory) {
+                                    "import folder \"$directory\" does not exist on the Ventoy partition"
+                                }
+                            }
+                            volume.statOrNull(target) != null
+                        }
+                    } finally {
+                        disk.close()
+                    }
+                if (attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey &&
+                    state.device?.identity == identity
+                ) {
+                    post(
+                        UiIntent.WindowsIsoImportInspected(
+                            uri = uri,
+                            name = name,
+                            sizeBytes = reportedSize,
+                            targetName = name,
+                            exists = exists,
+                            generation = generation,
+                            kind = kind,
+                            templateMarkers = markers,
+                            directory = directory,
+                        ),
+                    )
+                    if (markers.isNotEmpty()) {
+                        post(
+                            UiIntent.Status(
+                                UiMessage.Raw(
+                                    "Template has destructive sections: " +
+                                        markers.joinToString(", ") +
+                                        "; binding it will need a separate confirmation",
+                                ),
+                            ),
+                        )
+                    }
+                } else {
+                    // The stick changed under the picker: say so instead of dropping the result
+                    // and leaving the user with no dialog and no message.
+                    post(
+                        UiIntent.Status(
+                            UiMessage.Raw("USB attachment changed; re-select the file to import"),
+                        ),
+                    )
+                }
+            } catch (failure: Throwable) {
+                val problem =
+                    when (failure) {
+                        is usb.ventoy.NotUnattendRootException ->
+                            UnreadableProblem.NotUnattendRoot
+                        is usb.ventoy.TemplateTooLargeException ->
+                            UnreadableProblem.TooLarge
+                        is usb.ventoy.EmptyTemplateException ->
+                            UnreadableProblem.Empty
+                        is usb.ventoy.InvalidTemplateException ->
+                            UnreadableProblem.MalformedXml
+                        is java.io.IOException -> UnreadableProblem.IoFailure
+                        else -> UnreadableProblem.MalformedXml
+                    }
+                post(
+                    UiIntent.WindowsIsoImportRejected(
+                        problem = problem,
+                        reason = failure.message ?: failure.javaClass.simpleName,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun inspectPhoneTemplate(
+        resolver: android.content.ContentResolver,
+        document: android.net.Uri,
+    ): List<String> {
+        val limit = usb.ventoy.VentoySetup.MAX_TEMPLATE_BYTES
+        val input = resolver.openInputStream(document)
+            ?: throw java.io.FileNotFoundException("cannot open $document")
+        val bytes =
+            input.use { stream ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val read = stream.read(buffer)
+                    if (read <= 0) break
+                    total += read
+                    if (total > limit) {
+                        throw usb.ventoy.TemplateTooLargeException(
+                            "XML template is larger than $limit bytes; refusing to inspect it",
+                        )
+                    }
+                    output.write(buffer, 0, read)
+                }
+                output.toByteArray()
+            }
+        if (bytes.isEmpty()) throw usb.ventoy.EmptyTemplateException("XML template is empty")
+        return usb.ventoy.WindowsTemplate.inspect(bytes, requireUnattendRoot = true).destructiveMarkers
+    }
+
+    private fun importImage(proposal: usb.ui.IsoImportProposal, overwrite: Boolean) {
+        if (attachGeneration != proposal.attachGeneration ||
+            state.device?.identity != proposal.identity
+        ) {
+            onIntent(UiIntent.Status(UiMessage.Raw("USB attachment changed; re-select the file")))
+            return
+        }
+        if (proposal.exists && !overwrite) {
+            onIntent(UiIntent.Status(UiMessage.Raw("Overwrite was not confirmed; nothing was imported")))
+            return
+        }
+        if (!proposal.exists && overwrite) {
+            onIntent(UiIntent.Status(UiMessage.Raw("Overwrite was not confirmed for a new file")))
+            return
+        }
+        val resolver = getApplication<Application>().contentResolver
+        val label = "Import ${proposal.targetName}"
+        val op = object : DiskOperation(name = label) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val probe = usb.ventoy.VentoyLayout.probe(disk)
+                        ?: throw usb.ventoy.IncompatibleVentoyException(
+                            "No Ventoy data partition on this disk",
+                        )
+                    val sectorSize = disk.sectorSize.toULong()
+                    val maxBytes =
+                        if (probe.part1SectorCount <= Long.MAX_VALUE.toULong() / sectorSize) {
+                            (probe.part1SectorCount * sectorSize).toLong()
+                        } else {
+                            Long.MAX_VALUE
+                        }
+                    bytesTotal = proposal.sizeBytes ?: -1L
+                    val outcome = usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
+                        val input = resolver.openInputStream(Uri.parse(proposal.uri))
+                            ?: throw java.io.FileNotFoundException("cannot open ${proposal.uri}")
+                        usb.ventoy.VentoyIsoLibrary.import(
+                            volume = volume,
+                            input = input,
+                            rawName = proposal.targetName,
+                            operation = this,
+                            overwrite = overwrite,
+                            expectedSize = proposal.sizeBytes,
+                            maxBytes = maxBytes,
+                            importDirectory = proposal.directory,
+                            onCleanupFailure = { cleanup ->
+                                val detail = cleanup.message ?: cleanup.javaClass.simpleName
+                                post(UiIntent.AppendLog(logLine("Import cleanup: $detail")))
+                            },
+                        )
+                    }
+                    result = "Imported ${outcome.bytes} bytes to ${outcome.targetPath}"
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Running,
+                    label = label,
+                    bytesTotal = proposal.sizeBytes ?: -1L,
+                    cancelable = true,
+                ),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandle = handle
+        activeHandles.add(handle)
+        scope.launch {
+            val ticker = launch {
+                while (true) {
+                    delay(PROGRESS_TICK_MS)
+                    onIntent(
+                        UiIntent.OperationUpdated(
+                            OperationProgress(
+                                state = OperationState.Running,
+                                label = label,
+                                bytesDone = op.bytesDone,
+                                bytesTotal = op.bytesTotal,
+                                cancelable = true,
+                            ),
+                        ),
+                    )
+                }
+            }
+            try {
+                val outcome = handle.await()
+                ticker.cancel()
+                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            label = label,
+                            bytesDone = op.bytesDone,
+                            bytesTotal = op.bytesTotal,
+                            errorMessage = message,
+                            resultMessage = op.result,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (mappedState == OperationState.Completed) {
+                    if (proposal.kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                        onIntent(
+                            UiIntent.WindowsTemplateImported(
+                                "${proposal.directory.trimEnd('/')}/${proposal.targetName}",
+                            ),
+                        )
+                    }
+                    onIntent(UiIntent.LoadWindowsIsoCandidates)
+                    onIntent(UiIntent.LoadWindowsImageLinks)
+                } else if (message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                ticker.cancel()
+                if (activeHandle === handle) activeHandle = null
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun unlinkWindowsImages(paths: List<String>) {
+        val label = "Remove XML bindings"
+        val op = object : DiskOperation(name = label) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val changed = usb.ventoy.VentoySetup.unlinkImages(
+                        disk = disk,
+                        imagePaths = paths,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                    result =
+                        if (changed) {
+                            "Removed ${paths.size} binding(s); image and XML files were kept"
+                        } else {
+                            "No matching binding was present; nothing changed"
+                        }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Running,
+                    label = label,
+                    cancelable = true,
+                ),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandle = handle
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            label = label,
+                            errorMessage = message,
+                            resultMessage = op.result,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (mappedState == OperationState.Completed) {
+                    onIntent(UiIntent.LoadWindowsImageLinks)
+                } else if (message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                if (activeHandle === handle) activeHandle = null
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun saveWindowsControls() {
+        val bypass = state.vtoyBypassChecks
+        val localAccount = state.vtoyLocalAccount
+        if (bypass == null && localAccount == null) {
+            onIntent(
+                UiIntent.Status(
+                    UiMessage.Raw("No Windows control change to save (global Ventoy flags)"),
+                ),
+            )
+            return
+        }
+        val label = "Save global Windows controls"
+        val op = object : DiskOperation(name = label) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    usb.ventoy.VentoySetup.saveControls(
+                        disk = disk,
+                        options = usb.ventoy.SetupOptions(
+                            bypassChecks = bypass,
+                            localAccount = localAccount,
+                        ),
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                    result = "Global controls saved: " +
+                        "VTOY_WIN11_BYPASS_CHECK=${bypass ?: "unchanged"}, " +
+                        "VTOY_WIN11_BYPASS_NRO=${localAccount ?: "unchanged"}"
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Running, label = label, cancelable = false),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            label = label,
+                            errorMessage = message,
+                            resultMessage = op.result,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (message != null) onIntent(UiIntent.Status(UiMessage.Raw(message)))
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun loadAutounattend(xmlName: String, generation: Long) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val op = object : DiskOperation("Read unattend XML") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val read = usb.ventoy.VentoySetup.readAutounattend(disk, xmlName)
+                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                        post(
+                            UiIntent.AutounattendLoaded(
+                                xmlName = xmlName,
+                                state = read.state,
+                                bindings =
+                                    if (read.bindings.isEmpty()) {
+                                        emptyList()
+                                    } else {
+                                        read.bindings
+                                    },
+                                generation = generation,
+                            ),
+                        )
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey
+                ) {
+                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                    val problem =
+                        when (outcome.cause) {
+                            is usb.ventoy.VentoySetup.TemplateTooLargeException ->
+                                UnreadableProblem.TooLarge
+                            is java.io.IOException -> UnreadableProblem.IoFailure
+                            else -> UnreadableProblem.MalformedXml
+                        }
+                    post(
+                        UiIntent.AutounattendLoaded(
+                            xmlName = xmlName,
+                            state = AutounattendState.Unreadable(
+                                problem = problem,
+                                reason = message,
+                                sourcePath = usb.ventoy.VentoySetup.xmlPath(xmlName),
+                            ),
+                            bindings = emptyList(),
+                            generation = generation,
+                        ),
+                    )
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun loadAutounattendCandidates(xmlName: String, generation: Long) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val op = object : DiskOperation("List Ventoy images") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val templatePath = usb.ventoy.VentoySetup.xmlPath(xmlName)
+                    val links = usb.ventoy.VentoySetup.readLinks(disk)
+                    val result =
+                        usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
+                            val (roots, limitedBy) =
+                                usb.ventoy.VentoySetup.readSearchScope(volume)
+                            val listing = usb.image.RawSourceChooser.list(
+                                volume = volume,
+                                root = "/",
+                                maxEntries = 1000,
+                                maxDepth = 5,
+                                isActive = { isActive() },
+                            )
+                            val bindings =
+                                listing.candidates.map { file ->
+                                    val linked =
+                                        links.any { link ->
+                                            link.image.equals(file.path, ignoreCase = true) &&
+                                                link.templates.any {
+                                                    it.equals(templatePath, ignoreCase = true)
+                                                }
+                                        }
+                                    AutounattendBinding(
+                                        imagePath = file.path,
+                                        bound = linked,
+                                    )
+                                }
+                            usb.ui.AutounattendImageCandidates(
+                                images = bindings,
+                                searchScope = roots,
+                                scopeLimitedBy = limitedBy,
+                                truncated = listing.truncated,
+                                error =
+                                    listing.unreadable.firstOrNull()?.let {
+                                        "${listing.unreadable.size} folder(s) could not be read"
+                                    },
+                            )
+                        }
+                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                        post(
+                            UiIntent.AutounattendCandidatesLoaded(
+                                xmlName,
+                                result,
+                                generation = generation,
+                            ),
+                        )
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey
+                ) {
+                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                    post(
+                        UiIntent.AutounattendCandidatesLoaded(
+                            xmlName,
+                            usb.ui.AutounattendImageCandidates(
+                                images = emptyList(),
+                                searchScope = emptyList(),
+                                scopeLimitedBy = null,
+                                error = message,
+                            ),
+                            generation = generation,
+                        ),
+                    )
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun generateAutounattend(effect: UiEffect) {
+        val xmlName = effect.xmlName ?: return
+        val params = effect.autounattendParams ?: return
+        val imagePaths = effect.imagePaths
+        val overwriteXml = effect.overwriteXml
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val label = "Generate unattend XML"
+        val op = object : DiskOperation(name = label) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    usb.ventoy.VentoySetup.generateAutounattend(
+                        disk = disk,
+                        xmlName = xmlName,
+                        params = params,
+                        imagePaths = imagePaths,
+                        overwriteXml = overwriteXml,
+                        allowDestructiveTemplate = effect.allowDestructiveTemplate,
+                        expectedTemplateSha256 = effect.expectedTemplateSha256,
+                        expectedPlanSha256 = effect.expectedPlanSha256,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                    result = "Wrote ${usb.ventoy.VentoySetup.xmlPath(xmlName)}"
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Running, label = label, cancelable = false),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            label = label,
+                            errorMessage = message,
+                            resultMessage = op.result,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (mappedState == OperationState.Completed) {
+                    onIntent(UiIntent.LoadAutounattend(xmlName))
+                    onIntent(UiIntent.LoadWindowsImageLinks)
+                    onIntent(UiIntent.ClearWindowsSelection)
+                } else if (message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun loadVentoyGlobalSettings() {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val op = object : DiskOperation("Read Ventoy global settings") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val settings = usb.ventoy.VentoySetup.readGlobalSettings(disk)
+                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                        post(UiIntent.VentoyGlobalSettingsLoaded(settings))
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey
+                ) {
+                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                    post(
+                        UiIntent.VentoyGlobalSettingsLoaded(
+                            VentoyGlobalSettings(emptyList(), message),
+                        ),
+                    )
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun loadVentoyFolders() {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val op = object : DiskOperation("List Ventoy folders") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    val folders = usb.ventoy.VentoySetup.listDirectories(disk)
+                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                        post(UiIntent.VentoyFoldersLoaded(folders))
+                    }
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey
+                ) {
+                    post(
+                        UiIntent.VentoyFoldersLoaded(
+                            emptyList(),
+                            outcome.cause.message ?: outcome.cause.javaClass.simpleName,
+                        ),
+                    )
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun setVentoyGlobalSetting(key: String, value: String?) {
+        val op = object : DiskOperation("Set Ventoy global setting") {
+            override suspend fun run() {
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    usb.ventoy.VentoySetup.setGlobalSetting(
+                        disk = disk,
+                        key = key,
+                        value = value,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Running,
+                    label = "Set Ventoy global setting",
+                    cancelable = false,
+                ),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            label = "Set Ventoy global setting",
+                            errorMessage = message,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (mappedState == OperationState.Completed) {
+                    onIntent(UiIntent.LoadVentoyGlobalSettings)
+                } else if (message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    private fun bindAutounattend(
+        xmlName: String,
+        imagePaths: List<String>,
+        allowDestructiveTemplate: Boolean,
+        expectedTemplateSha256: String?,
+    ) {
+        // Pinned like generate and raw write: a different stick between tap and run must fail,
+        // not silently edit another disk that happens to hold the same path.
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val op = object : DiskOperation("Bind images to unattend XML") {
+            override suspend fun run() {
+                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    usb.ventoy.VentoySetup.bindImages(
+                        disk = disk,
+                        xmlName = xmlName,
+                        imagePaths = imagePaths,
+                        allowDestructiveTemplate = allowDestructiveTemplate,
+                        expectedTemplateSha256 = expectedTemplateSha256,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        submitBindingOperation(op, xmlName)
+    }
+
+    private fun unbindAutounattend(xmlName: String, imagePath: String) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val op = object : DiskOperation("Unbind image from unattend XML") {
+            override suspend fun run() {
+                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                val dev = attachedDevice ?: throw DiskException.Disconnected()
+                val mgr = usbManager ?: throw DiskException.Disconnected()
+                val disk = UsbDiskSession.open(mgr, dev)
+                try {
+                    // false means nothing was written: reporting "Completed" there would claim
+                    // a change that never happened.
+                    val removed = usb.ventoy.VentoySetup.unbindImage(
+                        disk = disk,
+                        xmlName = xmlName,
+                        imagePath = imagePath,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    require(removed) {
+                        "No binding for $imagePath in $xmlName; nothing was changed"
+                    }
+                    if (mutationAttempted) commitReached = true
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        submitBindingOperation(op, xmlName)
+    }
+
+    private fun submitBindingOperation(op: DiskOperation, xmlName: String) {
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Running, label = op.name, cancelable = false),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            label = op.name,
+                            errorMessage = message,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (mappedState == OperationState.Completed) {
+                    // LoadAutounattend now refreshes the document *and* the candidate list,
+                    // which is the only source of the Bound flag and of the Unbind button.
+                    onIntent(UiIntent.LoadAutounattend(xmlName))
+                    onIntent(UiIntent.LoadWindowsImageLinks)
+                    onIntent(UiIntent.ClearWindowsSelection)
+                } else if (message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                activeHandles.remove(handle)
             }
         }
     }
@@ -1679,10 +3224,10 @@ private fun downloadFile(path: String, name: String, uri: String) {
         bytesTotal: Long = -1L,
         failurePath: String? = null,
         onSuccess: (() -> Unit)? = null,
-        onTerminal: ((usb.service.OperationState) -> Unit)? = null,
+        onTerminal: ((usb.operation.OperationState) -> Unit)? = null,
+        quiet: Boolean = failurePath != null,
         body: (DiskOperation) -> Unit,
-    ) {
-        val quiet = failurePath != null
+    ): OperationHandle {
         val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
             override suspend fun run() {
                 synchronized(filesLock) {
@@ -1700,7 +3245,8 @@ private fun downloadFile(path: String, name: String, uri: String) {
             ),
         )
         val handle = DiskController.get().submit(operation)
-        activeHandle = handle
+        // A quiet listing must never become the CancelOperation target of a live write.
+        if (!quiet) activeHandle = handle
         activeHandles.add(handle)
         scope.launch {
             val ticker = launch {
@@ -1734,7 +3280,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 val outcome = handle.await()
                 ticker.cancel()
                 when (outcome) {
-                    is usb.service.OperationState.Failed -> {
+                    is usb.operation.OperationState.Failed -> {
                         val message =
                             outcome.cause.message
                                 ?: outcome.cause.javaClass.simpleName
@@ -1756,7 +3302,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
                         onTerminal?.invoke(outcome)
                     }
-                    is usb.service.OperationState.Cancelled -> {
+                    is usb.operation.OperationState.Cancelled -> {
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(state = OperationState.Cancelled, label = label),
@@ -1764,7 +3310,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         )
                         onTerminal?.invoke(outcome)
                     }
-                    is usb.service.OperationState.Partial -> {
+                    is usb.operation.OperationState.Partial -> {
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
@@ -1801,28 +3347,35 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 activeHandles.remove(handle)
             }
         }
+        return handle
     }
 
     /**
      * Read-only disk work. The mounted FAT volume is closed first because it holds the
      * USB claim; [body] then runs on the shared disk thread and returns the summary shown
-     * to the user. Nothing here writes to the stick.
+     * to the user. Structured extras (e.g. read-scan numbers) go on [ReadOnlySink].
+     * Nothing here writes to the stick.
      */
+    private class ReadOnlySink {
+        @Volatile var readScanResult: ReadScanOutcome? = null
+    }
+
     private fun submitReadOnlyDiskOperation(
         label: String,
         cancelable: Boolean = true,
-        body: (UsbDisk, DiskOperation) -> String,
+        body: (UsbDisk, DiskOperation, ReadOnlySink) -> String,
     ) {
+        val sink = ReadOnlySink()
         val operation = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                closeFilesVolume()
+                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val device = attachedDevice ?: throw DiskException.Disconnected()
                 val manager = usbManager ?: throw DiskException.Disconnected()
                 val disk = UsbDiskSession.open(manager, device)
                 try {
-                    result = body(disk, this)
+                    result = body(disk, this, sink)
                 } finally {
                     disk.close()
                 }
@@ -1873,7 +3426,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                 ticker.cancel()
                 logTicker.cancel()
                 when (outcome) {
-                    is usb.service.OperationState.Failed -> {
+                    is usb.operation.OperationState.Failed -> {
                         val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                         onIntent(UiIntent.Status(UiMessage.Raw(message)))
                         onIntent(
@@ -1883,9 +3436,10 @@ private fun downloadFile(path: String, name: String, uri: String) {
                                     label = label,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
-                                    resultMessage = operation.result,
+                                    resultMessage = operation.result?.takeIf { it.isNotEmpty() },
                                     failureCause = operation.failureCause,
                                     cancelable = cancelable,
+                                    readScanResult = sink.readScanResult,
                                 ),
                             ),
                         )
@@ -1900,9 +3454,10 @@ private fun downloadFile(path: String, name: String, uri: String) {
                                     label = label,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
-                                    resultMessage = operation.result,
+                                    resultMessage = operation.result?.takeIf { it.isNotEmpty() },
                                     failureCause = operation.failureCause,
                                     cancelable = cancelable,
+                                    readScanResult = sink.readScanResult,
                                 ),
                             ),
                         )
@@ -2011,7 +3566,7 @@ class MainActivity : ComponentActivity() {
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        viewModel.onIntent(UiIntent.SetImage(uri.toString()))
+        viewModel.onSafImagePicked(uri)
     }
 
     /** SAF file chosen for the next GPT critical-sector restore. */
@@ -2043,6 +3598,29 @@ class MainActivity : ComponentActivity() {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         viewModel.onIntent(UiIntent.SetRescueMap(uri.toString()))
+    }
+
+    /** Kind and destination waiting for the SAF file chosen in [windowsImportLauncher]. */
+    private var pendingWindowsImportKind = usb.ui.WindowsImportKind.Image
+    private var pendingWindowsImportDirectory: String? = null
+
+    /**
+     * SAF document picked for a phone-to-stick import. The kind and the chosen existing
+     * folder are captured before the picker opens, because the result arrives later. The
+     * source document is only read: nothing on the phone is moved, renamed or deleted.
+     */
+    private val windowsImportLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        val kind = pendingWindowsImportKind
+        val directory = pendingWindowsImportDirectory
+        pendingWindowsImportKind = usb.ui.WindowsImportKind.Image
+        pendingWindowsImportDirectory = null
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.onIntent(UiIntent.RequestImportWindowsIso(uri.toString(), kind, directory))
     }
 
     /** Entry name waiting for the SAF destination chosen in [downloadLauncher]. */
@@ -2104,6 +3682,16 @@ class MainActivity : ComponentActivity() {
         // A re-delivered CreateDocument result arrives after the activity is recreated
         // (rotation/process death); without this it would find no pending name and drop it.
         pendingDownloadName = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD)
+        // The document picker may recreate the activity; without these two the result would
+        // arrive as an image bound for /ISO, so an XML chosen for /ventoy would be misfiled and
+        // its marker scan skipped.
+        savedInstanceState?.getString(STATE_PENDING_WINDOWS_KIND)?.let { stored ->
+            pendingWindowsImportKind = runCatching {
+                usb.ui.WindowsImportKind.valueOf(stored)
+            }.getOrDefault(usb.ui.WindowsImportKind.Image)
+        }
+        pendingWindowsImportDirectory =
+            savedInstanceState?.getString(STATE_PENDING_WINDOWS_DIRECTORY)
         requestPermissionsIfNeeded()
         setContent {
             AppShell(
@@ -2112,18 +3700,19 @@ class MainActivity : ComponentActivity() {
                     viewModel.onIntent(intent)
                 },
                 onPickImage = {
-                    imagePickerLauncher.launch(
-                        arrayOf(
-                            "application/octet-stream",
-                            "application/x-iso9660-image",
-                            "application/gzip",
-                            "application/x-xz",
-                        ),
-                    )
+                    // A raw image may be called anything; filtering by MIME hid real files.
+                    imagePickerLauncher.launch(arrayOf("*/*"))
                 },
                 onRequestDownload = { name ->
                     pendingDownloadName = name
                     downloadLauncher.launch(name)
+                },
+                onPickWindowsFile = { kind, directory ->
+                    // Images and XML templates may have any name or MIME type; filtering hid
+                    // real files, and the host validates the content, not the extension.
+                    pendingWindowsImportKind = kind
+                    pendingWindowsImportDirectory = directory
+                    windowsImportLauncher.launch(arrayOf("*/*"))
                 },
                 onPickBackup = {
                     gptBackupPickerLauncher.launch(arrayOf("*/*"))
@@ -2141,6 +3730,10 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
+        outState.putString(STATE_PENDING_WINDOWS_KIND, pendingWindowsImportKind.name)
+        pendingWindowsImportDirectory?.let {
+            outState.putString(STATE_PENDING_WINDOWS_DIRECTORY, it)
+        }
     }
 
     override fun onStart() {
@@ -2246,5 +3839,8 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
         private const val STATE_PENDING_DOWNLOAD = "usb.multitool.PENDING_DOWNLOAD"
+        private const val STATE_PENDING_WINDOWS_KIND = "usb.multitool.PENDING_WINDOWS_KIND"
+        private const val STATE_PENDING_WINDOWS_DIRECTORY =
+            "usb.multitool.PENDING_WINDOWS_DIRECTORY"
     }
 }

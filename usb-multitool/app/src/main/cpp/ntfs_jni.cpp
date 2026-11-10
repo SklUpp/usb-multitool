@@ -153,6 +153,26 @@ std::string jstring_to_string(JNIEnv *env, jstring js)
     return s;
 }
 
+/* GetStringUTFChars yields modified UTF-8: an astral character becomes two surrogate
+ * code units encoded as separate 3-byte sequences, which a standard UTF-8 decoder
+ * (ntfs-3g's ntfs_mbstoucs) rejects. Hand the label over as UTF-16 and let the engine
+ * produce standard UTF-8; unpaired surrogates/NULs fail before anything is mounted. */
+bool jstring_to_utf8(JNIEnv *env, jstring js, std::string &out)
+{
+    out.clear();
+    if (!js) return true;
+    const jchar *chars = env->GetStringChars(js, nullptr);
+    if (!chars) return false;
+    const jsize len = env->GetStringLength(js);
+    std::string buffer(static_cast<size_t>(len) * 3 + 1, '\0');
+    int rc = ntfs_label_from_utf16(reinterpret_cast<const uint16_t *>(chars),
+                                   static_cast<size_t>(len), &buffer[0], buffer.size());
+    env->ReleaseStringChars(js, chars);
+    if (rc != 0) return false;
+    out = buffer.c_str();
+    return true;
+}
+
 /* ntfs_ucstombs emits standard UTF-8, while NewStringUTF expects modified UTF-8,
  * which cannot carry the 4-byte sequences used by astral names. Decode to UTF-16
  * instead: the C layer already rejected unconvertible names, so this input is
@@ -438,17 +458,81 @@ Java_usb_fs_NtfsFs_nativeIsVolumeDirty(JNIEnv *env, jclass, jlong handle)
     return (rc == 1) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_usb_fs_NtfsFs_nativeUsage(JNIEnv *env, jclass, jlong handle, jlongArray out)
+{
+    auto *wrapper = reinterpret_cast<MountedVolumeWrapper *>(handle);
+    if (!wrapper) {
+        throw_ntfs(env, "space query failed: bad handle");
+        return JNI_FALSE;
+    }
+    if (!out || env->GetArrayLength(out) < 2) {
+        throw_ntfs(env, "space query: output array too small");
+        return JNI_FALSE;
+    }
+    uint64_t total = 0;
+    uint64_t free_bytes = 0;
+    int rc = ntfs_engine_usage(wrapper->vol_handle, &total, &free_bytes);
+    if (rc != 0) {
+        throw_ntfs(env, "space query failed");
+        return JNI_FALSE;
+    }
+    jlong values[2] = { static_cast<jlong>(total), static_cast<jlong>(free_bytes) };
+    env->SetLongArrayRegion(out, 0, 2, values);
+    return JNI_TRUE;
+}
+
 JNIEXPORT jint JNICALL
 Java_usb_fs_NtfsFs_nativeMkfs(JNIEnv *env, jclass, jobject device,
                               jint sectorSize, jlong sectorCount, jstring label)
 {
+    std::string volume_label;
+    if (!jstring_to_utf8(env, label, volume_label)) return -EINVAL;
+
     JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
     if (!bdev) return -EINVAL;
 
     uint64_t bhandle = usb_block_register(&bdev->ops);
-    std::string volume_label = jstring_to_string(env, label);
     int rc = ntfs_engine_mkfs(
         bhandle, volume_label.empty() ? nullptr : volume_label.c_str(), true);
+    usb_block_unregister(bhandle);
+    destroy_block_device(env, bdev);
+    return rc;
+}
+
+JNIEXPORT jstring JNICALL
+Java_usb_fs_NtfsFs_nativeGetLabel(JNIEnv *env, jclass, jobject device,
+                                  jint sectorSize, jlong sectorCount)
+{
+    JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
+    if (!bdev) return nullptr;
+
+    char label[512];
+    uint64_t bhandle = usb_block_register(&bdev->ops);
+    int rc = ntfs_engine_get_label(bhandle, label, sizeof(label));
+    usb_block_unregister(bhandle);
+    destroy_block_device(env, bdev);
+    if (rc != 0) return nullptr;
+    std::u16string utf16 = utf8_to_utf16(label);
+    return env->NewString(
+        utf16.empty() ? reinterpret_cast<const jchar *>(u"")
+                      : reinterpret_cast<const jchar *>(utf16.data()),
+        static_cast<jsize>(utf16.size()));
+}
+
+JNIEXPORT jint JNICALL
+Java_usb_fs_NtfsFs_nativeSetLabel(JNIEnv *env, jclass, jobject device,
+                                  jint sectorSize, jlong sectorCount, jstring label)
+{
+    std::string volume_label;
+    if (!jstring_to_utf8(env, label, volume_label)) return -EINVAL;
+
+    JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
+    if (!bdev) return -EINVAL;
+
+    uint64_t bhandle = usb_block_register(&bdev->ops);
+    int rc = ntfs_engine_set_label(bhandle, volume_label.c_str());
+    usb_block_unregister(bhandle);
     destroy_block_device(env, bdev);
     return rc;
 }

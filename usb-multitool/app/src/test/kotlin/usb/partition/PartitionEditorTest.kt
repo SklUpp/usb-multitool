@@ -23,6 +23,60 @@ class PartitionEditorTest {
         }
     }
 
+    @Test fun createStoresGptNameAndRenameRewritesIt() {
+        val disk = SyntheticGpt.build(sectorCount = 16384UL)
+        val before = PartitionTable.read(disk)
+        val created = PartitionEditor.create(
+            before,
+            size = 2048UL,
+            type = PartitionType.BASIC,
+            name = "  DATA  ",
+        )
+        val committed = PartitionWriter.commit(disk, created)
+        val entry = committed.partitions.last()
+        assertEquals("DATA", entry.name)
+
+        val index = committed.partitions.indexOf(entry)
+        val renamed = PartitionWriter.commit(disk, PartitionEditor.rename(committed, index, "LINUX"))
+        assertEquals("LINUX", renamed.partitions[index].name)
+        // Other entries keep their name.
+        assertEquals("EFI", renamed.partitions.first().name)
+    }
+
+    @Test fun mbrRefusesNameInsteadOfDroppingIt() {
+        val mbr = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(2048UL, 2048UL, type = PartitionType.BASIC.name)),
+            freeRegions = listOf(FreeRegion(4096UL, 4096UL)),
+            diskSectorCount = 16384UL,
+            sectorSize = 512,
+        )
+        try {
+            PartitionEditor.create(mbr, size = 1024UL, type = PartitionType.BASIC, name = "DATA")
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
+        try {
+            PartitionEditor.rename(mbr, 0, "DATA")
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
+    @Test fun invalidGptNameIsRejectedBeforeAnyWrite() {
+        val before = fixture("between-partitions")
+        try {
+            PartitionEditor.create(
+                before,
+                size = 1024UL,
+                type = PartitionType.BASIC,
+                name = "x".repeat(37),
+            )
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
     @Test fun deleteRemovesEntryOnly() {
         val before = fixture("between-partitions")
         val after = PartitionEditor.delete(before, index = 1)

@@ -2,7 +2,7 @@ package usb.ui
 
 import java.nio.ByteBuffer
 import org.junit.Test
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 import usb.device.BlockDevice
 import usb.multitool.GptCriticalBackup
 
@@ -185,11 +185,11 @@ class GptCriticalBackupTest {
         val target = MemoryDisk(2048UL).also { it.dropWritesAt = 0UL }
         val operation = DiskOperation("gpt")
         runCatching { GptCriticalBackup.restore(target, blob, PRIMARY_SECTORS, BACKUP_SECTORS, operation) }
-        require(operation.state == usb.service.OperationState.Partial) { "readback mismatch must be Partial" }
+        require(operation.state == usb.operation.OperationState.Partial) { "readback mismatch must be Partial" }
         val bad = blob.copyOf(blob.size - 1)
         val clean = DiskOperation("gpt")
         runCatching { GptCriticalBackup.restore(target, bad, PRIMARY_SECTORS, BACKUP_SECTORS, clean) }
-        require(clean.state == usb.service.OperationState.Queued) { "preflight failure must stay clean" }
+        require(clean.state == usb.operation.OperationState.Queued) { "preflight failure must stay clean" }
     }
     @Test
     fun firstSecondWriteAndSyncFailuresBecomePartial() {
@@ -199,7 +199,7 @@ class GptCriticalBackupTest {
             val target = MemoryDisk(2048UL).apply(fault)
             val operation = DiskOperation("gpt")
             runCatching { GptCriticalBackup.restore(target, blob, PRIMARY_SECTORS, BACKUP_SECTORS, operation) }
-            require(operation.state == usb.service.OperationState.Partial) { "fault must yield Partial" }
+            require(operation.state == usb.operation.OperationState.Partial) { "fault must yield Partial" }
         }
     }
     private fun expectFailure(blob: ByteArray, disk: BlockDevice, needle: String) {

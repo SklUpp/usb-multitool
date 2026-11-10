@@ -117,8 +117,12 @@ object FatFsNative {
         create: Boolean,
     ): Int
     @JvmStatic external fun nativeMkfs(blockHandle: Long, sectorSize: Int, sectorCount: Long, type: Int)
+    @JvmStatic external fun nativeSetLabel(blockHandle: Long, sectorSize: Int, sectorCount: Long, label: String)
+    @JvmStatic external fun nativeGetLabel(blockHandle: Long, sectorSize: Int, sectorCount: Long): String
     @JvmStatic external fun nativeProbe(blockHandle: Long, sectorSize: Int, sectorCount: Long): Int
     @JvmStatic external fun nativeMaxFileSize(kind: Int): Long
+    /** Writes total/free bytes into [out]; true only with both values written. */
+    @JvmStatic external fun nativeUsage(volume: Long, out: LongArray): Boolean
 }
 
 class FatVolume internal constructor(
@@ -126,10 +130,19 @@ class FatVolume internal constructor(
     private val volumeHandle: Long,
     private val blockHandle: Long,
     private val ownsBlock: Boolean,
-) : AutoCloseable, UsbFsVolume {
+) : AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
     @Volatile private var open = true
 
     fun isOpen(): Boolean = open
+
+    override fun space(): FilesystemSpace {
+        ensureOpen()
+        val out = LongArray(2)
+        if (!FatFsNative.nativeUsage(volumeHandle, out)) {
+            throw FatFsException("space query failed")
+        }
+        return FilesystemSpace(totalBytes = out[0].toULong(), freeBytes = out[1].toULong())
+    }
 
     override fun list(path: String): List<UsbFsDirEntry> {
         ensureOpen()
@@ -244,6 +257,26 @@ object FatFs {
         val block = openBlock(callback, sectorSize, sectorCount)
         return try {
             FatKind.fromCode(FatFsNative.nativeProbe(block, sectorSize, sectorCount))
+        } finally {
+            closeBlock(block)
+        }
+    }
+
+    /** Write the volume label through FatFs `f_setlabel` (FAT and exFAT). */
+    fun setLabel(callback: FatBlockCallback, sectorSize: Int, sectorCount: Long, label: String) {
+        val block = openBlock(callback, sectorSize, sectorCount)
+        try {
+            FatFsNative.nativeSetLabel(block, sectorSize, sectorCount, label)
+        } finally {
+            closeBlock(block)
+        }
+    }
+
+    /** Read the volume label through FatFs `f_getlabel`; empty when the volume has none. */
+    fun getLabel(callback: FatBlockCallback, sectorSize: Int, sectorCount: Long): String {
+        val block = openBlock(callback, sectorSize, sectorCount)
+        return try {
+            FatFsNative.nativeGetLabel(block, sectorSize, sectorCount)
         } finally {
             closeBlock(block)
         }

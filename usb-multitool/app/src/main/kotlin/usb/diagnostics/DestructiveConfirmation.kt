@@ -1,7 +1,6 @@
 package usb.diagnostics
 
 import usb.device.UsbDisk
-import usb.fs.MountedVolume
 
 /** User-confirmed disk identity and capacity for destructive mutations. */
 data class DestructiveConfirmation(
@@ -30,12 +29,3 @@ class ConfirmationMismatchException(message: String) : Exception(message)
 
 /** First [PARTITION_METADATA_SECTORS] LBAs hold MBR/GPT/alignment gap. */
 const val PARTITION_METADATA_SECTORS: ULong = 2048UL
-
-internal fun closeMountedVolumes(openVolumes: List<MountedVolume>) {
-    for (volume in openVolumes) {
-        if (volume.isOpen()) {
-            volume.sync()
-            volume.close()
-        }
-    }
-}

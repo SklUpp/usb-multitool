@@ -120,12 +120,15 @@ fun DiagnosticsScreen(
         SectionCard(
             title = stringResource(R.string.diagnostics_rescue_title),
             subtitle = stringResource(R.string.diagnostics_rescue_subtitle),
+            trailing = {
+                // The full restore policy is one tap away instead of a wall of text
+                // between the file pickers and the restore button.
+                InfoHelpButton(
+                    infoTitle = stringResource(R.string.diagnostics_rescue_title),
+                    infoText = stringResource(R.string.diagnostics_rescue_note),
+                )
+            },
         ) {
-            Text(
-                text = stringResource(R.string.diagnostics_rescue_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -200,7 +203,7 @@ fun DiagnosticsScreen(
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            stringResource(R.string.partitions_pick),
+                            stringResource(R.string.diagnostics_pick_backup),
                             style = MaterialTheme.typography.labelMedium,
                         )
                     }

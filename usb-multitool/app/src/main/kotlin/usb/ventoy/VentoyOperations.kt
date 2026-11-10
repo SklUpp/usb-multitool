@@ -1,7 +1,7 @@
 package usb.ventoy
 
 import usb.device.UsbDisk
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 /** Coordinates Ventoy asset loading and mutation, preserving progress and Partial semantics. */
 object VentoyOperations {
@@ -31,7 +31,7 @@ object VentoyOperations {
         try {
             body()
         } catch (failure: VentoyMutationFailedException) {
-            operation.state = usb.service.OperationState.Partial
+            operation.state = usb.operation.OperationState.Partial
             operation.failureCause = failure
             throw failure
         }

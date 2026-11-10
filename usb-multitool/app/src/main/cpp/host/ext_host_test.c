@@ -145,17 +145,54 @@ static uint64_t find_marker_lba(FileBlockCtx *ctx, const char *marker)
 	return UINT64_MAX;
 }
 
+static void check_utf16_to_utf8(void)
+{
+	char out[64];
+	const uint16_t ascii[] = {'A', 'B'};
+	assert(ext_utf16_to_utf8(ascii, 2, out, sizeof(out)) == 2);
+	assert(memcmp(out, "AB", 2) == 0);
+
+	const uint16_t latin1[] = {0x00E9}; /* é, two bytes in standard UTF-8 */
+	assert(ext_utf16_to_utf8(latin1, 1, out, sizeof(out)) == 2);
+	assert(memcmp(out, "\xC3\xA9", 2) == 0);
+
+	const uint16_t euro[] = {0x20AC}; /* €, three bytes */
+	assert(ext_utf16_to_utf8(euro, 1, out, sizeof(out)) == 3);
+	assert(memcmp(out, "\xE2\x82\xAC", 3) == 0);
+
+	const uint16_t emoji[] = {0xD83D, 0xDE00}; /* U+1F600, one 4-byte sequence */
+	assert(ext_utf16_to_utf8(emoji, 2, out, sizeof(out)) == 4);
+	assert(memcmp(out, "\xF0\x9F\x98\x80", 4) == 0);
+
+	/* Three supplementary characters are 12 bytes, so they fit the 15-byte label. */
+	const uint16_t three[] = {0xD83D, 0xDE00, 0xD83D, 0xDE00, 0xD83D, 0xDE00};
+	assert(ext_utf16_to_utf8(three, 6, out, sizeof(out)) == 12);
+
+	assert(ext_utf16_to_utf8(emoji, 1, out, sizeof(out)) == -1); /* unpaired high */
+	const uint16_t low[] = {0xDE00};
+	assert(ext_utf16_to_utf8(low, 1, out, sizeof(out)) == -1); /* unpaired low */
+	assert(ext_utf16_to_utf8(emoji, 2, out, 4) == -1);         /* 4 bytes plus NUL overflow */
+	assert(ext_utf16_to_utf8(ascii, 0, out, sizeof(out)) == 0);
+	assert(out[0] == '\0');
+}
+
 int main(void)
 {
 	const char *img = "ext_host.img";
 	const uint32_t ss = 512;
 	const uint64_t sc = (32ull * 1024 * 1024) / ss; /* 32 MiB */
 	FileBlockCtx ctx;
+	check_utf16_to_utf8();
 	unlink(img);
 	uint64_t block = open_image(img, ss, sc, &ctx);
 
 	assert(ext_engine_probe(block) == 0);
-	assert(ext_engine_mkfs(block) == 0);
+	assert(ext_engine_mkfs(block, "LABEL-IS-TOO-LONG") == -ENAMETOOLONG);
+	/* Standard UTF-8 boundaries agree with the Kotlin 15-byte ceiling. */
+	assert(ext_engine_mkfs(block, "A\xF0\x9F\x98\x80\xF0\x9F\x98\x80\xF0\x9F\x98\x80") == 0);
+	assert(ext_engine_mkfs(block, "\xF0\x9F\x98\x80\xF0\x9F\x98\x80\xF0\x9F\x98\x80\xF0\x9F\x98\x80") ==
+	       -ENAMETOOLONG);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
 	assert(ext_engine_probe(block) == 1);
 	printf("PASS: mkfs + probe\n");
 
@@ -163,6 +200,14 @@ int main(void)
 	uint64_t vol = ext_engine_mount(block, false, &err);
 	assert(vol != 0);
 	assert(err == 0);
+
+	/* Metadata-only space query: sane values on a freshly formatted volume. */
+	uint64_t total_bytes = 0, free_bytes = 0;
+	assert(ext_engine_usage(vol, &total_bytes, &free_bytes) == 0);
+	assert(total_bytes > 0 && total_bytes <= sc * ss);
+	assert(free_bytes > 0 && free_bytes <= total_bytes);
+	printf("PASS: usage total=%llu free=%llu\n",
+	       (unsigned long long)total_bytes, (unsigned long long)free_bytes);
 
 	assert(ext_engine_mkdir(vol, "/data") == 0);
 	const char *payload = "hello-ext";
@@ -187,6 +232,15 @@ int main(void)
 	assert(found_root);
 	free(entries);
 	printf("PASS: root list sizes\n");
+
+	/* Allocation is reflected in the free count; the query never grows. */
+	{
+		uint64_t total_after = 0, free_after = 0;
+		assert(ext_engine_usage(vol, &total_after, &free_after) == 0);
+		assert(total_after == total_bytes);
+		assert(free_after <= free_bytes);
+		free_bytes = free_after;
+	}
 
 	char buf[64] = {0};
 	size_t got = 0;
@@ -223,6 +277,10 @@ int main(void)
 	vol = ext_engine_mount(block, true, &err);
 	assert(vol != 0);
 	assert(err == 0);
+	/* Read-only mount answers the same query without any journal/write traffic. */
+	assert(ext_engine_usage(vol, &total_bytes, &free_bytes) == 0);
+	assert(total_bytes > 0 && total_bytes <= sc * ss);
+	assert(free_bytes <= total_bytes);
 	assert(ext_engine_close(vol) == 0);
 	/* RW mutation mount then RO remount. */
 	err = 0;
@@ -276,7 +334,7 @@ int main(void)
 	close(ctx.fd);
 	unlink(img);
 	block = open_image(img, ss, sc, &ctx);
-	assert(ext_engine_mkfs(block) == 0);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
 
 	/* Dirty FINCOM_RECOVER: refuse without writing. */
 	set_recover_flag(&ctx);
@@ -297,7 +355,7 @@ int main(void)
 	close(ctx.fd);
 	unlink(img);
 	block = open_image(img, ss, sc, &ctx);
-	assert(ext_engine_mkfs(block) == 0);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
 	set_error_fs_state(&ctx);
 	writes_before = ctx.write_count;
 	err = 0;
@@ -318,7 +376,7 @@ int main(void)
 	/* mkfs must report a failed flush instead of claiming success. */
 	block = open_image(img, ss, sc, &ctx);
 	g_ops.sync = file_sync_fail;
-	assert(ext_engine_mkfs(block) == -EIO);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == -EIO);
 	g_ops.sync = file_sync;
 	usb_block_unregister(block);
 	close(ctx.fd);
@@ -328,7 +386,7 @@ int main(void)
 	/* A directory block that cannot be read must fail the listing, never
 	 * return a short listing that hides the remaining entries. */
 	block = open_image(img, ss, sc, &ctx);
-	assert(ext_engine_mkfs(block) == 0);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
 	err = 0;
 	vol = ext_engine_mount(block, false, &err);
 	assert(vol != 0);
@@ -393,7 +451,7 @@ int main(void)
 			uint64_t gsc = (8ull * 1024 * 1024) / gss;
 			FileBlockCtx gctx;
 			uint64_t gb = open_image(img, gss, gsc, &gctx);
-			assert(ext_engine_mkfs(gb) == 0);
+			assert(ext_engine_mkfs(gb, "SECTORED") == 0);
 			assert(ext_engine_probe(gb) == 1);
 
 			err = 0;

@@ -64,6 +64,52 @@ static int map_lw(int rc)
 	return -rc;
 }
 
+int ext_utf16_to_utf8(const uint16_t *in, size_t in_len, char *out, size_t out_cap)
+{
+	size_t used = 0;
+	if (!out || out_cap == 0) return -1;
+	if (!in && in_len != 0) return -1;
+	for (size_t i = 0; i < in_len; i++) {
+		uint32_t cp = in[i];
+		if (cp >= 0xD800 && cp <= 0xDBFF) {
+			if (i + 1 >= in_len) return -1;
+			uint32_t low = in[i + 1];
+			if (low < 0xDC00 || low > 0xDFFF) return -1;
+			cp = 0x10000u + (((cp - 0xD800u) << 10) | (low - 0xDC00u));
+			i++;
+		} else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+			return -1; /* unpaired low surrogate */
+		}
+		char buf[4];
+		size_t n;
+		if (cp < 0x80) {
+			buf[0] = (char)cp;
+			n = 1;
+		} else if (cp < 0x800) {
+			buf[0] = (char)(0xC0 | (cp >> 6));
+			buf[1] = (char)(0x80 | (cp & 0x3F));
+			n = 2;
+		} else if (cp < 0x10000) {
+			buf[0] = (char)(0xE0 | (cp >> 12));
+			buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+			buf[2] = (char)(0x80 | (cp & 0x3F));
+			n = 3;
+		} else {
+			buf[0] = (char)(0xF0 | (cp >> 18));
+			buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+			buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+			buf[3] = (char)(0x80 | (cp & 0x3F));
+			n = 4;
+		}
+		/* Always keep room for the terminator so callers can use strlen only when valid. */
+		if (used + n + 1 > out_cap) return -1;
+		memcpy(out + used, buf, n);
+		used += n;
+	}
+	out[used] = '\0';
+	return (int)used;
+}
+
 static int bdev_open(struct ext4_blockdev *bdev)
 {
 	(void)bdev;
@@ -350,6 +396,29 @@ int ext_engine_sync(uint64_t vol_handle)
 	return 0;
 }
 
+int ext_engine_usage(uint64_t vol_handle, uint64_t *out_total_bytes,
+		     uint64_t *out_free_bytes)
+{
+	ExtVolumeContext *v = from_handle(vol_handle);
+	struct ext4_mount_stats stats;
+	int rc;
+
+	if (!v || !v->mounted || !out_total_bytes || !out_free_bytes) return -EINVAL;
+	memset(&stats, 0, sizeof(stats));
+	/* Reads the cached superblock/group counters; no allocation, no journal. */
+	rc = ext4_mount_point_stats(v->mount_point, &stats);
+	if (rc != EOK) return map_lw(rc);
+
+	if (stats.block_size == 0 ||
+	    stats.blocks_count > UINT64_MAX / (uint64_t)stats.block_size ||
+	    stats.free_blocks_count > stats.blocks_count) {
+		return -EIO;
+	}
+	*out_total_bytes = stats.blocks_count * (uint64_t)stats.block_size;
+	*out_free_bytes = stats.free_blocks_count * (uint64_t)stats.block_size;
+	return 0;
+}
+
 int ext_engine_list(uint64_t vol_handle, const char *path,
 		    ExtDirEntry **out_entries, size_t *out_count)
 {
@@ -589,10 +658,14 @@ int ext_engine_rename(uint64_t vol_handle, const char *from, const char *to)
 	return map_lw(rc);
 }
 
-int ext_engine_mkfs(uint64_t block_handle)
+int ext_engine_mkfs(uint64_t block_handle, const char *label)
 {
 	ExtVolumeContext *v = alloc_volume(block_handle, false);
 	if (!v) return -EINVAL;
+	if (label && strlen(label) > 15) {
+		free_volume(v);
+		return -ENAMETOOLONG;
+	}
 
 	pthread_mutex_lock(&g_ext_mu);
 	int rc = take_slot(v);
@@ -617,7 +690,7 @@ int ext_engine_mkfs(uint64_t block_handle)
 	info.len = v->bdev.part_size;
 	info.block_size = v->ops->sector_size >= 1024 ? v->ops->sector_size : 1024;
 	info.journal = false; /* no journal → no FINCOM_RECOVER under lwext4 */
-	info.label = "usbext";
+	info.label = (label && label[0]) ? label : "";
 
 	rc = ext4_mkfs(&fs, &v->bdev, &info, F_SET_EXT4);
 	ext4_device_unregister(v->dev_name);

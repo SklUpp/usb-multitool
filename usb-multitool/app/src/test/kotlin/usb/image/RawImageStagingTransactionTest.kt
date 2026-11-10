@@ -9,7 +9,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 class RawImageStagingTransactionTest {
     private fun root() = Files.createTempDirectory("raw-stage-tx").toFile().also { it.deleteOnExit() }

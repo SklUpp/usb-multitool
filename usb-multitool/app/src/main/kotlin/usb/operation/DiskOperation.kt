@@ -1,4 +1,4 @@
-package usb.service
+package usb.operation
 
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
@@ -19,6 +19,8 @@ open class DiskOperation(
     @Volatile var state: OperationState = OperationState.Queued,
     @Volatile var failureCause: Throwable? = null,
     @Volatile var mutationAttempted: Boolean = false,
+    /** Set once cancellation can no longer undo the operation's committed result. */
+    @Volatile var commitReached: Boolean = false,
     private val active: () -> Boolean = { true },
 ) {
     private val explicitActive = AtomicBoolean(true)

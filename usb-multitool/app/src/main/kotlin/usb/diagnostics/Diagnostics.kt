@@ -4,18 +4,12 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import usb.device.DiskException
 import usb.device.UsbDisk
-import usb.fs.MountedVolume
 import usb.image.CountedInputStream
 import usb.image.ImageCancelledException
 import usb.image.ImageSource
 import usb.image.ImageVerifyException
-import usb.service.DiskOperation
-import usb.service.OperationState
-
-data class ScanReport(
-    val sectorsRead: ULong,
-    val failed: List<ULongRange>,
-)
+import usb.operation.DiskOperation
+import usb.operation.OperationState
 
 data class BenchmarkReport(
     val bytesWritten: Long,
@@ -35,8 +29,18 @@ object Diagnostics {
      * sector-by-sector inside a chunk only when the device reports a medium error.
      * Disconnect, closed session and every other non-medium error abort the scan
      * instead of painting the rest of the disk as unreadable.
+     *
+     * Average read speed uses only successful read bytes over monotonic elapsed time
+     * for this scan window. Failed sectors and cancellation shrink the numerator
+     * honestly; no extra I/O is issued for timing.
+     *
+     * @param monotonicNanos injectable monotonic clock (defaults to [System.nanoTime])
      */
-    fun readScan(disk: UsbDisk, operation: DiskOperation = DiskOperation("read-scan")): ScanReport {
+    fun readScan(
+        disk: UsbDisk,
+        operation: DiskOperation = DiskOperation("read-scan"),
+        monotonicNanos: () -> Long = System::nanoTime,
+    ): ScanReport {
         val sectorSize = disk.geometry.sectorSize
         val total = disk.geometry.sectorCount
         require(disk.geometry.capacityBytes <= Long.MAX_VALUE.toULong()) { "Disk capacity exceeds supported progress range" }
@@ -49,6 +53,8 @@ object Diagnostics {
             if (last != null && last.last + 1UL == lba) failed[failed.lastIndex] = last.first..lba
             else failed += lba..lba
         }
+        var successfulBytes = 0L
+        val started = monotonicNanos()
         var lba = 0UL
         while (lba < total) {
             if (!operation.isActive()) break
@@ -57,18 +63,26 @@ object Diagnostics {
             buf.limit(n * sectorSize)
             try {
                 disk.read(lba, buf) // never writes
+                successfulBytes += n.toLong() * sectorSize.toLong()
             } catch (e: DiskException.SenseError) {
                 if (!e.isMediumError) throw e
                 for (i in 0 until n) {
                     if (!operation.isActive()) {
                         val scanned = lba + i.toULong()
                         operation.report((scanned * sectorSize.toULong()).toLong())
-                        return ScanReport(sectorsRead = scanned, failed = failed)
+                        val elapsed = (monotonicNanos() - started).coerceAtLeast(0L)
+                        return ScanReport(
+                            sectorsRead = scanned,
+                            failed = failed,
+                            successfulBytes = successfulBytes,
+                            elapsedNanos = elapsed,
+                        )
                     }
                     buf.clear()
                     buf.limit(sectorSize)
                     try {
                         disk.read(lba + i.toULong(), buf)
+                        successfulBytes += sectorSize.toLong()
                     } catch (inner: DiskException.SenseError) {
                         if (!inner.isMediumError) throw inner
                         markFailed(lba + i.toULong())
@@ -78,7 +92,13 @@ object Diagnostics {
             lba += n.toULong()
             operation.report((lba * sectorSize.toULong()).toLong())
         }
-        return ScanReport(sectorsRead = lba, failed = failed)
+        val elapsed = (monotonicNanos() - started).coerceAtLeast(0L)
+        return ScanReport(
+            sectorsRead = lba,
+            failed = failed,
+            successfulBytes = successfulBytes,
+            elapsedNanos = elapsed,
+        )
     }
 
     /**
@@ -92,7 +112,6 @@ object Diagnostics {
         confirmation: DestructiveConfirmation,
         startLba: ULong,
         sectors: ULong,
-        openVolumes: List<MountedVolume> = emptyList(),
         operation: DiskOperation = DiskOperation("write-bench"),
     ): BenchmarkReport {
         confirmation.requireMatch(identity, disk)
@@ -106,7 +125,6 @@ object Diagnostics {
         require(startLba + sectors <= disk.geometry.sectorCount) {
             "benchmark range past end of disk"
         }
-        closeMountedVolumes(openVolumes)
         val buf = ByteBuffer.allocate(disk.geometry.sectorSize)
         val start = System.nanoTime()
         var written = 0L
@@ -133,11 +151,9 @@ object Diagnostics {
         disk: UsbDisk,
         identity: String,
         confirmation: DestructiveConfirmation,
-        openVolumes: List<MountedVolume> = emptyList(),
         operation: DiskOperation = DiskOperation("wipe"),
     ) {
         confirmation.requireMatch(identity, disk)
-        closeMountedVolumes(openVolumes)
         val zeros = ByteBuffer.allocate(disk.geometry.sectorSize)
         var lba = 0UL
         try {
@@ -307,7 +323,10 @@ object Rescue {
                         operation.failureCause = mergeAbort(operation.failureCause, aborted)
                     }
                     map.failed.isNotEmpty() || map.partial -> operation.state = OperationState.Partial
-                    else -> operation.state = OperationState.Completed
+                    else -> {
+                        // Durable commit (sync/close/checkpoint) is owned by RescueBackupOperations.
+                        operation.state = OperationState.Completed
+                    }
                 }
             }
         }
@@ -335,7 +354,6 @@ object Rescue {
         map: RescueMap,
         identity: String,
         confirmation: DestructiveConfirmation,
-        openVolumes: List<MountedVolume> = emptyList(),
         checkpointEverySectors: ULong = 4096UL,
         checkpoint: (RescueMap) -> Unit = {},
         operation: DiskOperation = DiskOperation("rescue-restore"),
@@ -364,7 +382,6 @@ object Rescue {
             }
         }
 
-        closeMountedVolumes(openVolumes)
         // Resume only for the same destination. Without a proven disk identity, matching
         // geometry and the checkpoint's own geometry the map may describe another stick,
         // so inherited COPIED runs are discarded. Content is still verified per range.
@@ -605,7 +622,10 @@ object Rescue {
                         operation.failureCause = mergeAbort(operation.failureCause, aborted)
                     }
                     map.failed.isNotEmpty() || map.partial -> operation.state = OperationState.Partial
-                    else -> operation.state = OperationState.Completed
+                    else -> {
+                        operation.commitReached = true
+                        operation.state = OperationState.Completed
+                    }
                 }
             }
         }

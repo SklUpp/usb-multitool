@@ -2,7 +2,7 @@ package usb.diagnostics
 
 import usb.device.UsbDisk
 import usb.image.ImageSource
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 /** Rescue mutation entry point; owns restore invocation and checkpoint persistence. */
 object RescueOperations {

@@ -39,6 +39,11 @@ object GptTable {
         val entriesRaw: ByteArray,
         /** True when [headerLba] was the backup header, not the primary at LBA 1. */
         val fromBackup: Boolean = false,
+        /**
+         * Entry-array LBA taken from the validated alternate header; null when no valid
+         * alternate copy exists, so callers must not predict it from geometry.
+         */
+        val backupEntriesLba: ULong? = null,
     )
 
     /** Sector span of the entry array described by [header]; [readHeader] bounded the size. */
@@ -112,8 +117,19 @@ object GptTable {
         require(entryLba >= 2UL) {
             "GPT entry array at LBA $entryLba overlaps metadata sector 0/1"
         }
+        // Bounds come first: an array running off the medium is the more specific fault and
+        // must not be misreported as a backup self-overlap.
         require(entryLba <= disk.sectorCount && entrySectors.toULong() <= disk.sectorCount - entryLba) {
             "GPT entry array extends past disk bounds"
+        }
+        if (headerLba != 1UL) {
+            // The alternate header sits at the last recorded LBA and its entry array must
+            // precede it. A CRC-valid header that puts its array on top of its own sector
+            // would be rewritten/erased over itself and leave an unreadable copy.
+            require(entryLba + entrySectors.toULong() <= headerLba) {
+                "backup GPT entry array ends at LBA ${entryLba + entrySectors.toULong()} past its header " +
+                    "at LBA $headerLba"
+            }
         }
         // A truncated copy whose declared backup header lies past the disk end (shrunk image
         // awaiting relocate) may also declare a usable end past the disk; anything else must fit.
@@ -222,7 +238,7 @@ object GptTable {
                     name = name,
                     flags = attrs,
                     bootable = (attrs and GPT_LEGACY_BOOTABLE_FLAG) != 0L,
-                    esp = guid.equals(EFI_SYSTEM_GUID, ignoreCase = true),
+                    esp = guid.equals(EFI_SYSTEM_TYPE_GUID, ignoreCase = true),
                     slot = i,
                 ),
             )
@@ -278,6 +294,4 @@ object GptTable {
             raw.copyOfRange(start, start + len).joinToString("") { "%02X".format(it) }
         return "${revHex(0, 4)}-${revHex(4, 2)}-${revHex(6, 2)}-${hex(8, 2)}-${hex(10, 6)}"
     }
-
-    private const val EFI_SYSTEM_GUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
 }

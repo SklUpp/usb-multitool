@@ -348,7 +348,7 @@ git commit -m "feat: serialize disk operations in one service"
 
 **Interfaces:**
 - Consumes: `VirtualPartition`.
-- Produces: `Filesystem.mount(partition: VirtualPartition): MountedVolume`, `VolumeFile`, and `FilesystemId` values `FAT`, `EXFAT`, `NTFS`, `EXT`.
+- Produces: ~~`Filesystem.mount` / `MountedVolume` / `VolumeFile`~~ (superseded by `PartitionVolumeSession` / `MountedFilesVolume`); `FilesystemId` values `FAT`, `EXFAT`, `NTFS`, `EXT`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -689,3 +689,95 @@ Expected: all automated commands exit 0. Physical and PC checks remain explicitl
 git add NOTICE.md docs/physical-acceptance.md CONVENTIONS.md app/src/androidTest/kotlin/usb/EndToEndFaultTest.kt
 git commit -m "test: verify faults notices and acceptance limits"
 ```
+
+### Task 15: Creation Names, Filesystem Choice, and Section Pass
+
+**Files:**
+- Modify: `usb-multitool/app/src/main/kotlin/usb/ui/PartitionsScreen.kt`
+- Modify: `usb-multitool/app/src/main/kotlin/usb/ui/FilesScreen.kt`
+- Modify: `usb-multitool/app/src/main/kotlin/usb/ui/VentoyScreen.kt`
+- Modify: `usb-multitool/app/src/main/kotlin/usb/ui/DiagnosticsScreen.kt`
+- Modify: `usb-multitool/app/src/main/kotlin/usb/ui/AppShell.kt`
+- Modify: `usb-multitool/app/src/main/res/values/strings.xml`, `values-ru/strings.xml`
+- Test: `usb-multitool/app/src/test/kotlin/usb/ui/PartitionNameCreationTest.kt`
+
+**Interfaces:**
+- Consumes: `PartitionName`, `VolumeLabel`, `FormatCatalog.supportsVolumeLabel`, `UiIntent.RequestCreatePartition(startLba, sectorCount, name, formatId, volumeLabel)`, `UiIntent.RequestRenamePartition(name)`, `AppUiState.partitionScheme`.
+- Produces: one confirmed create action that can format and carry a GPT name; a GPT-only rename action; a volume-label rename action only where the engine has a setter; a separate confirmed MBR/GPT table initialization; LBA start–end rows; compact sections with the header icons outside the header block.
+
+- [ ] **Step 1: Write the failing test**
+
+```kotlin
+@Test fun createConfirmationPinsFilesystemAndGptName() {
+    val state = ready(partitionScheme = TableScheme.GPT).copy(freeRegions = listOf(FreeRegionUi(2048UL, 4096UL)))
+    val pending = UiReducer
+        .reduce(state, UiIntent.RequestCreatePartition(2048UL, 2048UL, name = "WORK", formatId = FilesystemId.NTFS, volumeLabel = "WORK"))
+        .state.pendingConfirmation
+    assertEquals("WORK", pending?.createName)
+    assertEquals(FilesystemId.NTFS, pending?.createFormatId)
+    assertEquals("WORK", pending?.volumeLabel)
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew :app:testDebugUnitTest --tests usb.ui.PartitionNameCreationTest`
+Expected: FAIL — the intent and confirmation do not carry name or filesystem yet.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Validate the GPT name (36 UTF-16 code units, no control characters) and the NTFS-only volume label in the reducer, pin both plus the filesystem in the confirmation, and format only after the table commit succeeds; report `Partial` when mkfs fails after the commit. Add a GPT-only rename request with the ambiguity, damaged-table and geometry guards, refusing protected ESP/VTOYEFI entries. Add a table-scheme section (current scheme, MBR/GPT target, its own confirmation) that is also shown for a table with partitions, warning that every entry is erased and repeating the partition count; disable it when the scheme already matches, the layout is ambiguous, the primary GPT is damaged or the table cannot be read. In the screens: hide create-name and rename on MBR, offer the filesystem choice (including “do not format”) and the NTFS label in the create dialog, show LBA start–end for free regions, partitions and the selected entry, keep the range slider outside the scrolling block, centre the info glyph and move long policies into the section-heading help button, and collapse the empty partitions/files states into one statement plus one action.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew :app:testDebugUnitTest --tests 'usb.ui.*'`
+Expected: PASS for name/label validation, confirmation pinning, MBR refusal, protected-rename refusal, and the existing section tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/src/main/kotlin/usb/ui app/src/main/res app/src/test/kotlin/usb/ui
+git commit -m "feat: name partitions and group screens by section"
+```
+
+### Task 16: Filesystem Space Measurement
+
+- Consumes: Task 7 native boundary, Task 8 file operations, Task 13 UI state.
+- Produces: `usb.fs.FilesystemSpace`, `FilesystemUsage`, `FilesystemUsageKey`, `FilesystemUsageSnapshot`; `UsbFsUsageVolume.space()` on FatVolume/ExtVolume/NtfsVolume; native `*_engine_usage` and JNI `nativeUsage`; `FilesystemUsageProbe.measure` / `measureLocked` on the IO dispatcher; `AppUiState.filesystemUsage` + `UiIntent.RequestFilesystemUsage`/`FilesystemUsageResulted` wiring in the reducer and host.
+
+Steps:
+
+- [ ] Query free/total bytes for FAT/exFAT (`f_getfree`), EXT (`ext4_mount_point_stats`) and NTFS (`$Bitmap` free bits) without mounting, allocating or writing.
+- [ ] Return `Unavailable` (unsupported filesystem, missing engine, closed volume, I/O failure) instead of zero or a stale value; never derive filesystem free space from partition-table free regions.
+- [ ] Bind the snapshot to attach generation, device identity, partition geometry and filesystem; render only when the key matches the selected partition.
+- [ ] Call the query only from the serialized volume/operation path, on the IO dispatcher, never from the Compose main thread.
+- [ ] Tests: `usb.fs.FilesystemUsageTest` for known/unknown mapping, stale-key rejection and off-caller-thread execution; host assertions in `ext_host_test.c` and `ntfs_host_test.c`.
+
+### Task 17: Raw Range Write UI
+
+- Consumes: `usb.partition.RawRangePlan`, `usb.partition.RawRangeGeometry`, `usb.image.RangeProbe`, `usb.image.RawWriteResult`.
+- Produces: `usb/ui/RawPlanMap.kt`; the raw card in `PartitionsScreen.kt`; the readback line in `AppShell.kt`; strings `raw_*`.
+
+Steps:
+
+- [x] One write tool, not two: start and size fields default to `0` and `diskSectorCount`, the end sector and byte size are read-only, and the single action sends `RequestWriteRawRange(start, count)`, which builds the confirmation itself.
+- [x] Validate with `RawRangePlan.check` on every keystroke; list every `RawRangeProblem`; show `UnalignedStart` and `SchemeNotTrusted` warnings; leave `OverlapsObjects` to the map so the same facts are not printed twice.
+- [x] Draw the disk map from `geometry.objects` with range handles that snap to `snapPoints` only while the scheme is confirmed, keep typing exact, list every overlap as text, and speak a summary from the canvas.
+- [x] Print one line under the map when `metadataComplete` is false, choosing the sentence from `metadataProblem` (hybrid, unknown backup GPT, or neutral), and keep the write enabled.
+- [x] Require a probe whose `matches(draft, diskSectorCount, sectorSize, attachment)` holds before the write arms; keep all three findings confirmable and never surface `detail`.
+- [x] Render readback honestly: verified (whole range only when `writtenBytes == range.byteLength`), mismatch with count and first LBA, incomplete with its reason, unverified with the attempted subrange.
+- [ ] Manual check on device: handle drag does not scroll the page, drag does not get cancelled by recomposition, and TalkBack reads the summary and the overlap lines.
+
+### Task 18: Ventoy Autounattend Section (pending)
+
+- Consumes: `usb.ventoy.Autounattend`, `WindowsTemplate`, `VentoySetup`, `VentoyLayout`, `VentoyIsoLibrary`.
+- Produces: a Ventoy subsection only — existing-file summary with preserved unknown elements, opt-in parameter blocks, template and image pickers over one candidate list, binding rows with scope warnings, a separate target-PC layout confirmation, and raw-value global settings replacing the two blind toggles.
+
+Steps:
+
+- [ ] Land the `usb.ui` model/intent delta additively (owner required) so screens can compile against real declarations.
+- [ ] Replace the blind bypass toggles with rows that show the raw `control` value and offer set-`"1"`/set-`"0"`/remove.
+- [ ] Block generation when no template resolves, and re-prompt rather than reuse a stale `windowsTemplatePath`.
+- [ ] Show `scopeLimitedBy` and `truncated`/`error` on the candidate list; never treat them as filters.
+- [ ] Keep the layout confirmation free of USB identity and gate it with its own acknowledgement.
+- [ ] Tests: strings parity for the new `ventoy_*` keys and a host check for the candidate/scope rendering decisions.

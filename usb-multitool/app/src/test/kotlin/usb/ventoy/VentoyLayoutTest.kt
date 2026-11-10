@@ -285,48 +285,77 @@ class VentoyLayoutTest {
 
     @Test
     fun windowsSetupRequiresOverwrite() {
-        val volumeRoot = mutableMapOf<String, Any?>()
         val options = SetupOptions(bypassChecks = true, localAccount = true)
+        val first =
+            WindowsSetup.mergeAutoInstall(
+                null,
+                listOf("Windows11_Pro.iso"),
+                "/ventoy/Windows11_Pro.xml",
+                options,
+                overwrite = false,
+            )
+        assertTrue(first.contains("Windows11_Pro.iso"))
 
-        // Initial setup write succeeds
-        val json1 = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = false)
-        assertTrue(json1.contains("Windows11_Pro.iso"))
-        assertTrue(volumeRoot.containsKey("ventoy/ventoy.json"))
-        assertTrue(volumeRoot.containsKey("ventoy/Windows11_Pro.xml"))
-
-        // Second write with overwrite = false MUST throw VentoyOverwriteRequiredException
         try {
-            WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = false)
+            WindowsSetup.mergeAutoInstall(
+                first,
+                listOf("Windows11_Pro.iso"),
+                "/ventoy/Windows11_Pro.xml",
+                options,
+                overwrite = false,
+            )
             fail("Expected VentoyOverwriteRequiredException when overwrite is false")
         } catch (_: VentoyOverwriteRequiredException) {
             // Expected
         }
 
-        // With overwrite = true, write succeeds
-        val json2 = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = true)
-        assertTrue(json2.contains("Windows11_Pro.iso"))
+        val rewritten =
+            WindowsSetup.mergeAutoInstall(
+                first,
+                listOf("Windows11_Pro.iso"),
+                "/ventoy/Windows11_Pro.xml",
+                options,
+                overwrite = true,
+            )
+        assertTrue(rewritten.contains("Windows11_Pro.iso"))
     }
 
     @Test
     fun linkingASecondIsoMergesWithoutOverwrite() {
-        val volumeRoot = mutableMapOf<String, Any?>()
-        WindowsSetup.write(volumeRoot, "Ubuntu.iso", SetupOptions(), overwrite = false)
-
+        val first =
+            WindowsSetup.mergeAutoInstall(
+                null,
+                listOf("Ubuntu.iso"),
+                "/ventoy/Ubuntu.xml",
+                SetupOptions(),
+                overwrite = false,
+            )
         // A different ISO on a configured volume is a merge, not an overwrite.
-        val json = WindowsSetup.write(volumeRoot, "Windows11.iso", SetupOptions(), overwrite = false)
-        assertTrue(json.contains("/Ubuntu.iso"))
-        assertTrue(json.contains("/Windows11.iso"))
-        assertTrue(volumeRoot.containsKey("ventoy/Windows11.xml"))
+        val json =
+            WindowsSetup.mergeAutoInstall(
+                first,
+                listOf("Windows11.iso"),
+                "/ventoy/Windows11.xml",
+                SetupOptions(),
+                overwrite = false,
+            )
+        assertTrue(json.contains("/ISO/Ubuntu.iso"))
+        assertTrue(json.contains("/ISO/Windows11.iso"))
+        assertTrue(json.contains("/ventoy/Windows11.xml"))
     }
 
     @Test
     fun windowsSetupLinksIsoToXml() {
-        val volumeRoot = mutableMapOf<String, Any?>()
         val options = SetupOptions(bypassChecks = true, localAccount = true)
+        val json =
+            WindowsSetup.mergeAutoInstall(
+                null,
+                listOf("Win11_23H2.iso"),
+                "/ventoy/Win11_23H2.xml",
+                options,
+                overwrite = true,
+            )
 
-        val json = WindowsSetup.write(volumeRoot, "Win11_23H2.iso", options, overwrite = true)
-
-        // Linkage verification
         assertTrue(json.contains("\"image\": \"/ISO/Win11_23H2.iso\""))
         assertTrue(json.contains("\"template\": \"/ventoy/Win11_23H2.xml\""))
         assertTrue(json.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""))
@@ -334,14 +363,6 @@ class VentoyLayoutTest {
         assertFalse("no per-check keys exist upstream", json.contains("VTOY_WIN11_BYPASS_TPM"))
         assertFalse("no per-check keys exist upstream", json.contains("VTOY_WIN11_BYPASS_RAM"))
         assertFalse("no per-check keys exist upstream", json.contains("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT"))
-
-        val xml = volumeRoot["ventoy/Win11_23H2.xml"] as String
-        assertTrue(xml.contains("<unattend"))
-        assertTrue(xml.contains("<AcceptEula>true</AcceptEula>"))
-        // Bypasses are Ventoy control flags applied during setup, never answer-file commands.
-        assertFalse(xml.contains("LabConfig"))
-        assertFalse(xml.contains("BypassNRO"))
-        assertFalse(xml.contains("FirstLogonCommands"))
     }
 
     @Test
@@ -380,14 +401,6 @@ class VentoyLayoutTest {
             assertTrue("message must name needed sectors: ${e.message}", e.message!!.contains("65537"))
             assertTrue("message must name available sectors: ${e.message}", e.message!!.contains("65536"))
         }
-    }
-
-    @Test
-    fun windowsSetupEscapesXmlFullName() {
-        val volumeRoot = mutableMapOf<String, Any?>()
-        WindowsSetup.write(volumeRoot, "Win & Test <1>.iso", SetupOptions(), overwrite = true)
-        val xml = volumeRoot["ventoy/Win & Test <1>.xml"] as String
-        assertTrue(xml.contains("<FullName>Win &amp; Test &lt;1&gt;</FullName>"))
     }
 
     private fun syntheticStick(part1Sectors: Long, part2Sectors: Long): RecordingDisk {
@@ -548,7 +561,14 @@ class VentoyLayoutTest {
         volumeRoot["ventoy/ventoy.json"] = existingJson
 
         val options = SetupOptions(bypassChecks = true, localAccount = true)
-        val resultJson = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = true)
+        val resultJson =
+            WindowsSetup.mergeAutoInstall(
+                existingJson,
+                listOf("Windows11_Pro.iso"),
+                "/ventoy/Windows11_Pro.xml",
+                options,
+                overwrite = true,
+            )
 
         assertTrue("Theme file must be preserved", resultJson.contains("/ventoy/theme/custom.txt"))
         assertTrue("Theme gfxmode must be preserved", resultJson.contains("1920x1080"))
@@ -572,20 +592,21 @@ class VentoyLayoutTest {
 
     @Test
     fun autounattendTemplateDefersBypassToVentoyControl() {
-        val volumeRoot = mutableMapOf<String, Any?>()
         val options = SetupOptions(bypassChecks = true, localAccount = true)
-        val json = WindowsSetup.write(volumeRoot, "Win11.iso", options, overwrite = true)
+        val json =
+            WindowsSetup.mergeAutoInstall(
+                null,
+                listOf("Win11.iso"),
+                "/ventoy/Win11.xml",
+                options,
+                overwrite = true,
+            )
 
         // Official control keys, applied by Ventoy during setup (windowsPE), before OOBE.
         assertTrue(json.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""))
         assertTrue(json.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
-
-        val xml = volumeRoot["ventoy/Win11.xml"] as String
-        assertTrue("XML must stay a valid windowsPE answer file", xml.contains("<settings pass=\"windowsPE\">"))
-        assertFalse("bypass must not be re-implemented in the XML", xml.contains("Bypass"))
-        assertFalse("LabConfig writes belong to Ventoy, not the template", xml.contains("LabConfig"))
-        assertFalse("first-logon runs after OOBE and cannot bypass it", xml.contains("FirstLogonCommands"))
-        assertFalse("no late oobeSystem command block", xml.contains("<settings pass=\"oobeSystem\">"))
+        assertFalse("bypass must not be re-implemented as per-check keys", json.contains("VTOY_WIN11_BYPASS_TPM"))
+        assertFalse("bypass must not be re-implemented as per-check keys", json.contains("VTOY_WIN11_BYPASS_RAM"))
     }
 
     @Test
@@ -606,13 +627,14 @@ class VentoyLayoutTest {
     }
 
     @Test
-    fun mergeVentoyJsonRefusesCorruptExisting() {
+    fun mergeAutoInstallRefusesCorruptExisting() {
         try {
-            WindowsSetup.mergeVentoyJson(
+            WindowsSetup.mergeAutoInstall(
                 existingJson = "{not-json",
-                isoName = "a.iso",
-                xmlName = "a.xml",
+                imagePaths = listOf("a.iso"),
+                templatePath = "/ventoy/a.xml",
                 options = SetupOptions(),
+                overwrite = false,
             )
             fail("expected refuse")
         } catch (e: IllegalStateException) {
@@ -809,7 +831,30 @@ class VentoyLayoutTest {
     }
 
     @Test
-    fun mergeVentoyJsonPreservesUntouchedTriStateFlags() {
+    fun removingOneTemplateKeepsOtherTemplatesInTheEntry() {
+        val existing = """
+        {
+          "auto_install": [
+            {"image": "/ISO/Win.iso", "template": ["/ventoy/a.xml", "/ventoy/b.xml"]}
+          ]
+        }
+        """.trimIndent()
+        val after =
+            WindowsSetup.removeLinkForTemplate(existing, "/ISO/Win.iso", "/ventoy/b.xml")
+                ?: error("binding was not found")
+        val root = MiniJson.parse(after) as Map<*, *>
+        val entry = (root["auto_install"] as List<*>).single() as Map<*, *>
+        assertEquals(listOf("/ventoy/a.xml"), entry["template"])
+
+        val emptied =
+            WindowsSetup.removeLinkForTemplate(after, "/ISO/Win.iso", "/ventoy/a.xml")
+                ?: error("last binding was not found")
+        val emptiedRoot = MiniJson.parse(emptied) as Map<*, *>
+        assertTrue((emptiedRoot["auto_install"] as List<*>).isEmpty())
+    }
+
+    @Test
+    fun mergeAutoInstallPreservesUntouchedTriStateFlags() {
         val existing = """
         {
           "control": [
@@ -821,11 +866,12 @@ class VentoyLayoutTest {
         }
         """.trimIndent()
 
-        val enabled = WindowsSetup.mergeVentoyJson(
+        val enabled = WindowsSetup.mergeAutoInstall(
             existingJson = existing,
-            isoName = "Win.iso",
-            xmlName = "Win.xml",
+            imagePaths = listOf("Win.iso"),
+            templatePath = "/ventoy/Win.xml",
             options = SetupOptions(bypassChecks = true),
+            overwrite = false,
         )
         assertTrue("combined switch must enable the official all-checks key",
             enabled.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""))
@@ -833,22 +879,24 @@ class VentoyLayoutTest {
             enabled.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
         assertTrue("unrelated control key must survive", enabled.contains("/ISO"))
 
-        val untouched = WindowsSetup.mergeVentoyJson(
+        val untouched = WindowsSetup.mergeAutoInstall(
             existingJson = existing,
-            isoName = "Win.iso",
-            xmlName = "Win.xml",
+            imagePaths = listOf("Win.iso"),
+            templatePath = "/ventoy/Win.xml",
             options = SetupOptions(),
+            overwrite = false,
         )
         assertTrue("null options must leave the existing CHECK value",
             untouched.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"0\""))
         assertTrue("null options must leave the existing NRO value",
             untouched.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
 
-        val disabled = WindowsSetup.mergeVentoyJson(
+        val disabled = WindowsSetup.mergeAutoInstall(
             existingJson = existing,
-            isoName = "Win.iso",
-            xmlName = "Win.xml",
+            imagePaths = listOf("Win.iso"),
+            templatePath = "/ventoy/Win.xml",
             options = SetupOptions(bypassChecks = false, localAccount = false),
+            overwrite = false,
         )
         assertTrue("explicit false must write 0",
             disabled.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"0\""))
@@ -858,12 +906,15 @@ class VentoyLayoutTest {
 
     @Test
     fun windowsSetupRefusesOverwriteWithoutPermission() {
-        val root = linkedMapOf<String, Any?>(
-            "ventoy/ventoy.json" to """{"auto_install":[{"image":"/ISO/a.iso","template":"/ventoy/a.xml"}]}""",
-            "ventoy/a.xml" to "<xml/>",
-        )
+        val existing = """{"auto_install":[{"image":"/ISO/a.iso","template":"/ventoy/a.xml"}]}"""
         try {
-            WindowsSetup.write(root, "a.iso", SetupOptions(), overwrite = false)
+            WindowsSetup.mergeAutoInstall(
+                existing,
+                listOf("a.iso"),
+                "/ventoy/a.xml",
+                SetupOptions(),
+                overwrite = false,
+            )
             fail("expected VentoyOverwriteRequiredException")
         } catch (_: VentoyOverwriteRequiredException) {
         }

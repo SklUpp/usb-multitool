@@ -3,11 +3,6 @@ package usb.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -18,17 +13,18 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,9 +36,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -95,6 +94,24 @@ fun FilesScreen(
     val canWrite = canAct && !efiBlocked
     val selection = state.files.firstOrNull { it.name == selectedFile?.name }
 
+    if (state.partitions.isEmpty()) {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SectionCard(title = stringResource(R.string.files_section_partition)) {
+                EmptyHint(stringResource(R.string.files_no_partitions_hint))
+                OutlinedButton(
+                    onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.files_no_partitions_cta))
+                }
+            }
+        }
+        return
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -105,21 +122,30 @@ fun FilesScreen(
                 subtitle = selected?.let {
                     "${it.name} · ${it.filesystemLabel.ifEmpty { "—" }} · " +
                         (partitionSizeLabel(state, it) ?: "—")
-                } ?: stringResource(R.string.partitions_none),
+                } ?: stringResource(R.string.partitions_none_selected),
             ) {
-                if (state.partitions.isEmpty()) {
-                    EmptyHint(stringResource(R.string.files_no_partitions_hint))
-                } else {
-                    CompactChoice(
-                        options = state.partitions.map {
-                            it.id to partitionOptionLabel(state, it)
-                        },
-                        selected = selected?.id ?: state.partitions.first().id,
-                        onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
-                        label = stringResource(R.string.files_current_partition),
-                        enabled = state.actionsEnabled,
-                    )
-                }
+                CompactChoice(
+                    options = state.partitions.map {
+                        it.id to partitionOptionLabel(state, it)
+                    },
+                    selected = selected?.id ?: state.partitions.first().id,
+                    onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
+                    label = stringResource(R.string.files_current_partition),
+                    enabled = state.actionsEnabled,
+                )
+                val space = selected?.let(state::filesystemSpace)
+                InfoRow(
+                    stringResource(R.string.filesystem_usage_label),
+                    if (space != null) {
+                        stringResource(
+                            R.string.filesystem_usage_known,
+                            DeviceIdentity.formatCapacity(space.freeBytes),
+                            DeviceIdentity.formatCapacity(space.totalBytes),
+                        )
+                    } else {
+                        stringResource(R.string.filesystem_usage_unavailable)
+                    },
+                )
             }
 
             val upDescription = stringResource(R.string.files_up)
@@ -131,41 +157,34 @@ fun FilesScreen(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.size(48.dp),
-                    ) {
-                        IconButton(
-                            onClick = { onIntent(UiIntent.NavigateUp) },
-                            enabled = canAct && state.currentPath != "/",
-                            modifier = Modifier.semantics { contentDescription = upDescription },
-                        ) {
-                            GlyphIcon(Glyph.ChevronLeft, size = 20.dp)
-                        }
-                    }
                     Text(
-                        text = if (state.partitions.isEmpty()) {
-                            stringResource(R.string.partitions_none)
-                        } else {
-                            pluralStringResource(
-                                R.plurals.elements_count,
-                                state.files.size,
-                                state.files.size,
-                            )
-                        },
+                        text = pluralStringResource(
+                            R.plurals.elements_count,
+                            state.files.size,
+                            state.files.size,
+                        ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(
+                    // Named actions: an up-chevron and a plus alone were ambiguous.
+                    TextButton(
+                        onClick = { onIntent(UiIntent.NavigateUp) },
+                        enabled = canAct && state.currentPath != "/",
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.semantics { contentDescription = upDescription },
+                    ) {
+                        Text(stringResource(R.string.files_up_action))
+                    }
+                    TextButton(
                         onClick = { showNewFolderDialog = true },
                         enabled = canWrite,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.semantics { contentDescription = createFolderLabel },
                     ) {
-                        GlyphIcon(Glyph.Plus, size = 20.dp)
+                        Text(stringResource(R.string.files_new_folder_action))
                     }
                 }
                 if (selected == null && state.partitions.isNotEmpty()) {
@@ -183,12 +202,7 @@ fun FilesScreen(
                 }
             }
 
-            AnimatedVisibility(
-                visible = selection != null,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                selection?.let { selection ->
+            if (selection != null) {
                 SectionCard(
                     title = stringResource(R.string.files_section_selection),
                     subtitle = selection.name,
@@ -222,40 +236,6 @@ fun FilesScreen(
                                 )
                             }
                             TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.IsoActionRequested(
-                                            selection.name,
-                                            IsoAction.SendToRawWriter,
-                                        ),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) {
-                                Text(
-                                    stringResource(R.string.files_to_raw),
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                            }
-                        }
-                        if (selection.isIso) {
-                            TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.IsoActionRequested(
-                                            selection.name,
-                                            IsoAction.LinkXml,
-                                        ),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) {
-                                Text("XML", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                        TextButton(
                             onClick = {
                                 val device = state.device
                                 val partition = state.selectedPartition()
@@ -296,8 +276,6 @@ fun FilesScreen(
 
             when {
                 !state.actionsEnabled -> EmptyHint(UiReducer.presenceMessage(state.presence).localized())
-                state.partitions.isEmpty() ->
-                    EmptyHint(stringResource(R.string.files_content_unavailable))
                 state.files.isEmpty() -> Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -328,7 +306,10 @@ fun FilesScreen(
                     contentPadding = PaddingValues(bottom = 76.dp),
                 ) {
                     items(state.files, key = { it.name }) { entry ->
+                        // Reorders/inserts animate in place instead of jumping.
+                        val rowModifier = Modifier.animateItem()
                         FileRow(
+                            modifier = rowModifier,
                             entry = entry,
                             isSelected = entry == selectedFile,
                             actionsEnabled = canAct,
@@ -491,25 +472,21 @@ private fun FileRow(
     actionsEnabled: Boolean,
     onSelect: () -> Unit,
     onNavigate: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val glyph = when {
-        entry.isDirectory -> Glyph.Folder
-        entry.isIso -> Glyph.Iso
-        else -> Glyph.File
-    }
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         color = if (isSelected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+            MaterialTheme.colorScheme.primaryContainer
         } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            Color.Transparent
         },
         border = if (isSelected) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
         } else {
             null
         },
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(
                 enabled = actionsEnabled,
@@ -526,28 +503,48 @@ private fun FileRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .heightIn(min = 52.dp)
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            GlyphIcon(glyph, size = 22.dp)
-            Column(modifier = Modifier.weight(1f)) {
+            Icon(
+                painter = painterResource(
+                    if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
+                ),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp),
+            )
+            val shownName = if (entry.isDirectory) "${entry.name}/" else entry.name
+            val parts = fileNameParts(entry.name, entry.isDirectory)
+            // The suffix is its own node so a long name ellipsizes the base and never the
+            // extension; the row announces the real full name once, through semantics.
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clearAndSetSemantics { contentDescription = shownName },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val weight =
+                    if (entry.isDirectory || isSelected) FontWeight.Medium else FontWeight.Normal
                 Text(
-                    text = if (entry.isDirectory) "${entry.name}/" else entry.name,
+                    text = parts.base,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (entry.isDirectory || isSelected) FontWeight.Bold else FontWeight.Normal,
+                    fontWeight = weight,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                Text(
-                    text = when {
-                        entry.isDirectory -> stringResource(R.string.type_folder)
-                        entry.isIso -> stringResource(R.string.type_iso)
-                        else -> stringResource(R.string.type_file)
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (parts.suffix.isNotEmpty()) {
+                    Text(
+                        text = parts.suffix,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = weight,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
             }
             if (!entry.isDirectory) {
                 Text(
@@ -558,6 +555,23 @@ private fun FileRow(
                 )
             }
         }
+    }
+}
+
+private data class FileNameParts(val base: String, val suffix: String)
+
+/**
+ * Splits a real entry name into an ellipsizable base and a suffix that is never truncated:
+ * directories keep their trailing slash, files keep their extension. Names without an
+ * extension and hidden names (leading dot) stay whole, so nothing is invented or cut.
+ */
+private fun fileNameParts(name: String, isDirectory: Boolean): FileNameParts {
+    if (isDirectory) return FileNameParts(name, "/")
+    val dot = name.lastIndexOf('.')
+    return if (dot in 1 until name.lastIndex) {
+        FileNameParts(name.substring(0, dot), name.substring(dot))
+    } else {
+        FileNameParts(name, "")
     }
 }
 

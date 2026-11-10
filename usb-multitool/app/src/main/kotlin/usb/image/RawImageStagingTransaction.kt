@@ -3,7 +3,7 @@ package usb.image
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import usb.fs.UsbFsVolume
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 /** Copies one USB file into owned staging storage. Returns only after durable close and size check. */
 fun stageRawImageChunks(

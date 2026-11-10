@@ -1,6 +1,6 @@
 package usb.ui
 
-import usb.service.OperationState as ServiceOperationState
+import usb.operation.OperationState as ServiceOperationState
 
 /** Maps read-only operation outcome to UI progress without touching operation ownership. */
 fun readOnlyOperationProgress(
@@ -11,6 +11,7 @@ fun readOnlyOperationProgress(
     resultMessage: String?,
     failureCause: Throwable?,
     cancelable: Boolean,
+    readScanResult: ReadScanOutcome? = null,
 ): OperationProgress = when (outcome) {
     is ServiceOperationState.Failed -> OperationProgress(
         state = OperationState.Failed,
@@ -21,6 +22,10 @@ fun readOnlyOperationProgress(
     is ServiceOperationState.Cancelled -> OperationProgress(
         state = OperationState.Cancelled,
         label = label,
+        bytesDone = bytesDone,
+        bytesTotal = bytesTotal,
+        resultMessage = resultMessage,
+        readScanResult = readScanResult,
         cancelable = cancelable,
     )
     is ServiceOperationState.Partial -> OperationProgress(
@@ -30,14 +35,30 @@ fun readOnlyOperationProgress(
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
         errorMessage = failureCause?.message ?: failureCause?.javaClass?.simpleName,
+        readScanResult = readScanResult,
         cancelable = cancelable,
     )
-    else -> OperationProgress(
+    is ServiceOperationState.Queued -> OperationProgress(
+        state = OperationState.Queued,
+        label = label,
+        bytesDone = bytesDone,
+        bytesTotal = bytesTotal,
+        cancelable = cancelable,
+    )
+    is ServiceOperationState.Running -> OperationProgress(
+        state = OperationState.Running,
+        label = label,
+        bytesDone = bytesDone,
+        bytesTotal = bytesTotal,
+        cancelable = cancelable,
+    )
+    is ServiceOperationState.Completed -> OperationProgress(
         state = OperationState.Completed,
         label = label,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
+        readScanResult = readScanResult,
         cancelable = cancelable,
     )
 }

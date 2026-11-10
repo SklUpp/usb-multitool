@@ -56,6 +56,8 @@ The UI has four tabs: Files, Ventoy, Partitions, Diagnostics. This section lists
 
 - The app reads MBR and GPT tables. It shows free regions and a disk map.
 - You can create a partition in free space with 1 MiB alignment. You can delete a partition. The app supports MBR and GPT.
+- You can initialize an empty MBR or GPT table and you can replace the current scheme. The confirmation pins the current scheme and every existing partition geometry; a changed layout aborts before writing. A hybrid/ambiguous layout and a GPT recovered from its backup are refused. MBR is refused when the disk exceeds 32-bit LBA. On GPT, create can store a partition name (up to 36 UTF-16 characters) and can immediately format the new range with the chosen filesystem and volume label. MBR has no name field, so a name is refused instead of being dropped.
+- You can rename the GPT name of the selected partition and the volume label of a formatted partition. Renaming a protected EFI/VTOYEFI entry is refused. Labels are written only by engines that can: FAT/FAT32 (11 characters), exFAT (11 characters), NTFS (128 characters); EXT4 labels are written only while formatting.
 - A role change writes the partition type: EFI system or Linux data. The app does not restore the previous type automatically.
 - The boot flag is a separate operation. GPT stores it in partition attributes, MBR in the boot byte.
 - You can format the selected partition as FAT/FAT32, exFAT, NTFS, or EXT4. Real engines do the format.
@@ -80,7 +82,7 @@ The UI has four tabs: Files, Ventoy, Partitions, Diagnostics. This section lists
 
 - Each destructive operation needs a confirmation with device identity (model and serial) and capacity. The app checks partition bounds and integer overflow before each write.
 - The app syncs and closes open volumes before it changes the partition table or writes raw data.
-- Wipe, create/delete, format, raw write, GPT repair, role, and flag changes mark the first write. After it, they report `Partial`. Before the first write, the result is `Failed` or `Cancelled`. When its own mutation fails, Ventoy install/update reports `Partial`.
+- Wipe, create/delete, create-and-format, rename, table initialization, format, raw write, GPT repair, role, and flag changes mark the first write. After it, they report `Partial`. Before the first write, the result is `Failed` or `Cancelled`. If creating a partition succeeds and the immediate format fails, the partition stays and the operation reports `Partial` with an "exists but is unformatted" result. When its own mutation fails, Ventoy install/update reports `Partial`.
 - When the process stops, the app does not save the operation state. Nothing resumes automatically after reconnection.
 - Do not change the rescue image before the restore finishes. The app reads it as is. The app does not promise a snapshot or change detection. An edit can produce mixed data. The final check does not prove that the source stayed unchanged.
 - A rescue image stays a dense file with a map. Unreadable sectors stay visible. The app never shows a partial image as a full copy. A rescue copy needs a stable device serial.

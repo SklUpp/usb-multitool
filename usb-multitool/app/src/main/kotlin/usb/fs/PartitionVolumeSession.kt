@@ -42,8 +42,12 @@ object PartitionVolumeSession {
                     }
             }
         } catch (failure: Throwable) {
-
-            runCatching { disk.close() }
+            // Close must not erase the mount/probe cause: attach as suppressed.
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== failure) failure.addSuppressed(closeErr)
+            }
             throw failure
         }
     }

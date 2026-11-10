@@ -4,56 +4,19 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import usb.partition.VirtualPartition
 
-class VolumeFile(
-    val path: String,
-    val isDirectory: Boolean,
-    val size: Long,
-)
-
-class MountedVolume internal constructor(
-    val id: FilesystemId,
-    val partition: VirtualPartition,
-    private val nativeHandle: Long,
-) {
-    val root: VolumeFile = VolumeFile("/", isDirectory = true, size = 0L)
-
-    @Volatile
-    private var open: Boolean = true
-
-    fun isOpen(): Boolean = open
-
-    fun sync() {
-        check(open) { "volume closed" }
-        if (nativeHandle != 0L) {
-            FilesystemNative.sync(nativeHandle)
-        }
-    }
-
-    fun close() {
-        if (!open) return
-        open = false
-        if (nativeHandle != 0L) {
-            FilesystemNative.close(nativeHandle)
-        }
-    }
-}
-
 object Filesystem {
-    fun mount(partition: VirtualPartition): MountedVolume {
-        val id = probe(partition)
-        // fs_bridge.c is not linked into libusb_native yet. A null handle would look
-        // like a successful mount while sync/close are no-ops — refuse instead.
-        if (!FilesystemNative.isLinked()) {
-            throw UnsupportedFilesystemException(
-                "filesystem engine bridge is not linked for $id",
-            )
-        }
-        val handle = FilesystemNative.mount(id.ordinal, partition)
-        if (handle == 0L) {
-            throw UnsupportedFilesystemException("native mount failed for $id")
-        }
-        return MountedVolume(id, partition, handle)
-    }
+    /** Current volume label of a formatted partition, or null when the engine/volume has none. */
+    fun readLabel(partition: VirtualPartition, id: FilesystemId): String? =
+        when (id) {
+            FilesystemId.FAT, FilesystemId.EXFAT ->
+                FatFs.getLabel(
+                    callback = BlockDeviceFatCallback(partition),
+                    sectorSize = partition.sectorSize,
+                    sectorCount = partition.sectorCount.toLong(),
+                )
+            FilesystemId.NTFS -> NtfsFs.getLabel(partition)
+            FilesystemId.EXT -> extVolumeLabel(partition)
+        }?.trim()?.takeIf { it.isNotEmpty() }
 
     fun probe(partition: VirtualPartition): FilesystemId {
         val sector = ByteArray(partition.sectorSize)
@@ -88,19 +51,31 @@ object Filesystem {
             oem(boot) == "NTFS    "
 
     private fun isExt(partition: VirtualPartition): Boolean {
-        if (partition.sectorCount * partition.sectorSize.toULong() < 2048u) return false
-        val block = ByteArray(1024)
-        val absoluteByte = 1024L
-        val sectorSize = partition.sectorSize
-        val startSector = (absoluteByte / sectorSize).toULong()
-        val offsetInSector = (absoluteByte % sectorSize).toInt()
-        val need = offsetInSector + 1024
-        val sectors = ((need + sectorSize - 1) / sectorSize)
-        val raw = ByteArray(sectors * sectorSize)
-        partition.read(startSector, ByteBuffer.wrap(raw))
-        System.arraycopy(raw, offsetInSector, block, 0, 1024)
+        val block = readExtSuperblock(partition) ?: return false
         val magic = u16(block, 0x38)
         return magic == 0xEF53
+    }
+
+    /** `ext4_superblock.volume_name[16]` at superblock offset 0x78, NUL-terminated UTF-8. */
+    private fun extVolumeLabel(partition: VirtualPartition): String? {
+        val block = readExtSuperblock(partition) ?: return null
+        if (u16(block, 0x38) != 0xEF53) return null
+        val raw = block.copyOfRange(0x78, 0x78 + 16)
+        val end = raw.indexOf(0.toByte()).let { if (it < 0) raw.size else it }
+        return String(raw, 0, end, Charsets.UTF_8)
+    }
+
+    /** First 1024 bytes at absolute byte 1024 (sector-sized reads, any sector size). */
+    private fun readExtSuperblock(partition: VirtualPartition): ByteArray? {
+        val sectorSize = partition.sectorSize
+        if (partition.sectorCount * sectorSize.toULong() < 2048u) return null
+        val startSector = (1024L / sectorSize).toULong()
+        val offsetInSector = (1024L % sectorSize).toInt()
+        val need = offsetInSector + 1024
+        val sectors = (need + sectorSize - 1) / sectorSize
+        val raw = ByteArray(sectors * sectorSize)
+        partition.read(startSector, ByteBuffer.wrap(raw))
+        return raw.copyOfRange(offsetInSector, offsetInSector + 1024)
     }
 
     private fun oem(boot: ByteArray): String = ascii(boot, 3, 8)
@@ -115,64 +90,3 @@ object Filesystem {
 }
 
 class UnsupportedFilesystemException(message: String) : Exception(message)
-
-/**
- * JNI partition boundary. Unit tests stay on the JVM probe path with a null handle.
- * Real engines load only when the shared library is present.
- */
-internal object FilesystemNative {
-    @Volatile
-    private var libraryLoaded: Boolean = false
-
-    init {
-        try {
-            System.loadLibrary("usb_native")
-            libraryLoaded = true
-        } catch (_: UnsatisfiedLinkError) {
-            libraryLoaded = false
-        }
-    }
-
-    /** True only when fs_bridge JNI symbols are present in the loaded library. */
-    fun isLinked(): Boolean {
-        if (!libraryLoaded) return false
-        return try {
-            // Probe with impossible geometry so a real implementation returns quickly.
-            nativeProbe(0L, 0L, 0)
-            true
-        } catch (_: UnsatisfiedLinkError) {
-            false
-        }
-    }
-
-    fun mount(idOrdinal: Int, partition: VirtualPartition): Long {
-        if (!isLinked()) return 0L
-        return nativeMount(
-            idOrdinal,
-            partition.startLba.toLong(),
-            partition.sectorCount.toLong(),
-            partition.sectorSize,
-        )
-    }
-
-    fun sync(handle: Long) {
-        if (libraryLoaded && handle != 0L) nativeSync(handle)
-    }
-
-    fun close(handle: Long) {
-        if (libraryLoaded && handle != 0L) nativeClose(handle)
-    }
-
-    @JvmStatic external fun nativeMount(
-        idOrdinal: Int,
-        startLba: Long,
-        sectorCount: Long,
-        sectorSize: Int,
-    ): Long
-
-    @JvmStatic external fun nativeSync(handle: Long)
-
-    @JvmStatic external fun nativeClose(handle: Long)
-
-    @JvmStatic external fun nativeProbe(startLba: Long, sectorCount: Long, sectorSize: Int): Int
-}

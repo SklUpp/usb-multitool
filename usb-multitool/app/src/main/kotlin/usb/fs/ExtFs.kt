@@ -73,11 +73,11 @@ object ExtFs {
         return volume
     }
 
-    fun mkfs(device: BlockDevice) {
+    fun mkfs(device: BlockDevice, label: String = "") {
         ensureNative()
         require(device.sectorSize in 512..4096)
         require(device.sectorCount > 0uL)
-        val rc = nativeMkfs(device, device.sectorSize, device.sectorCount.toLong())
+        val rc = nativeMkfs(device, device.sectorSize, device.sectorCount.toLong(), label)
         if (rc != 0) throw ExtException("EXT mkfs failed (rc=$rc)")
     }
 
@@ -99,8 +99,11 @@ object ExtFs {
         outErrno: IntArray,
     ): Long
 
-    @JvmStatic private external fun nativeMkfs(device: BlockDevice, sectorSize: Int, sectorCount: Long): Int
+    @JvmStatic private external fun nativeMkfs(device: BlockDevice, sectorSize: Int, sectorCount: Long, label: String): Int
     @JvmStatic private external fun nativeProbe(device: BlockDevice, sectorSize: Int, sectorCount: Long): Boolean
+
+    /** Writes total/free bytes into [out]; true only with both values written. */
+    @JvmStatic internal external fun nativeUsage(handle: Long, out: LongArray): Boolean
 
     @JvmStatic internal external fun nativeClose(handle: Long): Int
     @JvmStatic internal external fun nativeSync(handle: Long): Int
@@ -123,13 +126,22 @@ class ExtVolume internal constructor(
     private val handle: Long,
     val device: BlockDevice,
     val readOnly: Boolean,
-) : Closeable, AutoCloseable, UsbFsVolume {
+) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
     @Volatile private var open: Boolean = true
 
     fun isOpen(): Boolean = open
 
     private fun ensureOpen() {
         check(open) { "EXT volume closed" }
+    }
+
+    override fun space(): FilesystemSpace {
+        ensureOpen()
+        val out = LongArray(2)
+        if (!ExtFs.nativeUsage(handle, out)) {
+            throw ExtException("space query failed")
+        }
+        return FilesystemSpace(totalBytes = out[0].toULong(), freeBytes = out[1].toULong())
     }
 
     override fun list(path: String): List<UsbFsDirEntry> {

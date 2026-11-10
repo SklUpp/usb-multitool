@@ -16,7 +16,6 @@ import usb.device.BlockDevice
 object PartitionWriter {
     private const val ENTRY_SIZE = 128
     private const val HEADER_SIZE = 92
-    private const val EFI_SYSTEM_GUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
     private const val LINUX_DATA_GUID = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
     private const val MBR_SLOTS = 4
     private const val MBR_TYPE_LINUX = 0x83
@@ -127,16 +126,24 @@ object PartitionWriter {
                 partition.flags and GPT_LEGACY_BOOTABLE_FLAG.inv()
             }
             putLeU64(entries, offset + 48, attributes.toULong())
+            require(partition.name.length <= PartitionName.MAX_UTF16_UNITS) {
+                "GPT name of ${partition.startLba} exceeds ${PartitionName.MAX_UTF16_UNITS} UTF-16 units"
+            }
             val name = partition.name.toByteArray(StandardCharsets.UTF_16LE)
             name.copyInto(entries, offset + 56, 0, minOf(name.size, ENTRY_SIZE - 56))
         }
         val entriesCrc = crc32(entries)
+        // GPT entry arrays occupy whole sectors; the CRC covers only the declared entries.
+        require(entrySectors <= (Int.MAX_VALUE / sectorSize).toULong()) {
+            "GPT entry array too large to pad"
+        }
+        val padded = entries.copyOf(entrySectors.toInt() * sectorSize)
 
         // Publish the backup copy first and make it durable before touching the primary.
         // A disconnect at any point then leaves at least one complete, CRC-valid GPT:
         // before the backup header lands the old primary is intact, afterwards the new
         // backup is. Writing both entry arrays before either header would invalidate both.
-        writeSectors(disk, backupEntriesLba, entries, sectorSize)
+        writeSectors(disk, backupEntriesLba, padded, sectorSize)
         writeHeader(
             disk = disk,
             lba = backupLba,
@@ -151,7 +158,7 @@ object PartitionWriter {
         )
         disk.sync()
 
-        writeSectors(disk, header.entryLba, entries, sectorSize)
+        writeSectors(disk, header.entryLba, padded, sectorSize)
         writeHeader(
             disk = disk,
             lba = header.currentLba,
@@ -176,6 +183,8 @@ object PartitionWriter {
         require(table.partitions.all { it.startLba <= 0xFFFF_FFFFUL && it.sectorCount <= 0xFFFF_FFFFUL }) {
             "MBR partition geometry exceeds 32-bit LBA fields"
         }
+        // MBR has no name field: [Partition.name] is a display label ("P1"…). Names are
+        // refused by PartitionEditor/reducer before a table reaches this writer.
         val sectorSize = disk.sectorSize
         require(sectorSize >= 512) { "sector size $sectorSize too small for MBR" }
         val sector = ByteArray(sectorSize)
@@ -307,7 +316,7 @@ object PartitionWriter {
     private fun typeGuidBytes(partition: Partition): ByteArray =
         when (partition.type.uppercase()) {
             "BASIC", LINUX_DATA_GUID -> guidBytes(LINUX_DATA_GUID)
-            "EFI", "VTOYEFI", EFI_SYSTEM_GUID -> guidBytes(EFI_SYSTEM_GUID)
+            "EFI", "VTOYEFI", EFI_SYSTEM_TYPE_GUID -> guidBytes(EFI_SYSTEM_TYPE_GUID)
             else -> {
                 require(partition.type.length == 36) {
                     "unknown partition type '${partition.type}'"
@@ -318,7 +327,7 @@ object PartitionWriter {
 
     private fun mbrType(partition: Partition): Int =
         when (partition.type.uppercase()) {
-            "EFI", "VTOYEFI", EFI_SYSTEM_GUID -> MBR_TYPE_EFI
+            "EFI", "VTOYEFI", EFI_SYSTEM_TYPE_GUID -> MBR_TYPE_EFI
             "", "BASIC" -> MBR_TYPE_LINUX
             else -> partition.type.removePrefix("0x").removePrefix("0X").toIntOrNull(16)
                 ?.takeIf { it in 1..255 && it != 0xEE }

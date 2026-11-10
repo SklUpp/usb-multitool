@@ -2,6 +2,7 @@ package usb.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import usb.formatBinaryBytesPerSecond
 import usb.fs.FormatCatalog
 import usb.multitool.R
 
@@ -10,6 +11,7 @@ import usb.multitool.R
 fun UiMessage.localized(): String =
     when (this) {
         is UiMessage.Raw -> text
+        is UiMessage.ReadScan -> readScanSummary(outcome)
         is UiMessage.Key -> when (key) {
             UiMessageKey.NoDevice -> stringResource(R.string.msg_no_device)
             UiMessageKey.PermissionRequired -> stringResource(R.string.msg_permission_required)
@@ -20,6 +22,7 @@ fun UiMessage.localized(): String =
             UiMessageKey.FormatUnsupported ->
                 stringResource(R.string.msg_format_unsupported, *args.toTypedArray())
             UiMessageKey.InvalidFreeRegion -> stringResource(R.string.msg_invalid_free_region)
+            UiMessageKey.RawRangeInvalid -> stringResource(R.string.msg_raw_range_invalid)
             UiMessageKey.NoIsoForLink -> stringResource(R.string.msg_no_iso_for_link)
             UiMessageKey.NoDeviceForLink -> stringResource(R.string.msg_no_device_for_link)
             UiMessageKey.LinkMismatch -> stringResource(R.string.msg_link_mismatch)
@@ -97,6 +100,19 @@ fun UiMessage.localized(): String =
             UiMessageKey.GptPrimaryDamaged -> stringResource(R.string.msg_gpt_primary_damaged)
             UiMessageKey.PartitionTableAmbiguous ->
                 stringResource(R.string.msg_partition_table_ambiguous)
+            UiMessageKey.PartitionNameUnsupported ->
+                stringResource(R.string.msg_partition_name_unsupported)
+            UiMessageKey.InvalidPartitionName ->
+                stringResource(R.string.msg_invalid_partition_name, *args.toTypedArray())
+            UiMessageKey.InvalidVolumeLabel ->
+                stringResource(R.string.msg_invalid_volume_label, *args.toTypedArray())
+            UiMessageKey.VolumeLabelUnsupported ->
+                stringResource(R.string.msg_volume_label_unsupported, *args.toTypedArray())
+            UiMessageKey.FilesystemUnknown -> stringResource(R.string.msg_filesystem_unknown)
+            UiMessageKey.SchemeAlreadyCurrent ->
+                stringResource(R.string.msg_scheme_already_current)
+            UiMessageKey.SchemeUnknown -> stringResource(R.string.msg_scheme_unknown)
+            UiMessageKey.SchemeMbrTooLarge -> stringResource(R.string.msg_scheme_mbr_too_large)
             UiMessageKey.Success -> stringResource(R.string.msg_success)
             UiMessageKey.CancelledStatus -> stringResource(R.string.msg_cancelled)
             UiMessageKey.FailedStatus -> stringResource(R.string.msg_failed)
@@ -105,6 +121,22 @@ fun UiMessage.localized(): String =
             UiMessageKey.QueuedStatus -> stringResource(R.string.msg_queued)
         }
     }
+
+/** Formats structured scan numbers with current Compose locale resources. */
+@Composable
+fun readScanSummary(outcome: ReadScanOutcome): String {
+    val speed = outcome.averageBytesPerSecond?.let { formatBinaryBytesPerSecond(it) }
+        ?: stringResource(R.string.diagnostics_read_speed_unavailable)
+    return stringResource(
+        R.string.msg_read_scan_result,
+        outcome.sectorsRead.toString(),
+        outcome.totalSectors.toString(),
+        outcome.unreadableSectors.toString(),
+        outcome.failedRangeCount,
+        speed,
+    )
+}
+
 
 @Composable
 fun DestructiveAction.label(): String =
@@ -125,6 +157,15 @@ fun DestructiveAction.label(): String =
         DestructiveAction.SET_PARTITION_ROLE -> stringResource(R.string.action_set_partition_role)
         DestructiveAction.SET_PARTITION_BOOTABLE ->
             stringResource(R.string.action_set_partition_bootable)
+        DestructiveAction.RENAME_PARTITION -> stringResource(R.string.action_rename_partition)
+        DestructiveAction.RENAME_VOLUME_LABEL ->
+            stringResource(R.string.action_rename_volume_label)
+        DestructiveAction.INITIALIZE_PARTITION_TABLE ->
+            stringResource(R.string.action_initialize_table)
+        DestructiveAction.VENTOY_UNATTEND_XML_WRITE ->
+            stringResource(R.string.action_ventoy_unattend_write)
+        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT ->
+            stringResource(R.string.action_ventoy_unattend_layout)
     }
 
 /**
@@ -220,6 +261,27 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             count.toLong(),
         )
     }
+    if (confirmation.action == DestructiveAction.CREATE_PARTITION) {
+        confirmation.createName?.takeIf { it.isNotBlank() }?.let { name ->
+            lines += stringResource(R.string.confirm_create_name, name)
+        }
+        confirmation.createFormatId?.let { id ->
+            lines += stringResource(R.string.confirm_create_format, FormatCatalog.label(id))
+        }
+        confirmation.volumeLabel.takeIf { it.isNotBlank() }?.let { label ->
+            lines += stringResource(R.string.confirm_create_volume_label, label)
+        }
+    }
+    if (confirmation.action == DestructiveAction.RENAME_PARTITION) {
+        confirmation.partitionName?.takeIf { it.isNotBlank() }?.let { name ->
+            lines += stringResource(R.string.confirm_partition_name, name)
+        }
+    }
+    if (confirmation.action == DestructiveAction.RENAME_VOLUME_LABEL) {
+        confirmation.volumeLabel.takeIf { it.isNotBlank() }?.let { label ->
+            lines += stringResource(R.string.confirm_volume_label, label)
+        }
+    }
     confirmation.partitionRole?.let { role ->
         lines += stringResource(
             R.string.confirm_partition_role,
@@ -239,6 +301,20 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
                 if (bootable) R.string.answer_yes else R.string.answer_no,
             ),
         )
+    }
+    if (confirmation.action == DestructiveAction.INITIALIZE_PARTITION_TABLE) {
+        confirmation.targetScheme?.let { scheme ->
+            lines += stringResource(
+                R.string.confirm_initialize_scheme,
+                scheme.toTableScheme().name,
+            )
+        }
+        if (confirmation.initialPartitions.isNotEmpty()) {
+            lines += stringResource(
+                R.string.confirm_initialize_partitions,
+                confirmation.initialPartitions.size,
+            )
+        }
     }
     if (confirmation.action == DestructiveAction.RESCUE_RESTORE) {
         lines += stringResource(R.string.confirm_rescue_restore, confirmation.identity.identity)

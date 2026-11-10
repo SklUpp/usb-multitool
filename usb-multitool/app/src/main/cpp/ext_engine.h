@@ -25,6 +25,14 @@ typedef struct ExtStat {
 } ExtStat;
 
 /*
+ * Convert a UTF-16 label to standard UTF-8 (supplementary code points as one 4-byte
+ * sequence, unlike Java's modified UTF-8 / CESU-8). Returns the byte count written
+ * without the terminator, or -1 for an unpaired surrogate or too small an output buffer.
+ * Used for the ext4 volume label, which lwext4 copies verbatim into the superblock.
+ */
+int ext_utf16_to_utf8(const uint16_t *in, size_t in_len, char *out, size_t out_cap);
+
+/*
  * Mount EXT2/3/4 over a registered usb_block handle via lwext4.
  * Relative LBAs only — VirtualPartition applies startLba once.
  *
@@ -41,6 +49,14 @@ uint64_t ext_engine_mount(uint64_t block_handle, bool read_only, int *out_errno)
 int ext_engine_close(uint64_t vol_handle);
 int ext_engine_sync(uint64_t vol_handle);
 
+/*
+ * Metadata-only space query from the mounted superblock/group descriptors:
+ * total and free bytes = blocks_count/free_blocks_count x block_size.
+ * Read-only; no allocation, no journal traffic. Returns 0 or a negative errno.
+ */
+int ext_engine_usage(uint64_t vol_handle, uint64_t *out_total_bytes,
+		     uint64_t *out_free_bytes);
+
 int ext_engine_list(uint64_t vol_handle, const char *path,
 		    ExtDirEntry **out_entries, size_t *out_count);
 int ext_engine_stat(uint64_t vol_handle, const char *path, ExtStat *out_stat);
@@ -56,9 +72,10 @@ int ext_engine_rename(uint64_t vol_handle, const char *from, const char *to);
 /*
  * Format partition as EXT4 without a journal (avoids FINCOM_RECOVER on first
  * unclean unmount under lwext4's non-replaying journal).
- * Block handle must not have an open volume.
+ * Block handle must not have an open volume. [label] is the 16-byte superblock
+ * volume name (NULL/empty = no label); longer labels are rejected, not truncated.
  */
-int ext_engine_mkfs(uint64_t block_handle);
+int ext_engine_mkfs(uint64_t block_handle, const char *label);
 
 /* Probe: 1 if EXT magic at byte 1024, 0 if not, negative on IO error. */
 int ext_engine_probe(uint64_t block_handle);

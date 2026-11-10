@@ -217,7 +217,10 @@ class GptFallbackTest {
         val table = PartitionTable.read(ImageBlockDevice(bytes, sectorSize, 128UL))
 
         assertEquals(TableScheme.GPT, table.scheme)
-        assertEquals(300UL, table.gptBackupHeaderLba)
+        // The declared backup header (LBA 300) is not on this medium, so no real backup
+        // geometry is known: never publish a location that cannot be read back.
+        assertNull("truncated copy has no on-medium backup", table.gptBackupHeaderLba)
+        assertNull(table.gptBackupEntriesLba)
         assertTrue(
             "free space must stop at the medium: ${table.freeRegions}",
             table.freeRegions.all { it.startLba + it.sectorCount <= 128UL },

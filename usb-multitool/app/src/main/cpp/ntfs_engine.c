@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -439,9 +440,31 @@ int ntfs_engine_sync(uint64_t vol_handle)
     return usb_block_sync(v->block_handle);
 }
 
+int ntfs_engine_usage(uint64_t vol_handle, uint64_t *out_total_bytes,
+                      uint64_t *out_free_bytes)
+{
+    NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
+    ntfs_volume *vol;
+
+    if (!v || !(vol = v->vol) || !out_total_bytes || !out_free_bytes) return -EINVAL;
+    if (vol->cluster_size == 0 || vol->nr_clusters <= 0) return -EIO;
+
+    /* One-time $Bitmap/$MFTBitmap scan; the result stays cached on the volume.
+     * Read-only: no allocation, no MFT or metadata writes. */
+    if (!NVolFreeSpaceKnown(vol) && ntfs_volume_get_free_space(vol) != 0) return -EIO;
+    if (vol->free_clusters < 0 || vol->free_clusters > vol->nr_clusters) return -EIO;
+    if ((uint64_t)vol->nr_clusters > UINT64_MAX / (uint64_t)vol->cluster_size) {
+        return -EOVERFLOW;
+    }
+
+    *out_total_bytes = (uint64_t)vol->nr_clusters * (uint64_t)vol->cluster_size;
+    *out_free_bytes = (uint64_t)vol->free_clusters * (uint64_t)vol->cluster_size;
+    return 0;
+}
+
 typedef struct ListContext {
-    NtfsDirEntry *entries; /* grown with realloc; owned by the caller on success */
-    size_t max_entries;
+	NtfsDirEntry *entries; /* grown with realloc; owned by the caller on success */
+	size_t max_entries;
     size_t count;
     bool overflow;
     ntfs_volume *vol;
@@ -1014,6 +1037,116 @@ int ntfs_engine_check_dirty_dev(uint64_t block_handle)
     ntfs_umount(v->vol, 0);
     free(v);
     return dirty;
+}
+
+int ntfs_label_from_utf16(const uint16_t *in, size_t in_len, char *out, size_t cap)
+{
+    if (!out || cap == 0) return -EINVAL;
+    out[0] = '\0';
+    size_t used = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        unsigned cp = in[i];
+        if (cp >= 0xD800u && cp <= 0xDBFFu) {
+            if (i + 1 >= in_len) return -EINVAL;
+            unsigned lo = in[i + 1];
+            if (lo < 0xDC00u || lo > 0xDFFFu) return -EINVAL;
+            cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+            i++;
+        } else if ((cp >= 0xDC00u && cp <= 0xDFFFu) || cp == 0u) {
+            return -EINVAL;
+        }
+        size_t need = cp < 0x80u ? 1u : (cp < 0x800u ? 2u : (cp < 0x10000u ? 3u : 4u));
+        if (used + need >= cap) return -ERANGE; /* keep room for the terminator */
+        if (need == 1u) {
+            out[used++] = (char)cp;
+        } else if (need == 2u) {
+            out[used++] = (char)(0xC0u | (cp >> 6));
+            out[used++] = (char)(0x80u | (cp & 0x3Fu));
+        } else if (need == 3u) {
+            out[used++] = (char)(0xE0u | (cp >> 12));
+            out[used++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+            out[used++] = (char)(0x80u | (cp & 0x3Fu));
+        } else {
+            out[used++] = (char)(0xF0u | (cp >> 18));
+            out[used++] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+            out[used++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+            out[used++] = (char)(0x80u | (cp & 0x3Fu));
+        }
+    }
+    out[used] = '\0';
+    return 0;
+}
+
+int ntfs_engine_set_label(uint64_t block_handle, const char *label)
+{
+    if (!label) return -EINVAL;
+
+    ntfs_log_set_handler(ntfs_log_handler_null);
+    NtfsVolumeContext *v = alloc_volume_ctx(block_handle);
+    if (!v) return -EINVAL;
+
+    v->vol = ntfs_device_mount(v->dev, 0);
+    if (!v->vol) {
+        ntfs_device_free(v->dev);
+        free(v);
+        return -EIO;
+    }
+    if (v->vol->flags & VOLUME_IS_DIRTY) {
+        ntfs_umount(v->vol, 0);
+        free(v);
+        errno = EBUSY;
+        return -EBUSY;
+    }
+
+    ntfschar *new_label = NULL;
+    int label_len = ntfs_mbstoucs(label, &new_label);
+    int rc;
+    if (label_len < 0) {
+        rc = -EINVAL;
+    } else if (label_len > 128) {
+        rc = -ERANGE;
+    } else {
+        rc = ntfs_volume_rename(v->vol, new_label, label_len) ? -EIO : 0;
+    }
+
+    // Unmount on every exit after a successful mount: a conversion/length failure must not
+    // leave the volume (and its block-device callbacks) mounted while the JNI layer unregisters
+    // the block and frees the callback context. ntfs-3g writes resident metadata during
+    // sync/unmount, so an ignored failure would also report success for a label that never
+    // reached the medium; keep the first error.
+    int sync_rc = 0;
+    if (v->vol->dev) sync_rc = ntfs_device_sync(v->vol->dev);
+    int umount_rc = ntfs_umount(v->vol, 0);
+    if (rc == 0) rc = sync_rc != 0 ? -EIO : (umount_rc != 0 ? -EIO : 0);
+    free(new_label);
+    free(v);
+    return rc;
+}
+
+int ntfs_engine_get_label(uint64_t block_handle, char *out, size_t cap)
+{
+    if (!out || cap == 0) return -EINVAL;
+    out[0] = '\0';
+
+    ntfs_log_set_handler(ntfs_log_handler_null);
+    NtfsVolumeContext *v = alloc_volume_ctx(block_handle);
+    if (!v) return -EINVAL;
+
+    v->vol = ntfs_device_mount(v->dev, NTFS_MNT_RDONLY);
+    if (!v->vol) {
+        ntfs_device_free(v->dev);
+        free(v);
+        return -EIO;
+    }
+    if (v->vol->vol_name) {
+        size_t n = strlen(v->vol->vol_name);
+        if (n >= cap) n = cap - 1;
+        memcpy(out, v->vol->vol_name, n);
+        out[n] = '\0';
+    }
+    ntfs_umount(v->vol, 0);
+    free(v);
+    return 0;
 }
 
 int ntfs_engine_clear_dirty(uint64_t block_handle, const char *confirmation_token)

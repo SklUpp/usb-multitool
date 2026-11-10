@@ -1,7 +1,7 @@
 package usb.ventoy
 
 import java.io.File
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 object VentoyAssetOperations {
     fun download(

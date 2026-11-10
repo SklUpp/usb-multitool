@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import usb.operation.DiskOperation
 
 /**
  * Process-safe disk work accessor. Owns the single-thread scope and [OperationExecutor].

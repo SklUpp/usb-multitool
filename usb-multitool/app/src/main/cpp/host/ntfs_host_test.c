@@ -33,6 +33,9 @@ typedef struct FileBlockCtx {
     /* Write-failure injection over an LBA range (fail_write_lba_to == 0 disables). */
     uint64_t fail_write_lba_from;
     uint64_t fail_write_lba_to;
+    /* Sync-failure injection: consume one failure per count. Used to prove that label
+     * writeback errors are reported instead of returning success. */
+    int fail_sync;
 } FileBlockCtx;
 
 static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
@@ -65,6 +68,11 @@ static int file_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors
 static int file_sync(void *ctx)
 {
     FileBlockCtx *f = (FileBlockCtx *)ctx;
+    if (f->fail_sync > 0) {
+        f->fail_sync--;
+        errno = EIO;
+        return -1;
+    }
     return fsync(f->fd);
 }
 
@@ -169,6 +177,16 @@ int main(int argc, char **argv)
     }
     printf("PASS: mount NTFS volume over usb_block (handle=0x%llx)\n", (unsigned long long)vol);
 
+    /* 1b. Metadata-only usage: sane values, no allocation/write. */
+    uint64_t total_bytes = 0;
+    uint64_t free_bytes = 0;
+    int usage_rc = ntfs_engine_usage(vol, &total_bytes, &free_bytes);
+    assert(usage_rc == 0);
+    assert(total_bytes > 0);
+    assert(free_bytes <= total_bytes);
+    printf("PASS: usage total=%llu free=%llu\n",
+           (unsigned long long)total_bytes, (unsigned long long)free_bytes);
+
     /* 2. Check initial clean state */
     int dirty = ntfs_engine_is_dirty(vol);
     assert(dirty == 0);
@@ -182,6 +200,16 @@ int main(int argc, char **argv)
     assert(rc == 0);
     assert(written == payload_len);
     printf("PASS: write file '/test_file.txt' (bytes=%zu)\n", written);
+
+    /* Allocation must not increase free space; totals stay stable. */
+    {
+        uint64_t total_after = 0;
+        uint64_t free_after = 0;
+        usage_rc = ntfs_engine_usage(vol, &total_after, &free_after);
+        assert(usage_rc == 0);
+        assert(total_after == total_bytes);
+        assert(free_after <= free_bytes);
+    }
 
     /* 4. Sync volume */
     rc = ntfs_engine_sync(vol);
@@ -765,6 +793,64 @@ int main(int argc, char **argv)
             printf("PASS: mkfs/mount/read/write with %u-byte sectors, %llu MiB\n",
                    (unsigned)gss, (unsigned long long)geom_mib[g]);
         }
+    }
+
+    /* Volume label setter: round-trip, and writeback (sync) failures must be reported. */
+    {
+        char limg[] = "/tmp/ntfs_label_XXXXXX.img";
+        int lfd = mkstemps(limg, 4);
+        assert(lfd >= 0);
+        uint64_t lsc = (8ULL << 20) / 512u;
+        assert(ftruncate(lfd, (off_t)lsc * 512u) == 0);
+
+        FileBlockCtx lctx = {
+            .fd = lfd,
+            .sector_size = 512u,
+            .sector_count = lsc,
+        };
+        UsbBlockOps lops = {
+            .read = file_read,
+            .write = file_write,
+            .sync = file_sync,
+            .ctx = &lctx,
+            .sector_size = 512u,
+            .sector_count = lsc,
+        };
+        uint64_t lblock = usb_block_register(&lops);
+        assert(lblock != 0);
+        assert(ntfs_engine_mkfs(lblock, "INIT", true) == 0);
+
+        char llabel[64];
+        assert(ntfs_engine_set_label(lblock, "NEWLABEL") == 0);
+        memset(llabel, 0, sizeof(llabel));
+        assert(ntfs_engine_get_label(lblock, llabel, sizeof(llabel)) == 0);
+        assert(strcmp(llabel, "NEWLABEL") == 0);
+        printf("PASS: NTFS label set/get\n");
+
+        /* $Volume metadata is written during sync/unmount; a failed flush must surface. */
+        lctx.fail_sync = 1;
+        assert(ntfs_engine_set_label(lblock, "NOFLUSH") != 0);
+        printf("PASS: NTFS label writeback error is reported\n");
+
+        usb_block_unregister(lblock);
+        close(lfd);
+        unlink(limg);
+    }
+
+    /* JNI label boundary: Java UTF-16 is converted to standard UTF-8 here. Modified UTF-8
+     * (what GetStringUTFChars returns) encodes the emoji as surrogate sequences that
+     * ntfs_mbstoucs rejects, so the conversion must produce the real 4-byte sequence and
+     * refuse unpaired surrogates/NULs before any mount happens. */
+    {
+        char u8[32];
+        const uint16_t emoji[] = { 'C', 0xD83D, 0xDE00, 'X' };
+        assert(ntfs_label_from_utf16(emoji, 4, u8, sizeof(u8)) == 0);
+        assert(strcmp(u8, "C\xF0\x9F\x98\x80X") == 0);
+        assert(ntfs_label_from_utf16(emoji + 1, 1, u8, sizeof(u8)) == -EINVAL);
+        assert(ntfs_label_from_utf16((const uint16_t[]){ 'a', 0, 'b' }, 3, u8, sizeof(u8)) == -EINVAL);
+        assert(ntfs_label_from_utf16((const uint16_t[]){ 0xDC00, 'a' }, 2, u8, sizeof(u8)) == -EINVAL);
+        assert(ntfs_label_from_utf16((const uint16_t[]){ 'a' }, 1, u8, 1) == -ERANGE);
+        printf("PASS: NTFS label UTF-16 to standard UTF-8\n");
     }
 
     printf("ALL NTFS INTEGRATION TESTS PASSED SUCCESSFULLY!\n");

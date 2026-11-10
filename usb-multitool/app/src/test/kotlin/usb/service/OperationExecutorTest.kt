@@ -10,11 +10,14 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import usb.device.DiskException
+import usb.operation.DiskOperation
+import usb.operation.OperationState
 import usb.files.FilesOperations
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
@@ -55,6 +58,25 @@ class OperationExecutorTest {
         assertEquals(OperationState.Partial, executor.submit(operation).await())
         assertTrue(volume.renamed)
         assertTrue(operation.failureCause is java.io.IOException)
+    }
+
+    @Test fun cancelAfterCommitReportsCompletedNotCancelled() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation("Import image") {
+            override suspend fun run() {
+                started.complete(Unit)
+                release.await()
+                mutationAttempted = true
+                commitReached = true
+            }
+        }
+        val handle = executor.submit(operation)
+        started.await()
+        handle.cancel()
+        release.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
     }
 
     @Test fun disconnectWaitsForRunningWorkerAndPreservesPartial() = runTest {
@@ -776,7 +798,228 @@ class OperationExecutorTest {
         assertSame(original, operation.failureCause)
     }
 
+@Test fun cancelThrowAfterCommitReachedIsCompleted() = runTest {
+        val executor = OperationExecutor(this)
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                commitReached = true
+                throw CancellationException("late cancel after commit")
+            }
+        }
+        assertEquals(OperationState.Completed, executor.submit(op).await())
+    }
 
+@Test fun closeFailureAfterCompletedIsPartialNotCompleted() = runTest {
+        val executor = OperationExecutor(this)
+        val closeErr = DiskException.IoFailure("close failed")
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                state = OperationState.Completed
+                throw closeErr
+            }
+        }
+        assertEquals(OperationState.Partial, executor.submit(op).await())
+        assertSame(closeErr, op.failureCause)
+    }
+
+@Test fun closeThrowAfterExplicitFailedPreservesPrimaryAndSuppressesClose() = runTest {
+        val executor = OperationExecutor(this)
+        val primary = IllegalStateException("table read failed")
+        val closeErr = DiskException.IoFailure("close failed")
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Failed(primary)
+                failureCause = primary
+                throw closeErr
+            }
+        }
+        val outcome = executor.submit(op).await()
+        assertTrue(outcome is OperationState.Failed)
+        assertSame(primary, (outcome as OperationState.Failed).cause)
+        assertSame(primary, op.failureCause)
+        assertTrue(
+            "close must be suppressed on primary, not dropped",
+            primary.suppressed.any { it === closeErr } ||
+                primary.suppressed.any { it.message == closeErr.message },
+        )
+        // Close must not become the only visible cause.
+        assertFalse(outcome.cause === closeErr)
+    }
+
+@Test fun closeThrowAfterFailedWithMatchingCauseStillSuppresses() = runTest {
+        val executor = OperationExecutor(this)
+        val primary = DiskException.IoFailure("partition table unreadable")
+        val closeErr = DiskException.Disconnected()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Failed(primary)
+                failureCause = primary
+                throw closeErr
+            }
+        }
+        val outcome = executor.submit(op).await()
+        assertTrue(outcome is OperationState.Failed)
+        assertSame(primary, (outcome as OperationState.Failed).cause)
+        assertTrue(primary.suppressed.any { it is DiskException.Disconnected })
+    }
+
+@Test fun commitReachedLateDisconnectClearsDisconnectFailureCause() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                commitReached = true
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+        assertNull(op.failureCause)
+    }
+
+@Test fun commitReachedSurvivesLateDisconnect() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                commitReached = true
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+    }
+
+@Test fun explicitFailedNotMaskedByLateCancel() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val cause = IllegalStateException("table read failed")
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Failed(cause)
+                failureCause = cause
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        handle.cancel()
+        gate.complete(Unit)
+        val outcome = handle.await()
+        assertTrue(outcome is OperationState.Failed)
+        assertSame(cause, (outcome as OperationState.Failed).cause)
+    }
+
+@Test fun lateCancelAfterCompletedIsCompletedEvenWithMutation() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                state = OperationState.Completed
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        handle.cancel()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+    }
+
+@Test fun lateCancelAfterReadOnlyCompletedIsCompleted() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Completed
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        handle.cancel()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+    }
+
+@Test fun lateDisconnectAfterCompletedClearsDisconnectFailureCause() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                state = OperationState.Completed
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+        // UI feeds failureCause into Completed log/status — must not keep Disconnected noise.
+        assertNull(op.failureCause)
+    }
+
+@Test fun lateDisconnectAfterCompletedIsCompleted() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                mutationAttempted = true
+                state = OperationState.Completed
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+    }
+
+@Test fun lateDisconnectAfterReadOnlyCompletedIsCompleted() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val op = object : DiskOperation() {
+            override suspend fun run() {
+                state = OperationState.Completed
+                started.complete(Unit)
+                gate.await()
+            }
+        }
+        val handle = executor.submit(op)
+        started.await()
+        executor.onDisconnected()
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+    }
 
 }
 

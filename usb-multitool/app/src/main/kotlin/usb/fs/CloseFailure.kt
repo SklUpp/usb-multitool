@@ -23,7 +23,7 @@ internal fun mergeCloseFailure(
 
 /**
  * Body succeeded (file created/deleted/synced) but umount/sync of the volume handle failed.
- * Must surface as [usb.service.OperationState.Partial] — never Completed / green success.
+ * Must surface as [usb.operation.OperationState.Partial] — never Completed / green success.
  */
 class CloseAfterSuccessException(cause: Throwable) : Exception(
     "Change applied, but volume close/sync was not confirmed: " +

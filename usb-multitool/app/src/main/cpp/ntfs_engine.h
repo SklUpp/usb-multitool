@@ -37,6 +37,15 @@ int ntfs_engine_close(uint64_t vol_handle);
 /* Flush dirty metadata/data to underlying block device. Returns 0 on success. */
 int ntfs_engine_sync(uint64_t vol_handle);
 
+/*
+ * Metadata-only space query: total and free bytes from the volume geometry and
+ * $Bitmap / $MFTBitmap free-bit counts (free bits are cached on the volume once
+ * counted). Read-only; never mounts, allocates or writes. Returns 0 on success,
+ * a negative errno otherwise. Serialized by the caller's volume lock.
+ */
+int ntfs_engine_usage(uint64_t vol_handle, uint64_t *out_total_bytes,
+                      uint64_t *out_free_bytes);
+
 /* Hard ceiling for a single directory listing; exceeding it is an error, never a
  * silent truncation. */
 #define NTFS_LIST_MAX_ENTRIES 65536u
@@ -115,6 +124,17 @@ int ntfs_engine_check_dirty_dev(uint64_t block_handle);
  * -EIO when a write/sync fails). On failure the device may be partially written.
  */
 int ntfs_engine_mkfs(uint64_t block_handle, const char *label, bool quick);
+
+/* Convert a Java UTF-16 label into standard UTF-8 (surrogate pairs become 4-byte
+ * sequences). Refuses unpaired surrogates, embedded NULs and values that do not fit.
+ * [out] is only meaningful when 0 is returned. Returns 0, -EINVAL or -ERANGE. */
+int ntfs_label_from_utf16(const uint16_t *in, size_t in_len, char *out, size_t cap);
+
+/* Replace the volume label through ntfs-3g ntfs_volume_rename (mount RW, dirty refused). */
+int ntfs_engine_set_label(uint64_t block_handle, const char *label);
+
+/* Read the volume name (mount RO); writes NUL-terminated UTF-8 into out. */
+int ntfs_engine_get_label(uint64_t block_handle, char *out, size_t cap);
 
 /* Clear dirty flag on NTFS volume (ntfsfix equivalent).
  * Requires confirmation token matching "CONFIRM_NTFS_CLEAR_DIRTY".

@@ -1,10 +1,15 @@
 package usb.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -26,11 +31,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -38,9 +41,11 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -80,9 +85,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import usb.fs.FilesystemSpace
+import usb.fs.FilesystemUsage
+import usb.image.ReadbackProblem
+import usb.image.ReadbackVerdict
 import usb.multitool.R
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
@@ -98,6 +107,8 @@ fun AppShell(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickImage: () -> Unit = {},
+    /** Opens the system file picker for a phone-to-stick import of [WindowsImportKind]. */
+    onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
     onPickRescueImage: () -> Unit = {},
@@ -108,7 +119,7 @@ fun AppShell(
         false -> false
         null -> isSystemInDarkTheme()
     }
-    val colors = if (isDark) darkColorScheme() else lightColorScheme()
+    val colors = if (isDark) darkDesignColors() else lightDesignColors()
     val baseContext = LocalContext.current
     val localizedContext = remember(baseContext, state.language) {
         createLocalizedContext(baseContext, state.language)
@@ -117,7 +128,7 @@ fun AppShell(
         LocalContext provides localizedContext,
         LocalResources provides localizedContext.resources,
     ) {
-    MaterialTheme(colorScheme = colors) {
+    MaterialTheme(colorScheme = colors, shapes = AppShapes) {
         var logExpanded by remember { mutableStateOf(false) }
         LaunchedEffect(state.logLines.isEmpty()) {
             if (state.logLines.isEmpty()) logExpanded = false
@@ -132,13 +143,23 @@ fun AppShell(
                         logExpanded = logExpanded,
                         onToggleLog = { logExpanded = !logExpanded },
                     )
-                    NavigationBar {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        tonalElevation = 0.dp,
+                    ) {
                         ShellTab.entries.forEach { tab ->
                             NavigationBarItem(
                                 selected = state.tab == tab,
                                 onClick = { onIntent(UiIntent.SelectTab(tab)) },
                                 icon = { TabIcon(tab) },
                                 label = { Text(tab.title()) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
                             )
                         }
                     }
@@ -152,43 +173,53 @@ fun AppShell(
             ) {
                 Column(
                     modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(horizontal = 16.dp)
                         .fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     DeviceHeader(state, onIntent)
-                    when (state.tab) {
-                        ShellTab.Files -> FilesScreen(
-                            state = state,
-                            onIntent = onIntent,
-                            modifier = Modifier.weight(1f),
-                            onRequestDownload = onRequestDownload,
-                        )
-                        ShellTab.Ventoy -> VentoyScreen(
-                            state = state,
-                            onIntent = onIntent,
-                            modifier = Modifier.weight(1f),
-                        )
-                        ShellTab.Partitions -> PartitionsScreen(
-                            state = state,
-                            onIntent = onIntent,
-                            modifier = Modifier.weight(1f),
-                            onPickImage = onPickImage,
-                        )
-                        ShellTab.Diagnostics -> DiagnosticsScreen(
-                            state = state,
-                            onIntent = onIntent,
-                            modifier = Modifier.weight(1f),
-                            onPickBackup = onPickBackup,
-                            onPickRescueImage = onPickRescueImage,
-                            onPickRescueMap = onPickRescueMap,
-                        )
+                    AnimatedContent(
+                        targetState = state.tab,
+                        modifier = Modifier.weight(1f),
+                        transitionSpec = {
+                            fadeIn(tween(140)) togetherWith fadeOut(tween(140))
+                        },
+                        label = "tab",
+                    ) { tab ->
+                        when (tab) {
+                            ShellTab.Files -> FilesScreen(
+                                state = state,
+                                onIntent = onIntent,
+                                modifier = Modifier.fillMaxSize(),
+                                onRequestDownload = onRequestDownload,
+                            )
+                            ShellTab.Ventoy -> VentoyScreen(
+                                state = state,
+                                onIntent = onIntent,
+                                modifier = Modifier.fillMaxSize(),
+                                onPickWindowsFile = onPickWindowsFile,
+                            )
+                            ShellTab.Partitions -> PartitionsScreen(
+                                state = state,
+                                onIntent = onIntent,
+                                modifier = Modifier.fillMaxSize(),
+                                onPickImage = onPickImage,
+                            )
+                            ShellTab.Diagnostics -> DiagnosticsScreen(
+                                state = state,
+                                onIntent = onIntent,
+                                modifier = Modifier.fillMaxSize(),
+                                onPickBackup = onPickBackup,
+                                onPickRescueImage = onPickRescueImage,
+                                onPickRescueMap = onPickRescueMap,
+                            )
+                        }
                     }
                 }
                 AnimatedVisibility(
                     visible = logExpanded && state.logLines.isNotEmpty(),
-                    enter = fadeIn() + slideInVertically { height -> height / 3 },
-                    exit = fadeOut(),
+                    enter = fadeIn(tween(140)) + slideInVertically(tween(180)) { it / 4 },
+                    exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 4 },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 ) {
                     LogOverlay(
@@ -201,25 +232,59 @@ fun AppShell(
         }
 
         state.pendingConfirmation?.let { confirmation ->
+            // Explicit acknowledgement: the target board requires a checked box before the
+            // destructive button becomes reachable. Reset per confirmation, never sticky.
+            var acknowledged by remember(confirmation) { mutableStateOf(false) }
             AlertDialog(
                 onDismissRequest = { onIntent(UiIntent.DismissConfirmation) },
-                title = { Text(stringResource(R.string.confirm_title)) },
+                shape = RoundedCornerShape(28.dp),
+                title = {
+                    Text(
+                        text = stringResource(R.string.confirm_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Normal,
+                    )
+                },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         confirmationLines(confirmation).forEach { line ->
-                            Text(line, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .toggleable(
+                                    value = acknowledged,
+                                    role = Role.Checkbox,
+                                    onValueChange = { acknowledged = it },
+                                )
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Checkbox(checked = acknowledged, onCheckedChange = null)
+                            Text(
+                                text = stringResource(R.string.confirm_ack),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
                         }
                     }
                 },
                 confirmButton = {
-                    Button(
+                    TextButton(
                         onClick = { onIntent(UiIntent.ConfirmDestructive) },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = MaterialTheme.colorScheme.onError,
-                        ),
+                        enabled = acknowledged,
                     ) {
-                        Text(stringResource(R.string.action_confirm))
+                        Text(
+                            text = stringResource(R.string.action_confirm),
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 },
                 dismissButton = {
@@ -262,8 +327,6 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
             append(device?.capacityLabel ?: "USB")
             append(" · ")
             append(pluralStringResource(R.plurals.partitions_count, partCount, partCount))
-            append(" · ")
-            append(stringResource(R.string.header_ready))
         }
         DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
         DevicePresence.Busy -> stringResource(R.string.header_busy)
@@ -271,91 +334,37 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         DevicePresence.Absent -> stringResource(R.string.header_absent)
     }
 
-    val totalSectors = device?.let { it.capacityBytes.toDouble() / state.diskSectorSize.toDouble() } ?: 0.0
-    val usedSectors = state.partitions.sumOf { partition ->
-        (partition.sectorCount ?: 0uL).toDouble()
-    }
-    val usedFraction =
-        if (totalSectors > 0.0) (usedSectors / totalSectors).toFloat().coerceIn(0f, 1f) else null
-    val usedPercent = ((usedFraction ?: 0f) * 100).roundToInt()
-    val usedDescription = stringResource(R.string.header_used_accessibility, usedPercent)
-
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    Row(
         modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = device?.label ?: stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.semantics { heading() },
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (state.presence == DevicePresence.PermissionRequired) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.ToggleTheme) },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                ) {
-                    Text(themeLabel(state.darkTheme), style = MaterialTheme.typography.labelSmall)
-                }
-
-                LanguagePicker(language = state.language, onIntent = onIntent)
-            }
-
-            if (usedFraction != null && state.partitions.isNotEmpty() && usedFraction > 0f) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    LinearProgressIndicator(
-                        progress = { usedFraction },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .clip(CircleShape)
-                            .semantics {
-                                contentDescription = usedDescription
-                            },
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.header_used_caption,
-                            usedPercent,
-                            pluralStringResource(R.plurals.partitions_count, partCount, partCount),
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = device?.label ?: stringResource(R.string.app_name),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (state.presence == DevicePresence.PermissionRequired) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+
+        // Beside the title block, never inside it: the header carries no background of its
+        // own (the boards use a flat header), so nothing behind these controls has to end.
+        LanguagePicker(language = state.language, onIntent = onIntent)
+        ThemeToggle(darkTheme = state.darkTheme, onIntent = onIntent)
     }
 }
 
@@ -377,19 +386,16 @@ internal fun StatusLogPanel(
 
     val failed = op?.state == OperationState.Failed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
-    val container = when {
-        failed -> MaterialTheme.colorScheme.errorContainer
-        running -> MaterialTheme.colorScheme.primaryContainer
-        overwrite != null -> MaterialTheme.colorScheme.tertiaryContainer
-        op != null -> MaterialTheme.colorScheme.secondaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    // A failure must stay readable: error-on-inverseSurface is ~1.5:1 in both themes.
+    val container = if (failed) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.inverseSurface
     }
-    val content = when {
-        failed -> MaterialTheme.colorScheme.onErrorContainer
-        running -> MaterialTheme.colorScheme.onPrimaryContainer
-        overwrite != null -> MaterialTheme.colorScheme.onTertiaryContainer
-        op != null -> MaterialTheme.colorScheme.onSecondaryContainer
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val content = if (failed) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.inverseOnSurface
     }
     val title = when {
         op != null -> "${operationLabel(op)} · ${operationStateLabel(op.state)}"
@@ -397,7 +403,9 @@ internal fun StatusLogPanel(
         else -> stringResource(R.string.status_title)
     }
     val detail = when {
-        op != null -> op.errorMessage ?: op.resultMessage
+        op != null -> op.errorMessage
+            ?: op.readScanResult?.let { readScanSummary(it) }
+            ?: op.resultMessage
         overwrite != null -> stringResource(
             R.string.status_link_exists,
             overwrite.substringAfterLast('/'),
@@ -405,18 +413,55 @@ internal fun StatusLogPanel(
         else -> state.statusMessage?.localized() ?: state.logLines.lastOrNull()
     }
 
+    // "Verified" is claimed only for Verified, and for a partial write only for the bytes that
+    // were actually written.
+    val readbackNote = op?.rawWriteResult?.let { result ->
+        when (val verdict = result.readback) {
+            ReadbackVerdict.Verified -> {
+                val whole = result.writtenBytes.toULong() ==
+                    result.range.byteLength(state.diskSectorSize)
+                if (whole) {
+                    stringResource(R.string.raw_readback_verified)
+                } else {
+                    stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
+                }
+            }
+            is ReadbackVerdict.Mismatch -> stringResource(
+                R.string.raw_readback_mismatch,
+                verdict.mismatchedSectors.toLong(),
+                verdict.firstMismatchLba.toLong(),
+            )
+            is ReadbackVerdict.Unverified -> stringResource(
+                R.string.raw_readback_unverified,
+                verdict.range.startLba.toLong(),
+                verdict.range.sectorCount.toLong(),
+            )
+            is ReadbackVerdict.Incomplete -> stringResource(
+                R.string.raw_readback_incomplete,
+                stringResource(
+                    when (verdict.reason) {
+                        ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled
+                        ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed
+                        ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error
+                    },
+                ),
+            )
+        }
+    }
+
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(8.dp),
         color = container,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .heightIn(min = 48.dp),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -437,7 +482,16 @@ internal fun StatusLogPanel(
                             text = message,
                             style = MaterialTheme.typography.labelSmall,
                             color = content.copy(alpha = 0.85f),
-                            maxLines = if (logExpanded) 3 else 1,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    readbackNote?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -535,9 +589,11 @@ internal fun StatusLogPanel(
 }
 
 /**
- * Operation log shown over the active tab: no scrim and no container background, so the
- * user keeps context. Every line stays a real text node and the close action stays
- * reachable; the log keeps its own scroll and follows new lines.
+ * Operation log shown over the active tab as a single overlay surface: the themed
+ * background wraps the heading and every visible line, so the whole block grows and
+ * scrolls together and stays readable over the tab content. The bottom navigation and
+ * the tab layout are not displaced. Height is capped, the list keeps its own scroll,
+ * and taps that land on the surface never reach the controls underneath.
  */
 @Composable
 private fun LogOverlay(
@@ -549,52 +605,62 @@ private fun LogOverlay(
     LaunchedEffect(lines.lastOrNull()) {
         logScroll.animateScrollTo(logScroll.maxValue)
     }
-    Column(
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp,
         modifier = modifier
             .fillMaxWidth()
             .heightIn(max = 240.dp)
-            // Swallow taps that land on the transparent overlay itself so they cannot
-            // reach buttons underneath; the log scroll and its own buttons still work.
+            // Swallow taps that land on the overlay surface itself so they cannot reach
+            // buttons underneath; the log scroll and its own buttons still work.
             .pointerInput(Unit) { detectTapGestures { } },
-        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.log_title_count, lines.size),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { heading() },
-            )
-            TextButton(
-                onClick = onClose,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.log_collapse),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(logScroll),
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            lines.forEach { line ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
-                    text = line,
-                    style = MaterialTheme.typography.labelSmall,
+                    text = stringResource(R.string.log_title_count, lines.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { heading() },
                 )
+                TextButton(
+                    onClick = onClose,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.log_collapse),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(logScroll),
+            ) {
+                lines.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
         }
     }
@@ -616,13 +682,19 @@ private fun createLocalizedContext(base: Context, language: AppLanguage): Contex
 private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val label = stringResource(R.string.language_label)
+    val current = languageName(language)
     Box {
-        OutlinedButton(
+        IconButton(
             onClick = { expanded = true },
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            modifier = Modifier.semantics { contentDescription = label },
+            modifier = Modifier
+                .size(48.dp)
+                .semantics { contentDescription = "$label: $current" },
         ) {
-            Text(languageCode(language), style = MaterialTheme.typography.labelSmall)
+            Icon(
+                painter = painterResource(R.drawable.ic_language),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             AppLanguage.entries.forEach { option ->
@@ -649,12 +721,24 @@ private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) 
     }
 }
 
-private fun languageCode(language: AppLanguage): String =
-    when (language) {
-        AppLanguage.System -> "AUTO"
-        AppLanguage.Russian -> "RU"
-        AppLanguage.English -> "EN"
+/** Cycles System → dark → light; the icon and its description follow the current value. */
+@Composable
+private fun ThemeToggle(darkTheme: Boolean?, onIntent: (UiIntent) -> Unit) {
+    val name = themeLabel(darkTheme)
+    val description = stringResource(R.string.theme_label) + ": " + name
+    IconButton(
+        onClick = { onIntent(UiIntent.ToggleTheme) },
+        modifier = Modifier
+            .size(48.dp)
+            .semantics { contentDescription = description },
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_theme),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
+}
 
 @Composable
 private fun languageName(language: AppLanguage): String =
@@ -672,6 +756,72 @@ private fun themeLabel(darkTheme: Boolean?): String =
         false -> stringResource(R.string.theme_light)
     }
 
+/** Design tokens of the target boards: flat background, card and row surfaces, one accent. */
+private fun darkDesignColors() = darkColorScheme(
+    primary = Color(0xFFB4C5FF), onPrimary = Color(0xFF0E1E4A),
+    primaryContainer = Color(0xFF2A2A30), onPrimaryContainer = Color(0xFFE6E6EA),
+    secondaryContainer = Color(0xFF2A2A30), onSecondaryContainer = Color(0xFFE6E6EA),
+    tertiaryContainer = Color(0xFF2A2A30), onTertiaryContainer = Color(0xFFE6E6EA),
+    background = Color(0xFF111113), onBackground = Color(0xFFE6E6EA),
+    surface = Color(0xFF111113), onSurface = Color(0xFFE6E6EA),
+    surfaceVariant = Color(0xFF2A2A30), onSurfaceVariant = Color(0xFFA3A3AD),
+    surfaceContainer = Color(0xFF1B1B1F),
+    surfaceContainerHigh = Color(0xFF2A2A30),
+    surfaceContainerHighest = Color(0xFF33333A),
+    outline = Color(0xFF3A3A42), outlineVariant = Color(0xFF3A3A42),
+    error = Color(0xFFFFB4AB), onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A), onErrorContainer = Color(0xFFFFDAD6),
+    inverseSurface = Color(0xFFE6E6EA), inverseOnSurface = Color(0xFF111113),
+)
+
+private fun lightDesignColors() = lightColorScheme(
+    primary = Color(0xFF2D55C8), onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFE9E9EF), onPrimaryContainer = Color(0xFF1A1A1E),
+    secondaryContainer = Color(0xFFE9E9EF), onSecondaryContainer = Color(0xFF1A1A1E),
+    tertiaryContainer = Color(0xFFE9E9EF), onTertiaryContainer = Color(0xFF1A1A1E),
+    background = Color(0xFFF7F7FA), onBackground = Color(0xFF1A1A1E),
+    surface = Color(0xFFF7F7FA), onSurface = Color(0xFF1A1A1E),
+    surfaceVariant = Color(0xFFE9E9EF), onSurfaceVariant = Color(0xFF5B5B66),
+    surfaceContainer = Color(0xFFFFFFFF),
+    surfaceContainerHigh = Color(0xFFE9E9EF),
+    surfaceContainerHighest = Color(0xFFDCDCE4),
+    outline = Color(0xFFD3D3DB), outlineVariant = Color(0xFFD3D3DB),
+    error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DEDC), onErrorContainer = Color(0xFF410E0B),
+    inverseSurface = Color(0xFF1A1A1E), inverseOnSurface = Color(0xFFF7F7FA),
+)
+
+private val AppShapes = Shapes(
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(28.dp),
+)
+
+/**
+ * Real free space of [partition], or null unless the measured snapshot still describes this
+ * exact attachment: same attach generation, device identity, start LBA, sector count, sector
+ * size and filesystem. A reformatted partition or a re-plugged stick with the same model but no
+ * serial therefore reports "unavailable" instead of stale numbers, and the table's free regions
+ * are never substituted here.
+ */
+internal fun AppUiState.filesystemSpace(partition: PartitionTab): FilesystemSpace? {
+    val snapshot = filesystemUsage ?: return null
+    // The reducer owns the key shape; sharing it keeps row and measurement from drifting apart.
+    val key = filesystemUsageKey(partition) ?: return null
+    if (!snapshot.matches(key)) return null
+    return (snapshot.usage as? FilesystemUsage.Known)?.space
+}
+
+/**
+ * Readable name of a document URI for a source row: percent-decoded, last path segment,
+ * document-id prefixes removed. Never claims the file was written — it only names it.
+ */
+internal fun rawSourceName(uri: String?): String? = uri
+    ?.let { runCatching { android.net.Uri.decode(it) }.getOrNull() }
+    ?.substringAfterLast('/')
+    ?.substringAfterLast(':')
+    ?.takeIf { it.isNotBlank() }
+
 /**
  * Section block: bold heading, optional one-line subtitle, hairline divider, then content.
  * No container fill — hierarchy comes from typography, spacing and the divider, so nested
@@ -686,43 +836,60 @@ internal fun SectionCard(
     trailing: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        // Heading lives outside the card, like the target boards: an uppercase label above
+        // its surface, separated from the content it names.
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 4.dp, end = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    text = title.uppercase(Locale.getDefault()),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.5.sp,
+                    color = if (danger) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     modifier = Modifier.semantics { heading() },
                 )
                 subtitle?.let {
                     Text(
                         text = it,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             trailing?.invoke()
         }
-        HorizontalDivider(
-            modifier = Modifier.padding(top = 4.dp, bottom = 6.dp),
-            color = if (danger) {
-                MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = if (danger) {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
             } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                null
             },
-        )
-        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            content()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                content()
+            }
         }
     }
 }
@@ -892,32 +1059,39 @@ internal fun InfoHint(
     infoText: String,
     modifier: Modifier = Modifier,
 ) {
-    var showInfo by remember { mutableStateOf(false) }
     Row(
         modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .weight(1f)
-                .padding(top = 12.dp),
+            modifier = Modifier.weight(1f),
         )
-        IconButton(
-            onClick = { showInfo = true },
-            modifier = Modifier
-                .size(48.dp)
-                .semantics { contentDescription = infoTitle },
-        ) {
-            GlyphIcon(
-                glyph = Glyph.Info,
-                size = 20.dp,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
+        InfoHelpButton(infoTitle = infoTitle, infoText = infoText)
+    }
+}
+
+/**
+ * 48 dp help target for a [SectionCard] `trailing` slot. The glyph is centred in the
+ * button and in the section heading row, so it no longer floats at a different baseline.
+ */
+@Composable
+internal fun InfoHelpButton(infoTitle: String, infoText: String) {
+    var showInfo by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = { showInfo = true },
+        modifier = Modifier
+            .size(48.dp)
+            .semantics { contentDescription = infoTitle },
+    ) {
+        GlyphIcon(
+            glyph = Glyph.Info,
+            size = 20.dp,
+            tint = MaterialTheme.colorScheme.primary,
+        )
     }
     if (showInfo) {
         AlertDialog(
@@ -929,6 +1103,25 @@ internal fun InfoHint(
                     Text(stringResource(R.string.info_close))
                 }
             },
+        )
+    }
+}
+
+/** Small section badge; one implementation shared by every tab. */
+@Composable
+internal fun Badge(
+    text: String,
+    container: Color = MaterialTheme.colorScheme.secondaryContainer,
+    content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
+) {
+    Surface(shape = RoundedCornerShape(8.dp), color = container) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = content,
+            maxLines = 1,
         )
     }
 }

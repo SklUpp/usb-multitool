@@ -2,6 +2,7 @@ package usb.ui
 
 import usb.fs.FilesystemId
 import usb.fs.FormatCatalog
+import usb.partition.TableScheme
 
 /**
  * Host-runnable assert self-check (no Android/Compose).
@@ -102,6 +103,115 @@ object UiStateHostCheck {
         require(create?.createStartLba == 16384UL && create.createSectorCount == 1024UL)
         require(UiReducer.reduce(withFree, UiIntent.RequestCreatePartition(16385UL, 1024UL)).state.pendingConfirmation == null)
         require(UiReducer.reduce(withFree, UiIntent.RequestCreatePartition(16384UL, 4097UL)).state.pendingConfirmation == null)
+        require(create != null) { "create confirmation missing" }
+        require(create.createName == null && create.createFormatId == null && create.volumeLabel == "")
+
+        val gptFree = withFree.copy(partitionScheme = TableScheme.GPT)
+        val named =
+            requireNotNull(
+                UiReducer.reduce(
+                    gptFree,
+                    UiIntent.RequestCreatePartition(
+                        16384UL,
+                        1024UL,
+                        name = "  Data  ",
+                        formatId = FilesystemId.EXT,
+                        volumeLabel = "MEDIA",
+                    ),
+                ).state.pendingConfirmation,
+            ) { "trimmed GPT name must be pinned in the confirmation" }
+        require(named.createName == "Data")
+        require(named.createFormatId == FilesystemId.EXT)
+        require(named.volumeLabel == "MEDIA")
+        require(
+            UiReducer.reduce(
+                withFree,
+                UiIntent.RequestCreatePartition(16384UL, 1024UL, name = "Data"),
+            ).state.pendingConfirmation == null,
+        ) { "a name without a GPT scheme must be refused, not dropped" }
+        require(
+            UiReducer.reduce(
+                gptFree,
+                UiIntent.RequestCreatePartition(16384UL, 1024UL, name = "x".repeat(37)),
+            ).state.pendingConfirmation == null,
+        )
+        require(
+            UiReducer.reduce(
+                gptFree,
+                UiIntent.RequestCreatePartition(16384UL, 1024UL, formatId = FilesystemId.EXT, volumeLabel = "x".repeat(16)),
+            ).state.pendingConfirmation == null,
+        ) { "EXT labels are limited to 15 UTF-8 bytes" }
+
+        val gptFormatted =
+            ready.copy(
+                partitionScheme = TableScheme.GPT,
+                partitions = ready.partitions.map {
+                    if (it.id == "1") it.copy(filesystemId = FilesystemId.NTFS) else it
+                },
+            )
+        val rename = requireNotNull(
+            UiReducer.reduce(gptFormatted, UiIntent.RequestRenamePartition(" Media "))
+                .state.pendingConfirmation,
+        )
+        require(rename.action == DestructiveAction.RENAME_PARTITION && rename.partitionName == "Media")
+        require(rename.partitionStartLba == 0UL && rename.partitionSectorCount == 2048UL)
+        require(UiReducer.reduce(gptFormatted, UiIntent.RequestRenamePartition("VENTOY")).state.pendingConfirmation == null)
+        require(
+            UiReducer.reduce(
+                gptFormatted.copy(selectedPartitionId = "2"),
+                UiIntent.RequestRenamePartition("NEW"),
+            ).state.pendingConfirmation == null,
+        ) { "protected VTOYEFI name must not be renamed" }
+        require(UiReducer.reduce(ready, UiIntent.RequestRenamePartition("Media")).state.pendingConfirmation == null) {
+            "unknown scheme must not accept a GPT name"
+        }
+        val label =
+            requireNotNull(
+                UiReducer.reduce(gptFormatted, UiIntent.RequestRenameVolumeLabel(" MEDIA "))
+                    .state.pendingConfirmation,
+            )
+        require(label.action == DestructiveAction.RENAME_VOLUME_LABEL && label.volumeLabel == "MEDIA")
+        require(
+            UiReducer.reduce(
+                gptFormatted.copy(
+                    partitions = gptFormatted.partitions.map {
+                        if (it.id == "1") it.copy(filesystemId = FilesystemId.EXT) else it
+                    },
+                ),
+                UiIntent.RequestRenameVolumeLabel("MEDIA"),
+            ).state.pendingConfirmation == null,
+        ) { "EXT label rename has no native setter" }
+        require(
+            UiReducer.reduce(
+                gptFormatted.copy(
+                    partitions = gptFormatted.partitions.map {
+                        if (it.id == "1") it.copy(filesystemId = FilesystemId.FAT) else it
+                    },
+                ),
+                UiIntent.RequestRenameVolumeLabel("bad/name"),
+            ).state.pendingConfirmation == null,
+        ) { "FAT-invalid characters must be refused before writing" }
+
+        val initGpt = requireNotNull(
+            UiReducer.reduce(
+                gptFormatted,
+                UiIntent.RequestInitializePartitionTable(PartitionScheme.Mbr),
+            ).state.pendingConfirmation,
+        )
+        require(initGpt.initialScheme == PartitionScheme.Gpt && initGpt.targetScheme == PartitionScheme.Mbr)
+        require(initGpt.initialPartitions.size == gptFormatted.partitions.size)
+        require(
+            UiReducer.reduce(
+                gptFormatted,
+                UiIntent.RequestInitializePartitionTable(PartitionScheme.Gpt),
+            ).state.pendingConfirmation == null,
+        ) { "same scheme must be refused" }
+        require(
+            UiReducer.reduce(
+                gptFormatted.copy(partitionTableAmbiguous = true),
+                UiIntent.RequestInitializePartitionTable(PartitionScheme.Mbr),
+            ).state.pendingConfirmation == null,
+        ) { "ambiguous layout must be refused fail-closed" }
 
         val permission =
             ready.copy(presence = DevicePresence.PermissionRequired)

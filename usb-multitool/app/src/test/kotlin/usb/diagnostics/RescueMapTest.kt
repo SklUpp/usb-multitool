@@ -13,7 +13,7 @@ import org.junit.Test
 import usb.device.DiskException
 import usb.image.ImageFormat
 import usb.image.ImageSource
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 import usb.testutil.RecordingDisk
 
 class RescueMapTest {
@@ -288,7 +288,7 @@ class RescueMapTest {
         assertEquals(0x5A, disk.bytes()[sectorSize].toInt() and 0xFF)
         assertEquals(0x5A, disk.bytes()[3 * sectorSize].toInt() and 0xFF)
         assertTrue(map.partial)
-        assertEquals(usb.service.OperationState.Partial, opEof.state)
+        assertEquals(usb.operation.OperationState.Partial, opEof.state)
         assertNotNull(opEof.failureCause)
     }
 
@@ -323,7 +323,7 @@ class RescueMapTest {
         assertEquals(listOf(0UL until 3UL), map.copied)
         assertEquals(listOf(3UL until 4UL), map.nonTried)
         assertTrue(map.partial)
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertNotNull(op.failureCause)
         assertEquals(sectorSize, disk.bytesWritten)
     }
@@ -347,7 +347,7 @@ class RescueMapTest {
         val image = ByteArrayOutputStream()
         val op = DiskOperation("rescue-copy")
         Rescue.copy(source, image.asRescueSink(sectorSize), copyMap, operation = op)
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         val imageBytes = image.toByteArray()
         assertEquals(sectorCount * sectorSize, imageBytes.size)
         assertEquals(listOf(3UL until 4UL), copyMap.failed)
@@ -445,7 +445,7 @@ class RescueMapTest {
         }
         assertTrue(map.copied.isEmpty())
         assertTrue(map.failed.isEmpty())
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertTrue(op.failureCause is DiskException.Disconnected)
     }
 
@@ -514,7 +514,7 @@ class RescueMapTest {
                 operation = op,
             )
         assertTrue(published.isEmpty())
-        assertTrue(op.state == usb.service.OperationState.Partial || op.state is usb.service.OperationState.Failed)
+        assertTrue(op.state == usb.operation.OperationState.Partial || op.state is usb.operation.OperationState.Failed)
         assertTrue(disk.bytesWritten > 0)
         assertTrue(out.copied.isNotEmpty())
         assertNotNull(op.failureCause)
@@ -603,7 +603,7 @@ class RescueMapTest {
 
         assertEquals(listOf(0UL), disk.writes)
         assertEquals(listOf(0UL until sectors), restoreMap.copied)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
     }
 
     /**
@@ -641,7 +641,7 @@ class RescueMapTest {
         assertEquals(listOf(0UL, 1UL), disk.writes)
         assertTrue(disk.bytes().copyOfRange(0, 2 * sectorSize).all { it == 0xB.toByte() })
         assertEquals(listOf(0UL until sectors), restoreMap.copied)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
     }
 
     @Test fun restoreSkipsCopiedRangeWhenDiskMatchesImage() {
@@ -670,7 +670,7 @@ class RescueMapTest {
 
         assertEquals(listOf(2UL), disk.writes)
         assertEquals(listOf(0UL until sectors), restoreMap.copied)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
         assertEquals(0x2A, disk.bytes()[0].toInt() and 0xFF)
     }
 
@@ -699,7 +699,7 @@ class RescueMapTest {
         assertEquals(listOf(0UL, 2UL), disk.writes)
         assertTrue(disk.bytes().all { it == 0x33.toByte() })
         assertEquals(listOf(0UL until sectors), map.copied)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
     }
 
     /**
@@ -732,7 +732,7 @@ class RescueMapTest {
         assertEquals(listOf(copied), disk.writes)
         assertTrue(disk.readCount >= 1L)
         assertEquals(listOf(0UL until sectorCount), map.copied)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
     }
 
     /** A map without a proven sector geometry never resumes. */
@@ -787,7 +787,7 @@ class RescueMapTest {
             operation = op,
         )
 
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertTrue(op.failureCause?.message?.contains("verification") == true)
         assertEquals(listOf(0UL until sectors), map.copied) // bytes were written, just unproven
     }
@@ -818,7 +818,7 @@ class RescueMapTest {
             operation = op,
         )
 
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertTrue(op.failureCause?.message?.contains("verification cancelled") == true)
         assertTrue(disk.bytesWritten > 0)
     }
@@ -854,8 +854,8 @@ class RescueMapTest {
 
         assertEquals(0L, disk.writeCount)
         assertTrue(
-            op.state is usb.service.OperationState.Failed ||
-                op.state == usb.service.OperationState.Partial,
+            op.state is usb.operation.OperationState.Failed ||
+                op.state == usb.operation.OperationState.Partial,
         )
         assertFalse(op.mutationAttempted)
     }
@@ -909,7 +909,7 @@ class RescueMapTest {
             operation = op,
         )
 
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertTrue(op.failureCause is DiskException.Disconnected)
         assertTrue(op.mutationAttempted)
         assertEquals(7, disk.bytes()[0].toInt() and 0xFF)
@@ -1056,9 +1056,9 @@ class RescueMapTest {
         } catch (_: DiskException.IoFailure) {
             // ok
         }
-        assertTrue(op.state is usb.service.OperationState.Failed || op.state == usb.service.OperationState.Partial)
-        if (op.state is usb.service.OperationState.Failed) {
-            assertNotNull((op.state as usb.service.OperationState.Failed).cause)
+        assertTrue(op.state is usb.operation.OperationState.Failed || op.state == usb.operation.OperationState.Partial)
+        if (op.state is usb.operation.OperationState.Failed) {
+            assertNotNull((op.state as usb.operation.OperationState.Failed).cause)
         }
         assertEquals(0, disk.bytesWritten)
     }
@@ -1094,7 +1094,7 @@ class RescueMapTest {
         assertEquals(listOf(1L to 2, 5L to 3), disk.writtenRanges)
         assertEquals(listOf(0UL until sectorCount.toULong()), map.copied)
         assertFalse(map.partial)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
         for (lba in listOf(1, 2, 5, 6, 7)) {
             val slice = disk.bytes[lba.toULong()]!!
             assertTrue(
@@ -1137,7 +1137,7 @@ class RescueMapTest {
         assertEquals(listOf(0UL, 1UL, 3UL), disk.writes)
         assertEquals(listOf(0UL until 2UL, 3UL until 4UL), map.copied)
         assertEquals(listOf(2UL until 3UL), map.failed)
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertEquals(3 * sectorSize, disk.bytesWritten)
         assertTrue("failed sector must stay untouched", disk.bytes[badLba] == null)
         for (lba in listOf(0, 1, 3)) {
@@ -1177,7 +1177,7 @@ class RescueMapTest {
         // A one-sector write already failed itself: no duplicate retry command.
         assertEquals(1, attempts)
         assertEquals(listOf(1UL until 2UL), map.failed)
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertEquals(0, disk.bytesWritten)
     }
 
@@ -1210,7 +1210,7 @@ class RescueMapTest {
         // Unknown landing state must never be published as COPIED.
         assertTrue(map.copied.isEmpty())
         assertEquals(listOf(0UL until 4UL), map.nonTried)
-        assertEquals(usb.service.OperationState.Partial, op.state)
+        assertEquals(usb.operation.OperationState.Partial, op.state)
         assertEquals("batch boom", op.failureCause?.message)
         assertEquals(0, disk.bytesWritten)
     }
@@ -1259,7 +1259,7 @@ class RescueMapTest {
         assertEquals(2L, disk.syncCount)
         assertEquals(listOf(0UL until 300UL), map.copied)
         assertFalse(map.partial)
-        assertEquals(usb.service.OperationState.Completed, op.state)
+        assertEquals(usb.operation.OperationState.Completed, op.state)
         assertTrue(
             disk.bytes[0UL]!!.contentEquals(payload.copyOfRange(0, sectorSize)),
         )

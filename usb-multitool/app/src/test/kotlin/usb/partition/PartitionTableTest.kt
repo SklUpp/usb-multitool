@@ -3,6 +3,7 @@ package usb.partition
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,14 +50,14 @@ class PartitionTableTest {
     }
 
     @Test
-    fun gptRecordsBackupLbas() {
+    fun gptKeepsBackupGeometryUnknownWithoutValidAlternateHeader() {
         val disk = DiskFixture.load("partition/mbr-gpt.bin")
         val table = PartitionTable.read(disk)
         assertEquals(TableScheme.GPT, table.scheme)
-        assertTrue(table.gptBackupHeaderLba != null)
-        assertEquals(disk.sectorCount - 1UL, table.gptBackupHeaderLba)
-        // 32 entry sectors end at headerLba-1 — never overlap the header.
-        assertEquals(disk.sectorCount - 1UL - 32UL, table.gptBackupEntriesLba)
+        // The alternate header is read from this fixture's last sector but is not CRC-valid,
+        // so both backup positions stay unknown: publishing sectorCount - 1 would be a guess.
+        assertNull(table.gptBackupHeaderLba)
+        assertNull(table.gptBackupEntriesLba)
     }
 
     @Test

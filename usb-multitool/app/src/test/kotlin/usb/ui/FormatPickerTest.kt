@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.fs.FilesystemId
-import usb.fs.Formatter
+import usb.fs.FormatCatalog
 
 class FormatPickerTest {
     private val device =
@@ -27,7 +27,7 @@ class FormatPickerTest {
 
     @Test
     fun supportedIdsAreRealEnginesOnly() {
-        val ids = Formatter.supportedFormatIds()
+        val ids = FormatCatalog.supportedFormatIds()
         assertEquals(
             listOf(FilesystemId.FAT, FilesystemId.EXFAT, FilesystemId.EXT, FilesystemId.NTFS),
             ids,
@@ -37,7 +37,7 @@ class FormatPickerTest {
 
     @Test
     fun requireSupportedAcceptsNtfs() {
-        assertEquals(FilesystemId.NTFS, Formatter.requireSupported(FilesystemId.NTFS))
+        assertEquals(FilesystemId.NTFS, FormatCatalog.requireSupported(FilesystemId.NTFS))
     }
 
     @Test
@@ -157,5 +157,74 @@ class FormatPickerTest {
         assertNull(pending.pendingConfirmation!!.formatId)
         val confirmed = UiReducer.reduce(pending, UiIntent.ConfirmDestructive)
         assertNull(confirmed.effects.single().formatId)
+    }
+
+    @Test
+    fun createConfirmationPinsNameFormatAndLabel() {
+        val base = ready().copy(
+            partitionScheme = usb.partition.TableScheme.GPT,
+            freeRegions = listOf(FreeRegionUi(2048uL, 4096uL)),
+        )
+        val pending = UiReducer.reduce(
+            base,
+            UiIntent.RequestCreatePartition(
+                startLba = 2048uL,
+                sectorCount = 2048uL,
+                name = "  Data  ",
+                formatId = FilesystemId.EXT,
+                volumeLabel = " MEDIA ",
+            ),
+        ).state.pendingConfirmation
+        assertNotNull(pending)
+        assertEquals("Data", pending!!.createName)
+        assertEquals(FilesystemId.EXT, pending.createFormatId)
+        assertEquals("MEDIA", pending.volumeLabel)
+        // CREATE keeps the FORMAT-only field empty so the FORMAT path stays unambiguous.
+        assertNull(pending.formatId)
+
+        val confirmed = UiReducer.reduce(
+            base.copy(pendingConfirmation = pending),
+            UiIntent.ConfirmDestructive,
+        )
+        assertEquals(DestructiveAction.CREATE_PARTITION, confirmed.effects.single().action)
+        assertEquals("Data", confirmed.effects.single().confirmation!!.createName)
+        assertEquals(FilesystemId.EXT, confirmed.effects.single().confirmation!!.createFormatId)
+    }
+
+    @Test
+    fun createRefusesNameWithoutGptAndChecksLabelLimits() {
+        val base = ready().copy(
+            partitionScheme = usb.partition.TableScheme.MBR,
+            freeRegions = listOf(FreeRegionUi(2048uL, 4096uL)),
+        )
+        val named = UiReducer.reduce(
+            base,
+            UiIntent.RequestCreatePartition(2048uL, 2048uL, name = "Data"),
+        )
+        assertNull(named.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.PartitionNameUnsupported), named.state.statusMessage)
+
+        val longLabel = base.copy(partitionScheme = usb.partition.TableScheme.GPT)
+        val bad = UiReducer.reduce(
+            longLabel,
+            UiIntent.RequestCreatePartition(
+                2048uL,
+                2048uL,
+                formatId = FilesystemId.EXT,
+                volumeLabel = "x".repeat(16),
+            ),
+        )
+        assertNull(bad.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.InvalidVolumeLabel), bad.state.statusMessage)
+
+        val labelWithoutFormat = UiReducer.reduce(
+            longLabel,
+            UiIntent.RequestCreatePartition(2048uL, 2048uL, volumeLabel = "MEDIA"),
+        )
+        assertNull(labelWithoutFormat.state.pendingConfirmation)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.InvalidVolumeLabel),
+            labelWithoutFormat.state.statusMessage,
+        )
     }
 }

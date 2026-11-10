@@ -117,6 +117,40 @@ object GptBackup {
         disk.write(startLba, ByteBuffer.wrap(padded))
     }
 
+    internal fun buildEmptyHeader(
+        diskGuid: ByteArray,
+        entryCount: Int,
+        entrySize: Int,
+        headerSize: Int,
+        currentLba: ULong,
+        backupLba: ULong,
+        firstUsable: ULong,
+        lastUsable: ULong,
+        entryLba: ULong,
+        entriesCrc: Int,
+        sectorSize: Int,
+    ): ByteArray {
+        require(diskGuid.size == 16) { "disk GUID must be 16 bytes" }
+        val bytes = ByteArray(sectorSize)
+        "EFI PART".toByteArray().copyInto(bytes, 0)
+        GptTable.putLeInt(bytes, 8, 0x00010000)
+        GptTable.putLeInt(bytes, 12, headerSize)
+        GptTable.putLeInt(bytes, 16, 0)
+        GptTable.putLeInt(bytes, 20, 0)
+        putU64(bytes, 24, currentLba)
+        putU64(bytes, 32, backupLba)
+        putU64(bytes, 40, firstUsable)
+        putU64(bytes, 48, lastUsable)
+        diskGuid.copyInto(bytes, 56)
+        putU64(bytes, 72, entryLba)
+        GptTable.putLeInt(bytes, 80, entryCount)
+        GptTable.putLeInt(bytes, 84, entrySize)
+        GptTable.putLeInt(bytes, 88, entriesCrc)
+        val crc = GptTable.crc32(bytes, 0, headerSize)
+        GptTable.putLeInt(bytes, 16, crc)
+        return bytes
+    }
+
     private fun buildHeader(
         header: GptHeader,
         currentLba: ULong,
@@ -126,29 +160,19 @@ object GptBackup {
         entryLba: ULong,
         entriesCrc: Int,
         sectorSize: Int,
-    ): ByteArray {
-        val bytes = ByteArray(sectorSize)
-        // Signature
-        "EFI PART".toByteArray().copyInto(bytes, 0)
-        // Revision 1.0
-        GptTable.putLeInt(bytes, 8, 0x00010000)
-        GptTable.putLeInt(bytes, 12, header.headerSize)
-        // CRC placeholder zeroed
-        GptTable.putLeInt(bytes, 16, 0)
-        GptTable.putLeInt(bytes, 20, 0)
-        putU64(bytes, 24, currentLba)
-        putU64(bytes, 32, backupLba)
-        putU64(bytes, 40, firstUsable)
-        putU64(bytes, 48, lastUsable)
-        header.diskGuid.copyInto(bytes, 56)
-        putU64(bytes, 72, entryLba)
-        GptTable.putLeInt(bytes, 80, header.entryCount)
-        GptTable.putLeInt(bytes, 84, header.entrySize)
-        GptTable.putLeInt(bytes, 88, entriesCrc)
-        val crc = GptTable.crc32(bytes, 0, header.headerSize)
-        GptTable.putLeInt(bytes, 16, crc)
-        return bytes
-    }
+    ): ByteArray = buildEmptyHeader(
+        diskGuid = header.diskGuid,
+        entryCount = header.entryCount,
+        entrySize = header.entrySize,
+        headerSize = header.headerSize,
+        currentLba = currentLba,
+        backupLba = backupLba,
+        firstUsable = firstUsable,
+        lastUsable = lastUsable,
+        entryLba = entryLba,
+        entriesCrc = entriesCrc,
+        sectorSize = sectorSize,
+    )
 
     private fun putU64(bytes: ByteArray, offset: Int, value: ULong) {
         GptTable.putLeULong(bytes, offset, value)

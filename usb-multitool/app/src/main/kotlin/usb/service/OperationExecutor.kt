@@ -10,6 +10,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import usb.device.DiskException
+import usb.operation.DiskOperation
+import usb.operation.OperationState
 
 
 interface OperationWakeLock {
@@ -264,64 +266,147 @@ class OperationExecutor(
         try {
             try {
                 op.operation.run()
-                terminal = when {
-                    op.isDone() -> op.state
-                    op.operation.state == OperationState.Partial -> OperationState.Partial
-                    op.generation != connectionGeneration.get() || disconnected.get() -> {
-                        val cause = DiskException.Disconnected()
-                        if (op.operation.failureCause == null) op.operation.failureCause = cause
-                        if (op.operation.mutationAttempted) OperationState.Partial else OperationState.Failed(cause)
-                    }
-                    op.cancelled.get() || !op.operation.isActive() -> {
-                        if (op.operation.mutationAttempted) {
-                            val cause = kotlinx.coroutines.CancellationException("Operation cancelled")
-                            if (op.operation.failureCause == null) op.operation.failureCause = cause
-                            OperationState.Partial
-                        } else OperationState.Cancelled
-                    }
-                    op.operation.state is OperationState.Failed -> op.operation.state
-                    else -> OperationState.Completed
-                }
+                terminal = classifyNormalReturn(op)
             } catch (e: DiskException) {
-                if (op.operation.failureCause == null) {
-                    op.operation.failureCause = e
-                }
-                terminal = when {
-                    op.isDone() -> op.state
-                    op.operation.state == OperationState.Partial -> OperationState.Partial
-                    op.operation.mutationAttempted -> OperationState.Partial
-                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
-                    else -> OperationState.Failed(e)
-                }
+                attachSecondaryFailure(op, e)
+                terminal = classifyThrown(op, cancelled = false)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Do not wrap cooperative/cancellation as IoFailure.
-                if (op.operation.failureCause == null && op.operation.mutationAttempted) {
+                // Still attach as suppressed when a primary failure already exists so close/
+                // disconnect after Failed is not silent.
+                if (op.operation.failureCause != null ||
+                    op.operation.state is OperationState.Failed
+                ) {
+                    attachSecondaryFailure(op, e)
+                } else if (op.operation.mutationAttempted &&
+                    !op.operation.commitReached &&
+                    op.operation.state != OperationState.Completed
+                ) {
                     op.operation.failureCause = e
                 }
-                terminal = when {
-                    op.isDone() -> op.state
-                    op.operation.state == OperationState.Partial -> OperationState.Partial
-                    op.operation.mutationAttempted -> OperationState.Partial
-                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
-                    else -> OperationState.Cancelled
-                }
+                terminal = classifyThrown(op, cancelled = true)
             } catch (t: Throwable) {
-                if (op.operation.failureCause == null) {
-                    op.operation.failureCause = t
-                }
-                terminal = when {
-                    op.isDone() -> op.state
-                    op.operation.state == OperationState.Partial -> OperationState.Partial
-                    op.operation.mutationAttempted -> OperationState.Partial
-                    op.generation != connectionGeneration.get() || disconnected.get() -> OperationState.Failed(DiskException.Disconnected())
-                    else -> OperationState.Failed(DiskException.IoFailure(t.message ?: t.javaClass.name, t))
-                }
+                attachSecondaryFailure(op, t)
+                terminal = classifyThrown(op, cancelled = false)
             }
         } finally {
             try {
                 wakeLock.release()
             } catch (_: Throwable) {}
+            clearSuccessNoiseCause(op, terminal)
             if (!op.isDone()) op.complete(terminal)
+        }
+    }
+
+    /**
+     * Keep the first failure as [DiskOperation.failureCause] / Failed.cause and attach any
+     * later throw (close, disconnect) via [Throwable.addSuppressed] — never drop it.
+     */
+    private fun attachSecondaryFailure(op: QueuedOp, thrown: Throwable) {
+        val existing = op.operation.failureCause
+        if (existing == null) {
+            op.operation.failureCause = thrown
+        } else if (existing !== thrown) {
+            existing.addSuppressed(thrown)
+        }
+        val stated = op.operation.state
+        if (stated is OperationState.Failed) {
+            val primary = stated.cause
+            if (primary !== thrown) {
+                // Avoid double-add when failureCause === Failed.cause (already suppressed above).
+                val already = primary === existing || primary.suppressed.any { it === thrown }
+                if (!already) primary.addSuppressed(thrown)
+            }
+        }
+    }
+
+    /**
+     * Success must not keep a late-race Disconnected/cancel cause — callers feed
+     * [DiskOperation.failureCause] into UI error lines even for Completed.
+     */
+    private fun clearSuccessNoiseCause(op: QueuedOp, terminal: OperationState) {
+        if (terminal != OperationState.Completed) return
+        when (val cause = op.operation.failureCause) {
+            is DiskException.Disconnected -> op.operation.failureCause = null
+            is kotlinx.coroutines.CancellationException -> op.operation.failureCause = null
+            else -> Unit
+        }
+    }
+
+    /**
+     * Normal `run()` return. Explicit terminal states and [DiskOperation.commitReached]
+     * beat late cancel/disconnect races; cancel/disconnect never invent Completed without
+     * a durable commit boundary.
+     */
+    private fun classifyNormalReturn(op: QueuedOp): OperationState {
+        if (op.isDone()) return op.state
+        when (val stated = op.operation.state) {
+            OperationState.Partial -> return OperationState.Partial
+            is OperationState.Failed -> return stated
+            OperationState.Completed -> return OperationState.Completed
+            else -> Unit
+        }
+        if (op.operation.commitReached) return OperationState.Completed
+        if (op.generation != connectionGeneration.get() || disconnected.get()) {
+            val cause = DiskException.Disconnected()
+            if (op.operation.failureCause == null) op.operation.failureCause = cause
+            return if (op.operation.mutationAttempted) OperationState.Partial else OperationState.Failed(cause)
+        }
+        if (op.cancelled.get() || !op.operation.isActive()) {
+            return if (op.operation.mutationAttempted) {
+                val cause = kotlinx.coroutines.CancellationException("Operation cancelled")
+                if (op.operation.failureCause == null) op.operation.failureCause = cause
+                OperationState.Partial
+            } else {
+                OperationState.Cancelled
+            }
+        }
+        return OperationState.Completed
+    }
+
+    /**
+     * Exception path. Close/disconnect errors stay visible (Partial after mutation).
+     * Only a proven commit + pure cancel may still report Completed.
+     */
+    private fun classifyThrown(op: QueuedOp, cancelled: Boolean): OperationState {
+        if (op.isDone()) return op.state
+        when (val stated = op.operation.state) {
+            OperationState.Partial -> return OperationState.Partial
+            is OperationState.Failed -> return stated
+            OperationState.Completed -> {
+                // Close/disconnect after a claimed Completed is ambiguous → not success.
+                if (!cancelled) {
+                    return if (op.operation.mutationAttempted) {
+                        OperationState.Partial
+                    } else if (op.generation != connectionGeneration.get() || disconnected.get()) {
+                        OperationState.Failed(DiskException.Disconnected())
+                    } else {
+                        OperationState.Failed(
+                            op.operation.failureCause
+                                ?: DiskException.IoFailure("operation failed after completion mark"),
+                        )
+                    }
+                }
+                return OperationState.Completed
+            }
+            else -> Unit
+        }
+        if (op.operation.commitReached && cancelled) return OperationState.Completed
+        if (op.operation.mutationAttempted) return OperationState.Partial
+        if (op.generation != connectionGeneration.get() || disconnected.get()) {
+            return OperationState.Failed(DiskException.Disconnected())
+        }
+        return if (cancelled) {
+            OperationState.Cancelled
+        } else {
+            val cause = op.operation.failureCause
+            if (cause is DiskException) OperationState.Failed(cause)
+            else OperationState.Failed(
+                DiskException.IoFailure(
+                    cause?.message ?: cause?.javaClass?.name ?: "operation failed",
+                    cause,
+                ),
+            )
         }
     }
 
@@ -349,7 +434,13 @@ class OperationExecutor(
         }
 
         fun recordDisconnect() {
-            if (operation.failureCause == null) operation.failureCause = DiskException.Disconnected()
+            // Late disconnect after durable success must not invent an error cause;
+            // classify still returns Completed via state/commitReached.
+            val success = operation.commitReached ||
+                operation.state == OperationState.Completed
+            if (!success && operation.failureCause == null) {
+                operation.failureCause = DiskException.Disconnected()
+            }
             operation.markInactive()
         }
 

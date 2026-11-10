@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.partition.EFI_SYSTEM_TYPE_GUID
 import usb.partition.Partition
 import usb.ui.AppUiState
 import usb.ui.DeviceIdentity
@@ -16,7 +17,7 @@ import usb.ui.UiIntent
 import usb.ui.UiReducer
 
 class PartitionSafetyUiTest {
-    private val espGuid = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+    private val espGuid = EFI_SYSTEM_TYPE_GUID
 
     private val efiA = PartitionTab(
         "1",

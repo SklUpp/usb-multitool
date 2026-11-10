@@ -159,6 +159,46 @@ class UiStateMachineTest {
                 ),
             )
         assertEquals(UiMessage.Raw("Partial rescue map retained"), partial.state.statusMessage)
+
+        val scan = ReadScanOutcome(
+            sectorsRead = 8UL,
+            totalSectors = 16UL,
+            unreadableSectors = 1UL,
+            failedRangeCount = 1,
+            averageBytesPerSecond = null,
+        )
+        val scanDone =
+            UiReducer.reduce(
+                base,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        OperationState.Completed,
+                        "Read scan",
+                        readScanResult = scan,
+                    ),
+                ),
+            )
+        assertEquals(UiMessage.ReadScan(scan), scanDone.state.statusMessage)
+        // Language switch must keep structured numbers, not freeze a sentence.
+        val switched = UiReducer.reduce(scanDone.state, UiIntent.SetLanguage(AppLanguage.Russian))
+        assertEquals(UiMessage.ReadScan(scan), switched.state.statusMessage)
+        assertEquals(AppLanguage.Russian, switched.state.language)
+
+        val scanCancel =
+            UiReducer.reduce(
+                base,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        OperationState.Cancelled,
+                        "Read scan",
+                        bytesDone = 1024L,
+                        bytesTotal = 8192L,
+                        readScanResult = scan,
+                    ),
+                ),
+            )
+        assertEquals(UiMessage.ReadScan(scan), scanCancel.state.statusMessage)
+
     }
 
     @Test

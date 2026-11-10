@@ -9,7 +9,9 @@ data class PartitionTable(
     val diskSectorCount: ULong,
     val sectorSize: Int = 512,
     val hybridAmbiguous: Boolean = false,
+    /** Backup GPT header LBA from the CRC-valid backup header; null when unknown/invalid. */
     val gptBackupHeaderLba: ULong? = null,
+    /** Backup entry-array LBA as recorded by that header; never guessed, null when unknown. */
     val gptBackupEntriesLba: ULong? = null,
     val gptPrimaryEntryLba: ULong? = null,
     val gptHeader: GptHeader? = null,
@@ -154,13 +156,10 @@ data class PartitionTable(
             // header in that sector says nothing about a real backup copy.
             val backupHeader = GptTable.readHeaderOrNull(disk, header.backupLba) ?: return primary
             requireConsistent(header, backupHeader)
-            val backupEntryEnd = backupHeader.entryLba +
-                GptTable.entrySectors(backupHeader, disk.sectorSize)
-            require(header.lastUsable < backupHeader.entryLba || header.firstUsable >= backupEntryEnd) {
-                "GPT usable range ${header.firstUsable}..${header.lastUsable} overlaps backup " +
-                    "metadata at LBA ${backupHeader.entryLba}..${backupEntryEnd - 1UL}"
-            }
-            return primary
+            requireDisjointCopies(disk, header, backupHeader)
+            // The alternate header is the only authority on its entry array location; publish
+            // it so raw range maps never predict a position from primary geometry.
+            return primary.copy(backupEntriesLba = backupHeader.entryLba)
         }
 
         /** A recovered backup may not sit on the real primary metadata range either. */
@@ -168,13 +167,64 @@ data class PartitionTable(
             val header = backup.header
             val primaryHeader = GptTable.readHeaderOrNull(disk, 1UL) ?: return backup
             requireConsistent(primaryHeader, header)
-            val primaryEntryEnd = primaryHeader.entryLba +
-                GptTable.entrySectors(primaryHeader, disk.sectorSize)
-            require(header.lastUsable < primaryHeader.entryLba || header.firstUsable >= primaryEntryEnd) {
-                "GPT usable range ${header.firstUsable}..${header.lastUsable} overlaps primary " +
-                    "metadata at LBA ${primaryHeader.entryLba}..${primaryEntryEnd - 1UL}"
-            }
+            requireDisjointCopies(disk, primaryHeader, header, usable = header)
             return backup
+        }
+
+        private data class MetadataRange(
+            val label: String,
+            val startLba: ULong,
+            val sectorCount: ULong,
+        ) {
+            val endExclusive: ULong get() = startLba + sectorCount
+            fun overlaps(other: MetadataRange) =
+                startLba < other.endExclusive && other.startLba < endExclusive
+        }
+
+        /**
+         * Independent validation of both copies: the two header sectors, the two entry arrays
+         * and the usable range must all be pairwise disjoint. A CRC and the disk GUID only
+         * prove the bytes are self-consistent; a crafted backup header can still record an
+         * entry array on top of its own sector (or of the primary metadata), which would be
+         * wiped/rewritten over itself by initialization.
+         */
+        private fun requireDisjointCopies(
+            disk: BlockDevice,
+            primary: GptHeader,
+            backup: GptHeader,
+            usable: GptHeader = primary,
+        ) {
+            val sectorSize = disk.sectorSize
+            val ranges = listOf(
+                MetadataRange("primary header", primary.currentLba, 1UL),
+                MetadataRange(
+                    "primary entry array",
+                    primary.entryLba,
+                    GptTable.entrySectors(primary, sectorSize),
+                ),
+                MetadataRange("backup header", backup.currentLba, 1UL),
+                MetadataRange(
+                    "backup entry array",
+                    backup.entryLba,
+                    GptTable.entrySectors(backup, sectorSize),
+                ),
+            )
+            for ((index, range) in ranges.withIndex()) {
+                require(range.sectorCount > 0UL && range.endExclusive <= disk.sectorCount) {
+                    "GPT ${range.label} at LBA ${range.startLba} lies outside the disk"
+                }
+                require(usable.lastUsable < range.startLba || usable.firstUsable >= range.endExclusive) {
+                    "GPT usable range ${usable.firstUsable}..${usable.lastUsable} overlaps " +
+                        "${range.label} at LBA ${range.startLba}..${range.endExclusive - 1UL}"
+                }
+                for (other in ranges.drop(index + 1)) {
+                    require(!range.overlaps(other)) {
+                        "GPT ${range.label} at LBA ${range.startLba}..${range.endExclusive - 1UL} " +
+                            "overlaps ${other.label} at LBA ${other.startLba}.." +
+                            "${other.endExclusive - 1UL}"
+                    }
+                }
+            }
         }
 
         private fun requireConsistent(primary: GptHeader, backup: GptHeader) {
@@ -193,12 +243,18 @@ data class PartitionTable(
 
         private fun fromGpt(disk: BlockDevice, gpt: GptTable.Result): PartitionTable {
             val header = gpt.header
-            val entrySectors = GptTable.entrySectors(header, disk.sectorSize)
-            // Backup entries occupy [backupLba-entrySectors, backupLba-1]; header is exclusive.
-            // A backup-sourced header records its own LBA and entry LBA instead.
-            val backupHeaderLba = if (gpt.fromBackup) header.currentLba else header.backupLba
+            // A CRC-valid backup header is the only authority on the backup copy: the array
+            // position comes from it (never predicted as `backupLba - entrySectors`), and an
+            // unreadable/bit-rotted header keeps both positions null so callers that rewrite
+            // or erase GPT metadata refuse instead of guessing.
+            val backupHeaderLba =
+                when {
+                    gpt.fromBackup -> header.currentLba
+                    gpt.backupEntriesLba == null -> null
+                    else -> header.backupLba
+                }
             val backupEntriesLba =
-                if (gpt.fromBackup) header.entryLba else header.backupLba - entrySectors
+                if (gpt.fromBackup) header.entryLba else gpt.backupEntriesLba
             // A shrunk copy can declare a usable end past the medium; recomputeFree clamps it.
             return PartitionTable(
                 scheme = TableScheme.GPT,

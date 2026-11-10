@@ -2,435 +2,686 @@ package usb.image
 
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.GZIPOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import kotlinx.coroutines.test.runTest
-import usb.device.BlockDevice
-import usb.device.DiskException
 import usb.device.TransferPlan
 import usb.device.capacityBytes
 import usb.diagnostics.ConfirmationMismatchException
 import usb.diagnostics.DestructiveConfirmation
-import usb.service.DiskOperation
+import usb.partition.RawWriteRange
+import usb.operation.DiskOperation
 import usb.service.OperationExecutor
-import usb.service.OperationState
+import usb.operation.OperationState
 import usb.testutil.RecordingDisk
 
 class RawWriterTest {
-    private class FailingSecondWriteDisk(
-        private val inner: RecordingDisk,
-        private val onWrite: () -> Unit,
-    ) : BlockDevice {
-        var writes = 0
-            private set
-
-        override val sectorSize: Int get() = inner.sectorSize
-        override val sectorCount: ULong get() = inner.sectorCount
-
-        override fun read(lba: ULong, destination: java.nio.ByteBuffer) =
-            inner.read(lba, destination)
-
-        override fun write(lba: ULong, source: java.nio.ByteBuffer) {
-            inner.write(lba, source)
-            onWrite()
-            writes++
-            if (writes >= 2) throw java.io.IOException("simulated transport failure")
-        }
-
-        override fun sync() = inner.sync()
-    }
-
     private val identity = "RAW-TEST"
 
     private fun conf(disk: RecordingDisk) =
         DestructiveConfirmation(identity, disk.geometry.capacityBytes)
 
-    @Test fun partialRawWriteThroughPlainBlockDeviceIsReportedPartial() = runTest {
-        // First chunk is TransferPlan.MAX_CHUNK (64 KiB); the second write needs
-        // one more sector, so payload and capacity must exceed one chunk.
-        val inner = RecordingDisk(sectorCount = 130UL, sectorSize = 512)
-        val source = ImageSource.fromBytes(
-            ByteArray(66_048) { 3 },
-            format = ImageFormat.IMG,
-            decodedSize = 66_048L,
+    private fun wholeDisk(disk: RecordingDisk) = RawWriteRange(0UL, disk.sectorCount)
+
+    private fun rawSource(bytes: ByteArray, decodedSize: Long? = bytes.size.toLong()) =
+        ImageSource.fromBytes(bytes, format = ImageFormat.IMG, decodedSize = decodedSize)
+
+    @Test fun rangeWriteUsesAbsoluteLbasAndLeavesOtherSectorsAlone() {
+        val payload = ByteArray(2048) { 3 }
+        val disk = RecordingDisk(sectorCount = 64UL, sectorSize = 512)
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(8UL, 4UL),
         )
-        val executor = OperationExecutor(this)
-        val handle = executor.submit(object : DiskOperation("raw-partial") {
-            override suspend fun run() {
-                val tracked = FailingSecondWriteDisk(inner) { mutationAttempted = true }
-                RawWriter.write(
-                    source = source,
-                    disk = tracked,
-                    identity = identity,
-                    confirmation = DestructiveConfirmation(identity, inner.capacityBytes),
-                    overwrite = true,
-                    operation = this,
-                )
-            }
-        })
-        assertEquals(OperationState.Partial, handle.await())
-        assertTrue(inner.bytesWritten > 0)
-    }
-
-    @Test fun compressedSourceWritesDecodedBytesAndStopsAtCapacity() {
-        val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
-        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
-            fail("expected ImageTooLargeException")
-        } catch (_: ImageTooLargeException) {
-        }
-        assertEquals(0, disk.bytesWritten)
-    }
-
-    @Test fun knownSizeRejectionWritesNoSector() {
-        val source = ImageSource.fromBytes(
-            ByteArray(1024) { 1 },
-            format = ImageFormat.IMG,
-            decodedSize = 10_000L,
-        )
-        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
-            fail("expected ImageTooLargeException")
-        } catch (_: ImageTooLargeException) {
-        }
-        assertEquals(0, disk.bytesWritten)
-        assertEquals(emptyList<ULong>(), disk.writes)
-    }
-
-    @Test fun rawImageWritesExactSectors() {
-        val payload = ByteArray(1024) { 3 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 1024L)
-        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
-        RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
-        assertEquals(1024, disk.bytesWritten)
-        assertTrue(disk.bytes().copyOf(1024).contentEquals(payload))
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(2048L, result.writtenBytes)
+        assertEquals(listOf(8UL), disk.writes)
+        assertEquals(listOf(8L to 4), disk.writtenRanges)
+        // Readback starts at the same absolute LBA, never at 0.
+        assertEquals(8UL, disk.reads.first())
+        val bytes = disk.bytes()
+        assertTrue(bytes.copyOfRange(8 * 512, 12 * 512).contentEquals(payload))
+        assertTrue(bytes.copyOfRange(0, 8 * 512).all { it == 0.toByte() })
+        assertTrue(bytes.copyOfRange(12 * 512, 16 * 512).all { it == 0.toByte() })
         assertEquals(1L, disk.syncCount)
-        // One multi-sector BOT write covering both sectors, then verify re-reads them.
-        assertEquals(listOf(0UL), disk.writes)
-        assertEquals(listOf(0L to 2), disk.writtenRanges)
-        assertTrue(disk.reads.isNotEmpty())
     }
 
-    @Test fun partialFinalSectorIsPadded() {
-        val payload = ByteArray(100) { 9 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 100L)
-        val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
-        RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
-        assertEquals(512, disk.bytesWritten)
-        assertEquals(9, disk.bytes()[0].toInt())
-        assertEquals(0, disk.bytes()[100].toInt())
+    @Test fun rangeEndingOnTheLastSectorIsAccepted() {
+        val payload = ByteArray(1024) { 5 }
+        val disk = RecordingDisk(sectorCount = 10UL, sectorSize = 512)
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(8UL, 2UL),
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(listOf(8L to 2), disk.writtenRanges)
     }
-    @Test fun prematureEofFailsOperationAndSkipsSync() {
-        val payload = ByteArray(512) { 4 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 1024L)
-        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
-        val op = DiskOperation("raw-write-eof")
+
+    @Test fun rangePastTheDiskIsRejectedBeforeAnyWrite() {
+        val disk = RecordingDisk(sectorCount = 10UL, sectorSize = 512)
         try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected EOFException")
-        } catch (e: java.io.EOFException) {
-            assertEquals("Premature EOF: wrote 512 of 1024 bytes", e.message)
+            RawWriter.write(
+                rawSource(ByteArray(512) { 1 }),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(9UL, 2UL),
+            )
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
         }
-
+        assertEquals(0L, disk.writeCount)
         assertEquals(0L, disk.syncCount)
-        assertTrue(op.state is OperationState.Failed)
-        val failed = op.state as OperationState.Failed
-        assertTrue(failed.cause is java.io.EOFException)
-        assertEquals("Premature EOF: wrote 512 of 1024 bytes", failed.cause.message)
     }
 
-    @Test fun rawFileSourcePopulatesDeclaredSize() {
-        val tempFile = java.io.File.createTempFile("test-image", ".iso")
+    @Test fun rangeWithWrappingStartIsRejectedBeforeAnyWrite() {
+        val disk = RecordingDisk(sectorCount = 10UL, sectorSize = 512)
         try {
-            tempFile.writeBytes(ByteArray(2048) { 0x5A })
-            val source = ImageSource.fromFile(tempFile)
-            assertEquals(2048L, source.declaredDecodedSize)
+            RawWriter.write(
+                rawSource(ByteArray(512) { 1 }),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(ULong.MAX_VALUE, 2UL),
+            )
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
+        assertEquals(0L, disk.writeCount)
+    }
 
-            val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true)
-            assertEquals(2048, disk.bytesWritten)
-            assertEquals(1L, disk.syncCount)
-        } finally {
-            tempFile.delete()
+    @Test fun emptyRangeIsRejectedByConstruction() {
+        try {
+            RawWriteRange(0UL, 0UL)
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
         }
     }
 
-    @Test fun overwriteFalseWritesNothing() {
-        val payload = ByteArray(512) { 1 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
-        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = false)
-            fail("expected OverwriteRequiredException")
-        } catch (_: OverwriteRequiredException) {
-        }
-        assertEquals(0, disk.bytesWritten)
-    }
-
-    @Test fun confirmationMismatchWritesNothing() {
-        val payload = ByteArray(512) { 1 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
-        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+    @Test fun knownSourceLargerThanRangeWritesNoSector() {
+        val source = rawSource(ByteArray(1024) { 1 }, decodedSize = 1024L)
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
         try {
             RawWriter.write(
                 source,
                 disk,
                 identity,
-                DestructiveConfirmation("OTHER", disk.geometry.capacityBytes),
+                conf(disk),
                 overwrite = true,
+                range = RawWriteRange(0UL, 1UL),
             )
-            fail("expected ConfirmationMismatchException")
-        } catch (_: ConfirmationMismatchException) {
-        }
-        assertEquals(0, disk.bytesWritten)
-    }
-
-    @Test fun unknownLengthOversizeKeepsCommittedSectorsAndReportsPartial() {
-        // 3 full sectors = 1536 bytes; disk holds 2 sectors = 1024.
-        // decodedSize unknown so early reject cannot fire.
-        val payload = ByteArray(3 * 512) { 7 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = null)
-        val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
-        val op = DiskOperation("raw-write-partial")
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
             fail("expected ImageTooLargeException")
         } catch (_: ImageTooLargeException) {
         }
-        // First two sectors fit in one chunk and stay committed; overflow detected after.
-        assertEquals(1024, disk.bytesWritten)
-        assertEquals(listOf(0UL), disk.writes)
-        assertEquals(listOf(0L to 2), disk.writtenRanges)
-        assertEquals(OperationState.Partial, op.state)
-        assertEquals(1024L, op.bytesDone)
-        // Overflow aborts before sync/verify.
-        assertEquals(0L, disk.syncCount)
-    }
-
-    @Test fun unknownLengthOversizeBeforeAnyCommitStaysNonPartial() {
-        // No room on disk: first chunk already overflows. Throw, but never claim Partial.
-        val payload = ByteArray(512) { 7 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = null)
-        val disk = RecordingDisk(sectorCount = 0UL, sectorSize = 512)
-        val op = DiskOperation("raw-write-zero-overflow")
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageTooLargeException")
-        } catch (_: ImageTooLargeException) {
-        }
-        assertEquals(0, disk.bytesWritten)
+        assertEquals(0L, disk.writeCount)
         assertEquals(emptyList<ULong>(), disk.writes)
-        assertTrue(op.state != OperationState.Partial)
     }
 
-    @Test fun multiSectorChunkThenVerifyCatchesSilentDrop() {
-        val payload = ByteArray(2048) { 5 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 2048L)
-        val op = DiskOperation("raw-write-verify-mismatch")
-        val disk =
-            object : RecordingDisk(sectorCount = 8UL, sectorSize = 512) {
-                override fun write(lba: ULong, source: ByteBuffer) {
-                    super.write(lba, source)
-                    // Drop the second sector of the multi-sector write after recording it.
-                    bytes.remove(lba + 1UL)
-                }
-            }
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageVerifyException")
-        } catch (e: ImageVerifyException) {
-            assertTrue(e.message!!.contains("проверка выявила ошибку"))
-            assertTrue(e.message!!.contains("mismatch"))
-        }
-        assertEquals(1L, disk.syncCount)
-        assertEquals(OperationState.Partial, op.state)
-    }
-
-    @Test fun cancelBetweenChunksAbortsBeforeVerify() {
-        val payload = ByteArray(TransferPlan.MAX_CHUNK + 512) { 2 }
-        val source =
-            ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = payload.size.toLong())
-        val stillActive = java.util.concurrent.atomic.AtomicBoolean(true)
-        val op = DiskOperation(name = "raw-write-cancel", active = { stillActive.get() })
-        var chunks = 0
-        val cancelling =
-            object : RecordingDisk(sectorCount = 256UL, sectorSize = 512) {
-                override fun write(lba: ULong, source: ByteBuffer) {
-                    super.write(lba, source)
-                    chunks++
-                    if (chunks == 1) stillActive.set(false)
-                }
-            }
+    @Test fun compressedKnownDecodedSizeIsRejectedBeforeAnyWrite() {
+        val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
         try {
             RawWriter.write(
                 source,
-                cancelling,
+                disk,
                 identity,
-                conf(cancelling),
+                conf(disk),
                 overwrite = true,
-                operation = op,
+                range = wholeDisk(disk),
             )
-            fail("expected ImageCancelledException")
-        } catch (_: ImageCancelledException) {
+            fail("expected ImageTooLargeException")
+        } catch (_: ImageTooLargeException) {
         }
-        assertEquals(1, chunks)
-        assertEquals(0L, cancelling.syncCount)
+        assertEquals(0L, disk.writeCount)
     }
 
-    @Test fun verifyIoFailureMarksPartialIncomplete() {
-        val payload = ByteArray(512) { 9 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
-        val op = DiskOperation("raw-write-verify-io")
+    @Test fun partialFinalSectorIsPaddedInsideTheRange() {
+        val payload = ByteArray(100) { 9 }
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(1UL, 1UL),
+        )
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(512, disk.bytesWritten)
+        val bytes = disk.bytes()
+        assertEquals(9, bytes[512].toInt())
+        assertEquals(0, bytes[512 + 100].toInt())
+        assertEquals(0.toByte(), bytes[0])
+    }
+
+    @Test fun unknownLengthOverflowWritesOnlyTheRangeThenSyncsAndReadsBack() {
+        // Unknown decoded size plus a 2-sector range: three sectors must not be truncated
+        // silently — exactly the requested range is written, the tail is refused.
+        val payload = ByteArray(3 * 512) { 7 }
+        val source = rawSource(payload, decodedSize = null)
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val op = DiskOperation("raw-range-overflow")
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(2UL, 2UL),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(1024L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(listOf(2L to 2), disk.writtenRanges)
+        // Overflow is detected only after commut, and the medium is synced + read back.
+        assertEquals(1L, disk.syncCount)
+        assertTrue(disk.reads.contains(2UL))
+        assertEquals(OperationState.Partial, op.state)
+        assertTrue(op.mutationAttempted)
+        assertNull(op.bytesTotal.takeIf { it > 0L })
+        assertTrue(result.failure is ImageTooLargeException)
+    }
+
+    @Test fun prematureEofSyncsAndReadsBackWrittenPrefix() {
+        val source = rawSource(ByteArray(512) { 4 }, decodedSize = 1024L)
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val op = DiskOperation("raw-write-eof")
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = wholeDisk(disk),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(512L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(1L, disk.syncCount)
+        assertTrue(result.failure is java.io.EOFException)
+        assertEquals(OperationState.Partial, op.state)
+        assertEquals(512L, op.bytesDone)
+    }
+
+    @Test fun transportFailureAfterFirstCommitIsSyncedAndReportedPartial() = runTest {
+        val inner = RecordingDisk(sectorCount = 130UL, sectorSize = 512)
+        val payload = ByteArray(129 * 512) { 3 }
+        val source = rawSource(payload)
+        val executor = OperationExecutor(this)
+        var captured: RawWriteResult? = null
+        val handle = executor.submit(object : DiskOperation("raw-partial") {
+            override suspend fun run() {
+                var attempts = 0
+                val flaky = object : usb.device.BlockDevice {
+                    override val sectorSize: Int get() = inner.sectorSize
+                    override val sectorCount: ULong get() = inner.sectorCount
+
+                    override fun read(lba: ULong, destination: ByteBuffer) =
+                        inner.read(lba, destination)
+
+                    override fun write(lba: ULong, source: ByteBuffer) {
+                        attempts++
+                        // The request may reach the medium before the CSW/residue error.
+                        inner.write(lba, source)
+                        if (attempts >= 2) throw java.io.IOException("simulated transport failure")
+                    }
+
+                    override fun sync() = inner.sync()
+                }
+                captured = RawWriter.write(
+                    source = source,
+                    disk = flaky,
+                    identity = identity,
+                    confirmation = DestructiveConfirmation(identity, inner.capacityBytes),
+                    overwrite = true,
+                    range = RawWriteRange(0UL, inner.sectorCount),
+                    operation = this,
+                )
+                assertTrue(mutationAttempted)
+            }
+        })
+        assertEquals(OperationState.Partial, handle.await())
+        val result = captured!!
+        assertEquals(RawWriteStatus.Partial, result.state)
+        // The failed second request may have reached the medium, so it is not Verified.
+        val verdict = result.readback as ReadbackVerdict.Unverified
+        assertEquals(RawWriteRange(128UL, 1UL), verdict.range)
+        assertEquals(TransferPlan.MAX_CHUNK.toLong(), result.writtenBytes)
+        assertEquals(1L, inner.syncCount)
+        assertTrue(inner.bytesWritten > 0)
+    }
+
+    @Test fun readbackMismatchCountsSectorsAndNamesAbsoluteLba() {
+        val payload = ByteArray(2048) { 5 }
         val disk =
-            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
-                override fun read(lba: ULong, destination: ByteBuffer) {
-                    throw java.io.IOException("USB disconnect mid-verify")
+            object : RecordingDisk(sectorCount = 16UL, sectorSize = 512) {
+                override fun write(lba: ULong, source: ByteBuffer) {
+                    super.write(lba, source)
+                    // Drop the sector after the first one of this range.
+                    bytes.remove(lba + 1UL)
                 }
             }
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageVerifyException")
-        } catch (e: ImageVerifyException) {
-            assertTrue(e.message!!.contains("verification unavailable"))
-            assertTrue(e.cause is java.io.IOException)
-        }
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(4UL, 4UL),
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
         assertEquals(1L, disk.syncCount)
-        assertEquals(OperationState.Partial, op.state)
-        assertEquals(512, disk.bytesWritten)
-        assertTrue(op.failureCause!!.message!!.contains("verification unavailable"))
+        val verdict = result.readback as ReadbackVerdict.Mismatch
+        assertEquals(1UL, verdict.mismatchedSectors)
+        assertEquals(5UL, verdict.firstMismatchLba)
+        assertTrue(result.failure!!.message!!.contains("readback mismatch"))
+        assertTrue(result.failure!!.message!!.contains("LBA 5"))
     }
 
-    @Test fun cancelDuringVerifyMarksPartialIncomplete() {
-        val payload = ByteArray(TransferPlan.MAX_CHUNK + 512) { 4 }
+    @Test fun readbackIoFailureIsIncompleteNotVerified() {
+        val disk =
+            object : RecordingDisk(sectorCount = 16UL, sectorSize = 512) {
+                override fun read(lba: ULong, destination: ByteBuffer) {
+                    throw java.io.IOException("USB disconnect mid-readback")
+                }
+            }
+        val result = RawWriter.write(
+            rawSource(ByteArray(512) { 9 }),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(2UL, 1UL),
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        val verdict = result.readback as ReadbackVerdict.Incomplete
+        assertEquals(ReadbackProblem.IoError, verdict.reason)
+        assertEquals(1L, disk.syncCount)
+        assertEquals(1L, disk.writeCount)
+    }
+
+    @Test fun readbackSourceShortIsReportedAsSourceChanged() {
+        var opens = 0
         val source =
-            ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = payload.size.toLong())
-        val stillActive = java.util.concurrent.atomic.AtomicBoolean(true)
-        val op = DiskOperation(name = "raw-write-verify-cancel", active = { stillActive.get() })
+            ImageSource.fromContent(
+                openRaw = {
+                    opens++
+                    if (opens > 1) java.io.ByteArrayInputStream(ByteArray(128))
+                    else java.io.ByteArrayInputStream(ByteArray(512) { 1 })
+                },
+                displayName = "stick.img",
+                size = 512L,
+            )
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 1UL),
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        val verdict = result.readback as ReadbackVerdict.Incomplete
+        assertEquals(ReadbackProblem.SourceChanged, verdict.reason)
+        assertEquals(1L, disk.syncCount)
+    }
+
+    @Test fun cancelAfterFirstCommitIsPartialWithSyncAndReadback() {
+        val payload = ByteArray(TransferPlan.MAX_CHUNK + 512) { 2 }
+        val stillActive = AtomicBoolean(true)
+        val op = DiskOperation(name = "raw-cancel", active = { stillActive.get() })
+        val disk =
+            object : RecordingDisk(sectorCount = 256UL, sectorSize = 512) {
+                override fun write(lba: ULong, source: ByteBuffer) {
+                    // Commit the whole first chunk, then simulate the user cancelling.
+                    val count = source.remaining() / sectorSize
+                    for (i in 0 until count) {
+                        val one = ByteArray(sectorSize)
+                        source.get(one)
+                        bytes[lba + i.toULong()] = one
+                    }
+                    writtenRanges.add(Pair(lba.toLong(), count))
+                    bytesWritten += count * sectorSize
+                    stillActive.set(false)
+                }
+            }
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 129UL),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        // The operation is already cancelled, so the partial readback still runs on the
+        // committed prefix instead of silently skipping verification.
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(1L, disk.syncCount)
+        assertTrue(result.failure is ImageCancelledException)
+        assertTrue(op.mutationAttempted)
+    }
+
+    @Test fun cancelDuringFullReadbackIsIncomplete() {
+        val payload = ByteArray(TransferPlan.MAX_CHUNK + 512) { 4 }
+        val stillActive = AtomicBoolean(true)
+        val op = DiskOperation(name = "raw-verify-cancel", active = { stillActive.get() })
         val disk =
             object : RecordingDisk(sectorCount = 256UL, sectorSize = 512) {
                 override fun read(lba: ULong, destination: ByteBuffer) {
-                    // First verify chunk: cancel after write+sync completed.
                     stillActive.set(false)
                     super.read(lba, destination)
                 }
             }
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = wholeDisk(disk),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        val verdict = result.readback as ReadbackVerdict.Incomplete
+        assertEquals(ReadbackProblem.Cancelled, verdict.reason)
+        assertEquals(1L, disk.syncCount)
+    }
+
+    @Test fun emptySourceFailsWithoutWrites() {
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
         try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageCancelledException")
-        } catch (e: ImageCancelledException) {
-            assertTrue(e.message!!.contains("image written and synced; verification"))
+            RawWriter.write(
+                rawSource(ByteArray(0)),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = wholeDisk(disk),
+            )
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
         }
+        assertEquals(0L, disk.writeCount)
+        assertEquals(0L, disk.syncCount)
+    }
+
+    @Test fun overwriteFalseWritesNothing() {
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                rawSource(ByteArray(512) { 1 }),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = false,
+                range = wholeDisk(disk),
+            )
+            fail("expected OverwriteRequiredException")
+        } catch (_: OverwriteRequiredException) {
+        }
+        assertEquals(0L, disk.writeCount)
+    }
+
+    @Test fun confirmationMismatchWritesNothing() {
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                rawSource(ByteArray(512) { 1 }),
+                disk,
+                identity,
+                DestructiveConfirmation("OTHER", disk.geometry.capacityBytes),
+                overwrite = true,
+                range = wholeDisk(disk),
+            )
+            fail("expected ConfirmationMismatchException")
+        } catch (_: ConfirmationMismatchException) {
+        }
+        assertEquals(0L, disk.writeCount)
+    }
+
+    @Test fun progressTotalIsKnownOnlyForKnownDecodedSize() {
+        val knownDisk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val knownOp = DiskOperation("known")
+        val known = RawWriter.write(
+            rawSource(ByteArray(1024) { 1 }),
+            knownDisk,
+            identity,
+            conf(knownDisk),
+            overwrite = true,
+            range = wholeDisk(knownDisk),
+            operation = knownOp,
+        )
+        assertEquals(RawWriteStatus.Completed, known.state)
+        assertEquals(1024L, knownOp.bytesTotal)
+
+        val unknownDisk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val unknownOp = DiskOperation("unknown")
+        val unknown = RawWriter.write(
+            rawSource(ByteArray(1024) { 1 }, decodedSize = null),
+            unknownDisk,
+            identity,
+            conf(unknownDisk),
+            overwrite = true,
+            range = wholeDisk(unknownDisk),
+            operation = unknownOp,
+        )
+        assertEquals(RawWriteStatus.Completed, unknown.state)
+        assertEquals(-1L, unknownOp.bytesTotal)
+        assertEquals(1024L, unknownOp.bytesDone)
+    }
+
+    @Test fun uncompressedFileSourceKeepsDeclaredSize() {
+        val tempFile = java.io.File.createTempFile("test-image", ".iso")
+        try {
+            tempFile.writeBytes(ByteArray(2048) { 0x5A })
+            val source = ImageSource.fromFile(tempFile)
+            assertEquals(2048L, source.declaredDecodedSize)
+            val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+            val result = RawWriter.write(
+                source,
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(2UL, 4UL),
+            )
+            assertEquals(RawWriteStatus.Completed, result.state)
+            assertEquals(listOf(2L to 4), disk.writtenRanges)
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test fun failedFirstWriteAttemptIsUnverifiedNotVerified() {
+        var calls = 0
+        val disk =
+            object : RecordingDisk(sectorCount = 8UL, sectorSize = 512) {
+                override fun write(lba: ULong, source: ByteBuffer) {
+                    super.write(lba, source)
+                    calls++
+                    throw java.io.IOException("CSW failure after transfer")
+                }
+            }
+        val op = DiskOperation("raw-unverified-first")
+        val result = RawWriter.write(
+            rawSource(ByteArray(512) { 6 }),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 1UL),
+            operation = op,
+        )
+        assertEquals(1, calls)
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(0L, result.writtenBytes)
+        val verdict = result.readback as ReadbackVerdict.Unverified
+        assertEquals(RawWriteRange(0UL, 1UL), verdict.range)
+        assertEquals(1L, disk.syncCount)
+        assertTrue(result.failure is java.io.IOException)
+        assertEquals(OperationState.Partial, op.state)
+    }
+
+    @Test fun failedLaterWriteAttemptLeavesAttemptUnverified() {
+        var calls = 0
+        val disk =
+            object : RecordingDisk(sectorCount = 130UL, sectorSize = 512) {
+                override fun write(lba: ULong, source: ByteBuffer) {
+                    super.write(lba, source)
+                    calls++
+                    if (calls >= 2) throw java.io.IOException("residue after transfer")
+                }
+            }
+        val payload = ByteArray(129 * 512) { 3 }
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 129UL),
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(TransferPlan.MAX_CHUNK.toLong(), result.writtenBytes)
+        val verdict = result.readback as ReadbackVerdict.Unverified
+        assertEquals(RawWriteRange(128UL, 1UL), verdict.range)
+        assertTrue(result.failure is java.io.IOException)
+        assertEquals(1L, disk.syncCount)
+    }
+
+    @Test fun corruptFailedAttemptReportsMismatchNotVerified() {
+        var calls = 0
+        val disk =
+            object : RecordingDisk(sectorCount = 130UL, sectorSize = 512) {
+                override fun write(lba: ULong, source: ByteBuffer) {
+                    calls++
+                    if (calls >= 2) {
+                        // Commit zeroes instead of the requested sector, then fail.
+                        val zero = ByteArray(sectorSize)
+                        bytes[lba] = zero
+                        writtenRanges.add(Pair(lba.toLong(), 1))
+                        bytesWritten += sectorSize
+                        throw java.io.IOException("corrupted transfer")
+                    }
+                    super.write(lba, source)
+                }
+            }
+        val payload = ByteArray(129 * 512) { 4 }
+        val result = RawWriter.write(
+            rawSource(payload),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 129UL),
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        val verdict = result.readback as ReadbackVerdict.Mismatch
+        assertEquals(128UL, verdict.firstMismatchLba)
+        assertEquals(1UL, verdict.mismatchedSectors)
+    }
+
+    @Test fun sourceCloseFailureDowngradesCompletedButKeepsResult() {
+        var opens = 0
+        val payload = ByteArray(512) { 7 }
+        val source =
+            ImageSource.fromContent(
+                openRaw = {
+                    opens++
+                    // Only the write stream fails to close; readback reopens normally.
+                    ClosingStream(payload, failClose = opens == 1)
+                },
+                displayName = "stick.img",
+                size = payload.size.toLong(),
+            )
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val op = DiskOperation("raw-close-fail")
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 1UL),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(512L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertTrue(result.failure is java.io.IOException)
+        assertTrue(result.failure!!.message!!.contains("close failed"))
         assertEquals(1L, disk.syncCount)
         assertEquals(OperationState.Partial, op.state)
-        assertTrue(disk.bytesWritten >= TransferPlan.MAX_CHUNK)
+    }
+
+    @Test fun sourceCloseFailureKeepsPrimaryWriteFailure() {
+        val writeError = java.io.IOException("write failed")
+        var opens = 0
+        val payload = ByteArray(512) { 8 }
+        val source =
+            ImageSource.fromContent(
+                openRaw = {
+                    opens++
+                    ClosingStream(payload, failClose = opens == 1)
+                },
+                displayName = "stick.img",
+                size = payload.size.toLong(),
+            )
+        val disk =
+            object : RecordingDisk(sectorCount = 8UL, sectorSize = 512) {
+                override fun write(lba: ULong, source: ByteBuffer) {
+                    super.write(lba, source)
+                    throw writeError
+                }
+            }
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 1UL),
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertTrue(result.failure === writeError)
+        assertEquals(1, writeError.suppressed.size)
+        assertTrue(writeError.suppressed[0].message!!.contains("close failed"))
+        assertTrue(result.readback is ReadbackVerdict.Unverified)
+    }
+
+    private class ClosingStream(
+        data: ByteArray,
+        private val failClose: Boolean,
+    ) : java.io.ByteArrayInputStream(data) {
+        override fun close() {
+            if (failClose) throw java.io.IOException("close failed")
+        }
     }
 
     private fun gzip(data: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { it.write(data) }
         return out.toByteArray()
-    }
-
-    @Test fun verifyDiskExceptionMarksPartialIncomplete() {
-        val payload = ByteArray(512) { 8 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
-        val op = DiskOperation("raw-write-verify-diskex")
-        val disk =
-            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
-                override fun read(lba: ULong, destination: ByteBuffer) {
-                    throw DiskException.IoFailure("USB stall mid-verify")
-                }
-            }
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageVerifyException")
-        } catch (e: ImageVerifyException) {
-            assertTrue(e.message!!.contains("image written and synced; verification"))
-            assertTrue(e.cause is DiskException.IoFailure)
-        }
-        assertEquals(1L, disk.syncCount)
-        assertEquals(OperationState.Partial, op.state)
-        assertTrue(op.failureCause!!.message!!.contains("image written and synced; verification"))
-    }
-
-    @Test fun verifyOpenSecurityExceptionMarksPartialIncomplete() {
-        val payload = ByteArray(512) { 6 }
-        var opens = 0
-        val source =
-            ImageSource.fromContent(
-                openRaw = {
-                    opens++
-                    if (opens > 1) throw SecurityException("SAF revoked")
-                    java.io.ByteArrayInputStream(payload)
-                },
-                displayName = "stick.img",
-                size = 512L,
-            )
-        val op = DiskOperation("raw-write-verify-sec")
-        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageVerifyException")
-        } catch (e: ImageVerifyException) {
-            assertTrue(e.message!!.contains("verification unavailable"))
-            assertTrue(e.message!!.contains("SecurityException"))
-            assertTrue(e.cause is SecurityException)
-        }
-        assertEquals(1L, disk.syncCount)
-        assertEquals(OperationState.Partial, op.state)
-        assertTrue(op.failureCause!!.message!!.contains("verification unavailable"))
-    }
-
-    @Test fun cancelDuringVerifyFailureCauseIsInformative() {
-        val payload = ByteArray(TransferPlan.MAX_CHUNK + 512) { 4 }
-        val source =
-            ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = payload.size.toLong())
-        val stillActive = java.util.concurrent.atomic.AtomicBoolean(true)
-        val op = DiskOperation(name = "raw-write-verify-cancel-cause", active = { stillActive.get() })
-        val disk =
-            object : RecordingDisk(sectorCount = 256UL, sectorSize = 512) {
-                override fun read(lba: ULong, destination: ByteBuffer) {
-                    stillActive.set(false)
-                    super.read(lba, destination)
-                }
-            }
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageCancelledException")
-        } catch (e: ImageCancelledException) {
-            assertTrue(e.message!!.contains("image written and synced; verification"))
-        }
-        assertEquals(OperationState.Partial, op.state)
-        assertTrue(op.failureCause is ImageCancelledException)
-        assertTrue(op.failureCause!!.message!!.contains("image written and synced; verification"))
-        assertEquals(1L, disk.syncCount)
-    }
-
-    @Test fun verifyDiskExceptionDisconnectedMarksPartial() {
-        val payload = ByteArray(512) { 7 }
-        val source = ImageSource.fromBytes(payload, format = ImageFormat.IMG, decodedSize = 512L)
-        val op = DiskOperation("raw-write-verify-disc")
-        val disk =
-            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
-                override fun read(lba: ULong, destination: ByteBuffer) {
-                    throw DiskException.Disconnected()
-                }
-            }
-        try {
-            RawWriter.write(source, disk, identity, conf(disk), overwrite = true, operation = op)
-            fail("expected ImageVerifyException")
-        } catch (e: ImageVerifyException) {
-            assertTrue(e.message!!.contains("image written and synced; verification"))
-            assertTrue(e.cause is DiskException.Disconnected)
-        }
-        assertEquals(1L, disk.syncCount)
-        assertEquals(OperationState.Partial, op.state)
-        assertTrue(disk.bytesWritten > 0)
-        assertTrue(op.failureCause!!.message!!.contains("image written and synced; verification"))
     }
 }

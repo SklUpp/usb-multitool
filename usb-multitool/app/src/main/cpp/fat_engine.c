@@ -182,6 +182,46 @@ int fat_engine_sync(uint64_t volume)
 	return usb_block_sync(bh) == 0 ? 0 : (int)FR_DISK_ERR;
 }
 
+int fat_engine_usage(uint64_t volume, uint64_t *out_total_bytes, uint64_t *out_free_bytes)
+{
+	FatVolume *v;
+	char path[8];
+	FATFS *fs = NULL;
+	DWORD free_clusters = 0;
+	FRESULT fr;
+	uint64_t clusters;
+	uint64_t cluster_bytes;
+
+	if (!out_total_bytes || !out_free_bytes) return (int)FR_INVALID_PARAMETER;
+
+	pthread_mutex_lock(&g_fat_mu);
+	v = vol_from(volume);
+	if (!v) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return (int)FR_INVALID_OBJECT;
+	}
+	if ((fr = (FRESULT)make_path(path, sizeof(path), v->pdrv, "/")) != FR_OK) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return map_fr(fr);
+	}
+	/* f_getfree only reads FAT/bitmap sectors. It may flag the in-memory FSInfo
+	 * for a later sync, but no sync is issued here, so the media stays untouched. */
+	fr = f_getfree(path, &free_clusters, &fs);
+	if (fr == FR_OK) {
+		clusters = (uint64_t)(fs->n_fatent - 2);
+		cluster_bytes = (uint64_t)fs->csize * v->sector_size;
+		if (cluster_bytes == 0 || clusters > UINT64_MAX / cluster_bytes ||
+		    (uint64_t)free_clusters > clusters) {
+			fr = FR_INT_ERR;
+		} else {
+			*out_total_bytes = clusters * cluster_bytes;
+			*out_free_bytes = (uint64_t)free_clusters * cluster_bytes;
+		}
+	}
+	pthread_mutex_unlock(&g_fat_mu);
+	return map_fr(fr);
+}
+
 int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t cap, size_t *out_count)
 {
 	FatVolume *v;
@@ -503,6 +543,77 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 	pthread_mutex_unlock(&g_vols_mu);
 	pthread_mutex_unlock(&g_fat_mu);
 	free(work);
+	return map_fr(fr);
+}
+
+int fat_engine_set_label(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
+			 const char *label)
+{
+	FatFsKind kind;
+	uint64_t vol = 0;
+	// f_setlabel takes "N:label" — passing only "N:" clears the label instead.
+	char drive_label[8 + 64];
+	FRESULT fr;
+
+	if (!label) return (int)FR_INVALID_PARAMETER;
+	int rc = fat_engine_mount(block_handle, sector_size, sector_count, &kind, &vol);
+	if (rc != 0) return rc;
+
+	FatVolume *v = vol_from(vol);
+	if (!v) {
+		fat_engine_umount(vol);
+		return (int)FR_INVALID_PARAMETER;
+	}
+	// Truncation must fail, never drop the label silently.
+	int n = snprintf(drive_label, sizeof(drive_label), "%u:%s", (unsigned)v->pdrv, label);
+	if (n < 0 || (size_t)n >= sizeof(drive_label)) {
+		fat_engine_umount(vol);
+		return (int)FR_INVALID_NAME;
+	}
+
+	pthread_mutex_lock(&g_fat_mu);
+	fr = f_setlabel(drive_label);
+	pthread_mutex_unlock(&g_fat_mu);
+
+	int urc = fat_engine_umount(vol);
+	if (fr == FR_OK) fr = (FRESULT)urc;
+	return map_fr(fr);
+}
+
+int fat_engine_get_label(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
+			 char *out, size_t cap)
+{
+	FatFsKind kind;
+	uint64_t vol = 0;
+	char path[8];
+	char label[64];
+	FRESULT fr;
+
+	if (!out || cap == 0) return (int)FR_INVALID_PARAMETER;
+	out[0] = '\0';
+	int rc = fat_engine_mount(block_handle, sector_size, sector_count, &kind, &vol);
+	if (rc != 0) return rc;
+
+	FatVolume *v = vol_from(vol);
+	if (!v) {
+		fat_engine_umount(vol);
+		return (int)FR_INVALID_PARAMETER;
+	}
+	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
+	memset(label, 0, sizeof(label));
+
+	pthread_mutex_lock(&g_fat_mu);
+	fr = f_getlabel(path, label, NULL);
+	pthread_mutex_unlock(&g_fat_mu);
+
+	int urc = fat_engine_umount(vol);
+	if (fr == FR_OK) {
+		size_t n = strlen(label);
+		if (n >= cap) n = cap - 1;
+		memcpy(out, label, n);
+		out[n] = '\0';
+		fr = (FRESULT)urc;
+	}
 	return map_fr(fr);
 }
 

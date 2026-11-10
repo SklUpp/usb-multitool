@@ -4,7 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 /** Filesystem operation bodies. Mount/session ownership stays with coordinator. */
 object FilesOperations {
@@ -101,7 +101,7 @@ object FilesOperations {
                 }
                 stream.flush()
             } catch (failure: Throwable) {
-                operation.state = usb.service.OperationState.Partial
+                operation.state = usb.operation.OperationState.Partial
                 operation.failureCause = usb.device.DiskException.IoFailure("Download destination truncated ($offset of $size bytes)", failure)
                 throw failure
             }

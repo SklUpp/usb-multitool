@@ -350,15 +350,58 @@ Java_usb_fs_ExtFs_nativeRename(JNIEnv *env, jclass, jlong handle, jstring from, 
 
 JNIEXPORT jint JNICALL
 Java_usb_fs_ExtFs_nativeMkfs(JNIEnv *env, jclass, jobject device, jint sectorSize,
-                             jlong sectorCount)
+                             jlong sectorCount, jstring label)
 {
     JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
     if (!bdev) return -EINVAL;
     uint64_t bhandle = usb_block_register(&bdev->ops);
-    int rc = ext_engine_mkfs(bhandle);
+    /*
+     * lwext4 copies the label bytes into ext4_superblock.volume_name verbatim, and the
+     * Kotlin validation counts standard UTF-8. GetStringUTFChars would hand over Java's
+     * modified UTF-8 (CESU-8), where a supplementary code point becomes two 3-byte
+     * surrogate sequences, so the two sides would disagree about the 15-byte ceiling and
+     * the stored label would not be valid UTF-8.
+     */
+    char label_utf8[64];
+    const jsize label_len = label ? env->GetStringLength(label) : 0;
+    const jchar *label_chars =
+        label_len > 0 ? env->GetStringChars(label, nullptr) : nullptr;
+    int converted = 0;
+    if (label_chars) {
+        converted = ext_utf16_to_utf8(reinterpret_cast<const uint16_t *>(label_chars),
+                                      static_cast<size_t>(label_len), label_utf8,
+                                      sizeof(label_utf8));
+        env->ReleaseStringChars(label, label_chars);
+    }
+    int rc = converted < 0 ? -EINVAL
+                           : ext_engine_mkfs(bhandle, converted > 0 ? label_utf8 : nullptr);
     usb_block_unregister(bhandle);
     destroy_block_device(env, bdev);
     return rc;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_usb_fs_ExtFs_nativeUsage(JNIEnv *env, jclass, jlong handle, jlongArray out)
+{
+    auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
+    if (!w) {
+        throw_ext(env, "space query failed: bad handle");
+        return JNI_FALSE;
+    }
+    if (!out || env->GetArrayLength(out) < 2) {
+        throw_ext(env, "space query: output array too small");
+        return JNI_FALSE;
+    }
+    uint64_t total = 0;
+    uint64_t free_bytes = 0;
+    int rc = ext_engine_usage(w->vol_handle, &total, &free_bytes);
+    if (rc != 0) {
+        throw_ext(env, "space query failed");
+        return JNI_FALSE;
+    }
+    jlong values[2] = { static_cast<jlong>(total), static_cast<jlong>(free_bytes) };
+    env->SetLongArrayRegion(out, 0, 2, values);
+    return JNI_TRUE;
 }
 
 JNIEXPORT jboolean JNICALL

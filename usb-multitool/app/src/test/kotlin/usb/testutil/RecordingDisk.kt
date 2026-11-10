@@ -25,7 +25,7 @@ open class RecordingDisk(
     var syncCount: Long = 0
         private set
     var bytesWritten: Int = 0
-        private set
+        protected set
 
     fun resetStats() {
         readCount = 0

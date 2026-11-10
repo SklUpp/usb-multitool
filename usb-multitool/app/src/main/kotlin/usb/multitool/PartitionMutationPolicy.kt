@@ -2,24 +2,7 @@ package usb.multitool
 
 import usb.partition.Partition
 import usb.partition.findConfirmedPartition
-
-internal fun isProtectedSystemPartition(partition: Partition): Boolean =
-    partition.esp ||
-        partition.name.contains("VTOYEFI", ignoreCase = true) ||
-        partition.type.equals("0xEF", ignoreCase = true) ||
-        partition.type.equals("EFI", ignoreCase = true) ||
-        partition.type.equals("C12A7328-F81F-11D2-BA4B-00A0C93EC93B", ignoreCase = true)
-
-internal fun isEfiWriteAllowedFor(
-    partition: Partition,
-    allowedStartLba: ULong?,
-    allowedSectorCount: ULong?,
-): Boolean =
-    !isProtectedSystemPartition(partition) ||
-        (allowedStartLba != null &&
-            allowedSectorCount != null &&
-            partition.startLba == allowedStartLba &&
-            partition.sectorCount == allowedSectorCount)
+import usb.partition.isEfiWriteAllowedFor
 
 /**
  * A writable mount is a mutation boundary. Refuse it while the MBR and GPT layouts disagree:

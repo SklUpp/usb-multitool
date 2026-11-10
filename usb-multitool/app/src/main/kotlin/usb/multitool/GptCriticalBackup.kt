@@ -3,7 +3,7 @@ package usb.multitool
 import java.nio.ByteBuffer
 import java.util.zip.CRC32
 import usb.device.BlockDevice
-import usb.service.DiskOperation
+import usb.operation.DiskOperation
 
 /**
  * Restore half of [usb.partition.GptBackup.backupCriticalSectors]: validate a captured
@@ -205,7 +205,7 @@ object GptCriticalBackup {
         val tailBytes = backupSectors * sectorSize
         val tailStart = disk.sectorCount - backupSectors.toULong()
 
-        operation?.let { it.state = usb.service.OperationState.Running }
+        operation?.let { it.state = usb.operation.OperationState.Running }
         try {
             operation?.let { it.failureCause = null }
             operation?.mutationAttempted = true
@@ -213,7 +213,7 @@ object GptCriticalBackup {
             operation?.mutationAttempted = true
             disk.write(tailStart, ByteBuffer.wrap(blob, headBytes, tailBytes))
         } catch (failure: Throwable) {
-            operation?.let { it.state = usb.service.OperationState.Partial; it.failureCause = failure }
+            operation?.let { it.state = usb.operation.OperationState.Partial; it.failureCause = failure }
             throw failure
         }
 
@@ -228,7 +228,7 @@ object GptCriticalBackup {
             val mismatchTail = firstMismatch(blob, headBytes, tail)
             if (mismatchTail >= 0) throw IllegalArgumentException("restore verification failed: LBA ${tailStart + (mismatchTail / sectorSize).toULong()} does not match the backup")
         } catch (failure: Throwable) {
-            operation?.let { it.state = usb.service.OperationState.Partial; it.failureCause = failure }
+            operation?.let { it.state = usb.operation.OperationState.Partial; it.failureCause = failure }
             throw failure
         }
         return report

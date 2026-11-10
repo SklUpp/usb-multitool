@@ -909,67 +909,269 @@ data class SetupOptions(
     val localAccount: Boolean? = null,
 )
 
+/** One raw `auto_install` entry read from the real ventoy.json. */
+data class AutoInstallLink(val image: String, val templates: List<String>)
+
+class AmbiguousAutoInstallEntryException(message: String) : IllegalStateException(message)
+
 object WindowsSetup {
-    fun write(
-        volumeRoot: MutableMap<String, Any?>,
-        isoName: String,
+    /**
+     * Normalize the image reference used by Ventoy's auto_install entry.
+     *
+     * An absolute reference keeps its real directory (`/Win/install.iso`, `/ISO/a.img`).
+     * A bare file name keeps the legacy `/ISO/<name>` target older builds wrote.
+     * Backslashes are treated as separators and `.`/`..` segments are rejected so a
+     * picked name can never escape the Ventoy data partition.
+     */
+    fun normalizeImagePath(reference: String): String {
+        val trimmed = reference.trim()
+        require(trimmed.isNotEmpty()) { "image path is empty" }
+        val slashed = trimmed.replace('\\', '/')
+        val bareName = !slashed.contains('/')
+        val absolute = if (slashed.startsWith('/')) slashed else "/$slashed"
+        val segments = absolute.split('/').filter { it.isNotEmpty() }
+        require(segments.isNotEmpty()) { "image path is empty" }
+        require(segments.none { it == "." || it == ".." }) {
+            "image path must not contain . or .. segments: $reference"
+        }
+        require(segments.none { it.contains('\u0000') }) { "image path contains NUL: $reference" }
+        val path = "/" + segments.joinToString("/")
+        return if (bareName) "/ISO/${path.drop(1)}" else path
+    }
+
+    /** Auto_install entries currently present in [existingJson], in file order. */
+    fun parseLinks(existingJson: String?): List<AutoInstallLink> {
+        val root = parseRootOrNull(existingJson) ?: return emptyList()
+        val entries = root["auto_install"] as? List<*> ?: return emptyList()
+        return entries.mapNotNull { entry ->
+            val map = entry as? Map<*, *> ?: return@mapNotNull null
+            val image = map["image"]?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val templates =
+                when (val template = map["template"]) {
+                    is String -> listOf(template)
+                    is List<*> -> template.mapNotNull { it?.toString() }
+                    else -> emptyList()
+                }
+            AutoInstallLink(image = image, templates = templates)
+        }
+    }
+
+    /**
+     * Remove bindings for [imagePaths] only. The image files and XML files are never
+     * touched; every other auto_install entry and top-level key is preserved.
+     * Returns null when nothing changed, so the host can avoid a needless write.
+     */
+    fun removeLinks(existingJson: String?, imagePaths: List<String>): String? {
+        if (existingJson.isNullOrBlank()) return null
+        val root = parseRootOrThrow(existingJson)
+        val entries = (root["auto_install"] as? List<*> ?: return null).toMutableList()
+        val normalized = imagePaths.map(::normalizeImagePath)
+        for (target in normalized) {
+            val matches = entries.count { entry ->
+                matchesTargetImage((entry as? Map<*, *>)?.get("image")?.toString(), target)
+            }
+            if (matches > 1) {
+                throw AmbiguousAutoInstallEntryException(
+                    "$target has $matches auto_install entries; refusing to guess which one to remove — " +
+                        "edit /ventoy/ventoy.json on a PC",
+                )
+            }
+        }
+        val kept = entries.filterNot { entry ->
+            val image = (entry as? Map<*, *>)?.get("image")?.toString()
+            normalized.any { matchesTargetImage(image, it) }
+        }
+        if (kept.size == entries.size) return null
+        root["auto_install"] = kept
+        return MiniJson.stringify(root)
+    }
+
+    /**
+     * Update only the global `control` array. No auto_install entries, images, or XML
+     * files are touched. These flags are global by Ventoy design; they are not per-image.
+     */
+    fun mergeControlOptions(existingJson: String?, options: SetupOptions): String {
+        val root = parseRootOrThrow(existingJson)
+        applyControlOptions(root, options)
+        return MiniJson.stringify(root)
+    }
+
+    fun mergeAutoInstall(
+        existingJson: String?,
+        imagePaths: List<String>,
+        templatePath: String,
         options: SetupOptions,
         overwrite: Boolean,
     ): String {
-        val baseName = isoName.substringBeforeLast(".")
-        val xmlName = "$baseName.xml"
-        val xmlPath = "ventoy/$xmlName"
-        val jsonPath = "ventoy/ventoy.json"
+        val normalized = imagePaths.map(::normalizeImagePath).distinct()
+        require(normalized.isNotEmpty()) { "no image selected" }
+        val rootMap = parseRootOrThrow(existingJson)
+        applyControlOptions(rootMap, options)
 
-        val existingJson = (volumeRoot[jsonPath] ?: volumeRoot["ventoy.json"]) as? String
-        val hasExistingXml = volumeRoot.containsKey(xmlName) || volumeRoot.containsKey(xmlPath)
+        val autoInstallList: MutableList<Any?> =
+            ((rootMap["auto_install"] as? List<*>)?.toMutableList()) ?: mutableListOf()
 
-        // Linking a different ISO onto a configured volume is a merge, not an overwrite.
-        if (!overwrite && (hasExistingXml || hasLinkForIso(existingJson, isoName))) {
-            throw VentoyOverwriteRequiredException(
-                "Existing configuration for $isoName requires explicit overwrite permission"
-            )
-        }
-
-        // Minimal answer file; bypass flags go to ventoy.json control, not this XML
-        val xmlContent = buildXmlTemplate(baseName)
-        volumeRoot[xmlPath] = xmlContent
-        volumeRoot[xmlName] = xmlContent
-
-        // Build or merge ventoy.json linking ISO to XML
-        val jsonContent = mergeVentoyJson(existingJson, isoName, xmlName, options)
-        volumeRoot[jsonPath] = jsonContent
-        volumeRoot["ventoy.json"] = jsonContent
-
-        return jsonContent
-    }
-
-    fun mergeVentoyJson(
-        existingJson: String?,
-        isoName: String,
-        xmlName: String,
-        options: SetupOptions,
-    ): String {
-        val rootMap: MutableMap<String, Any?> = if (!existingJson.isNullOrBlank()) {
-            try {
-                @Suppress("UNCHECKED_CAST")
-                (MiniJson.parse(existingJson) as? MutableMap<String, Any?>)
-                    ?: throw IllegalStateException(
-                        "ventoy.json parsed but root is not an object; refusing to overwrite",
-                    )
-            } catch (e: IllegalStateException) {
-                throw e
-            } catch (e: Throwable) {
-                throw IllegalStateException(
-                    "ventoy.json is not valid JSON; refusing to destroy existing config: ${e.message}",
-                    e,
+        if (!overwrite) {
+            val conflict = normalized.firstOrNull { path ->
+                autoInstallList.any { entry ->
+                    matchesTargetImage((entry as? Map<*, *>)?.get("image")?.toString(), path)
+                }
+            }
+            if (conflict != null) {
+                throw VentoyOverwriteRequiredException(
+                    "Existing configuration for $conflict requires explicit overwrite permission",
                 )
             }
-        } else {
-            linkedMapOf()
         }
 
-        val controlList: MutableList<Any?> = ((rootMap["control"] as? List<*>)?.toMutableList()) ?: mutableListOf()
+        for (targetImage in normalized) {
+            val matchIndexes = autoInstallList.indices.filter { i ->
+                val item = autoInstallList[i]
+                item is Map<*, *> && matchesTargetImage(item["image"]?.toString(), targetImage)
+            }
+            if (matchIndexes.size > 1) {
+                throw AmbiguousAutoInstallEntryException(
+                    "$targetImage has ${matchIndexes.size} auto_install entries; " +
+                        "refusing to overwrite them ambiguously — edit /ventoy/ventoy.json on a PC",
+                )
+            }
+            val index = matchIndexes.firstOrNull()
+            if (index != null) {
+                val item = autoInstallList[index] as Map<*, *>
+                val newEntry = linkedMapOf<String, Any?>()
+                for ((k, v) in item) newEntry[k.toString()] = v
+                newEntry["image"] = targetImage
+                newEntry["template"] = templatePath
+                autoInstallList[index] = newEntry
+            } else {
+                autoInstallList.add(linkedMapOf("image" to targetImage, "template" to templatePath))
+            }
+        }
+        rootMap["auto_install"] = autoInstallList
+        return MiniJson.stringify(rootMap)
+    }
+
+    /**
+     * Set or remove one validated global control key; all other entries/keys are preserved.
+     * Unknown keys are rejected by the caller before this function.
+     */
+    fun setControl(existingJson: String?, key: String, value: String?): String {
+        require(key == "VTOY_WIN11_BYPASS_CHECK" || key == "VTOY_WIN11_BYPASS_NRO") {
+            "unsupported Ventoy control key \"$key\""
+        }
+        require(value == null || value == "0" || value == "1") {
+            "control value must be \"0\", \"1\", or null"
+        }
+        val root = parseRootOrThrow(existingJson)
+        val controlList: MutableList<Any?> =
+            ((root["control"] as? List<*>)?.toMutableList()) ?: mutableListOf()
+        var found = false
+        val kept = ArrayList<Any?>()
+        for (item in controlList) {
+            val map = item as? Map<*, *>
+            if (map != null && map.containsKey(key)) {
+                found = true
+                if (value != null) {
+                    val updated = linkedMapOf<String, Any?>()
+                    for ((k, v) in map) updated[k.toString()] = v
+                    updated[key] = value
+                    kept.add(updated)
+                }
+            } else {
+                kept.add(item)
+            }
+        }
+        if (!found && value != null) kept.add(linkedMapOf(key to value))
+        root["control"] = kept
+        return MiniJson.stringify(root)
+    }
+
+    /** Remove only the entry linking [imagePath] to [templatePath]; other templates stay. */
+    fun removeLinkForTemplate(
+        existingJson: String?,
+        imagePath: String,
+        templatePath: String,
+    ): String? {
+        if (existingJson.isNullOrBlank()) return null
+        val root = parseRootOrThrow(existingJson)
+        val entries = (root["auto_install"] as? List<*> ?: return null).toMutableList()
+        val targetImage = normalizeImagePath(imagePath)
+        val targetTemplate = normalizeImagePath(templatePath)
+        val matches =
+            entries.count { entry ->
+                val map = entry as? Map<*, *> ?: return@count false
+                val templates =
+                    when (val template = map["template"]) {
+                        is String -> listOf(template)
+                        is List<*> -> template.mapNotNull { it?.toString() }
+                        else -> emptyList()
+                    }
+                matchesTargetImage(map["image"]?.toString(), targetImage) &&
+                    templates.any { it.equals(targetTemplate, ignoreCase = true) }
+            }
+        if (matches == 0) return null
+        if (matches > 1) {
+            throw AmbiguousAutoInstallEntryException(
+                "$targetImage has $matches entries for $targetTemplate; " +
+                    "refusing to guess which one to remove — edit /ventoy/ventoy.json on a PC",
+            )
+        }
+        var changed = false
+        val updated = ArrayList<Any?>()
+        for (entry in entries) {
+            val map = entry as? Map<*, *>
+            if (map == null || !matchesTargetImage(map["image"]?.toString(), targetImage)) {
+                updated.add(entry)
+                continue
+            }
+            val rawTemplate = map["template"]
+            val templates =
+                when (rawTemplate) {
+                    is String -> listOf(rawTemplate)
+                    is List<*> -> rawTemplate.mapNotNull { it?.toString() }
+                    else -> emptyList()
+                }
+            if (templates.none { it.equals(targetTemplate, ignoreCase = true) }) {
+                updated.add(entry)
+                continue
+            }
+            changed = true
+            val remaining = templates.filterNot { it.equals(targetTemplate, ignoreCase = true) }
+            if (remaining.isEmpty()) continue // drop the whole entry only then
+            val newMap = linkedMapOf<String, Any?>()
+            for ((k, v) in map) newMap[k.toString()] = v
+            newMap["template"] = if (rawTemplate is String) remaining.first() else remaining
+            updated.add(newMap)
+        }
+        if (!changed) return null
+        root["auto_install"] = updated
+        return MiniJson.stringify(root)
+    }
+
+    private fun parseRootOrNull(json: String?): MutableMap<String, Any?>? {
+        if (json.isNullOrBlank()) return null
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            MiniJson.parse(json) as? MutableMap<String, Any?>
+                ?: throw IllegalStateException(
+                    "ventoy.json parsed but root is not an object; refusing to overwrite",
+                )
+        } catch (e: IllegalStateException) {
+            throw e
+        } catch (e: Throwable) {
+            throw IllegalStateException(
+                "ventoy.json is not valid JSON; refusing to destroy existing config: ${e.message}",
+                e,
+            )
+        }
+    }
+
+    private fun parseRootOrThrow(json: String?): MutableMap<String, Any?> =
+        parseRootOrNull(json) ?: linkedMapOf()
+
+    private fun applyControlOptions(rootMap: MutableMap<String, Any?>, options: SetupOptions) {
+        val controlList: MutableList<Any?> =
+            ((rootMap["control"] as? List<*>)?.toMutableList()) ?: mutableListOf()
 
         fun setControlFlag(key: String, value: String) {
             for (i in controlList.indices) {
@@ -989,18 +1191,9 @@ object WindowsSetup {
             controlList.add(linkedMapOf(key to value))
         }
 
-        var hasSearchRoot = false
-        for (item in controlList) {
-            if (item is Map<*, *> && item.containsKey("VTOY_DEFAULT_SEARCH_ROOT")) {
-                hasSearchRoot = true
-                break
-            }
-        }
-        if (!hasSearchRoot) {
-            controlList.add(linkedMapOf("VTOY_DEFAULT_SEARCH_ROOT" to "/ISO"))
-        }
-
-        // Drop keys older builds wrote; Ventoy never read them (no such control keys).
+        // Do not invent VTOY_DEFAULT_SEARCH_ROOT: adding /ISO would hide images bound
+        // outside it. The UI warns when the existing real scope excludes a bound image.
+        options.bypassChecks?.let { setControlFlag("VTOY_WIN11_BYPASS_CHECK", if (it) "1" else "0") }
         val obsoleteWin11Keys = setOf(
             "VTOY_WIN11_BYPASS_TPM",
             "VTOY_WIN11_BYPASS_RAM",
@@ -1016,87 +1209,23 @@ object WindowsSetup {
         controlList.clear()
         controlList.addAll(cleanedControl)
 
-        // One UI switch, one official key. null means the user never touched it, so the
-        // existing ventoy.json value survives a relink instead of being forced to "0".
         options.bypassChecks?.let { setControlFlag("VTOY_WIN11_BYPASS_CHECK", if (it) "1" else "0") }
-        // Applies during setup (before OOBE); a local account is offered only with the
-        // network unplugged: https://www.ventoy.net/en/plugin_control.html
         options.localAccount?.let { setControlFlag("VTOY_WIN11_BYPASS_NRO", if (it) "1" else "0") }
-
         rootMap["control"] = controlList
-
-        val autoInstallList: MutableList<Any?> = ((rootMap["auto_install"] as? List<*>)?.toMutableList()) ?: mutableListOf()
-        val cleanName = isoName.substringAfterLast('/')
-        val targetImage = "/ISO/$cleanName"
-        val targetTemplate = "/ventoy/$xmlName"
-        var matched = false
-
-        for (i in autoInstallList.indices) {
-            val item = autoInstallList[i]
-            if (item is Map<*, *>) {
-                val img = item["image"]?.toString()
-                if (img == targetImage || img == "/$cleanName" || img == cleanName) {
-                    val newEntry = linkedMapOf<String, Any?>()
-                    for ((k, v) in item) newEntry[k.toString()] = v
-                    newEntry["image"] = targetImage
-                    newEntry["template"] = targetTemplate
-                    autoInstallList[i] = newEntry
-                    matched = true
-                    break
-                }
-            }
-        }
-        if (!matched) {
-            autoInstallList.add(linkedMapOf("image" to targetImage, "template" to targetTemplate))
-        }
-        rootMap["auto_install"] = autoInstallList
-
-        return MiniJson.stringify(rootMap)
     }
-
-    /** True when ventoy.json already carries an auto_install entry for [isoName]. */
-    private fun hasLinkForIso(existingJson: String?, isoName: String): Boolean {
-        if (existingJson.isNullOrBlank()) return false
-        val root =
-            try {
-                MiniJson.parse(existingJson) as? Map<*, *>
-            } catch (_: Throwable) {
-                null
-            } ?: return false
-        val entries = root["auto_install"] as? List<*> ?: return false
-        val cleanName = isoName.substringAfterLast('/')
-        val targetImage = "/ISO/$cleanName"
-        return entries.any { entry ->
-            val image = (entry as? Map<*, *>)?.get("image")?.toString()
-            image == targetImage || image == "/$cleanName" || image == cleanName
-        }
-    }
-
-    private fun escapeXml(text: String): String =
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
 
     /**
-     * Minimal answer file: EULA + full name only. Windows 11 hardware/OOBE bypasses stay
-     * in `ventoy.json` control flags, which Ventoy applies during setup; duplicating them
-     * here (especially in `FirstLogonCommands`) ran too late to affect OOBE.
-     * Edition/disk selection is still interactive: this is not a full unattended install.
+     * Exact path match plus the two bare-name forms older builds wrote for `/ISO`.
+     * Basename matching is not used for arbitrary directories: two images may share a name.
      */
-    private fun buildXmlTemplate(name: String): String = buildString {
-        appendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
-        appendLine("<unattend xmlns=\"urn:schemas-microsoft-com:unattend\">")
-        appendLine("  <settings pass=\"windowsPE\">")
-        appendLine("    <component name=\"Microsoft-Windows-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">")
-        appendLine("      <UserData>")
-        appendLine("        <AcceptEula>true</AcceptEula>")
-        appendLine("        <FullName>${escapeXml(name)}</FullName>")
-        appendLine("      </UserData>")
-        appendLine("    </component>")
-        appendLine("  </settings>")
-        appendLine("</unattend>")
+    private fun matchesTargetImage(stored: String?, target: String): Boolean {
+        if (stored == null) return false
+        val normalized = stored.replace('\\', '/')
+        if (normalized.equals(target, ignoreCase = true)) return true
+        val file = target.substringAfterLast('/')
+        val legacyTarget = "/ISO/$file".equals(target, ignoreCase = true)
+        return legacyTarget &&
+            (normalized.equals("/$file", ignoreCase = true) || normalized.equals(file, ignoreCase = true))
     }
 }
 
@@ -1254,6 +1383,8 @@ internal object MiniJson {
                         }
                     }
                     val token = s.substring(start, pos)
+                    // Integers stay Long so stringify→parse keeps 42L as Long (not Int).
+                    // Callers that need numeric equality must compare via Number.toLong().
                     if (isFloat) token.toDouble() else token.toLong()
                 }
             }

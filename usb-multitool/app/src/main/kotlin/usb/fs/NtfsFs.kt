@@ -133,6 +133,28 @@ object NtfsFs {
         if (rc != 0) throw NtfsException("NTFS mkfs failed (errno=${-rc})")
     }
 
+    /** Replace `$VOLUME_NAME` on a mounted-for-write volume (ntfs-3g `ntfs_volume_rename`). */
+    fun setLabel(device: BlockDevice, label: String) = withNativeEngine {
+        require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
+        require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
+        val rc = nativeSetLabel(
+            device,
+            device.sectorSize,
+            device.sectorCount.toLong(),
+            label,
+        )
+        if (rc != 0) throw NtfsException("NTFS label update failed (errno=${-rc})")
+    }
+
+    /** Read `$VOLUME_NAME`; null when the volume carries no label. */
+    fun getLabel(device: BlockDevice): String? = withNativeEngine {
+        require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
+        require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
+        nativeGetLabel(device, device.sectorSize, device.sectorCount.toLong())
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
     fun isDirty(device: BlockDevice): Boolean = withNativeEngine {
         require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
         require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
@@ -191,6 +213,19 @@ object NtfsFs {
         label: String,
     ): Int
 
+    @JvmStatic private external fun nativeSetLabel(
+        device: BlockDevice,
+        sectorSize: Int,
+        sectorCount: Long,
+        label: String,
+    ): Int
+
+    @JvmStatic private external fun nativeGetLabel(
+        device: BlockDevice,
+        sectorSize: Int,
+        sectorCount: Long,
+    ): String?
+
     @JvmStatic private external fun nativeCheckDirty(
         device: BlockDevice,
         sectorSize: Int,
@@ -227,19 +262,31 @@ object NtfsFs {
     @JvmStatic internal external fun nativeDelete(handle: Long, path: String)
     @JvmStatic internal external fun nativeRename(handle: Long, from: String, to: String)
     @JvmStatic internal external fun nativeIsVolumeDirty(handle: Long): Boolean
+
+    /** Writes total/free bytes into [out]; true only with both values written. */
+    @JvmStatic internal external fun nativeUsage(handle: Long, out: LongArray): Boolean
 }
 
 class NtfsVolume internal constructor(
     private val handle: Long,
     val device: BlockDevice,
     val readOnly: Boolean,
-) : Closeable, AutoCloseable, UsbFsVolume {
+) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
     @Volatile private var open: Boolean = true
 
     fun isOpen(): Boolean = open
 
     private fun ensureOpen() {
         check(open) { "NTFS volume closed" }
+    }
+
+    override fun space(): FilesystemSpace {
+        ensureOpen()
+        val out = LongArray(2)
+        if (!NtfsFs.nativeUsage(handle, out)) {
+            throw NtfsException("space query failed")
+        }
+        return FilesystemSpace(totalBytes = out[0].toULong(), freeBytes = out[1].toULong())
     }
 
     private fun ensureWritable() {
