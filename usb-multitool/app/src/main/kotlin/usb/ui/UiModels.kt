@@ -28,12 +28,10 @@ data class DeviceIdentity(
     /**
      * Stable identity for confirmations and rescue maps.
      * Prefers serial so two sticks of the same model do not collide.
+     * Format: `label` or `label#serial` (serial trimmed; blank/whitespace → no suffix).
      */
     val identity: String
-        get() {
-            val serial = serialNumber?.trim().orEmpty()
-            return if (serial.isNotEmpty()) "$label#$serial" else label
-        }
+        get() = identityString(label, serialNumber)
 
     /** True when a serial is present — required to resume a RESTORE map. */
     val hasStableSerial: Boolean
@@ -42,6 +40,39 @@ data class DeviceIdentity(
     val capacityLabel: String get() = formatCapacity(capacityBytes)
 
     companion object {
+        /** Fallback when USB product and device names are both absent. */
+        const val DEFAULT_LABEL = "USB Storage"
+
+        /**
+         * Single identity-string rule used by [DeviceIdentity.identity] and any live
+         * USB check that must match confirmations. No format drift across callsites.
+         */
+        fun identityString(label: String, serialNumber: String?): String {
+            val serial = serialNumber?.trim().orEmpty()
+            return if (serial.isNotEmpty()) "$label#$serial" else label
+        }
+
+        /** Label rule shared by every attach/probe path. Pure strings — no Android types. */
+        fun labelOf(productName: String?, deviceName: String?): String =
+            productName ?: deviceName ?: DEFAULT_LABEL
+
+        /**
+         * Build identity from already-resolved fields. Capacity and attachGeneration are
+         * taken verbatim so probe/permission/refresh paths cannot silently alter them.
+         */
+        fun of(
+            label: String,
+            capacityBytes: ULong,
+            serialNumber: String? = null,
+            attachGeneration: Long = 0L,
+        ): DeviceIdentity =
+            DeviceIdentity(
+                label = label,
+                capacityBytes = capacityBytes,
+                serialNumber = serialNumber,
+                attachGeneration = attachGeneration,
+            )
+
         fun formatCapacity(bytes: ULong): String {
             if (bytes < 1024uL) return "$bytes B"
             val kib = bytes.toDouble() / 1024.0

@@ -1097,7 +1097,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val disk = UsbDiskSession.open(mgr, dev)
                         try {
                             require(disk.geometry.capacityBytes == confirmed.identity.capacityBytes) { "confirmed capacity does not match live device" }
-                            val liveIdentity = (dev.productName ?: dev.deviceName ?: "USB Storage") + (dev.serialNumber?.trim()?.takeIf { it.isNotEmpty() }?.let { "#$it" } ?: "")
+                            // Trust boundary: serial read must not swallow SecurityException into label-only.
+                            val liveIdentity = UsbDeviceIdentity.identityStringFailClosed(dev)
                             require(liveIdentity == deviceIdentity) { "confirmed identity does not match live USB" }
                             val linked = VentoySetup.linkImages(
                                 disk = disk,
@@ -1312,11 +1313,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             usbManager = manager
         }
         val mgr = usbManager
-        val identity = DeviceIdentity(
-     label = device.productName ?: device.deviceName ?: "USB Storage",
-     capacityBytes = 0uL,
-     serialNumber = runCatching { device.serialNumber }.getOrNull(),
- )
+        val identity = UsbDeviceIdentity.of(device)
         if (!hasPermission || mgr == null) {
             onIntent(
                 UiIntent.DeviceChanged(
@@ -1357,12 +1354,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             // Keep the geometry the running operation is using.
                             return@withContext
                         }
-                        val probedIdentity = DeviceIdentity(
-                            label = device.productName ?: device.deviceName ?: "USB Storage",
-                            capacityBytes = capacity,
-                            serialNumber = runCatching { device.serialNumber }.getOrNull(),
-                            attachGeneration = gen,
-                        )
+                        val probedIdentity =
+                            UsbDeviceIdentity.of(
+                                device,
+                                capacityBytes = capacity,
+                                attachGeneration = gen,
+                            )
                         onIntent(
                             UiIntent.DeviceChanged(
                                 presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
@@ -1498,12 +1495,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (attachGeneration != gen || attachedDevice?.deviceId != dev.deviceId) {
                             return@withContext
                         }
-                        val identity = DeviceIdentity(
-                            label = dev.productName ?: dev.deviceName ?: "USB Storage",
-                            capacityBytes = capacity,
-                            serialNumber = runCatching { dev.serialNumber }.getOrNull(),
-                            attachGeneration = gen,
-                        )
+                        val identity =
+                            UsbDeviceIdentity.of(
+                                dev,
+                                capacityBytes = capacity,
+                                attachGeneration = gen,
+                            )
                         onIntent(
                             UiIntent.DeviceChanged(
                                 presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
@@ -1569,11 +1566,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             onIntent(
                                 UiIntent.DeviceChanged(
                                     presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
-                                    device = state.device ?: DeviceIdentity(
-     label = dev.productName ?: dev.deviceName ?: "USB Storage",
-     capacityBytes = 0uL,
-     serialNumber = runCatching { dev.serialNumber }.getOrNull(),
- ),
+                                    device = state.device ?: UsbDeviceIdentity.of(dev),
                                     partitions = emptyList(),
                                     files = emptyList(),
                                     tableValid = false,
