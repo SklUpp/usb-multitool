@@ -447,11 +447,11 @@ class UiStateMachineTest {
     @Test
     fun toggleVtoyBypassChecksUpdatesState() {
         val initial = ready()
-        assertTrue(initial.vtoyBypassChecks)
+        assertNull(initial.vtoyBypassChecks)
         val disabled = UiReducer.reduce(initial, UiIntent.SetVtoyBypassChecks(false))
-        assertFalse(disabled.state.vtoyBypassChecks)
+        assertEquals(false, disabled.state.vtoyBypassChecks)
         val reEnabled = UiReducer.reduce(disabled.state, UiIntent.SetVtoyBypassChecks(true))
-        assertTrue(reEnabled.state.vtoyBypassChecks)
+        assertEquals(true, reEnabled.state.vtoyBypassChecks)
     }
 
     @Test
