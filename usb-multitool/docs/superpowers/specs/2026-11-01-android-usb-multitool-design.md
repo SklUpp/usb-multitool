@@ -94,6 +94,16 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
 - `DiskOperation`: type, bytes, progress, cancellation, result, and structured error.
 - `RescueMap`: copied, failed, and non-tried ranges. A partial image remains marked partial.
 
+### Agreed architecture changes (not yet fully implemented)
+
+- Operation results: migrate terminal verdict ownership to `OperationExecutor` incrementally. Producers report mutation, durable commit, and failures; cancellation, disconnection, sync, close failures, and `Partial` must remain accurate. Do not treat a write as committed before its operation-specific durable boundary.
+- UI and executor retain separate operation-state types connected by an exhaustive mapper.
+- Split `MainViewModel` by responsibility in reviewed stages. Component boundaries and migration order require explicit approval; preserve USB attachment ownership, confirmation, cancellation, and close ordering.
+- Centralize USB identity construction without changing identity format, serial, capacity, or attachment generation. Confirmation and rescue checkpoints must retain their existing identity semantics.
+- Report missing native filesystem engines consistently at the volume-opening boundary, preserving the engine name and original cause.
+- Replace nullable-field `UiEffect` variants with typed effects in stages. Use typed operation titles for localization; preserve technical log messages separately.
+- NTFS and exFAT recovery are requested future features, not implemented by this decision. Verify engine capabilities and limitations and agree on a separately confirmed write workflow before implementation; clearing an NTFS dirty flag is not equivalent to filesystem repair.
+
 ## 6. Device and service rules
 
 - Initial I/O size is 64 KiB, split only as required by sector alignment, short USB transfers, or a request boundary.
