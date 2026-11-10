@@ -9,8 +9,9 @@ import usb.device.UsbDisk
 open class RecordingDisk(
     sectorCount: ULong = 262144UL, // 128 MiB default
     sectorSize: Int = 512,
+    session: FakeBotSession = FakeBotSession(),
 ) : UsbDisk(
-    session = FakeBotSession(),
+    session = session,
     geometry = BlockGeometry(sectorSize, sectorCount),
 ) {
     val reads = mutableListOf<ULong>()

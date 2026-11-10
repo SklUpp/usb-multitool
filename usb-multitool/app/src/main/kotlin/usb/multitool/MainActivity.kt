@@ -43,8 +43,10 @@ import kotlinx.coroutines.withContext
 import usb.device.DiskException
 import usb.device.MassStorageDiscovery
 import usb.device.UsbDisk
+import usb.device.withWriteTracking
 import usb.service.DiskController
 import usb.operation.DiskOperation
+import usb.operation.syncDestructiveDisk
 import usb.service.OperationHandle
 import usb.service.DiskService
 import usb.ui.AppShell
@@ -327,12 +329,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 }
                             }
-                            val partitionDisk = object : usb.device.BlockDevice by disk {
-                                override fun write(lba: ULong, source: java.nio.ByteBuffer) {
-                                    mutationAttempted = true
-                                    disk.write(lba, source)
-                                }
-                            }
+                            // Both Long and ULong write overloads — Ventoy uses Long LBA.
+                            val partitionDisk =
+                                disk.withWriteTracking { mutationAttempted = true }
                             when (action) {
                                 DestructiveAction.WIPE -> {
                                     Diagnostics.wipe(
@@ -678,7 +677,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
-                                    VentoyOperations.install(disk, assets, this)
+                                    // First disk.write marks mutationAttempted (partitionDisk wrap).
+                                    VentoyOperations.install(partitionDisk, assets, this)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_UPDATE -> {
@@ -690,7 +690,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
-                                    VentoyOperations.update(disk, assets, this)
+                                    VentoyOperations.update(partitionDisk, assets, this)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> {
@@ -700,7 +700,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         isActive = { isActive() },
                                     )
                                     bytesTotal = -1L
-                                    VentoyOperations.install(disk, released.assets, this)
+                                    VentoyOperations.install(partitionDisk, released.assets, this)
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.RAW_WRITE -> {
@@ -765,21 +765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     )
                                 null -> throw IllegalArgumentException("no destructive action selected")
                             }
-                            try {
-                                disk.sync()
-                                // Final sync after mutation body: durable commit boundary.
-                                if (state != usb.operation.OperationState.Partial &&
-                                    state !is usb.operation.OperationState.Failed
-                                ) {
-                                    commitReached = true
-                                }
-                            } catch (syncFailure: Throwable) {
-                                if (this.mutationAttempted) {
-                                    state = usb.operation.OperationState.Partial
-                                    failureCause = syncFailure
-                                }
-                                throw syncFailure
-                            }
+                            syncDestructiveDisk(disk)
                         } finally {
                             disk.close()
                         }
