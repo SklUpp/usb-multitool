@@ -169,45 +169,54 @@ fun DestructiveAction.label(): String =
     }
 
 /**
- * Localized title for a user-facing operation. Technical log lines keep [OperationProgress.label].
- * Labels are authored by this app; unknown labels fall back unchanged.
+ * Localized title for a user-facing operation. Technical log lines keep
+ * [OperationProgress.label] / [OperationTitle.logLabel] unchanged.
  */
 @Composable
-fun operationLabel(progress: OperationProgress): String {
-    DestructiveAction.entries
-        .firstOrNull { it.displayName() == progress.label }
-        ?.let { return it.label() }
-    val label = progress.label
-    return when {
-        label == "Probe device" -> stringResource(R.string.op_probe)
-        label == "Read scan" -> stringResource(R.string.op_read_scan)
-        label == "Rescue backup" -> stringResource(R.string.op_rescue_backup)
-        label == "GPT critical backup" -> stringResource(R.string.op_gpt_backup)
-        label == "Refresh partitions" -> stringResource(R.string.op_refresh)
-        label == "Self-test" -> stringResource(R.string.op_self_test)
-        label == "Self-test: running..." -> stringResource(R.string.op_self_test_running)
-        label == "Upload" -> stringResource(R.string.op_upload)
-        label == "autounattend.xml link" -> stringResource(R.string.op_link_xml)
-        label.startsWith("List ") ->
-            stringResource(R.string.op_list, label.removePrefix("List "))
-        label.startsWith("New folder ") ->
-            stringResource(R.string.op_new_folder, label.removePrefix("New folder "))
-        label.startsWith("Delete ") ->
-            stringResource(R.string.op_delete, label.removePrefix("Delete "))
-        label.startsWith("Rename ") ->
-            stringResource(R.string.op_rename, label.removePrefix("Rename "))
-        label.startsWith("Download ") ->
-            stringResource(R.string.op_download, label.removePrefix("Download "))
-        label.startsWith("Stage ") && label.endsWith(" for raw write") ->
-            stringResource(
-                R.string.op_stage,
-                label.removePrefix("Stage ").removeSuffix(" for raw write"),
-            )
-        label.startsWith("Format ") ->
-            stringResource(R.string.op_format, label.removePrefix("Format "))
-        else -> label
+fun operationLabel(progress: OperationProgress): String = progress.title.localized()
+
+@Composable
+fun OperationTitle.localized(): String =
+    when (this) {
+        is OperationTitle.Destructive -> action.label()
+        OperationTitle.ProbeDevice -> stringResource(R.string.op_probe)
+        OperationTitle.ReadScan -> stringResource(R.string.op_read_scan)
+        OperationTitle.RescueBackup -> stringResource(R.string.op_rescue_backup)
+        OperationTitle.GptCriticalBackup -> stringResource(R.string.op_gpt_backup)
+        OperationTitle.RefreshPartitions -> stringResource(R.string.op_refresh)
+        OperationTitle.SelfTest -> stringResource(R.string.op_self_test)
+        OperationTitle.SelfTestRunning -> stringResource(R.string.op_self_test_running)
+        OperationTitle.Upload -> stringResource(R.string.op_upload)
+        OperationTitle.AutounattendXmlLink -> stringResource(R.string.op_link_xml)
+        OperationTitle.CheckRawRange -> stringResource(R.string.op_check_raw_range)
+        OperationTitle.ListRawSources -> stringResource(R.string.op_list_raw_sources)
+        OperationTitle.ListDataPartitionFiles ->
+            stringResource(R.string.op_list_data_partition_files)
+        OperationTitle.ReadXmlBindings -> stringResource(R.string.op_read_xml_bindings)
+        OperationTitle.RemoveXmlBindings -> stringResource(R.string.op_remove_xml_bindings)
+        OperationTitle.SaveGlobalWindowsControls ->
+            stringResource(R.string.op_save_global_windows_controls)
+        OperationTitle.ReadUnattendXml -> stringResource(R.string.op_read_unattend_xml)
+        OperationTitle.ListVentoyImages -> stringResource(R.string.op_list_ventoy_images)
+        OperationTitle.GenerateUnattendXml -> stringResource(R.string.op_generate_unattend_xml)
+        OperationTitle.ReadVentoyGlobalSettings ->
+            stringResource(R.string.op_read_ventoy_global_settings)
+        OperationTitle.ListVentoyFolders -> stringResource(R.string.op_list_ventoy_folders)
+        OperationTitle.SetVentoyGlobalSetting ->
+            stringResource(R.string.op_set_ventoy_global_setting)
+        OperationTitle.BindImagesToUnattendXml ->
+            stringResource(R.string.op_bind_images_unattend)
+        OperationTitle.UnbindImageFromUnattendXml ->
+            stringResource(R.string.op_unbind_image_unattend)
+        is OperationTitle.ListPath -> stringResource(R.string.op_list, path)
+        is OperationTitle.NewFolder -> stringResource(R.string.op_new_folder, name)
+        is OperationTitle.DeleteEntry -> stringResource(R.string.op_delete, name)
+        is OperationTitle.RenameEntry -> stringResource(R.string.op_rename, from)
+        is OperationTitle.DownloadEntry -> stringResource(R.string.op_download, name)
+        is OperationTitle.StageForRawWrite -> stringResource(R.string.op_stage, name)
+        is OperationTitle.FormatTarget -> stringResource(R.string.op_format, target)
+        is OperationTitle.ImportTarget -> stringResource(R.string.op_import, targetName)
     }
-}
 
 @Composable
 fun operationStateLabel(state: OperationState): String =

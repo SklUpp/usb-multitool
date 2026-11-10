@@ -471,9 +471,148 @@ data class IsoImportProposal(
 /** One existing `auto_install` binding shown in the XML section. */
 data class WindowsImageLink(val image: String, val templates: List<String>)
 
+/**
+ * Typed user-facing operation identity.
+ * UI localizes via [usb.ui.operationLabel]; logs and [usb.operation.DiskOperation.name]
+ * use stable English [logLabel] only — never reverse-parse localized text.
+ */
+sealed interface OperationTitle {
+    /** English technical string for journals and DiskOperation.name. Never localized. */
+    val logLabel: String
+
+    data class Destructive(val action: DestructiveAction) : OperationTitle {
+        override val logLabel: String get() = action.displayName()
+    }
+
+    data object ProbeDevice : OperationTitle {
+        override val logLabel: String get() = "Probe device"
+    }
+
+    data object ReadScan : OperationTitle {
+        override val logLabel: String get() = "Read scan"
+    }
+
+    data object RescueBackup : OperationTitle {
+        override val logLabel: String get() = "Rescue backup"
+    }
+
+    data object GptCriticalBackup : OperationTitle {
+        override val logLabel: String get() = "GPT critical backup"
+    }
+
+    data object RefreshPartitions : OperationTitle {
+        override val logLabel: String get() = "Refresh partitions"
+    }
+
+    data object SelfTest : OperationTitle {
+        override val logLabel: String get() = "Self-test"
+    }
+
+    /** Transient running banner before the terminal Self-test title. */
+    data object SelfTestRunning : OperationTitle {
+        override val logLabel: String get() = "Self-test: running..."
+    }
+
+    data object Upload : OperationTitle {
+        override val logLabel: String get() = "Upload"
+    }
+
+    data object AutounattendXmlLink : OperationTitle {
+        override val logLabel: String get() = "autounattend.xml link"
+    }
+
+    data object CheckRawRange : OperationTitle {
+        override val logLabel: String get() = "Check raw range"
+    }
+
+    data object ListRawSources : OperationTitle {
+        override val logLabel: String get() = "List raw sources"
+    }
+
+    data object ListDataPartitionFiles : OperationTitle {
+        override val logLabel: String get() = "List data partition files"
+    }
+
+    data object ReadXmlBindings : OperationTitle {
+        override val logLabel: String get() = "Read XML bindings"
+    }
+
+    data object RemoveXmlBindings : OperationTitle {
+        override val logLabel: String get() = "Remove XML bindings"
+    }
+
+    data object SaveGlobalWindowsControls : OperationTitle {
+        override val logLabel: String get() = "Save global Windows controls"
+    }
+
+    data object ReadUnattendXml : OperationTitle {
+        override val logLabel: String get() = "Read unattend XML"
+    }
+
+    data object ListVentoyImages : OperationTitle {
+        override val logLabel: String get() = "List Ventoy images"
+    }
+
+    data object GenerateUnattendXml : OperationTitle {
+        override val logLabel: String get() = "Generate unattend XML"
+    }
+
+    data object ReadVentoyGlobalSettings : OperationTitle {
+        override val logLabel: String get() = "Read Ventoy global settings"
+    }
+
+    data object ListVentoyFolders : OperationTitle {
+        override val logLabel: String get() = "List Ventoy folders"
+    }
+
+    data object SetVentoyGlobalSetting : OperationTitle {
+        override val logLabel: String get() = "Set Ventoy global setting"
+    }
+
+    data object BindImagesToUnattendXml : OperationTitle {
+        override val logLabel: String get() = "Bind images to unattend XML"
+    }
+
+    data object UnbindImageFromUnattendXml : OperationTitle {
+        override val logLabel: String get() = "Unbind image from unattend XML"
+    }
+
+    data class ListPath(val path: String) : OperationTitle {
+        override val logLabel: String get() = "List $path"
+    }
+
+    data class NewFolder(val name: String) : OperationTitle {
+        override val logLabel: String get() = "New folder $name"
+    }
+
+    data class DeleteEntry(val name: String) : OperationTitle {
+        override val logLabel: String get() = "Delete $name"
+    }
+
+    data class RenameEntry(val from: String) : OperationTitle {
+        override val logLabel: String get() = "Rename $from"
+    }
+
+    data class DownloadEntry(val name: String) : OperationTitle {
+        override val logLabel: String get() = "Download $name"
+    }
+
+    data class StageForRawWrite(val name: String) : OperationTitle {
+        override val logLabel: String get() = "Stage $name for raw write"
+    }
+
+    data class FormatTarget(val target: String) : OperationTitle {
+        override val logLabel: String get() = "Format $target"
+    }
+
+    data class ImportTarget(val targetName: String) : OperationTitle {
+        override val logLabel: String get() = "Import $targetName"
+    }
+}
+
 data class OperationProgress(
     val state: OperationState,
-    val label: String,
+    val title: OperationTitle,
     val bytesDone: Long = 0L,
     val bytesTotal: Long = 0L,
     val bytesPerSecond: Long = 0L,
@@ -493,6 +632,12 @@ data class OperationProgress(
     val readScanResult: ReadScanOutcome? = null,
     val cancelable: Boolean = true,
 ) {
+    /**
+     * Stable English technical label for journals and DiskOperation.name.
+     * UI must not parse this; use [title] through [operationLabel].
+     */
+    val label: String get() = title.logLabel
+
     val fraction: Float
         get() =
             if (bytesTotal <= 0L) {

@@ -16,7 +16,7 @@ class OperationProgressMapperTest {
 
     @Test fun partialPreservesProgressAndMessages() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Partial, "scan", 4L, 10L, "saved", IllegalStateException("incomplete"), false,
+            ServiceOperationState.Partial, OperationTitle.ReadScan, 4L, 10L, "saved", IllegalStateException("incomplete"), false,
         )
         assertEquals(OperationState.Partial, progress.state)
         assertEquals(4L, progress.bytesDone)
@@ -28,7 +28,7 @@ class OperationProgressMapperTest {
 
     @Test fun failedUsesOutcomeCauseMessage() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Failed(IllegalArgumentException("bad disk")), "scan", 4L, 10L, null, null, true,
+            ServiceOperationState.Failed(IllegalArgumentException("bad disk")), OperationTitle.ReadScan, 4L, 10L, null, null, true,
         )
         assertEquals(OperationState.Failed, progress.state)
         assertEquals("bad disk", progress.errorMessage)
@@ -37,7 +37,7 @@ class OperationProgressMapperTest {
 
     @Test fun queuedAndRunningKeepTheirState() {
         val queued = readOnlyOperationProgress(
-            ServiceOperationState.Queued, "scan", 0L, 10L, "stale", null, true, readScanResult = scan,
+            ServiceOperationState.Queued, OperationTitle.ReadScan, 0L, 10L, "stale", null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Queued, queued.state)
         assertEquals(0L, queued.bytesDone)
@@ -47,7 +47,7 @@ class OperationProgressMapperTest {
         assertNull(queued.readScanResult)
 
         val running = readOnlyOperationProgress(
-            ServiceOperationState.Running, "scan", 4L, 10L, "stale", null, true, readScanResult = scan,
+            ServiceOperationState.Running, OperationTitle.ReadScan, 4L, 10L, "stale", null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Running, running.state)
         assertEquals(4L, running.bytesDone)
@@ -57,7 +57,7 @@ class OperationProgressMapperTest {
 
     @Test fun cancelledKeepsProgressAndStructuredScan() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Cancelled, "scan", 4L, 10L, null, null, false, readScanResult = scan,
+            ServiceOperationState.Cancelled, OperationTitle.ReadScan, 4L, 10L, null, null, false, readScanResult = scan,
         )
         assertEquals(OperationState.Cancelled, progress.state)
         assertEquals(false, progress.cancelable)
@@ -68,11 +68,44 @@ class OperationProgressMapperTest {
 
     @Test fun completedPreservesResultProgressAndScan() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Completed, "scan", 10L, 10L, null, null, true, readScanResult = scan,
+            ServiceOperationState.Completed, OperationTitle.ReadScan, 10L, 10L, null, null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Completed, progress.state)
         assertEquals(10L, progress.bytesDone)
         assertNull(progress.resultMessage)
         assertEquals(scan, progress.readScanResult)
+    }
+
+    @Test fun preservesTypedTitleAndLogLabel() {
+        val title = OperationTitle.ListPath("/ISO")
+        val progress = readOnlyOperationProgress(
+            ServiceOperationState.Completed, title, 10L, 10L, "ok", null, true,
+        )
+        assertEquals(title, progress.title)
+        assertEquals("List /ISO", progress.label)
+        assertEquals(title.logLabel, progress.label)
+    }
+
+    @Test fun destructiveTitleKeepsDisplayNameAsLogLabel() {
+        val title = OperationTitle.Destructive(DestructiveAction.GPT_RESTORE)
+        assertEquals("restore GPT backup", title.logLabel)
+        val progress = readOnlyOperationProgress(
+            ServiceOperationState.Running, title, 0L, 0L, null, null, true,
+        )
+        assertEquals(title, progress.title)
+        assertEquals("restore GPT backup", progress.label)
+    }
+
+    @Test fun parameterizedTitlesDoNotNeedEnglishPrefixParsing() {
+        assertEquals("New folder docs", OperationTitle.NewFolder("docs").logLabel)
+        assertEquals("Delete a.bin", OperationTitle.DeleteEntry("a.bin").logLabel)
+        assertEquals("Rename old", OperationTitle.RenameEntry("old").logLabel)
+        assertEquals("Download x.iso", OperationTitle.DownloadEntry("x.iso").logLabel)
+        assertEquals(
+            "Stage img.iso for raw write",
+            OperationTitle.StageForRawWrite("img.iso").logLabel,
+        )
+        assertEquals("Import win.iso", OperationTitle.ImportTarget("win.iso").logLabel)
+        assertEquals("Format DATA", OperationTitle.FormatTarget("DATA").logLabel)
     }
 }

@@ -94,9 +94,9 @@ class FilesystemUsageUiTest {
 
     @Test
     fun noRequestWhileAnOperationRunsOrAConfirmationIsOpen() {
-        val running = ready().copy(operation = OperationProgress(state = OperationState.Running, label = "Format"))
+        val running = ready().copy(operation = OperationProgress(state = OperationState.Running, title = OperationTitle.FormatTarget("p1")))
         assertTrue(UiReducer.reduce(running, UiIntent.RequestFilesystemUsage).effects.isEmpty())
-        val queued = ready().copy(operation = OperationProgress(state = OperationState.Queued, label = "Create"))
+        val queued = ready().copy(operation = OperationProgress(state = OperationState.Queued, title = OperationTitle.Destructive(DestructiveAction.CREATE_PARTITION)))
         assertTrue(UiReducer.reduce(queued, UiIntent.RequestFilesystemUsage).effects.isEmpty())
         val absent = ready().copy(presence = DevicePresence.Disconnected)
         assertTrue(UiReducer.reduce(absent, UiIntent.RequestFilesystemUsage).effects.isEmpty())
@@ -228,7 +228,7 @@ class FilesystemUsageUiTest {
         )
         val running = UiReducer.reduce(
             published.state,
-            UiIntent.OperationUpdated(OperationProgress(state = OperationState.Running, label = "Upload")),
+            UiIntent.OperationUpdated(OperationProgress(state = OperationState.Running, title = OperationTitle.Upload)),
         )
         assertEquals(key, requireNotNull(running.state.filesystemUsage).key)
         for (terminal in listOf(
@@ -239,7 +239,7 @@ class FilesystemUsageUiTest {
         )) {
             val finished = UiReducer.reduce(
                 published.state,
-                UiIntent.OperationUpdated(OperationProgress(state = terminal, label = "Upload")),
+                UiIntent.OperationUpdated(OperationProgress(state = terminal, title = OperationTitle.Upload)),
             )
             assertNull("$terminal must invalidate the measured value", finished.state.filesystemUsage)
         }

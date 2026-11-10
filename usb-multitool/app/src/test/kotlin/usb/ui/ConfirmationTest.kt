@@ -98,7 +98,7 @@ class UiStateMachineTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
-                        label = "raw write",
+                        title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
                         bytesDone = 1000,
                         bytesTotal = 5000,
                         bytesPerSecond = 100,
@@ -120,7 +120,7 @@ class UiStateMachineTest {
             UiReducer.reduce(
                 base,
                 UiIntent.OperationUpdated(
-                    OperationProgress(OperationState.Completed, "wipe"),
+                    OperationProgress(OperationState.Completed, OperationTitle.Destructive(DestructiveAction.WIPE)),
                 ),
             )
         assertEquals(UiMessage.Key(UiMessageKey.Success), completed.state.statusMessage)
@@ -129,7 +129,7 @@ class UiStateMachineTest {
             UiReducer.reduce(
                 base,
                 UiIntent.OperationUpdated(
-                    OperationProgress(OperationState.Cancelled, "wipe"),
+                    OperationProgress(OperationState.Cancelled, OperationTitle.Destructive(DestructiveAction.WIPE)),
                 ),
             )
         assertEquals(UiMessage.Key(UiMessageKey.CancelledStatus), cancelled.state.statusMessage)
@@ -140,7 +140,7 @@ class UiStateMachineTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Failed,
-                        "wipe",
+                        OperationTitle.Destructive(DestructiveAction.WIPE),
                         errorMessage = "I/O error",
                     ),
                 ),
@@ -153,7 +153,7 @@ class UiStateMachineTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Partial,
-                        "backup",
+                        OperationTitle.RescueBackup,
                         errorMessage = "Partial rescue map retained",
                     ),
                 ),
@@ -173,7 +173,7 @@ class UiStateMachineTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Completed,
-                        "Read scan",
+                        OperationTitle.ReadScan,
                         readScanResult = scan,
                     ),
                 ),
@@ -190,7 +190,7 @@ class UiStateMachineTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Cancelled,
-                        "Read scan",
+                        OperationTitle.ReadScan,
                         bytesDone = 1024L,
                         bytesTotal = 8192L,
                         readScanResult = scan,
@@ -434,7 +434,7 @@ class UiStateMachineTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Completed,
-                        "rescue backup",
+                        OperationTitle.RescueBackup,
                         resultMessage = detail,
                     ),
                 ),
@@ -444,7 +444,7 @@ class UiStateMachineTest {
         val bare =
             UiReducer.reduce(
                 ready(),
-                UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, "wipe")),
+                UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, OperationTitle.Destructive(DestructiveAction.WIPE))),
             )
         assertEquals(UiMessage.Key(UiMessageKey.Success), bare.state.statusMessage)
     }
@@ -463,7 +463,7 @@ class UiStateMachineTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
-                        label = "raw write",
+                        title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
                         bytesTotal = 100,
                     ),
             )

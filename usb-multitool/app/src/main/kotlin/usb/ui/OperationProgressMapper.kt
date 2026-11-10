@@ -5,7 +5,7 @@ import usb.operation.OperationState as ServiceOperationState
 /** Maps read-only operation outcome to UI progress without touching operation ownership. */
 fun readOnlyOperationProgress(
     outcome: ServiceOperationState,
-    label: String,
+    title: OperationTitle,
     bytesDone: Long,
     bytesTotal: Long,
     resultMessage: String?,
@@ -15,13 +15,13 @@ fun readOnlyOperationProgress(
 ): OperationProgress = when (outcome) {
     is ServiceOperationState.Failed -> OperationProgress(
         state = OperationState.Failed,
-        label = label,
+        title = title,
         errorMessage = outcome.cause.message ?: outcome.cause.javaClass.simpleName,
         cancelable = cancelable,
     )
     is ServiceOperationState.Cancelled -> OperationProgress(
         state = OperationState.Cancelled,
-        label = label,
+        title = title,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
@@ -30,7 +30,7 @@ fun readOnlyOperationProgress(
     )
     is ServiceOperationState.Partial -> OperationProgress(
         state = OperationState.Partial,
-        label = label,
+        title = title,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
@@ -40,21 +40,21 @@ fun readOnlyOperationProgress(
     )
     is ServiceOperationState.Queued -> OperationProgress(
         state = OperationState.Queued,
-        label = label,
+        title = title,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         cancelable = cancelable,
     )
     is ServiceOperationState.Running -> OperationProgress(
         state = OperationState.Running,
-        label = label,
+        title = title,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         cancelable = cancelable,
     )
     is ServiceOperationState.Completed -> OperationProgress(
         state = OperationState.Completed,
-        label = label,
+        title = title,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,

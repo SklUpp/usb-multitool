@@ -56,6 +56,7 @@ import usb.ui.DeviceIdentity
 import usb.ui.DevicePresence
 import usb.ui.FileEntry
 import usb.ui.OperationProgress
+import usb.ui.OperationTitle
 import usb.ui.ReadScanOutcome
 import usb.ui.readOnlyOperationProgress
 import usb.ui.OperationState
@@ -65,7 +66,6 @@ import usb.ui.UiMessage
 import usb.ui.UiMessageKey
 import usb.ui.UiReducer
 import usb.ui.AppLanguage
-import usb.ui.displayName
 import usb.device.UsbDiskSession
 import usb.diagnostics.Diagnostics
 import usb.diagnostics.Rescue
@@ -254,7 +254,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (intent is UiIntent.OperationUpdated && intent.progress != null) {
             val current = intent.progress
             val previous = state.operation
-            if (previous?.state != current.state || previous?.label != current.label) {
+            if (previous?.state != current.state || previous?.title != current.title) {
                 val detail = current.errorMessage
                     ?: current.resultMessage
                     ?: current.readScanResult?.toLogLine()
@@ -279,7 +279,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         when (effect.kind) {
             UiEffect.Kind.SubmitDestructive -> {
                 val action = effect.action
-                val actionName = action?.displayName() ?: "destructive"
+                val opTitle = action?.let { OperationTitle.Destructive(it) }
+                    ?: error("destructive action missing")
+                val actionName = opTitle.logLabel
                 val uiState = state
                 val confirmed = effect.confirmation
                     ?: throw IllegalStateException("destructive confirmation missing")
@@ -777,7 +779,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = OperationState.Running,
-                            label = actionName,
+                            title = opTitle,
                             cancelable = isCooperative,
                         ),
                     ),
@@ -793,7 +795,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val total = op.bytesTotal
                             onIntent(UiIntent.OperationUpdated(OperationProgress(
                                 state = OperationState.Running,
-                                label = actionName,
+                                title = opTitle,
                                 bytesDone = done,
                                 bytesTotal = total,
                                 cancelable = isCooperative,
@@ -813,7 +815,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = mappedState,
-                                    label = actionName,
+                                    title = opTitle,
                                     errorMessage = errorMsg,
                                     resultMessage = op.result,
                                     rawWriteResult = rawWriteOutcome,
@@ -859,7 +861,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             UiEffect.Kind.ReadScan ->
-                submitReadOnlyDiskOperation("Read scan") { disk, operation, sink ->
+                submitReadOnlyDiskOperation(OperationTitle.ReadScan) { disk, operation, sink ->
                     val report = Diagnostics.readScan(disk, operation = operation)
                     sink.readScanResult = ReadScanOutcome.from(report, disk.geometry.sectorCount)
                     // UI formats from sink; empty resultMessage avoids frozen language string.
@@ -875,7 +877,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         device?.let {
                             usb.image.RangeProbeAttachment(it.identity, it.attachGeneration)
                         }
-                    submitReadOnlyDiskOperation("Check raw range") { disk, _, _ ->
+                    submitReadOnlyDiskOperation(OperationTitle.CheckRawRange) { disk, _, _ ->
                         val result =
                             usb.image.RangeProbe.sample(
                                 disk = disk,
@@ -891,7 +893,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             UiEffect.Kind.RescueBackup ->
-                submitReadOnlyDiskOperation("Rescue backup") { disk, operation, _ ->
+                submitReadOnlyDiskOperation(OperationTitle.RescueBackup) { disk, operation, _ ->
                     val dir = backupDirectory()
                     val stamp = "${timestamp()}-${System.nanoTime()}"
                     val image = File(dir, "rescue-$stamp.img")
@@ -949,7 +951,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
             UiEffect.Kind.CaptureGptBackup ->
-                submitReadOnlyDiskOperation("GPT critical backup") { disk, operation, _ ->
+                submitReadOnlyDiskOperation(OperationTitle.GptCriticalBackup) { disk, operation, _ ->
                     val blob = GptBackup.backupCriticalSectors(disk)
                     val info = GptCriticalBackup.inspectCaptured(
                         blob = blob,
@@ -1062,7 +1064,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Failed,
-                                label = "autounattend.xml link",
+                                title = OperationTitle.AutounattendXmlLink,
                                 errorMessage = "No image selected for the Windows setup link",
                             ),
                         ),
@@ -1073,7 +1075,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val confirmed = effect.confirmation ?: throw IllegalStateException("Ventoy link confirmation missing")
                 val operationGeneration = attachGeneration
                 val deviceIdentity = confirmed.identity.identity
-                val op = object : DiskOperation(name = "autounattend.xml link") {
+                val linkTitle = OperationTitle.AutounattendXmlLink
+                val op = object : DiskOperation(name = linkTitle.logLabel) {
                     @Volatile var result: String? = null
 
                     override suspend fun run() {
@@ -1110,7 +1113,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = OperationState.Running,
-                            label = "autounattend.xml link",
+                            title = OperationTitle.AutounattendXmlLink,
                             cancelable = false,
                         ),
                     ),
@@ -1127,7 +1130,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = mappedState,
-                                    label = "autounattend.xml link",
+                                    title = OperationTitle.AutounattendXmlLink,
                                     errorMessage = errorMsg,
                                     resultMessage = op.result,
                                     cancelable = false,
@@ -1217,7 +1220,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dev = attachedDevice
         val mgr = usbManager
         if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
-            submitReadOnlyDiskOperation("Self-test", cancelable = false) { disk, _, _ ->
+            submitReadOnlyDiskOperation(OperationTitle.SelfTest, cancelable = false) { disk, _, _ ->
                 val report = usb.diagnostics.SelfTestRunner.runAll(disk)
                 check(report.allPassed) { report.summary() }
                 report.summary()
@@ -1226,7 +1229,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scope.launch {
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(state = OperationState.Running, label = "Self-test: running...", cancelable = false),
+                        OperationProgress(state = OperationState.Running, title = OperationTitle.SelfTestRunning, cancelable = false),
                     ),
                 )
                 try {
@@ -1239,7 +1242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = targetState,
-                                label = "Self-test",
+                                title = OperationTitle.SelfTest,
                                 resultMessage = if (report.allPassed) summary else null,
                                 errorMessage = if (!report.allPassed) summary else null,
                                 cancelable = false,
@@ -1252,7 +1255,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Failed,
-                                label = "Self-test",
+                                title = OperationTitle.SelfTest,
                                 errorMessage = t.message ?: "Self-test failed",
                                 cancelable = false,
                             ),
@@ -1323,7 +1326,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.Probing)))
 
-        val op = object : DiskOperation(name = "Probe device") {
+        val op = object : DiskOperation(name = OperationTitle.ProbeDevice.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val disk = UsbDiskSession.open(mgr, device)
@@ -1468,7 +1471,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dev = attachedDevice ?: return
         val mgr = usbManager ?: return
         val gen = attachGeneration
-        val op = object : DiskOperation(name = "Refresh partitions") {
+        val op = object : DiskOperation(name = OperationTitle.RefreshPartitions.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val disk = UsbDiskSession.open(mgr, dev)
@@ -1749,7 +1752,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Re-list the displayed directory from the real volume. */
     fun listDirectory(path: String, status: UiMessage? = null) = withPartitionId { partitionId ->
         submitFilesOperation(
-            label = "List $path",
+            title = OperationTitle.ListPath(path),
             failurePath = path,
             onSuccess = { status?.let { onIntent(UiIntent.Status(it)) } },
         ) {
@@ -1762,7 +1765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val target = fatChildPath(path, name)
         withWritablePartitionId { partitionId ->
             submitFilesOperation(
-                label = "New folder $name",
+                title = OperationTitle.NewFolder(name),
                 onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.CreatedFolder, listOf(target))) },
             ) { operation ->
                 filesSession.withWritableVolume(partitionId, operation) { volume ->
@@ -1779,7 +1782,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val target = fatChildPath(path, name)
         withWritablePartitionId { partitionId ->
             submitFilesOperation(
-                label = "Delete $name",
+                title = OperationTitle.DeleteEntry(name),
                 onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.DeletedPath, listOf(target))) },
             ) { operation ->
                 filesSession.withWritableVolume(partitionId, operation) { volume ->
@@ -1803,7 +1806,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val expectedDeviceKey = deviceKey(attachedDevice)
         withWritablePartitionId { partitionId ->
             submitFilesOperation(
-                label = "Rename $from",
+                title = OperationTitle.RenameEntry(from),
                 onSuccess = {
                     listDirectory(
                         path,
@@ -1842,7 +1845,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         var uploaded: String? = null
         withWritablePartitionId { partitionId ->
             submitFilesOperation(
-                label = "Upload",
+                title = OperationTitle.Upload,
                 onSuccess = {
                     val name = uploaded
                     listDirectory(
@@ -1934,7 +1937,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Holder: publish SetStaged only after copy+sync+close succeed; onSuccess runs on Main.
         val stagedPathHolder = arrayOfNulls<String>(1)
         submitFilesOperation(
-            label = "Stage $name for raw write",
+            title = OperationTitle.StageForRawWrite(name),
             onSuccess = {
                 val stagedPath = stagedPathHolder[0]
                 if (stagedPath != null) {
@@ -2025,7 +2028,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val identity = state.device?.identity
         rawSourceHandle?.cancel()
         rawSourceHandle = submitFilesOperation(
-            label = "List raw sources",
+            title = OperationTitle.ListRawSources,
             quiet = true,
         ) { operation ->
             require(attachGeneration == expectedAttach) { "USB attach generation changed" }
@@ -2065,7 +2068,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val expectedKey = deviceKey(attachedDevice)
         val identity = state.device?.identity
         windowsImageHandle?.cancel()
-        val op = object : DiskOperation("List data partition files") {
+        val op = object : DiskOperation(OperationTitle.ListDataPartitionFiles.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2139,7 +2142,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
         val identity = state.device?.identity
-        val op = object : DiskOperation("Read XML bindings") {
+        val op = object : DiskOperation(OperationTitle.ReadXmlBindings.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2350,7 +2353,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val resolver = getApplication<Application>().contentResolver
-        val label = "Import ${proposal.targetName}"
+        val opTitle = OperationTitle.ImportTarget(proposal.targetName)
+        val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
@@ -2400,7 +2404,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UiIntent.OperationUpdated(
                 OperationProgress(
                     state = OperationState.Running,
-                    label = label,
+                    title = opTitle,
                     bytesTotal = proposal.sizeBytes ?: -1L,
                     cancelable = true,
                 ),
@@ -2417,7 +2421,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Running,
-                                label = label,
+                                title = opTitle,
                                 bytesDone = op.bytesDone,
                                 bytesTotal = op.bytesTotal,
                                 cancelable = true,
@@ -2435,7 +2439,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            label = label,
+                            title = opTitle,
                             bytesDone = op.bytesDone,
                             bytesTotal = op.bytesTotal,
                             errorMessage = message,
@@ -2466,7 +2470,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun unlinkWindowsImages(paths: List<String>) {
-        val label = "Remove XML bindings"
+        val opTitle = OperationTitle.RemoveXmlBindings
+        val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
@@ -2497,7 +2502,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UiIntent.OperationUpdated(
                 OperationProgress(
                     state = OperationState.Running,
-                    label = label,
+                    title = opTitle,
                     cancelable = true,
                 ),
             ),
@@ -2514,7 +2519,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            label = label,
+                            title = opTitle,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
@@ -2544,7 +2549,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             return
         }
-        val label = "Save global Windows controls"
+        val opTitle = OperationTitle.SaveGlobalWindowsControls
+        val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
@@ -2573,7 +2579,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         onIntent(
             UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, label = label, cancelable = false),
+                OperationProgress(state = OperationState.Running, title = opTitle, cancelable = false),
             ),
         )
         val handle = DiskController.get().submit(op)
@@ -2587,7 +2593,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            label = label,
+                            title = opTitle,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
@@ -2604,7 +2610,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadAutounattend(xmlName: String, generation: Long) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val op = object : DiskOperation("Read unattend XML") {
+        val op = object : DiskOperation(OperationTitle.ReadUnattendXml.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2671,7 +2677,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadAutounattendCandidates(xmlName: String, generation: Long) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val op = object : DiskOperation("List Ventoy images") {
+        val op = object : DiskOperation(OperationTitle.ListVentoyImages.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2766,7 +2772,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val overwriteXml = effect.overwriteXml
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val label = "Generate unattend XML"
+        val opTitle = OperationTitle.GenerateUnattendXml
+        val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
@@ -2798,7 +2805,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         onIntent(
             UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, label = label, cancelable = false),
+                OperationProgress(state = OperationState.Running, title = opTitle, cancelable = false),
             ),
         )
         val handle = DiskController.get().submit(op)
@@ -2812,7 +2819,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            label = label,
+                            title = opTitle,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
@@ -2835,7 +2842,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadVentoyGlobalSettings() {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val op = object : DiskOperation("Read Ventoy global settings") {
+        val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2876,7 +2883,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadVentoyFolders() {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val op = object : DiskOperation("List Ventoy folders") {
+        val op = object : DiskOperation(OperationTitle.ListVentoyFolders.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2915,7 +2922,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun setVentoyGlobalSetting(key: String, value: String?) {
-        val op = object : DiskOperation("Set Ventoy global setting") {
+        val op = object : DiskOperation(OperationTitle.SetVentoyGlobalSetting.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
@@ -2938,7 +2945,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UiIntent.OperationUpdated(
                 OperationProgress(
                     state = OperationState.Running,
-                    label = "Set Ventoy global setting",
+                    title = OperationTitle.SetVentoyGlobalSetting,
                     cancelable = false,
                 ),
             ),
@@ -2954,7 +2961,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            label = "Set Ventoy global setting",
+                            title = OperationTitle.SetVentoyGlobalSetting,
                             errorMessage = message,
                             cancelable = false,
                         ),
@@ -2981,7 +2988,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // not silently edit another disk that happens to hold the same path.
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val op = object : DiskOperation("Bind images to unattend XML") {
+        val bindTitle = OperationTitle.BindImagesToUnattendXml
+        val op = object : DiskOperation(bindTitle.logLabel) {
             override suspend fun run() {
                 require(attachGeneration == expectedAttach) { "USB attach generation changed" }
                 require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
@@ -3004,13 +3012,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        submitBindingOperation(op, xmlName)
+        submitBindingOperation(op, bindTitle, xmlName)
     }
 
     private fun unbindAutounattend(xmlName: String, imagePath: String) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
-        val op = object : DiskOperation("Unbind image from unattend XML") {
+        val unbindTitle = OperationTitle.UnbindImageFromUnattendXml
+        val op = object : DiskOperation(unbindTitle.logLabel) {
             override suspend fun run() {
                 require(attachGeneration == expectedAttach) { "USB attach generation changed" }
                 require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
@@ -3036,13 +3045,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        submitBindingOperation(op, xmlName)
+        submitBindingOperation(op, unbindTitle, xmlName)
     }
 
-    private fun submitBindingOperation(op: DiskOperation, xmlName: String) {
+    private fun submitBindingOperation(op: DiskOperation, title: OperationTitle, xmlName: String) {
         onIntent(
             UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, label = op.name, cancelable = false),
+                OperationProgress(state = OperationState.Running, title = title, cancelable = false),
             ),
         )
         val handle = DiskController.get().submit(op)
@@ -3056,7 +3065,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            label = op.name,
+                            title = title,
                             errorMessage = message,
                             cancelable = false,
                         ),
@@ -3077,11 +3086,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-private fun downloadFile(path: String, name: String, uri: String) {
+    private fun downloadFile(path: String, name: String, uri: String) {
         val resolver = getApplication<Application>().contentResolver
         withPartitionId { partitionId ->
             submitFilesOperation(
-                label = "Download $name",
+                title = OperationTitle.DownloadEntry(name),
                 onSuccess = { onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(name)))) },
             ) { operation ->
                 val target = fatChildPath(path, name)
@@ -3135,7 +3144,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
      * the affected directory after a mutation so the UI never shows invented entries.
      */
     private fun submitFilesOperation(
-        label: String,
+        title: OperationTitle,
         bytesTotal: Long = -1L,
         failurePath: String? = null,
         onSuccess: (() -> Unit)? = null,
@@ -3143,6 +3152,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
         quiet: Boolean = failurePath != null,
         body: (DiskOperation) -> Unit,
     ): OperationHandle {
+        val label = title.logLabel
         val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
             override suspend fun run() {
                 filesSession.withLock {
@@ -3154,7 +3164,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
             UiIntent.OperationUpdated(
                 OperationProgress(
                     state = OperationState.Running,
-                    label = label,
+                    title = title,
                     bytesTotal = bytesTotal,
                 ),
             ),
@@ -3173,7 +3183,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Running,
-                                label = label,
+                                title = title,
                                 bytesDone = operation.bytesDone,
                                 bytesTotal = operation.bytesTotal,
                             ),
@@ -3208,7 +3218,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = OperationState.Failed,
-                                    label = label,
+                                    title = title,
                                     errorMessage = message,
                                 ),
                             ),
@@ -3220,7 +3230,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                     is usb.operation.OperationState.Cancelled -> {
                         onIntent(
                             UiIntent.OperationUpdated(
-                                OperationProgress(state = OperationState.Cancelled, label = label),
+                                OperationProgress(state = OperationState.Cancelled, title = title),
                             ),
                         )
                         onTerminal?.invoke(outcome)
@@ -3230,7 +3240,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = OperationState.Partial,
-                                    label = label,
+                                    title = title,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
                                     errorMessage = operation.failureCause?.message
@@ -3246,7 +3256,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                             UiIntent.OperationUpdated(
                                 OperationProgress(
                                     state = OperationState.Completed,
-                                    label = label,
+                                    title = title,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
                                 ),
@@ -3276,11 +3286,12 @@ private fun downloadFile(path: String, name: String, uri: String) {
     }
 
     private fun submitReadOnlyDiskOperation(
-        label: String,
+        title: OperationTitle,
         cancelable: Boolean = true,
         body: (UsbDisk, DiskOperation, ReadOnlySink) -> String,
     ) {
         val sink = ReadOnlySink()
+        val label = title.logLabel
         val operation = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
@@ -3298,7 +3309,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
         }
         onIntent(
             UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, label = label, cancelable = cancelable),
+                OperationProgress(state = OperationState.Running, title = title, cancelable = cancelable),
             ),
         )
         val handle = DiskController.get().submit(operation)
@@ -3312,7 +3323,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Running,
-                                label = label,
+                                title = title,
                                 bytesDone = operation.bytesDone,
                                 bytesTotal = operation.bytesTotal,
                                 cancelable = cancelable,
@@ -3348,7 +3359,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
                                     outcome = outcome,
-                                    label = label,
+                                    title = title,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
                                     resultMessage = operation.result?.takeIf { it.isNotEmpty() },
@@ -3366,7 +3377,7 @@ private fun downloadFile(path: String, name: String, uri: String) {
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
                                     outcome = outcome,
-                                    label = label,
+                                    title = title,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
                                     resultMessage = operation.result?.takeIf { it.isNotEmpty() },

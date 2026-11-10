@@ -223,7 +223,7 @@ object UiStateHostCheck {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
-                        label = "raw write",
+                        title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
                         bytesDone = 10,
                         bytesTotal = 100,
                     ),
@@ -238,7 +238,7 @@ object UiStateHostCheck {
         fun statusOf(state: OperationState, err: String? = null): UiMessage? =
             UiReducer.reduce(
                 ready,
-                UiIntent.OperationUpdated(OperationProgress(state, "op", errorMessage = err)),
+                UiIntent.OperationUpdated(OperationProgress(state, OperationTitle.Upload, errorMessage = err)),
             ).state.statusMessage
 
         require(statusOf(OperationState.Completed) == UiMessage.Key(UiMessageKey.Success))
@@ -251,7 +251,7 @@ object UiStateHostCheck {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Completed,
-                        "backup",
+                        OperationTitle.RescueBackup,
                         resultMessage = "saved /a.bin",
                     ),
                 ),
@@ -374,7 +374,7 @@ object UiStateHostCheck {
 
         val running = ready.copy(
             presence = DevicePresence.Busy,
-            operation = OperationProgress(OperationState.Running, "raw write", bytesTotal = 100),
+            operation = OperationProgress(OperationState.Running, OperationTitle.Destructive(DestructiveAction.RAW_WRITE), bytesTotal = 100),
         )
         val switched = UiReducer.reduce(running, UiIntent.SelectPartition("2"))
         require(switched.effects.isEmpty()) { "partition switch during a write must not list" }
@@ -479,7 +479,7 @@ object UiStateHostCheck {
 
         val cancelEffect = UiReducer.reduce(ready, UiIntent.CancelOperation)
         val staged = ready.copy(stagedRawImagePath = "/staging/old.img", stagedRawImageLabel = "old")
-        val stagedBusy = staged.copy(operation = OperationProgress(OperationState.Running, "raw write", bytesTotal = 1))
+        val stagedBusy = staged.copy(operation = OperationProgress(OperationState.Running, OperationTitle.Destructive(DestructiveAction.RAW_WRITE), bytesTotal = 1))
         require(UiReducer.reduce(stagedBusy, UiIntent.ClearStagedRawImage()).state.stagedRawImagePath == "/staging/old.img")
         require(UiReducer.reduce(stagedBusy, UiIntent.SetStagedRawImage("/staging/new.img", "new")).state.stagedRawImagePath == "/staging/old.img")
         val stagedConfirmed = staged.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.RAW_WRITE))
@@ -557,7 +557,7 @@ object UiStateHostCheck {
                 device = device,
                 stagedRawImagePath = "/data/staging/raw-1-img.bin",
                 stagedRawImageLabel = "img.bin",
-                operation = OperationProgress(state = OperationState.Running, label = "raw image write"),
+                operation = OperationProgress(state = OperationState.Running, title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE)),
             )
             require(!busy.actionsEnabled)
             val blocked = UiReducer.reduce(busy, UiIntent.SetImage("content://new.iso"))
