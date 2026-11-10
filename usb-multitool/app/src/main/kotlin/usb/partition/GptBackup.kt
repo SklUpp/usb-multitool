@@ -45,6 +45,10 @@ object GptBackup {
             throw HybridAmbiguityException("refusing GPT backup relocate on hybrid/ambiguous layout")
         }
         require(table.scheme == TableScheme.GPT) { "relocateBackup requires GPT" }
+        require(!table.gptPrimaryDamaged) {
+            "primary GPT header or entries are damaged; refusing to relocate an " +
+                "ambiguous table — restore a matching GPT critical backup first"
+        }
         val header = requireNotNull(table.gptHeader) { "missing GPT header" }
         val entries = requireNotNull(table.gptEntriesRaw) { "missing GPT entries" }
         val sectorSize = disk.sectorSize
@@ -82,6 +86,8 @@ object GptBackup {
             sectorSize = sectorSize,
         )
         disk.write(newBackupHeaderLba, ByteBuffer.wrap(backupHeader))
+        // Durable backup before the primary header stops pointing at the relocated copy.
+        disk.sync()
 
         // Update primary header to point at new backup.
         val primaryHeader = buildHeader(

@@ -14,6 +14,13 @@ data class PartitionTable(
     val gptPrimaryEntryLba: ULong? = null,
     val gptHeader: GptHeader? = null,
     val gptEntriesRaw: ByteArray? = null,
+    /**
+     * True when the primary header or entry array failed validation and this table was
+     * recovered from the backup copy at the last disk sector. Read-only by contract:
+     * the backup header does not record the primary entry-array location, so
+     * [PartitionWriter.commit] and [GptBackup.relocateBackup] refuse such a table.
+     */
+    val gptPrimaryDamaged: Boolean = false,
 ) {
     companion object {
         private const val MIB_BYTES = 1024L * 1024L
@@ -32,8 +39,7 @@ data class PartitionTable(
                         hybridAmbiguous = true,
                     )
                 }
-                val gpt = GptTable.read(disk)
-                return fromGpt(disk, gpt)
+                return fromGpt(disk, readGptPreferPrimary(disk))
             }
             if (mbr.partitions.isNotEmpty()) {
                 // Classic MBR. Still probe GPT — hybrid layouts are ambiguous.
@@ -84,13 +90,61 @@ data class PartitionTable(
             }
         }
 
-        private fun fromGpt(disk: BlockDevice, gpt: GptTable.Result): PartitionTable {
+        /**
+         * Read the primary GPT; on validation failure recover the table from the backup
+         * copy at the last disk sector. The returned result is flagged as backup-sourced
+         * so write paths can refuse the ambiguous primary entry-array location.
+         */
+        private fun readGptPreferPrimary(disk: BlockDevice): GptTable.Result {
+            val primaryFailure = try {
+                return GptTable.read(disk)
+            } catch (failure: IllegalArgumentException) {
+                failure
+            }
+            // A backup header needs its own sector below the primary header at LBA 1.
+            if (disk.sectorCount < 3UL) throw primaryFailure
+            val backupHeaderLba = disk.sectorCount - 1UL
+            val backup = try {
+                GptTable.read(disk, backupHeaderLba)
+            } catch (failure: IllegalArgumentException) {
+                primaryFailure.addSuppressed(failure)
+                throw primaryFailure
+            }
+            val header = backup.header
             val entrySectors = (
-                (gpt.header.entryCount.toLong() * gpt.header.entrySize.toLong() +
+                (header.entryCount.toLong() * header.entrySize.toLong() +
+                    disk.sectorSize - 1) / disk.sectorSize
+                ).toULong()
+            // A backup header must point back at the primary header at LBA 1;
+            // anything else means two different layouts are being mixed.
+            require(header.backupLba == 1UL) {
+                "backup GPT header at LBA $backupHeaderLba points at alternate LBA " +
+                    "${header.backupLba}, expected 1; refusing ambiguous primary recovery"
+            }
+            require(header.entryLba > 0UL && entrySectors > 0UL &&
+                header.entryLba < backupHeaderLba &&
+                entrySectors <= backupHeaderLba - header.entryLba) {
+                "backup GPT entries at LBA ${header.entryLba} overlap the backup header " +
+                    "at LBA $backupHeaderLba"
+            }
+            require(header.lastUsable < header.entryLba) {
+                "backup GPT usable range ends at LBA ${header.lastUsable}, " +
+                    "past its entries at LBA ${header.entryLba}"
+            }
+            return backup.copy(fromBackup = true)
+        }
+
+        private fun fromGpt(disk: BlockDevice, gpt: GptTable.Result): PartitionTable {
+            val header = gpt.header
+            val entrySectors = (
+                (header.entryCount.toLong() * header.entrySize.toLong() +
                     disk.sectorSize - 1) / disk.sectorSize
                 ).toULong()
             // Backup entries occupy [backupLba-entrySectors, backupLba-1]; header is exclusive.
-            val backupEntriesLba = gpt.header.backupLba - entrySectors
+            // A backup-sourced header records its own LBA and entry LBA instead.
+            val backupHeaderLba = if (gpt.fromBackup) header.currentLba else header.backupLba
+            val backupEntriesLba =
+                if (gpt.fromBackup) header.entryLba else header.backupLba - entrySectors
             return PartitionTable(
                 scheme = TableScheme.GPT,
                 partitions = gpt.partitions,
@@ -98,16 +152,17 @@ data class PartitionTable(
                     gpt.partitions,
                     disk.sectorCount,
                     alignmentSectors(disk.sectorSize),
-                    firstUsable = gpt.header.firstUsable,
-                    lastUsableExclusive = gpt.header.lastUsable + 1UL,
+                    firstUsable = header.firstUsable,
+                    lastUsableExclusive = header.lastUsable + 1UL,
                 ),
                 diskSectorCount = disk.sectorCount,
                 sectorSize = disk.sectorSize,
-                gptBackupHeaderLba = gpt.header.backupLba,
+                gptBackupHeaderLba = backupHeaderLba,
                 gptBackupEntriesLba = backupEntriesLba,
-                gptPrimaryEntryLba = gpt.header.entryLba,
-                gptHeader = gpt.header,
+                gptPrimaryEntryLba = if (gpt.fromBackup) null else header.entryLba,
+                gptHeader = header,
                 gptEntriesRaw = gpt.entriesRaw,
+                gptPrimaryDamaged = gpt.fromBackup,
             )
         }
 

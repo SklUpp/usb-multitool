@@ -82,6 +82,11 @@ object PartitionWriter {
     }
 
     private fun commitGpt(disk: BlockDevice, table: PartitionTable) {
+        require(!table.gptPrimaryDamaged) {
+            "primary GPT header or entries are damaged and the table was recovered from " +
+                "the backup copy; refusing an ambiguous primary rewrite — restore a " +
+                "matching GPT critical backup first"
+        }
         val header =
             table.gptHeader
                 ?: throw IllegalArgumentException("GPT scheme without a parsed header")
@@ -127,21 +132,11 @@ object PartitionWriter {
         }
         val entriesCrc = crc32(entries)
 
-        writeSectors(disk, header.entryLba, entries, sectorSize)
+        // Publish the backup copy first and make it durable before touching the primary.
+        // A disconnect at any point then leaves at least one complete, CRC-valid GPT:
+        // before the backup header lands the old primary is intact, afterwards the new
+        // backup is. Writing both entry arrays before either header would invalidate both.
         writeSectors(disk, backupEntriesLba, entries, sectorSize)
-
-        writeHeader(
-            disk = disk,
-            lba = header.currentLba,
-            currentLba = header.currentLba,
-            backupLba = backupLba,
-            firstUsable = header.firstUsable,
-            lastUsable = header.lastUsable,
-            diskGuid = header.diskGuid,
-            entryLba = header.entryLba,
-            entryCount = entryCount,
-            entriesCrc = entriesCrc,
-        )
         writeHeader(
             disk = disk,
             lba = backupLba,
@@ -151,6 +146,21 @@ object PartitionWriter {
             lastUsable = header.lastUsable,
             diskGuid = header.diskGuid,
             entryLba = backupEntriesLba,
+            entryCount = entryCount,
+            entriesCrc = entriesCrc,
+        )
+        disk.sync()
+
+        writeSectors(disk, header.entryLba, entries, sectorSize)
+        writeHeader(
+            disk = disk,
+            lba = header.currentLba,
+            currentLba = header.currentLba,
+            backupLba = backupLba,
+            firstUsable = header.firstUsable,
+            lastUsable = header.lastUsable,
+            diskGuid = header.diskGuid,
+            entryLba = header.entryLba,
             entryCount = entryCount,
             entriesCrc = entriesCrc,
         )

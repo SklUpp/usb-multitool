@@ -28,6 +28,8 @@ object GptTable {
         val partitions: List<Partition>,
         val header: GptHeader,
         val entriesRaw: ByteArray,
+        /** True when [headerLba] was the backup header, not the primary at LBA 1. */
+        val fromBackup: Boolean = false,
     )
 
     fun read(disk: BlockDevice, headerLba: ULong = 1UL): Result {
@@ -43,7 +45,9 @@ object GptTable {
         require(sig.contentEquals(SIGNATURE)) { "missing GPT signature" }
 
         val headerSize = headerBuf.getInt(12)
-        require(headerSize >= 92) { "invalid GPT header size $headerSize" }
+        require(headerSize in 92..sectorSize) {
+            "invalid GPT header size $headerSize for sector size $sectorSize"
+        }
         val storedCrc = headerBuf.getInt(16)
         val headerBytes = ByteArray(headerSize)
         headerBuf.position(0)
