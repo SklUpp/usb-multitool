@@ -118,7 +118,57 @@ class VentoyLayoutTest {
         assertEquals(VentoyLayout.EFI_PART_SECTORS.toULong(), probe.part2SectorCount)
         assertTrue(VentoyLayout.isVentoyDisk(disk))
         val p2End = probe.part2StartLba + probe.part2SectorCount - 1UL
-        assertTrue(p2End < disk.sectorCount - 34UL)
+        // Upstream: part2End = diskSectors - 34 - (part2Start base % 8); backup GPT stays free.
+        val expectedP2End = disk.sectorCount - 34UL -
+            ((disk.sectorCount - VentoyLayout.EFI_PART_SECTORS.toULong() - 33UL) % 8UL)
+        assertEquals(expectedP2End, p2End)
+        assertTrue(p2End < disk.sectorCount - 33UL)
+    }
+
+    @Test
+    fun installedGptHeaderUsesUpstreamUsableEnd() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        val buf = ByteBuffer.allocate(512)
+        disk.read(1L, buf)
+        val hdr = ByteBuffer.wrap(buf.array()).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(1L, hdr.getLong(24))
+        assertEquals(disk.sectorCount.toLong() - 1L, hdr.getLong(32))
+        assertEquals(34L, hdr.getLong(40))
+        assertEquals("upstream PartAreaEndLBA = diskSectors - 34", disk.sectorCount.toLong() - 34L, hdr.getLong(48))
+        assertEquals(2L, hdr.getLong(72))
+    }
+
+    @Test
+    fun installedProtectiveMbrFillsChs() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        val buf = ByteBuffer.allocate(512)
+        disk.read(0L, buf)
+        val m = buf.array()
+        assertEquals("start head", 0, m[446 + 1].toInt() and 0xFF)
+        assertEquals("start sector", 1, m[446 + 2].toInt() and 0x3F)
+        assertEquals("start cylinder low", 0, m[446 + 3].toInt() and 0xFF)
+        assertEquals("end head", 254, m[446 + 5].toInt() and 0xFF)
+        assertEquals("end sector", 63, m[446 + 6].toInt() and 0x3F)
+        assertEquals(
+            "end cylinder",
+            1023,
+            (((m[446 + 6].toInt() ushr 6) and 0x03) shl 8) or (m[446 + 7].toInt() and 0xFF),
+        )
+    }
+
+    @Test
+    fun installedMbrPartitionFillsUpstreamChs() {
+        val disk = RecordingDisk(sectorSize = 512, sectorCount = 262144UL)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = false)
+        val buf = ByteBuffer.allocate(512)
+        disk.read(0L, buf)
+        val m = buf.array()
+        // 128 MiB disk -> 8 heads; LBA 2048 is cylinder 4, head 0, sector 33.
+        assertEquals("start head", 0, m[446 + 1].toInt() and 0xFF)
+        assertEquals("start sector", 33, m[446 + 2].toInt() and 0x3F)
+        assertEquals("start cylinder low", 4, m[446 + 3].toInt() and 0xFF)
     }
 
     @Test
@@ -236,7 +286,7 @@ class VentoyLayoutTest {
     @Test
     fun windowsSetupRequiresOverwrite() {
         val volumeRoot = mutableMapOf<String, Any?>()
-        val options = SetupOptions(tpmBypass = true, bypassRamCheck = true, localAccount = true)
+        val options = SetupOptions(bypassChecks = true, localAccount = true)
 
         // Initial setup write succeeds
         val json1 = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = false)
@@ -272,22 +322,26 @@ class VentoyLayoutTest {
     @Test
     fun windowsSetupLinksIsoToXml() {
         val volumeRoot = mutableMapOf<String, Any?>()
-        val options = SetupOptions(tpmBypass = true, bypassRamCheck = true, localAccount = true)
+        val options = SetupOptions(bypassChecks = true, localAccount = true)
 
         val json = WindowsSetup.write(volumeRoot, "Win11_23H2.iso", options, overwrite = true)
 
         // Linkage verification
         assertTrue(json.contains("\"image\": \"/ISO/Win11_23H2.iso\""))
         assertTrue(json.contains("\"template\": \"/ventoy/Win11_23H2.xml\""))
-        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_TPM\": \"1\""))
-        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_RAM\": \"1\""))
-        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_LOCAL_ACCOUNT\": \"1\""))
+        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""))
+        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
+        assertFalse("no per-check keys exist upstream", json.contains("VTOY_WIN11_BYPASS_TPM"))
+        assertFalse("no per-check keys exist upstream", json.contains("VTOY_WIN11_BYPASS_RAM"))
+        assertFalse("no per-check keys exist upstream", json.contains("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT"))
 
         val xml = volumeRoot["ventoy/Win11_23H2.xml"] as String
         assertTrue(xml.contains("<unattend"))
-        assertTrue(xml.contains("BypassTPMCheck"))
-        assertTrue(xml.contains("BypassRAMCheck"))
-        assertTrue(xml.contains("BypassNRO"))
+        assertTrue(xml.contains("<AcceptEula>true</AcceptEula>"))
+        // Bypasses are Ventoy control flags applied during setup, never answer-file commands.
+        assertFalse(xml.contains("LabConfig"))
+        assertFalse(xml.contains("BypassNRO"))
+        assertFalse(xml.contains("FirstLogonCommands"))
     }
 
     @Test
@@ -493,7 +547,7 @@ class VentoyLayoutTest {
         """.trimIndent()
         volumeRoot["ventoy/ventoy.json"] = existingJson
 
-        val options = SetupOptions(tpmBypass = true, bypassRamCheck = true, localAccount = true)
+        val options = SetupOptions(bypassChecks = true, localAccount = true)
         val resultJson = WindowsSetup.write(volumeRoot, "Windows11_Pro.iso", options, overwrite = true)
 
         assertTrue("Theme file must be preserved", resultJson.contains("/ventoy/theme/custom.txt"))
@@ -502,29 +556,36 @@ class VentoyLayoutTest {
         assertTrue("Secondary boot control must be preserved", resultJson.contains("VTOY_SECONDARY_BOOT"))
         assertTrue("Existing Linux ISO must be preserved", resultJson.contains("ubuntu-24.04.iso"))
         assertTrue("New Windows ISO must be added", resultJson.contains("Windows11_Pro.iso"))
-        assertTrue("VTOY_WIN11_BYPASS_TPM must be updated to 1", resultJson.contains("\"VTOY_WIN11_BYPASS_TPM\": \"1\""))
-        assertTrue("VTOY_WIN11_BYPASS_RAM must be set to 1", resultJson.contains("\"VTOY_WIN11_BYPASS_RAM\": \"1\""))
-        assertTrue("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT must be set to 1", resultJson.contains("\"VTOY_WIN11_BYPASS_LOCAL_ACCOUNT\": \"1\""))
+        assertFalse(
+            "obsolete per-check key must be dropped",
+            resultJson.contains("VTOY_WIN11_BYPASS_TPM"),
+        )
+        assertTrue(
+            "VTOY_WIN11_BYPASS_CHECK must be set to 1",
+            resultJson.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""),
+        )
+        assertTrue(
+            "VTOY_WIN11_BYPASS_NRO must be set to 1",
+            resultJson.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""),
+        )
     }
 
     @Test
-    fun testAutounattendBypassNroInOobeSystem() {
+    fun autounattendTemplateDefersBypassToVentoyControl() {
         val volumeRoot = mutableMapOf<String, Any?>()
-        val options = SetupOptions(tpmBypass = true, bypassRamCheck = false, localAccount = true)
-        WindowsSetup.write(volumeRoot, "Win11.iso", options, overwrite = true)
+        val options = SetupOptions(bypassChecks = true, localAccount = true)
+        val json = WindowsSetup.write(volumeRoot, "Win11.iso", options, overwrite = true)
+
+        // Official control keys, applied by Ventoy during setup (windowsPE), before OOBE.
+        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""))
+        assertTrue(json.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
 
         val xml = volumeRoot["ventoy/Win11.xml"] as String
-        assertTrue("Must declare oobeSystem settings pass", xml.contains("<settings pass=\"oobeSystem\">"))
-        assertTrue("Must contain BypassNRO command", xml.contains("BypassNRO"))
-
-        // Ensure BypassNRO is NOT inside windowsPE pass
-        val peSection = xml.substringAfter("<settings pass=\"windowsPE\">").substringBefore("</settings>")
-        assertFalse("BypassNRO must NOT be in windowsPE pass", peSection.contains("BypassNRO"))
-        assertTrue("BypassTPMCheck must be in windowsPE pass", peSection.contains("BypassTPMCheck"))
-
-        // Ensure BypassNRO IS inside oobeSystem pass
-        val oobeSection = xml.substringAfter("<settings pass=\"oobeSystem\">").substringBefore("</settings>")
-        assertTrue("BypassNRO must be in oobeSystem pass", oobeSection.contains("BypassNRO"))
+        assertTrue("XML must stay a valid windowsPE answer file", xml.contains("<settings pass=\"windowsPE\">"))
+        assertFalse("bypass must not be re-implemented in the XML", xml.contains("Bypass"))
+        assertFalse("LabConfig writes belong to Ventoy, not the template", xml.contains("LabConfig"))
+        assertFalse("first-logon runs after OOBE and cannot bypass it", xml.contains("FirstLogonCommands"))
+        assertFalse("no late oobeSystem command block", xml.contains("<settings pass=\"oobeSystem\">"))
     }
 
     @Test
@@ -588,32 +649,76 @@ class VentoyLayoutTest {
     }
 
     @Test
-    fun gptPreflightAcceptsUpstream2047SectorCore() {
+    fun gptPreflightAcceptsZeroPaddedCoreButRefusesRealTruncation() {
+        val efi = ByteArray(2048 * 512)
         VentoyInstaller.preflightInstallPayloads(
             gpt = true,
-            decompressedCore = ByteArray(2047 * 512),
-            decompressedEfi = ByteArray(2048 * 512),
+            decompressedCore = ByteArray(2014 * 512),
+            decompressedEfi = efi,
         )
+        // Official core.img shape: content in the first 2014 sectors, zero padding after.
+        VentoyInstaller.preflightInstallPayloads(
+            gpt = true,
+            decompressedCore = ByteArray(VentoyLayout.MBR_CORE_MAX_SECTORS.toInt() * 512),
+            decompressedEfi = efi,
+        )
+        // MBR keeps the full 1..2047 gap.
+        VentoyInstaller.preflightInstallPayloads(
+            gpt = false,
+            decompressedCore = ByteArray(VentoyLayout.MBR_CORE_MAX_SECTORS.toInt() * 512) { 0x7F },
+            decompressedEfi = efi,
+        )
+        for (sectors in listOf(2015L, 2047L)) {
+            val core = ByteArray((sectors * 512).toInt()) { 0x33 }
+            try {
+                VentoyInstaller.preflightInstallPayloads(gpt = true, decompressedCore = core, decompressedEfi = efi)
+                fail("GPT must reject non-zero bytes past 2014 sectors instead of truncating them")
+            } catch (e: VentoyPayloadTooLargeException) {
+                assertTrue("message must name the limit: ${e.message}", e.message!!.contains("2014"))
+            }
+        }
     }
 
     @Test
-    fun installRejectsOversizedCoreBeforeDiskWrites() {
-        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
-        val assets = syntheticVentoyAssets(
-            efiPartSectors = 2048,
-            coreBytes = ByteArray(2047 * 512 + 1) { 0x33 },
-        )
-        try {
-            VentoyInstaller.install(disk, assets, gpt = true)
-            fail("expected oversized core preflight failure")
-        } catch (_: VentoyPayloadTooLargeException) {
+    fun installWritesOfficialShapedGptCoreWithoutLosingBytes() {
+        val core = ByteArray(VentoyLayout.MBR_CORE_MAX_SECTORS.toInt() * 512) { i ->
+            if (i < VentoyLayout.GPT_CORE_MAX_SECTORS.toInt() * 512) 0xCC.toByte() else 0.toByte()
         }
-        assertEquals("oversized core must fail before disk writes", 0, disk.writeCount)
+        val assets = syntheticVentoyAssets(efiPartSectors = 2048, coreBytes = core)
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, assets, gpt = true)
+
+        assertTrue(
+            "GPT core write must stop after 2014 sectors",
+            disk.writtenRanges.any { it.first == 34L && it.second == VentoyLayout.GPT_CORE_MAX_SECTORS.toInt() },
+        )
+        assertFalse("partition 1 start must never absorb core bytes", disk.wasRangeWritten(2048L, 1L))
+        // Last byte of the written prefix survives, and the marker patch is applied.
+        val lastPrefix = disk.bytes[34UL + VentoyLayout.GPT_CORE_MAX_SECTORS.toULong() - 1UL]!!
+        assertEquals(0xCC.toByte(), lastPrefix[511])
+        assertEquals(35.toByte(), disk.bytes[34UL]!![500])
+    }
+
+    @Test
+    fun installRejectsGptCoreBeyond2014SectorsBeforeDiskWrites() {
+        for (sectors in listOf(2015L, 2047L)) {
+            val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+            val assets = syntheticVentoyAssets(
+                efiPartSectors = 2048,
+                coreBytes = ByteArray((sectors * 512).toInt()) { 0x33 },
+            )
+            try {
+                VentoyInstaller.install(disk, assets, gpt = true)
+                fail("expected $sectors-sector GPT core preflight failure")
+            } catch (_: VentoyPayloadTooLargeException) {
+            }
+            assertEquals("oversized core must fail before disk writes", 0, disk.writeCount)
+        }
     }
 
     @Test
     fun installGeometryAlignAndReserveKeepGptMinimumPart1() {
-        val base = 2048L + VentoyLayout.EFI_PART_SECTORS + 35L
+        val base = 2048L + VentoyLayout.EFI_PART_SECTORS + 34L
         for (align in listOf(false, true)) {
             val alignmentSlack = if (align) 7L else 0L
             val minSectors = base + 2047L + alignmentSlack
@@ -676,17 +781,19 @@ class VentoyLayoutTest {
 
     @Test
     fun updateRefusesOversizedCoreBeforeAnyWrite() {
-        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
-        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
-        disk.resetStats()
-        val hugeCore = ByteArray(2047 * 512 + 1) { 0x5A }
-        val assets = syntheticVentoyAssets(efiPartSectors = 2048, coreBytes = hugeCore)
-        try {
-            VentoyInstaller.update(disk, assets)
-            fail("expected VentoyPayloadTooLargeException")
-        } catch (_: VentoyPayloadTooLargeException) {
+        for (sectors in listOf(2015L, 2047L)) {
+            val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+            installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+            disk.resetStats()
+            val hugeCore = ByteArray((sectors * 512).toInt()) { 0x5A }
+            val assets = syntheticVentoyAssets(efiPartSectors = 2048, coreBytes = hugeCore)
+            try {
+                VentoyInstaller.update(disk, assets)
+                fail("expected $sectors-sector GPT core update to fail preflight")
+            } catch (_: VentoyPayloadTooLargeException) {
+            }
+            assertEquals("oversized core update must not mutate disk", 0, disk.writeCount)
         }
-        assertEquals("oversized core update must not mutate disk", 0, disk.writeCount)
     }
 
     @Test
@@ -702,34 +809,51 @@ class VentoyLayoutTest {
     }
 
     @Test
-    fun mergeVentoyJsonPreservesUnsetWin11Flags() {
+    fun mergeVentoyJsonPreservesUntouchedTriStateFlags() {
         val existing = """
         {
           "control": [
-            {"VTOY_WIN11_BYPASS_TPM": "1"},
-            {"VTOY_WIN11_BYPASS_RAM": "1"},
+            {"VTOY_WIN11_BYPASS_CHECK": "0"},
+            {"VTOY_WIN11_BYPASS_NRO": "1"},
             {"VTOY_DEFAULT_SEARCH_ROOT": "/ISO"}
           ],
           "auto_install": []
         }
         """.trimIndent()
-        val out = WindowsSetup.mergeVentoyJson(
+
+        val enabled = WindowsSetup.mergeVentoyJson(
             existingJson = existing,
             isoName = "Win.iso",
             xmlName = "Win.xml",
-            options = SetupOptions(tpmBypass = true),
+            options = SetupOptions(bypassChecks = true),
         )
-        assertTrue("RAM bypass key must remain", out.contains("VTOY_WIN11_BYPASS_RAM"))
-        assertFalse(
-            "unset RAM flag must not be forced to 0",
-            out.contains("\"VTOY_WIN11_BYPASS_RAM\": \"0\"") ||
-                out.contains("\"VTOY_WIN11_BYPASS_RAM\":\"0\""),
+        assertTrue("combined switch must enable the official all-checks key",
+            enabled.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"1\""))
+        assertTrue("null local-account option must keep the existing 1",
+            enabled.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
+        assertTrue("unrelated control key must survive", enabled.contains("/ISO"))
+
+        val untouched = WindowsSetup.mergeVentoyJson(
+            existingJson = existing,
+            isoName = "Win.iso",
+            xmlName = "Win.xml",
+            options = SetupOptions(),
         )
-        assertTrue(
-            "RAM bypass must stay 1",
-            out.contains("\"VTOY_WIN11_BYPASS_RAM\": \"1\"") ||
-                out.contains("\"VTOY_WIN11_BYPASS_RAM\":\"1\""),
+        assertTrue("null options must leave the existing CHECK value",
+            untouched.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"0\""))
+        assertTrue("null options must leave the existing NRO value",
+            untouched.contains("\"VTOY_WIN11_BYPASS_NRO\": \"1\""))
+
+        val disabled = WindowsSetup.mergeVentoyJson(
+            existingJson = existing,
+            isoName = "Win.iso",
+            xmlName = "Win.xml",
+            options = SetupOptions(bypassChecks = false, localAccount = false),
         )
+        assertTrue("explicit false must write 0",
+            disabled.contains("\"VTOY_WIN11_BYPASS_CHECK\": \"0\""))
+        assertTrue("explicit false must write 0 for NRO",
+            disabled.contains("\"VTOY_WIN11_BYPASS_NRO\": \"0\""))
     }
 
     @Test

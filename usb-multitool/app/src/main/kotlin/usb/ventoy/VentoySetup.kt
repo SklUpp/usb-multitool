@@ -7,7 +7,7 @@ import usb.fs.FatVolume
 import usb.partition.VirtualPartition
 
 /**
- * Windows unattended-setup files on the Ventoy data partition (partition 1, the
+ * Windows setup answer files on the Ventoy data partition (partition 1, the
  * FAT/exFAT volume that carries `/ISO` and `/ventoy`). All work happens on the
  * real volume: an ISO that is not in `/ISO` is an error, never a silent success.
  */

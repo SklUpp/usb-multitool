@@ -24,7 +24,7 @@ class VentoySetupTest {
         val firstJson = WindowsSetup.write(
             firstRoot,
             "Windows11_Pro.iso",
-            SetupOptions(tpmBypass = true),
+            SetupOptions(bypassChecks = true),
             overwrite = false,
         )
 
@@ -40,7 +40,7 @@ class VentoySetupTest {
             .flatMap { (it as Map<*, *>).keys }
             .map { it.toString() }
         assertTrue("control block lost: $controlKeys", controlKeys.contains("VTOY_DEFAULT_SEARCH_ROOT"))
-        assertTrue("control block lost: $controlKeys", controlKeys.contains("VTOY_WIN11_BYPASS_TPM"))
+        assertTrue("control block lost: $controlKeys", controlKeys.contains("VTOY_WIN11_BYPASS_CHECK"))
     }
 
     @Test

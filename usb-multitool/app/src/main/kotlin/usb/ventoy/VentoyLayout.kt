@@ -51,6 +51,10 @@ object VentoyLayout {
     const val PART1_START_SECTOR = 2048L
     const val EFI_PART_SECTORS = 65536L
 
+    /** core.img fits LBA 1..2047 on MBR; GPT starts at LBA 34, so only 2014 sectors. */
+    const val MBR_CORE_MAX_SECTORS = 2047L
+    const val GPT_CORE_MAX_SECTORS = 2014L
+
     fun isVentoyDisk(disk: BlockDevice): Boolean {
         if (disk.sectorSize == 4096) {
             throw UnsupportedSectorSizeException("Upstream Ventoy does not support 4K native devices")
@@ -312,9 +316,12 @@ object VentoyInstaller {
 
         if (gpt) {
             // Write legacy GRUB stage1 at LBA 34
-            val coreBuf = ByteBuffer.allocate(2014 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(decompressedCore.size, coreBuf.capacity())
-            coreBuf.put(decompressedCore, 0, copyLen)
+            val coreBuf = ByteBuffer.allocate(
+                VentoyLayout.GPT_CORE_MAX_SECTORS.toInt() * VentoyLayout.SECTOR_SIZE,
+            ).order(ByteOrder.LITTLE_ENDIAN)
+            // Preflight proved any tail beyond 2014 sectors is zero padding (upstream's
+            // GPT dd also stops at LBA 2047); real bytes are never dropped here.
+            coreBuf.put(decompressedCore, 0, minOf(decompressedCore.size, coreBuf.capacity()))
             coreBuf.array()[500] = 35 // Blocklist marker
             coreBuf.flip()
             disk.write(34L, coreBuf)
@@ -354,7 +361,7 @@ object VentoyInstaller {
             ByteBuffer.wrap(pHdrArr, 24, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(1L)
             ByteBuffer.wrap(pHdrArr, 32, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 1L)
             ByteBuffer.wrap(pHdrArr, 40, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(34L)
-            ByteBuffer.wrap(pHdrArr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 35L)
+            ByteBuffer.wrap(pHdrArr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 34L)
             ByteBuffer.wrap(pHdrArr, 72, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(2L)
             ByteBuffer.wrap(pHdrArr, 80, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(128)
             ByteBuffer.wrap(pHdrArr, 84, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(128)
@@ -380,6 +387,8 @@ object VentoyInstaller {
             mbr[92] = 0x22
             mbr[446] = 0x00 // Not active
             mbr[450] = 0xEE.toByte() // Protective MBR
+            putChs(mbr, 446 + 1, head = 0, sector = 1, cylinder = 0)
+            putChs(mbr, 446 + 5, head = 254, sector = 63, cylinder = 1023)
             val rng = java.util.Random()
             val randUuid = ByteArray(16).apply { rng.nextBytes(this) }
             randUuid.copyInto(mbr, 0x180)
@@ -398,7 +407,9 @@ object VentoyInstaller {
             disk.write(diskSectors - 1L, ByteBuffer.wrap(bHdrArr))
         } else {
             // Write legacy GRUB stage1 at LBA 1
-            val coreBuf = ByteBuffer.allocate(2047 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+            val coreBuf = ByteBuffer.allocate(
+                VentoyLayout.MBR_CORE_MAX_SECTORS.toInt() * VentoyLayout.SECTOR_SIZE,
+            ).order(ByteOrder.LITTLE_ENDIAN)
             val copyLen = decompressedCore.size
             coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.flip()
@@ -417,12 +428,14 @@ object VentoyInstaller {
             ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(rng.nextInt())
             ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part1Start.toInt())
             ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part1Count.toInt())
+            fillMbrPartChs(mbr, 446, diskSectors, part1Start, part1Count)
 
             // Partition 2
             mbr[462] = 0x00.toByte()
             mbr[466] = 0xEF.toByte() // EFI System Partition
             ByteBuffer.wrap(mbr, 462 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part2Start.toInt())
             ByteBuffer.wrap(mbr, 462 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(VentoyLayout.EFI_PART_SECTORS.toInt())
+            fillMbrPartChs(mbr, 462, diskSectors, part2Start, VentoyLayout.EFI_PART_SECTORS)
 
             mbr[510] = 0x55.toByte()
             mbr[511] = 0xAA.toByte()
@@ -506,12 +519,24 @@ object VentoyInstaller {
                     "${probe.part2SectorCount}; update would truncate the boot image",
             )
         }
-        val coreLimitSectors = 2047L
+        val coreLimitSectors = if (probe.scheme == TableScheme.GPT) {
+            VentoyLayout.GPT_CORE_MAX_SECTORS
+        } else {
+            VentoyLayout.MBR_CORE_MAX_SECTORS
+        }
         val coreLimit = coreLimitSectors * VentoyLayout.SECTOR_SIZE
         if (decompressedCore.size > coreLimit) {
-            throw VentoyPayloadTooLargeException(
-                "core.img is ${decompressedCore.size} bytes; boot gap holds only $coreLimit",
-            )
+            // Same contract as install: zero padding past the GPT gap is harmless and is
+            // exactly what upstream truncates; non-zero bytes must fail before writing.
+            val losslessPadding = probe.scheme == TableScheme.GPT &&
+                decompressedCore.size <= VentoyLayout.MBR_CORE_MAX_SECTORS * VentoyLayout.SECTOR_SIZE &&
+                isAllZero(decompressedCore, coreLimit.toInt(), decompressedCore.size)
+            if (!losslessPadding) {
+                throw VentoyPayloadTooLargeException(
+                    "core.img is ${decompressedCore.size} bytes; ${probe.scheme} boot gap " +
+                        "holds only $coreLimitSectors sectors ($coreLimit bytes) and the tail is not zero padding",
+                )
+            }
         }
         if (decompressedCore.size % VentoyLayout.SECTOR_SIZE != 0) {
             throw VentoyPayloadTooLargeException(
@@ -543,14 +568,19 @@ object VentoyInstaller {
 
         // 2. Write new core.img in boot gap
         if (probe.scheme == TableScheme.GPT) {
-            val coreBuf = ByteBuffer.allocate(2014 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = minOf(decompressedCore.size, coreBuf.capacity())
-            coreBuf.put(decompressedCore, 0, copyLen)
+            val coreBuf = ByteBuffer.allocate(
+                VentoyLayout.GPT_CORE_MAX_SECTORS.toInt() * VentoyLayout.SECTOR_SIZE,
+            ).order(ByteOrder.LITTLE_ENDIAN)
+            // Preflight proved any tail beyond 2014 sectors is zero padding; real bytes
+            // are never dropped here (matches upstream's 2014-sector GPT write).
+            coreBuf.put(decompressedCore, 0, minOf(decompressedCore.size, coreBuf.capacity()))
             coreBuf.array()[500] = 35
             coreBuf.flip()
             disk.write(34L, coreBuf)
         } else {
-            val coreBuf = ByteBuffer.allocate(2047 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+            val coreBuf = ByteBuffer.allocate(
+                VentoyLayout.MBR_CORE_MAX_SECTORS.toInt() * VentoyLayout.SECTOR_SIZE,
+            ).order(ByteOrder.LITTLE_ENDIAN)
             val copyLen = decompressedCore.size
             coreBuf.put(decompressedCore, 0, copyLen)
             coreBuf.flip()
@@ -683,13 +713,15 @@ object VentoyInstaller {
             "Disks larger than 2TB require GPT; MBR cannot address > 0xFFFFFFFF sectors"
         }
         val reserveSectors = reserveBytes / VentoyLayout.SECTOR_SIZE
+        // GPT keeps the last 33 LBAs for the backup entry array + backup header
+        // (upstream ventoy_lib.sh: part1_end = disk - VTOYEFI - 34).
         val minNeeded =
-            VentoyLayout.PART1_START_SECTOR + VentoyLayout.EFI_PART_SECTORS + (if (gpt) 35L else 1L) + 2047L + if (align4k) 7L else 0L
+            VentoyLayout.PART1_START_SECTOR + VentoyLayout.EFI_PART_SECTORS + (if (gpt) 34L else 1L) + 2047L + if (align4k) 7L else 0L
         require(diskSectors >= minNeeded && reserveSectors <= diskSectors - minNeeded) {
             "Disk too small for Ventoy after reserve/alignment: sectors=$diskSectors reserve=$reserveSectors minimum=$minNeeded"
         }
         val part1Start = VentoyLayout.PART1_START_SECTOR
-        var part1End = diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - if (gpt) 35L else 1L
+        var part1End = diskSectors - reserveSectors - VentoyLayout.EFI_PART_SECTORS - if (gpt) 34L else 1L
         var part2Start = part1End + 1L
         if (align4k) {
             val misalignment = (part2Start % 8L).toInt()
@@ -731,11 +763,22 @@ object VentoyInstaller {
                     "${VentoyLayout.EFI_PART_SECTORS}; install would truncate the boot image",
             )
         }
-        val coreLimit = 2047L * VentoyLayout.SECTOR_SIZE
+        val coreLimitSectors =
+            if (gpt) VentoyLayout.GPT_CORE_MAX_SECTORS else VentoyLayout.MBR_CORE_MAX_SECTORS
+        val coreLimit = coreLimitSectors * VentoyLayout.SECTOR_SIZE
         if (decompressedCore.size > coreLimit) {
-            throw VentoyPayloadTooLargeException(
-                "core.img is ${decompressedCore.size} bytes; boot gap holds only $coreLimit",
-            )
+            // Official core.img is 2047 sectors with a zero tail; GPT writes only 2014
+            // sectors (LBA 34..2047). Accept the padding, refuse anything that would lose
+            // real bytes instead of truncating silently.
+            val losslessPadding = gpt &&
+                decompressedCore.size <= VentoyLayout.MBR_CORE_MAX_SECTORS * VentoyLayout.SECTOR_SIZE &&
+                isAllZero(decompressedCore, coreLimit.toInt(), decompressedCore.size)
+            if (!losslessPadding) {
+                throw VentoyPayloadTooLargeException(
+                    "core.img is ${decompressedCore.size} bytes; ${if (gpt) "GPT" else "MBR"} boot gap " +
+                        "holds only $coreLimitSectors sectors ($coreLimit bytes) and the tail is not zero padding",
+                )
+            }
         }
         if (decompressedCore.size % VentoyLayout.SECTOR_SIZE != 0 ||
             decompressedEfi.size % VentoyLayout.SECTOR_SIZE != 0
@@ -744,6 +787,11 @@ object VentoyInstaller {
                 "Ventoy payload sizes must be multiples of ${VentoyLayout.SECTOR_SIZE}",
             )
         }
+    }
+
+    private fun isAllZero(data: ByteArray, from: Int, until: Int): Boolean {
+        for (i in from until until) if (data[i] != 0.toByte()) return false
+        return true
     }
 
     private fun writeBufferToDisk(
@@ -790,6 +838,51 @@ object VentoyInstaller {
         data4.copyInto(dest, offset + 8, 0, 8)
     }
 
+    /**
+     * Legacy CHS bytes at [offset] (head, sector|cylinder-high, cylinder-low).
+     * Upstream fills them in `VentoyFillProtectMBR` (fixed 0/1/0 -> 254/63/1023) and in
+     * `VentoyFillMBRLocation` for data partitions (see [fillMbrPartChs]); UEFI ignores
+     * these bytes, old BIOS boot code does not.
+     */
+    private fun putChs(mbr: ByteArray, offset: Int, head: Int, sector: Int, cylinder: Int) {
+        val cyl = cylinder and 0x3FF
+        mbr[offset] = head.toByte()
+        mbr[offset + 1] = ((sector and 0x3F) or ((cyl ushr 8) shl 6)).toByte()
+        mbr[offset + 2] = (cyl and 0xFF).toByte()
+    }
+
+    /**
+     * Start/end CHS for one MBR data-partition entry, replicating upstream
+     * `VentoyFillMBRLocation` (`ventoy_util.c`) head probing. The Linux shell installer
+     * delegates this to parted/fdisk and may pick different CHS values; layout is otherwise
+     * identical. The values matter only to legacy BIOS boot code.
+     */
+    private fun fillMbrPartChs(
+        mbr: ByteArray,
+        entryOffset: Int,
+        diskSectors: Long,
+        startLba: Long,
+        sectorCount: Long,
+    ) {
+        // Upstream probes up to 255 heads in powers of two; uint8 wrap selects 255 heads.
+        var heads = 8
+        while (heads != 0 && diskSectors / 63L / heads > 1024L) {
+            heads = (heads * 2) and 0xFF
+        }
+        if (heads == 0) heads = 255
+
+        fun chs(lba: Long): Triple<Int, Int, Int> = Triple(
+            (lba / 63L % heads).toInt(),
+            (lba % 63L + 1L).toInt(),
+            (lba / 63L / heads).toInt() and 0x3FF,
+        )
+
+        val start = chs(startLba)
+        putChs(mbr, entryOffset + 1, start.first, start.second, start.third)
+        val end = chs(startLba + sectorCount - 1L)
+        putChs(mbr, entryOffset + 5, end.first, end.second, end.third)
+    }
+
     private fun putUtf16Name(dest: ByteArray, offset: Int, name: String) {
         val utf16 = name.toByteArray(Charsets.UTF_16LE)
         utf16.copyInto(dest, offset, 0, minOf(utf16.size, 72))
@@ -803,9 +896,16 @@ object VentoyInstaller {
 }
 
 data class SetupOptions(
-    /** null = leave existing ventoy.json control flag unchanged. */
-    val tpmBypass: Boolean? = null,
-    val bypassRamCheck: Boolean? = null,
+    /**
+     * Official `VTOY_WIN11_BYPASS_CHECK`, all-or-nothing: RAM, TPM, Secure Boot and CPU
+     * checks are bypassed together. null = leave the existing ventoy.json value untouched
+     * (Ventoy's own default is "1"); true = "1"; false = explicit "0".
+     */
+    val bypassChecks: Boolean? = null,
+    /**
+     * Official `VTOY_WIN11_BYPASS_NRO`, applied during setup (before OOBE). A local account
+     * is offered only while the network is unplugged. null = leave the existing value untouched.
+     */
     val localAccount: Boolean? = null,
 )
 
@@ -831,8 +931,8 @@ object WindowsSetup {
             )
         }
 
-        // Build unattended answer XML template
-        val xmlContent = buildXmlTemplate(baseName, options)
+        // Minimal answer file; bypass flags go to ventoy.json control, not this XML
+        val xmlContent = buildXmlTemplate(baseName)
         volumeRoot[xmlPath] = xmlContent
         volumeRoot[xmlName] = xmlContent
 
@@ -900,12 +1000,28 @@ object WindowsSetup {
             controlList.add(linkedMapOf("VTOY_DEFAULT_SEARCH_ROOT" to "/ISO"))
         }
 
-        // Only touch flags the caller set; null means preserve existing ventoy.json values.
-        options.tpmBypass?.let { setControlFlag("VTOY_WIN11_BYPASS_TPM", if (it) "1" else "0") }
-        options.bypassRamCheck?.let { setControlFlag("VTOY_WIN11_BYPASS_RAM", if (it) "1" else "0") }
-        options.localAccount?.let {
-            setControlFlag("VTOY_WIN11_BYPASS_LOCAL_ACCOUNT", if (it) "1" else "0")
+        // Drop keys older builds wrote; Ventoy never read them (no such control keys).
+        val obsoleteWin11Keys = setOf(
+            "VTOY_WIN11_BYPASS_TPM",
+            "VTOY_WIN11_BYPASS_RAM",
+            "VTOY_WIN11_BYPASS_LOCAL_ACCOUNT",
+        )
+        val cleanedControl = controlList.mapNotNull { item ->
+            val map = item as? Map<*, *> ?: return@mapNotNull item
+            if (map.keys.none { it.toString() in obsoleteWin11Keys }) return@mapNotNull item
+            val kept = linkedMapOf<String, Any?>()
+            for ((k, v) in map) if (k.toString() !in obsoleteWin11Keys) kept[k.toString()] = v
+            if (kept.isEmpty()) null else kept
         }
+        controlList.clear()
+        controlList.addAll(cleanedControl)
+
+        // One UI switch, one official key. null means the user never touched it, so the
+        // existing ventoy.json value survives a relink instead of being forced to "0".
+        options.bypassChecks?.let { setControlFlag("VTOY_WIN11_BYPASS_CHECK", if (it) "1" else "0") }
+        // Applies during setup (before OOBE); a local account is offered only with the
+        // network unplugged: https://www.ventoy.net/en/plugin_control.html
+        options.localAccount?.let { setControlFlag("VTOY_WIN11_BYPASS_NRO", if (it) "1" else "0") }
 
         rootMap["control"] = controlList
 
@@ -963,7 +1079,13 @@ object WindowsSetup {
             .replace("\"", "&quot;")
             .replace("'", "&apos;")
 
-    private fun buildXmlTemplate(name: String, options: SetupOptions): String = buildString {
+    /**
+     * Minimal answer file: EULA + full name only. Windows 11 hardware/OOBE bypasses stay
+     * in `ventoy.json` control flags, which Ventoy applies during setup; duplicating them
+     * here (especially in `FirstLogonCommands`) ran too late to affect OOBE.
+     * Edition/disk selection is still interactive: this is not a full unattended install.
+     */
+    private fun buildXmlTemplate(name: String): String = buildString {
         appendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
         appendLine("<unattend xmlns=\"urn:schemas-microsoft-com:unattend\">")
         appendLine("  <settings pass=\"windowsPE\">")
@@ -972,48 +1094,8 @@ object WindowsSetup {
         appendLine("        <AcceptEula>true</AcceptEula>")
         appendLine("        <FullName>${escapeXml(name)}</FullName>")
         appendLine("      </UserData>")
-        if (options.tpmBypass == true || options.bypassRamCheck == true) {
-            appendLine("      <RunSynchronous>")
-            var order = 1
-            if (options.tpmBypass == true) {
-                appendLine("        <RunSynchronousCommand>")
-                appendLine("          <Order>$order</Order>")
-                appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>")
-                appendLine("        </RunSynchronousCommand>")
-                order++
-                appendLine("        <RunSynchronousCommand>")
-                appendLine("          <Order>$order</Order>")
-                appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>")
-                appendLine("        </RunSynchronousCommand>")
-                order++
-            }
-            if (options.bypassRamCheck == true) {
-                appendLine("        <RunSynchronousCommand>")
-                appendLine("          <Order>$order</Order>")
-                appendLine("          <Path>reg add HKLM\\SYSTEM\\Setup\\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>")
-                appendLine("        </RunSynchronousCommand>")
-                order++
-            }
-            appendLine("      </RunSynchronous>")
-        }
         appendLine("    </component>")
         appendLine("  </settings>")
-        if (options.localAccount == true) {
-            appendLine("  <settings pass=\"oobeSystem\">")
-            appendLine("    <component name=\"Microsoft-Windows-Shell-Setup\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">")
-            appendLine("      <OOBE>")
-            appendLine("        <ProtectYourPC>3</ProtectYourPC>")
-            appendLine("      </OOBE>")
-            appendLine("      <FirstLogonCommands>")
-            appendLine("        <SynchronousCommand>")
-            appendLine("          <Order>1</Order>")
-            appendLine("          <CommandLine>reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</CommandLine>")
-            appendLine("          <Description>Bypass Network Requirement for Local Account</Description>")
-            appendLine("        </SynchronousCommand>")
-            appendLine("      </FirstLogonCommands>")
-            appendLine("    </component>")
-            appendLine("  </settings>")
-        }
         appendLine("</unattend>")
     }
 }
