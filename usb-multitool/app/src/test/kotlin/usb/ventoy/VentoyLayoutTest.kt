@@ -14,7 +14,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.junit.Assert.assertSame
+import usb.fs.FatKind
+import usb.fs.Filesystem
+import usb.fs.FilesystemId
 import usb.partition.TableScheme
+import usb.partition.VirtualPartition
 import usb.testutil.RecordingDisk
 
 class VentoyLayoutTest {
@@ -23,7 +28,11 @@ class VentoyLayoutTest {
 
     private val fakeAssets = syntheticVentoyAssets(efiPartSectors = 2048)
 
-    /** Layout only: require native-format failure; never synthesize an install return. */
+    /**
+     * Layout-only fixture. Host JVM without FatFs fails format after layout write
+     * ([usb.EngineMissingException] cause). Linked native may complete install —
+     * both paths must leave a probeable Ventoy layout. Never synthesize layout.
+     */
     private fun installLayoutExpectingMissingNativeFormat(
         disk: RecordingDisk,
         assets: VentoyAssets = fakeAssets,
@@ -32,12 +41,25 @@ class VentoyLayoutTest {
     ): VentoyProbeResult {
         try {
             VentoyInstaller.install(disk, assets, gpt = gpt, align4k = align4k)
-            fail("host JVM must not fake successful native formatting")
         } catch (e: VentoyMutationFailedException) {
-            assertTrue("expected missing FatFs after layout write", e.cause is usb.EngineMissingException)
+            assertFatFsEngineMissing(e.cause, "expected missing FatFs after layout write")
         }
         return VentoyLayout.probe(disk)
-            ?: throw AssertionError("Ventoy layout absent after expected native-format failure")
+            ?: throw AssertionError("Ventoy layout absent after install/format boundary")
+    }
+
+    /** FatFs gate: name in message, original ULE as cause when mapped by requireLinkedEngine. */
+    private fun assertFatFsEngineMissing(cause: Throwable?, detail: String) {
+        assertTrue(detail, cause is usb.EngineMissingException)
+        val missing = cause as usb.EngineMissingException
+        assertTrue(
+            "FatFs engine name missing in: ${missing.message}",
+            missing.message!!.startsWith("FatFs engine not linked"),
+        )
+        assertTrue(
+            "UnsatisfiedLinkError cause missing in: ${missing.cause}",
+            missing.cause is UnsatisfiedLinkError,
+        )
     }
 
     @Test
@@ -818,16 +840,80 @@ class VentoyLayoutTest {
         }
     }
 
+    /**
+     * Integration: install must reach the real exFAT formatter after layout.
+     * - Success (native FatFs linked): part1 must carry an EXFAT boot signature
+     *   (pure [Filesystem.probe] — formatter no-op must not pass).
+     * - Failure without native: environment-dependent path — layout present and
+     *   [usb.EngineMissingException] FatFs + ULE cause (see also deterministic
+     *   [formatDataPartitionMapsUleToFatFsEngineMissingWithCause]).
+     */
     @Test
     fun installReachesRealExfatFormatterAfterLayout() {
         val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
         try {
             VentoyInstaller.install(disk, fakeAssets, gpt = true)
-            fail("host JVM lacks FatFs JNI; formatting must not fake success")
+            val probe =
+                requireNotNull(VentoyLayout.probe(disk)) {
+                    "layout must remain after successful native format"
+                }
+            assertPart1IsExfat(disk, probe)
         } catch (e: VentoyMutationFailedException) {
-            assertTrue(e.cause is usb.EngineMissingException)
-            assertNotNull("layout must be present before native formatter failure", VentoyLayout.probe(disk))
+            // Environment-dependent integration when FatFs JNI is absent.
+            assertFatFsEngineMissing(e.cause, "format boundary must report missing FatFs")
+            assertNotNull(
+                "layout must be present before native formatter failure",
+                VentoyLayout.probe(disk),
+            )
         }
+    }
+
+    @Test
+    fun formatDataPartitionMapsUleToFatFsEngineMissingWithCause() {
+        val disk = RecordingDisk(sectorCount = 8192UL, sectorSize = 512)
+        val link = UnsatisfiedLinkError("nativeMkfs-exfat")
+        val thrown =
+            org.junit.Assert.assertThrows(usb.EngineMissingException::class.java) {
+                VentoyInstaller.formatDataPartitionExfat(
+                    disk = disk,
+                    startLba = 2048UL,
+                    sectorCount = 4096UL,
+                    format = { throw link },
+                )
+            }
+        assertTrue(thrown.message!!.startsWith("FatFs engine not linked"))
+        assertSame(link, thrown.cause)
+    }
+
+    @Test
+    fun formatDataPartitionRejectsNonExfatProbeEvenIfFormatNoOp() {
+        val disk = RecordingDisk(sectorCount = 8192UL, sectorSize = 512)
+        val thrown =
+            org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+                VentoyInstaller.formatDataPartitionExfat(
+                    disk = disk,
+                    startLba = 2048UL,
+                    sectorCount = 4096UL,
+                    format = { /* formatter no-op must not count as success */ },
+                    probeKind = { FatKind.FAT32 },
+                )
+            }
+        assertTrue(thrown.message!!.contains("expected EXFAT"))
+    }
+
+    /** Pure boot-sector proof — no JNI. Empty/no-op format fails this check. */
+    private fun assertPart1IsExfat(disk: RecordingDisk, probe: VentoyProbeResult) {
+        val part1 =
+            VirtualPartition(
+                startLba = probe.part1StartLba,
+                sectorCount = probe.part1SectorCount,
+                disk = disk,
+            )
+        assertEquals(
+            "install success must leave real exFAT on part1, not layout-only",
+            FilesystemId.EXFAT,
+            Filesystem.probe(part1),
+        )
     }
 
     @Test

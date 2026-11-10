@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.CRC32
 import usb.device.BlockDevice
+import usb.requireLinkedEngine
 import usb.fs.BlockDeviceFatCallback
 import usb.fs.FatFs
 import usb.fs.FatKind
@@ -21,8 +22,6 @@ class IncompatibleVentoyException(message: String) : Exception(message)
 class VentoyOverwriteRequiredException(message: String) : Exception(message)
 
 class UnsupportedSectorSizeException(message: String) : Exception(message)
-
-class EngineMissingException(message: String) : Exception(message)
 
 /** The release payload does not fit the existing partition; writing would truncate it. */
 class VentoyPayloadTooLargeException(message: String) : Exception(message)
@@ -674,22 +673,32 @@ object VentoyInstaller {
     /**
      * Format Ventoy data partition (partition 1) as exFAT.
      * Call only after geometry/payload preflight + layout writes.
-     * No test seam — real [Formatter.format] + FatFs.probe only.
+     *
+     * Defaults use real [Formatter.format] + [FatFs.probe]. Tests may inject
+     * [format]/[probeKind] to prove ULE→[usb.EngineMissingException] without native,
+     * and that a non-EXFAT probe still fails closed. Success always requires
+     * [FatKind.EXFAT] from [probeKind].
      */
-    private fun formatDataPartitionExfat(disk: BlockDevice, startLba: ULong, sectorCount: ULong) {
+    internal fun formatDataPartitionExfat(
+        disk: BlockDevice,
+        startLba: ULong,
+        sectorCount: ULong,
+        format: (VirtualPartition) -> Unit = { partition ->
+            Formatter.format(partition, FilesystemId.EXFAT)
+        },
+        probeKind: (VirtualPartition) -> FatKind = { partition ->
+            FatFs.probe(
+                BlockDeviceFatCallback(partition),
+                partition.sectorSize,
+                partition.sectorCount.toLong(),
+            )
+        },
+    ) {
         require(sectorCount > 0UL) { "part1 sectorCount must be positive" }
         val partition = VirtualPartition(startLba, sectorCount, disk)
-        try {
-            Formatter.format(partition, FilesystemId.EXFAT)
-        } catch (e: UnsatisfiedLinkError) {
-            throw usb.EngineMissingException("FatFs")
-        }
+        requireLinkedEngine("FatFs") { format(partition) }
         disk.sync()
-        val kind = FatFs.probe(
-            BlockDeviceFatCallback(partition),
-            partition.sectorSize,
-            partition.sectorCount.toLong(),
-        )
+        val kind = requireLinkedEngine("FatFs") { probeKind(partition) }
         if (kind != FatKind.EXFAT) {
             throw IllegalStateException(
                 "Ventoy part1 format verify failed: probe=$kind, expected EXFAT",

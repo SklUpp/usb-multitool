@@ -1,6 +1,6 @@
 package usb.ventoy
 
-import java.io.IOException
+import usb.requireLinkedEngine
 import usb.device.BlockDevice
 import usb.fs.BlockDeviceFatCallback
 import usb.fs.FatFs
@@ -571,11 +571,13 @@ object VentoySetup {
                 )
         val partition = VirtualPartition(probe.part1StartLba, probe.part1SectorCount, disk)
         val volume =
-            FatFs.mount(
-                BlockDeviceFatCallback(partition),
-                partition.sectorSize,
-                partition.sectorCount.toLong(),
-            )
+            requireLinkedEngine("FatFs") {
+                FatFs.mount(
+                    BlockDeviceFatCallback(partition),
+                    partition.sectorSize,
+                    partition.sectorCount.toLong(),
+                )
+            }
         return volume.use(block)
     }
 

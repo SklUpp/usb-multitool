@@ -1,6 +1,6 @@
 package usb.fs
 
-import usb.EngineMissingException
+import usb.requireLinkedEngine
 import usb.device.BlockDevice
 import java.io.Closeable
 import java.util.Collections
@@ -57,11 +57,7 @@ object NtfsFs {
 
     private fun <T> withNativeEngine(op: () -> T): T {
         ensureNative()
-        return try {
-            op()
-        } catch (failure: UnsatisfiedLinkError) {
-            throw EngineMissingException("ntfs-3g")
-        }
+        return requireLinkedEngine("ntfs-3g", op)
     }
 
 
