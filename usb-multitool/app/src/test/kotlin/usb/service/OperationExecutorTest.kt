@@ -467,6 +467,41 @@ class OperationExecutorTest {
         assertEquals(OperationState.Failed(DiskException.Disconnected()), subsequent.await())
     }
 
+    @Test fun staleDisconnectStopsForegroundAfterLastRejectedSubmit() = runTest {
+        val service = RecordingServiceControl()
+        val executor = OperationExecutor(this, serviceControl = service)
+        var rejected: OperationHandle? = null
+        val first = executor.submit(object : DiskOperation() {
+            override suspend fun run() {
+                // Disconnect lands before this op returns, so the drain idle check
+                // sees the counted-but-not-enqueued submit and cannot stop.
+                executor.onDisconnected()
+                rejected = executor.submit(object : DiskOperation() {
+                    override suspend fun run() {
+                        fail("rejected submit must not run")
+                    }
+                })
+            }
+        })
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), first.await())
+        assertEquals(OperationState.Failed(DiskException.Disconnected()), rejected!!.await())
+        advanceUntilIdle()
+        assertFalse(executor.hasOutstandingWork())
+        // Stopped exactly once, and only after the rejected submit dropped the count.
+        assertEquals(listOf("start", "stop"), service.events)
+        assertEquals(1, service.stopCount)
+
+        // Idle stop must not kill later work.
+        executor.onConnected("dev1")
+        advanceUntilIdle()
+        val next = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, next.await())
+        service.awaitStop(2)
+        assertEquals(listOf("start", "stop", "start", "stop"), service.events)
+    }
+
     @Test fun serviceLifecycleInterleavingDoesNotDropForeground() {
         var starts = 0
         var stops = 0
@@ -730,12 +765,17 @@ class RecordingServiceControl : ServiceControl {
     var stopCount = 0
         private set
 
+    /** Start/stop order across the executor's lifetime. */
+    val events = mutableListOf<String>()
+
     override fun startForeground() {
         startCount++
+        events.add("start")
     }
 
     override fun stopWhenIdle() {
         stopCount++
+        events.add("stop")
     }
 
     suspend fun awaitStop(expected: Int = 1) {

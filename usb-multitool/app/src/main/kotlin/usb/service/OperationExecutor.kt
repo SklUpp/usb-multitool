@@ -50,11 +50,14 @@ class OperationExecutor(
     @Volatile private var current: QueuedOp? = null
     @Volatile private var currentDeviceId: String? = null
     private val outstanding = AtomicInteger(0)
+    /** Set under [mutex] by [stopIfIdleLocked]; cleared on bind/unbind and on enqueue. */
+    @Volatile private var idleStopSignalled = false
 
     /** Rebind wake/service control. Not a public field write. */
     fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {
         this.wakeLock = wakeLock
         this.serviceControl = serviceControl
+        idleStopSignalled = false
     }
 
     /**
@@ -65,12 +68,29 @@ class OperationExecutor(
         if (this.serviceControl === expectedServiceControl) {
             this.wakeLock = NoOpWakeLock
             this.serviceControl = NoOpServiceControl
+            idleStopSignalled = false
         }
     }
 
 
     /** Queued or running operations remain. Safe for stopWhenIdle re-entry. */
     fun hasOutstandingWork(): Boolean = outstanding.get() > 0
+
+    /**
+     * Must hold [mutex]. Signals idle stop only when no queued, running, or
+     * counted-but-not-yet-enqueued operation exists. Every path that drops the
+     * last outstanding count (including rejected submits) must call this, or the
+     * foreground service stays up with no work.
+     */
+    private fun stopIfIdleLocked(force: Boolean = false) {
+        if (running || queue.isNotEmpty() || outstanding.get() > 0) return
+        // A rejected submit can race an idle stop that the service control answered
+        // by restarting, so it re-signals instead of trusting the flag.
+        if (idleStopSignalled && !force) return
+        serviceControl.stopWhenIdle()
+        idleStopSignalled = true
+    }
+
     fun submit(operation: DiskOperation): OperationHandle {
         val submitGen = connectionGeneration.get()
         val handle = QueuedOp(operation, generation = submitGen)
@@ -83,10 +103,12 @@ class OperationExecutor(
             val startWorker = mutex.withLock {
                 if (disconnected.get() || connectionGeneration.get() != submitGen) {
                     handle.complete(OperationState.Failed(DiskException.Disconnected()))
+                    stopIfIdleLocked(force = true)
                     return@withLock false
                 }
                 if (handle.cancelled.get() || !handle.operation.isActive()) {
                     handle.complete(OperationState.Cancelled)
+                    stopIfIdleLocked(force = true)
                     return@withLock false
                 }
                 val wasEmpty = queue.isEmpty() && !running
@@ -102,9 +124,13 @@ class OperationExecutor(
                                 ),
                             ),
                         )
+                        stopIfIdleLocked(force = true)
                         return@withLock false
                     }
                 }
+                // Serialized with stopIfIdleLocked: work queued after a concurrent
+                // idle attempt must be able to stop the (re)started service later.
+                idleStopSignalled = false
                 queue.addLast(handle)
                 !running
             }
@@ -136,11 +162,7 @@ class OperationExecutor(
                 op.failDisconnected()
             }
             mutex.withLock {
-                if (!running && queue.isEmpty()) {
-                    if (outstanding.get() == 0) {
-                        serviceControl.stopWhenIdle()
-                    }
-                }
+                stopIfIdleLocked()
             }
         }
     }
@@ -169,6 +191,9 @@ class OperationExecutor(
             for (op in toFail) {
                 op.failDisconnected()
             }
+            mutex.withLock {
+                stopIfIdleLocked()
+            }
         }
     }
 
@@ -181,9 +206,7 @@ class OperationExecutor(
                 if (next == null) {
                     // Outstanding counted but not yet enqueued: leave worker stopped;
                     // that submit's launch will restart drain after enqueue.
-                    if (outstanding.get() == 0) {
-                        serviceControl.stopWhenIdle()
-                    }
+                    stopIfIdleLocked()
                     return
                 }
                 if (disconnected.get() || next.generation != connectionGeneration.get()) {
@@ -206,11 +229,8 @@ class OperationExecutor(
                     running = false
                     current = null
                     if (queue.isEmpty()) {
-                        if (outstanding.get() == 0) {
-                            serviceControl.stopWhenIdle()
-                            return
-                        }
-                        // Counted submit still pending enqueue — exit; it restarts drain.
+                        stopIfIdleLocked()
+                        // Counted submit still pending enqueue, if any — exit; it restarts drain.
                         return
                     }
                 }
