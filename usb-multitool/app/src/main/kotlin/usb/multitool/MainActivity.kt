@@ -104,6 +104,15 @@ import usb.ui.DestructiveAction
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val LANGUAGE_KEY = "language"
+        /**
+         * One 1 MiB chunk per filesystem call. The FAT engine opens, seeks, writes and
+         * syncs per call, so a larger chunk cuts that overhead 16×. The buffer is
+         * allocated per operation and dropped when it returns — no idle retention.
+         */
+        const val COPY_CHUNK_BYTES = 1024 * 1024
+        const val PROGRESS_TICK_MS = 120L
+        /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
+        const val LOG_TICK_MS = 3_000L
     }
 
     var state by mutableStateOf(AppUiState())
@@ -1009,7 +1018,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (attachGeneration != gen || attachedDevice?.deviceId != device.deviceId) {
                             return@withContext
                         }
-                        if (state.isRunning) {
+                        if (this@MainViewModel.state.isRunning) {
                             // Keep the geometry the running operation is using.
                             return@withContext
                         }
@@ -1984,17 +1993,6 @@ private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
             sizeBytes = size.coerceAtLeast(0L).toULong(),
         )
 
-    private companion object {
-        /**
-         * One 1 MiB chunk per filesystem call. The FAT engine opens, seeks, writes and
-         * syncs per call, so a larger chunk cuts that overhead 16×. The buffer is
-         * allocated per operation and dropped when it returns — no idle retention.
-         */
-        const val COPY_CHUNK_BYTES = 1024 * 1024
-        const val PROGRESS_TICK_MS = 120L
-        /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
-        const val LOG_TICK_MS = 3_000L
-    }
 }
 
 class MainActivity : ComponentActivity() {
