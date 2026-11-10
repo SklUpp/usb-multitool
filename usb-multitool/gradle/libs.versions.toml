@@ -8,6 +8,9 @@ ndk = "29.0.14206865"
 coreKtx = "1.16.0"
 activityCompose = "1.10.1"
 composeBom = "2025.12.01"
+# ui-graphics 1.10.0 pulls 1.0.1, whose prebuilt .so (NDK r25c) violates
+# Android's GNU_RELRO 16 KB rule; 1.1.0 is rebuilt with a 16 KB-ready system.
+graphicsPath = "1.1.0"
 coroutines = "1.10.2"
 junit = "4.13.2"
 mockk = "1.14.2"
@@ -20,6 +23,7 @@ androidx-activity-compose = { group = "androidx.activity", name = "activity-comp
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-graphics-path = { group = "androidx.graphics", name = "graphics-path", version.ref = "graphicsPath" }
 compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
