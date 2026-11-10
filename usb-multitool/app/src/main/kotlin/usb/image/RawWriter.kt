@@ -4,8 +4,9 @@ import java.io.EOFException
 import java.nio.ByteBuffer
 import kotlinx.coroutines.CancellationException
 import usb.device.DiskException
+import usb.device.BlockDevice
 import usb.device.TransferPlan
-import usb.device.UsbDisk
+import usb.device.capacityBytes
 import usb.diagnostics.DestructiveConfirmation
 import usb.diagnostics.closeMountedVolumes
 import usb.fs.MountedVolume
@@ -32,18 +33,18 @@ object RawWriter {
      */
     fun write(
         source: ImageSource,
-        disk: UsbDisk,
+        disk: BlockDevice,
         identity: String,
         confirmation: DestructiveConfirmation,
         overwrite: Boolean,
         openVolumes: List<MountedVolume> = emptyList(),
         operation: DiskOperation = DiskOperation("raw-write"),
     ) {
-        confirmation.requireMatch(identity, disk)
+        confirmation.requireMatch(identity, disk.capacityBytes)
         if (!overwrite) throw OverwriteRequiredException()
 
-        val capacity = disk.geometry.capacityBytes
-        val sectorSize = disk.geometry.sectorSize
+        val capacity = disk.capacityBytes
+        val sectorSize = disk.sectorSize
         val known = source.declaredDecodedSize
         if (known != null && known.toULong() > capacity) {
             throw ImageTooLargeException("image $known exceeds disk capacity $capacity")
@@ -173,7 +174,7 @@ object RawWriter {
      */
     private fun verify(
         source: ImageSource,
-        disk: UsbDisk,
+        disk: BlockDevice,
         totalDecoded: Long,
         sectorSize: Int,
         operation: DiskOperation,

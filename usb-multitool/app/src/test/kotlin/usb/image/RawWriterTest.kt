@@ -7,19 +7,73 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import kotlinx.coroutines.test.runTest
+import usb.device.BlockDevice
 import usb.device.DiskException
 import usb.device.TransferPlan
+import usb.device.capacityBytes
 import usb.diagnostics.ConfirmationMismatchException
 import usb.diagnostics.DestructiveConfirmation
 import usb.service.DiskOperation
+import usb.service.OperationExecutor
 import usb.service.OperationState
 import usb.testutil.RecordingDisk
 
 class RawWriterTest {
+    private class FailingSecondWriteDisk(
+        private val inner: RecordingDisk,
+        private val onWrite: () -> Unit,
+    ) : BlockDevice {
+        var writes = 0
+            private set
+
+        override val sectorSize: Int get() = inner.sectorSize
+        override val sectorCount: ULong get() = inner.sectorCount
+
+        override fun read(lba: ULong, destination: java.nio.ByteBuffer) =
+            inner.read(lba, destination)
+
+        override fun write(lba: ULong, source: java.nio.ByteBuffer) {
+            inner.write(lba, source)
+            onWrite()
+            writes++
+            if (writes >= 2) throw java.io.IOException("simulated transport failure")
+        }
+
+        override fun sync() = inner.sync()
+    }
+
     private val identity = "RAW-TEST"
 
     private fun conf(disk: RecordingDisk) =
         DestructiveConfirmation(identity, disk.geometry.capacityBytes)
+
+    @Test fun partialRawWriteThroughPlainBlockDeviceIsReportedPartial() = runTest {
+        // First chunk is TransferPlan.MAX_CHUNK (64 KiB); the second write needs
+        // one more sector, so payload and capacity must exceed one chunk.
+        val inner = RecordingDisk(sectorCount = 130UL, sectorSize = 512)
+        val source = ImageSource.fromBytes(
+            ByteArray(66_048) { 3 },
+            format = ImageFormat.IMG,
+            decodedSize = 66_048L,
+        )
+        val executor = OperationExecutor(this)
+        val handle = executor.submit(object : DiskOperation("raw-partial") {
+            override suspend fun run() {
+                val tracked = FailingSecondWriteDisk(inner) { mutationAttempted = true }
+                RawWriter.write(
+                    source = source,
+                    disk = tracked,
+                    identity = identity,
+                    confirmation = DestructiveConfirmation(identity, inner.capacityBytes),
+                    overwrite = true,
+                    operation = this,
+                )
+            }
+        })
+        assertEquals(OperationState.Partial, handle.await())
+        assertTrue(inner.bytesWritten > 0)
+    }
 
     @Test fun compressedSourceWritesDecodedBytesAndStopsAtCapacity() {
         val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))

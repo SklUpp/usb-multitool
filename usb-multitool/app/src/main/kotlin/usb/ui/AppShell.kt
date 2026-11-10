@@ -1,10 +1,15 @@
 package usb.ui
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,8 +21,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +28,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +45,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import android.content.Context
+import android.content.res.Configuration
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,21 +57,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import usb.multitool.R
+import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
@@ -88,12 +108,29 @@ fun AppShell(
         null -> isSystemInDarkTheme()
     }
     val colors = if (isDark) darkColorScheme() else lightColorScheme()
+    val baseContext = LocalContext.current
+    val localizedContext = remember(baseContext, state.language) {
+        createLocalizedContext(baseContext, state.language)
+    }
+    CompositionLocalProvider(
+        LocalContext provides localizedContext,
+        LocalResources provides localizedContext.resources,
+    ) {
     MaterialTheme(colorScheme = colors) {
+        var logExpanded by remember { mutableStateOf(false) }
+        LaunchedEffect(state.logLines.isEmpty()) {
+            if (state.logLines.isEmpty()) logExpanded = false
+        }
         Scaffold(
             modifier = modifier.fillMaxSize(),
             bottomBar = {
                 Column {
-                    StatusLogPanel(state, onIntent)
+                    StatusLogPanel(
+                        state = state,
+                        onIntent = onIntent,
+                        logExpanded = logExpanded,
+                        onToggleLog = { logExpanded = !logExpanded },
+                    )
                     NavigationBar {
                         ShellTab.entries.forEach { tab ->
                             NavigationBarItem(
@@ -107,39 +144,56 @@ fun AppShell(
                 }
             },
         ) { padding ->
-            Column(
+            Box(
                 modifier = Modifier
                     .padding(padding)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
                     .fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                DeviceHeader(state, onIntent)
-                when (state.tab) {
-                    ShellTab.Files -> FilesScreen(
-                        state = state,
-                        onIntent = onIntent,
-                        modifier = Modifier.weight(1f),
-                        onRequestDownload = onRequestDownload,
-                    )
-                    ShellTab.Ventoy -> VentoyScreen(
-                        state = state,
-                        onIntent = onIntent,
-                        modifier = Modifier.weight(1f),
-                    )
-                    ShellTab.Partitions -> PartitionsScreen(
-                        state = state,
-                        onIntent = onIntent,
-                        modifier = Modifier.weight(1f),
-                        onPickImage = onPickImage,
-                    )
-                    ShellTab.Diagnostics -> DiagnosticsScreen(
-                        state = state,
-                        onIntent = onIntent,
-                        modifier = Modifier.weight(1f),
-                        onPickBackup = onPickBackup,
-                        onPickRescueImage = onPickRescueImage,
-                        onPickRescueMap = onPickRescueMap,
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DeviceHeader(state, onIntent)
+                    when (state.tab) {
+                        ShellTab.Files -> FilesScreen(
+                            state = state,
+                            onIntent = onIntent,
+                            modifier = Modifier.weight(1f),
+                            onRequestDownload = onRequestDownload,
+                        )
+                        ShellTab.Ventoy -> VentoyScreen(
+                            state = state,
+                            onIntent = onIntent,
+                            modifier = Modifier.weight(1f),
+                        )
+                        ShellTab.Partitions -> PartitionsScreen(
+                            state = state,
+                            onIntent = onIntent,
+                            modifier = Modifier.weight(1f),
+                            onPickImage = onPickImage,
+                        )
+                        ShellTab.Diagnostics -> DiagnosticsScreen(
+                            state = state,
+                            onIntent = onIntent,
+                            modifier = Modifier.weight(1f),
+                            onPickBackup = onPickBackup,
+                            onPickRescueImage = onPickRescueImage,
+                            onPickRescueMap = onPickRescueMap,
+                        )
+                    }
+                }
+                AnimatedVisibility(
+                    visible = logExpanded && state.logLines.isNotEmpty(),
+                    enter = fadeIn() + slideInVertically { height -> height / 3 },
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                ) {
+                    LogOverlay(
+                        lines = state.logLines,
+                        onClose = { logExpanded = false },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
             }
@@ -148,8 +202,14 @@ fun AppShell(
         state.pendingConfirmation?.let { confirmation ->
             AlertDialog(
                 onDismissRequest = { onIntent(UiIntent.DismissConfirmation) },
-                title = { Text(confirmation.action) },
-                text = { Text(confirmation.message) },
+                title = { Text(stringResource(R.string.confirm_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        confirmationLines(confirmation).forEach { line ->
+                            Text(line, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                },
                 confirmButton = {
                     Button(
                         onClick = { onIntent(UiIntent.ConfirmDestructive) },
@@ -158,16 +218,17 @@ fun AppShell(
                             contentColor = MaterialTheme.colorScheme.onError,
                         ),
                     ) {
-                        Text("Подтвердить")
+                        Text(stringResource(R.string.action_confirm))
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { onIntent(UiIntent.DismissConfirmation) }) {
-                        Text("Отмена")
+                        Text(stringResource(R.string.action_cancel))
                     }
                 },
             )
         }
+    }
     }
 }
 
@@ -199,13 +260,14 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
             append(" · ")
-            append(partitionsLabel(partCount))
-            append(" · Готово")
+            append(pluralStringResource(R.plurals.partitions_count, partCount, partCount))
+            append(" · ")
+            append(stringResource(R.string.header_ready))
         }
-        DevicePresence.PermissionRequired -> "Нужно разрешение USB"
-        DevicePresence.Busy -> "Устройство занято"
-        DevicePresence.Disconnected -> "Устройство отключено"
-        DevicePresence.Absent -> "Накопитель не подключён"
+        DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
+        DevicePresence.Busy -> stringResource(R.string.header_busy)
+        DevicePresence.Disconnected -> stringResource(R.string.header_disconnected)
+        DevicePresence.Absent -> stringResource(R.string.header_absent)
     }
 
     val totalSectors = device?.let { it.capacityBytes.toDouble() / state.diskSectorSize.toDouble() } ?: 0.0
@@ -214,6 +276,8 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     }
     val usedFraction =
         if (totalSectors > 0.0) (usedSectors / totalSectors).toFloat().coerceIn(0f, 1f) else null
+    val usedPercent = ((usedFraction ?: 0f) * 100).roundToInt()
+    val usedDescription = stringResource(R.string.header_used_accessibility, usedPercent)
 
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -223,17 +287,17 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = device?.label ?: "USB Multitool",
+                        text = device?.label ?: stringResource(R.string.app_name),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -259,35 +323,56 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                 ) {
                     Text(themeLabel(state.darkTheme), style = MaterialTheme.typography.labelSmall)
                 }
+
+                LanguagePicker(language = state.language, onIntent = onIntent)
             }
 
-            if (usedFraction != null) {
-                LinearProgressIndicator(
-                    progress = { usedFraction },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(CircleShape),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                )
+            if (usedFraction != null && state.partitions.isNotEmpty() && usedFraction > 0f) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    LinearProgressIndicator(
+                        progress = { usedFraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(CircleShape)
+                            .semantics {
+                                contentDescription = usedDescription
+                            },
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.header_used_caption,
+                            usedPercent,
+                            pluralStringResource(R.plurals.partitions_count, partCount, partCount),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
 }
 
 /**
- * Single non-interrupting status + operation + log surface. Sits above the navigation
- * bar, never covers tab content with a dialog, and collapses to one line.
+ * Collapsed status/operation line above the navigation bar. The operation log itself is
+ * an overlay ([LogOverlay]) so expanding it never squeezes the active tab layout.
  */
 @Composable
-internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
+internal fun StatusLogPanel(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    logExpanded: Boolean,
+    onToggleLog: () -> Unit,
+) {
     val op = state.operation
     val overwrite = state.linkOverwriteCandidate
     val hasLog = state.logLines.isNotEmpty()
     if (op == null && state.statusMessage == null && !hasLog && overwrite == null) return
-
-    var expanded by remember(hasLog) { mutableStateOf(false) }
 
     val failed = op?.state == OperationState.Failed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
@@ -306,16 +391,17 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val title = when {
-        op != null -> "${op.label} · ${operationStateLabel(op.state)}"
-        overwrite != null -> "Перезапись связи Ventoy"
-        else -> "Статус"
+        op != null -> "${operationLabel(op)} · ${operationStateLabel(op.state)}"
+        overwrite != null -> stringResource(R.string.status_overwrite_title)
+        else -> stringResource(R.string.status_title)
     }
     val detail = when {
         op != null -> op.errorMessage ?: op.resultMessage
-        overwrite != null ->
-            "Ссылка уже существует для ${overwrite.substringAfterLast('/')}. " +
-                "Нужно явное подтверждение перезаписи."
-        else -> state.statusMessage ?: state.logLines.lastOrNull()
+        overwrite != null -> stringResource(
+            R.string.status_link_exists,
+            overwrite.substringAfterLast('/'),
+        )
+        else -> state.statusMessage?.localized() ?: state.logLines.lastOrNull()
     }
 
     Surface(
@@ -350,7 +436,7 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                             text = message,
                             style = MaterialTheme.typography.labelSmall,
                             color = content.copy(alpha = 0.85f),
-                            maxLines = if (expanded) 3 else 1,
+                            maxLines = if (logExpanded) 3 else 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -370,7 +456,7 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            text = "Отмена",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = content,
@@ -379,11 +465,13 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                 }
                 if (hasLog) {
                     TextButton(
-                        onClick = { expanded = !expanded },
+                        onClick = onToggleLog,
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            text = if (expanded) "Свернуть" else "Журнал",
+                            text = stringResource(
+                                if (logExpanded) R.string.log_collapse else R.string.log_open,
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = content,
                         )
@@ -395,7 +483,7 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            text = "Скрыть",
+                            text = stringResource(R.string.status_hide),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = content,
@@ -407,7 +495,7 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            text = "Скрыть",
+                            text = stringResource(R.string.status_hide),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = content,
@@ -434,64 +522,159 @@ internal fun StatusLogPanel(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                 ) {
                     Text(
-                        text = "Перезаписать связь",
+                        text = stringResource(R.string.status_overwrite),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = content,
                     )
                 }
             }
+        }
+    }
+}
 
-            if (hasLog && expanded) {
-                val logScroll = rememberScrollState()
-                LaunchedEffect(state.logLines.lastOrNull()) {
-                    logScroll.animateScrollTo(logScroll.maxValue)
-                }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 180.dp)
-                        .verticalScroll(logScroll),
-                ) {
-                    state.logLines.forEach { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.8f),
-                        )
-                    }
-                }
+/**
+ * Operation log shown over the active tab: no scrim and no container background, so the
+ * user keeps context. Every line stays a real text node and the close action stays
+ * reachable; the log keeps its own scroll and follows new lines.
+ */
+@Composable
+private fun LogOverlay(
+    lines: List<String>,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val logScroll = rememberScrollState()
+    LaunchedEffect(lines.lastOrNull()) {
+        logScroll.animateScrollTo(logScroll.maxValue)
+    }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(max = 240.dp)
+            // Swallow taps that land on the transparent overlay itself so they cannot
+            // reach buttons underneath; the log scroll and its own buttons still work.
+            .pointerInput(Unit) { detectTapGestures { } },
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.log_title_count, lines.size),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { heading() },
+            )
+            TextButton(
+                onClick = onClose,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.log_collapse),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(logScroll),
+        ) {
+            lines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
             }
         }
     }
 }
 
+/** Applies [language] without touching the process-wide locale. */
+private fun createLocalizedContext(base: Context, language: AppLanguage): Context {
+    val tag = when (language) {
+        AppLanguage.System -> return base
+        AppLanguage.Russian -> "ru"
+        AppLanguage.English -> "en"
+    }
+    val config = Configuration(base.resources.configuration)
+    config.setLocale(Locale.forLanguageTag(tag))
+    return base.createConfigurationContext(config)
+}
+
+@Composable
+private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = stringResource(R.string.language_label)
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            modifier = Modifier.semantics { contentDescription = label },
+        ) {
+            Text(languageCode(language), style = MaterialTheme.typography.labelSmall)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            AppLanguage.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(languageName(option)) },
+                    onClick = {
+                        expanded = false
+                        onIntent(UiIntent.SetLanguage(option))
+                    },
+                    trailingIcon = if (option == language) {
+                        {
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun languageCode(language: AppLanguage): String =
+    when (language) {
+        AppLanguage.System -> "AUTO"
+        AppLanguage.Russian -> "RU"
+        AppLanguage.English -> "EN"
+    }
+
+@Composable
+private fun languageName(language: AppLanguage): String =
+    when (language) {
+        AppLanguage.System -> stringResource(R.string.language_system)
+        AppLanguage.Russian -> stringResource(R.string.language_russian)
+        AppLanguage.English -> stringResource(R.string.language_english)
+    }
+
+@Composable
 private fun themeLabel(darkTheme: Boolean?): String =
     when (darkTheme) {
-        null -> "Авто"
-        true -> "Тёмная"
-        false -> "Светлая"
-    }
-
-private fun operationStateLabel(state: OperationState): String =
-    when (state) {
-        OperationState.Queued -> "в очереди"
-        OperationState.Running -> "выполняется"
-        OperationState.Completed -> "готово"
-        OperationState.Cancelled -> "отменено"
-        OperationState.Failed -> "ошибка"
-        OperationState.Partial -> "частично"
-    }
-
-internal fun partitionsLabel(count: Int): String =
-    when (count % 10) {
-        1 -> if (count % 100 == 11) "$count разделов" else "$count раздел"
-        2, 3, 4 -> if (count % 100 in 12..14) "$count разделов" else "$count раздела"
-        else -> "$count разделов"
+        null -> stringResource(R.string.theme_auto)
+        true -> stringResource(R.string.theme_dark)
+        false -> stringResource(R.string.theme_light)
     }
 
 /**
- * Section container shared by all tabs: one M3 surface, optional error border.
+ * Section block: bold heading, optional one-line subtitle, hairline divider, then content.
+ * No container fill — hierarchy comes from typography, spacing and the divider, so nested
+ * row surfaces stay the only backgrounds and no vertical space is wasted on padding.
  */
 @Composable
 internal fun SectionCard(
@@ -502,101 +685,120 @@ internal fun SectionCard(
     trailing: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        border = if (danger) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f))
-        } else {
-            null
-        },
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.semantics { heading() },
+                )
+                subtitle?.let {
                     Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.semantics { heading() },
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    subtitle?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
-                trailing?.invoke()
             }
+            trailing?.invoke()
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(top = 4.dp, bottom = 6.dp),
+            color = if (danger) {
+                MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            },
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             content()
         }
     }
 }
 
 /**
- * Weighted segmented single-choice control (format picker). Radio semantics.
+ * Compact single-choice dropdown: one 48 dp row with the current value, full option list
+ * on demand. Used where chips/segmented rows cost too much vertical space.
  */
 @Composable
-internal fun <T> SegmentedChoice(
+internal fun <T> CompactChoice(
     options: List<Pair<T, String>>,
     selected: T,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    label: String? = null,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            .selectableGroup()
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        options.forEach { (value, label) ->
-            val isSelected = value == selected
-            Surface(
-                shape = RoundedCornerShape(9.dp),
-                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                modifier = Modifier
-                    .weight(1f)
-                    .selectable(
-                        selected = isSelected,
-                        enabled = enabled,
-                        role = Role.RadioButton,
-                        onClick = { onSelect(value) },
-                    ),
-            ) {
+    var expanded by remember { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "choiceChevron",
+    )
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: "—"
+    Box(modifier = modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                label?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
                 Text(
-                    text = label,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            GlyphIcon(
+                glyph = Glyph.ChevronDown,
+                size = 20.dp,
+                modifier = Modifier.rotate(chevronRotation),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        expanded = false
+                        onSelect(value)
+                    },
+                    trailingIcon = if (value == selected) {
+                        {
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
                 )
             }
         }
@@ -667,16 +869,65 @@ internal fun SwitchRow(
 
 @Composable
 internal fun EmptyHint(text: String, modifier: Modifier = Modifier) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+    Text(
+        text = text,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/**
+ * Short always-visible hint plus an info button with the longer explanation. Used where
+ * the short text alone could mislead (write-protection policy, partition boundaries).
+ * Both strings come from resources and the icon keeps a 48 dp target.
+ */
+@Composable
+internal fun InfoHint(
+    text: String,
+    infoTitle: String,
+    infoText: String,
+    modifier: Modifier = Modifier,
+) {
+    var showInfo by remember { mutableStateOf(false) }
+    Row(
         modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .weight(1f)
+                .padding(top = 12.dp),
+        )
+        IconButton(
+            onClick = { showInfo = true },
+            modifier = Modifier
+                .size(48.dp)
+                .semantics { contentDescription = infoTitle },
+        ) {
+            GlyphIcon(
+                glyph = Glyph.Info,
+                size = 20.dp,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+    if (showInfo) {
+        AlertDialog(
+            onDismissRequest = { showInfo = false },
+            title = { Text(infoTitle) },
+            text = { Text(infoText) },
+            confirmButton = {
+                TextButton(onClick = { showInfo = false }) {
+                    Text(stringResource(R.string.info_close))
+                }
+            },
         )
     }
 }
@@ -688,6 +939,7 @@ internal enum class Glyph {
     Iso,
     Usb,
     Shield,
+    Info,
     Scan,
     Copy,
     Gpt,
@@ -760,6 +1012,16 @@ internal fun GlyphIcon(
                     tint,
                     style = stroke,
                 )
+                Glyph.Info -> {
+                    drawCircle(tint, radius = 9f, style = stroke)
+                    drawCircle(tint, radius = 1.4f, center = androidx.compose.ui.geometry.Offset(12f, 8f))
+                    drawLine(
+                        tint,
+                        androidx.compose.ui.geometry.Offset(12f, 11f),
+                        androidx.compose.ui.geometry.Offset(12f, 17f),
+                        1.8f,
+                    )
+                }
                 Glyph.Scan -> {
                     drawPath(
                         Path().apply {
@@ -825,22 +1087,30 @@ internal fun GlyphIcon(
     }
 }
 
+@Composable
 private fun ShellTab.title(): String =
     when (this) {
-        ShellTab.Files -> "Файлы"
-        ShellTab.Ventoy -> "Ventoy"
-        ShellTab.Partitions -> "Разделы"
-        ShellTab.Diagnostics -> "Диагностика"
+        ShellTab.Files -> stringResource(R.string.tab_files)
+        ShellTab.Ventoy -> stringResource(R.string.tab_ventoy)
+        ShellTab.Partitions -> stringResource(R.string.tab_partitions)
+        ShellTab.Diagnostics -> stringResource(R.string.tab_diagnostics)
     }
 
 @Composable
 private fun TabIcon(tab: ShellTab) {
-    val glyph = when (tab) {
-        ShellTab.Files -> Glyph.Folder
-        ShellTab.Ventoy -> Glyph.Usb
-        ShellTab.Partitions -> Glyph.Gpt
-        ShellTab.Diagnostics -> Glyph.Pulse
-    }
-    // The NavigationBarItem label already exposes the tab name to accessibility services.
-    GlyphIcon(glyph, size = 24.dp)
+    // Provided vector icons keep their transparency and follow the theme content color;
+    // the NavigationBarItem label already exposes the tab name to accessibility services.
+    Icon(
+        painter = painterResource(
+            when (tab) {
+                ShellTab.Files -> R.drawable.ic_tab_files
+                ShellTab.Ventoy -> R.drawable.ic_tab_ventoy
+                ShellTab.Partitions -> R.drawable.ic_tab_partitions
+                ShellTab.Diagnostics -> R.drawable.ic_tab_diagnostics
+            },
+        ),
+        contentDescription = null,
+        tint = LocalContentColor.current,
+        modifier = Modifier.size(24.dp),
+    )
 }

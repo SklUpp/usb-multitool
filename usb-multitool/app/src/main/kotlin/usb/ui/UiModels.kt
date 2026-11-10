@@ -2,6 +2,7 @@ package usb.ui
 
 import usb.fs.FilesystemId
 import usb.fs.FormatCatalog
+import kotlin.math.roundToLong
 
 /**
  * Pure UI/domain models. No Android USB imports.
@@ -11,7 +12,7 @@ import usb.fs.FormatCatalog
 data class DeviceIdentity(
     val label: String,
     val capacityBytes: ULong,
-    /** USB serial when the OS exposes it; null/blank → resume refused. */
+    /** USB serial when the OS exposes it; null/blank → RESTORE resume refused. */
     val serialNumber: String? = null,
     /** Attach generation distinguishes same-model devices without serial. */
     val attachGeneration: Long = 0L,
@@ -57,7 +58,91 @@ enum class OperationState {
     Partial,
 }
 
-/** Device presence / permission / link lifecycle for the shell. */
+/** Authored, translatable text. [Raw] holds system or engine text and is shown unchanged. */
+sealed interface UiMessage {
+    data class Key(
+        val key: UiMessageKey,
+        val args: List<Any> = emptyList(),
+    ) : UiMessage
+
+    data class Raw(val text: String) : UiMessage
+}
+
+enum class UiMessageKey {
+    NoDevice,
+    PermissionRequired,
+    DeviceBusy,
+    DeviceDisconnected,
+    Ready,
+    WaitForOperation,
+    FormatUnsupported,
+    InvalidFreeRegion,
+    NoIsoForLink,
+    NoDeviceForLink,
+    LinkMismatch,
+    LinkOverwriteNeeded,
+    EfiPartitionMissing,
+    EfiGeometryUnknown,
+    StagingFile,
+    CannotChangeStaged,
+    StagedImageReady,
+    CannotClearStaged,
+    StagedCleared,
+    OperationInProgress,
+    SelfTestStarting,
+    InvalidFolderName,
+    SelectEntryToDelete,
+    SelectFileToDownload,
+    SelectPartitionFirst,
+    ReadOnlyPartition,
+    SelectedFileMissing,
+    ImageCleared,
+    ImageReady,
+    WritingXml,
+    BackupCleared,
+    BackupReady,
+    RescueImageCleared,
+    RescueImageReady,
+    RescueMapCleared,
+    RescueMapReady,
+    ChooseGptBackup,
+    ChooseRescueFiles,
+    SelectImageFirst,
+    CorruptTableCreate,
+    Probing,
+    NoPartitionsFound,
+    ProbeCancelled,
+    ProbeFailed,
+    SavedFile,
+    UploadCleanupFailed,
+    StagingLeftovers,
+    StaleStagedImage,
+    CannotDeleteStaging,
+    CannotStage,
+    CreatedFolder,
+    DeletedPath,
+    UploadedFile,
+    CannotOpenUsb,
+    VolumeSyncUnconfirmed,
+    DeleteStagingFailed,
+    InvalidEntryName,
+    RenameSameName,
+    RenamedPath,
+    TargetChanged,
+    TableDamaged,
+    PartitionGeometryUnknown,
+    GptPrimaryDamaged,
+    PartitionTableAmbiguous,
+    CannotReadUsb,
+    CannotReadPartitionTable,
+    Success,
+    CancelledStatus,
+    FailedStatus,
+    PartialStatus,
+    RunningStatus,
+    QueuedStatus,
+}
+
 enum class DevicePresence {
     Absent,
     PermissionRequired,
@@ -79,12 +164,14 @@ enum class DestructiveAction {
     GPT_RESTORE,
     RESCUE_RESTORE,
     VENTOY_LINK_XML,
+    SET_PARTITION_ROLE,
+    SET_PARTITION_BOOTABLE,
 }
 
 data class DestructiveConfirmation(
-    val action: String,
+    val action: DestructiveAction,
     val identity: DeviceIdentity,
-    val message: String,
+    val targetPartitionName: String? = null,
     val formatId: FilesystemId? = null,
     val isoName: String? = null,
     val linkOverwrite: Boolean = false,
@@ -93,53 +180,23 @@ data class DestructiveConfirmation(
     val partitionSectorCount: ULong? = null,
     val createStartLba: ULong? = null,
     val createSectorCount: ULong? = null,
+    val partitionRole: PartitionRole? = null,
+    val partitionBootable: Boolean? = null,
 ) {
     companion object {
         fun request(
             device: DeviceIdentity,
             action: DestructiveAction,
-            targetPartition: String? = null,
+            targetPartitionName: String? = null,
             formatId: FilesystemId? = null,
             isoName: String? = null,
             linkOverwrite: Boolean = false,
             target: PartitionTab? = null,
-        ): DestructiveConfirmation {
-            val actionLabel = action.displayName()
-            val targetSuffix = if (targetPartition != null) " (partition $targetPartition)" else ""
-            val formatSuffix =
-                if (action == DestructiveAction.FORMAT_PARTITION && formatId != null) {
-                    " as ${FormatCatalog.label(formatId)}"
-                } else {
-                    ""
-                }
-            val rescueHint =
-                if (action == DestructiveAction.RESCUE_RESTORE) {
-                    " Restores onto the currently attached disk (${device.identity}). " +
-                        "If the map names a different stick, that is a disk swap — " +
-                        "all NON_TRIED gaps and FAILED sectors become zeros on this disk. " +
-                        "Partial COPY maps are refused."
-                } else {
-                    ""
-                }
-            val linkHint =
-                if (action == DestructiveAction.VENTOY_LINK_XML) {
-                    val iso = isoName?.substringAfterLast('/') ?: "(ISO)"
-                    if (linkOverwrite) {
-                        " Overwrites existing autounattend.xml / ventoy.json link for $iso."
-                    } else {
-                        " Writes autounattend.xml and merges ventoy.json for $iso " +
-                            "(refuses if a link already exists — confirm overwrite)."
-                    }
-                } else {
-                    ""
-                }
-            val message =
-                "Confirm $actionLabel$formatSuffix$targetSuffix on ${device.identity} (${device.capacityLabel}). " +
-                    "This changes the USB device and cannot be undone from this app." + rescueHint + linkHint
-            return DestructiveConfirmation(
-                action = actionLabel,
+        ): DestructiveConfirmation =
+            DestructiveConfirmation(
+                action = action,
                 identity = device,
-                message = message,
+                targetPartitionName = targetPartitionName,
                 formatId = if (action == DestructiveAction.FORMAT_PARTITION) formatId else null,
                 isoName = if (action == DestructiveAction.VENTOY_LINK_XML) isoName else null,
                 linkOverwrite = linkOverwrite,
@@ -147,7 +204,6 @@ data class DestructiveConfirmation(
                 partitionStartLba = target?.startLba,
                 partitionSectorCount = target?.sectorCount,
             )
-        }
     }
 }
 fun DestructiveAction.displayName(): String =
@@ -164,7 +220,22 @@ fun DestructiveAction.displayName(): String =
         DestructiveAction.GPT_RESTORE -> "restore GPT backup"
         DestructiveAction.RESCUE_RESTORE -> "restore rescue image"
         DestructiveAction.VENTOY_LINK_XML -> "link Ventoy Windows setup XML"
+        DestructiveAction.SET_PARTITION_ROLE -> "change partition type"
+        DestructiveAction.SET_PARTITION_BOOTABLE -> "change bootable flag"
     }
+
+/** Persisted UI language. [System] follows the device locale. */
+/** Boot role the user can assign to a partition; maps to BASIC or EFI on disk. */
+enum class PartitionRole {
+    Data,
+    Efi,
+}
+
+enum class AppLanguage {
+    System,
+    Russian,
+    English,
+}
 
 enum class ShellTab {
     Files,
@@ -173,14 +244,29 @@ enum class ShellTab {
     Diagnostics,
 }
 
+/** Exact target captured when a file mutation is requested. */
+data class PartitionBinding(
+    val device: DeviceIdentity,
+    val partitionId: String,
+    val startLba: ULong?,
+    val sectorCount: ULong?,
+)
+
 data class PartitionTab(
     val id: String,
     val name: String,
+    /**
+     * Conservative write protection: real ESP type, EFI type byte/GUID, or the VTOYEFI
+     * name. Independent of the current on-disk type; not a mount mode.
+     */
     val readOnly: Boolean,
-    val isVtoyEfi: Boolean = false,
+    /** Real ESP type on disk (GPT ESP GUID or MBR 0xEF), not a name-based guess. */
+    val isEfiType: Boolean = false,
     val filesystemId: FilesystemId? = null,
     val startLba: ULong? = null,
     val sectorCount: ULong? = null,
+    /** Legacy BIOS bootable flag as stored on disk (MBR 0x80 / GPT attribute bit 2). */
+    val bootable: Boolean = false,
 ) {
     val filesystemLabel: String
         get() = when (filesystemId) {
@@ -233,24 +319,51 @@ data class AppUiState(
     val presence: DevicePresence = DevicePresence.Absent,
     val device: DeviceIdentity? = null,
     val tab: ShellTab = ShellTab.Files,
+    val language: AppLanguage = AppLanguage.System,
     val partitions: List<PartitionTab> = emptyList(),
     val freeRegions: List<FreeRegionUi> = emptyList(),
     val diskSectorSize: Int = 512,
     val selectedPartitionId: String? = null,
-    val vtoyEfiWriteEnabled: Boolean = false,
-    val vtoyBypassTpm: Boolean = false,
-    val vtoyBypassRam: Boolean = false,
-    val vtoyLocalAccount: Boolean = false,
+    /**
+     * Partition ID of the one EFI system partition whose write protection is lifted for
+     * the current attachment. Null means every EFI partition stays protected.
+     * Not a mount mode: it never changes how a volume is opened or mounted.
+     * Cleared when the device is replaced, re-attached, detached, or the partition list
+     * stops containing that same EFI partition.
+     */
+    val vtoyEfiWritePartitionId: String? = null,
+    /** Geometry of the overridden EFI partition; the override never follows an ID alone. */
+    val vtoyEfiWriteStartLba: ULong? = null,
+    val vtoyEfiWriteSectorCount: ULong? = null,
+    /**
+     * Single official VTOY_WIN11_BYPASS_CHECK control: TPM, RAM, Secure Boot and CPU checks.
+     * Null leaves the existing ventoy.json value untouched; true writes 1; false writes 0.
+     */
+    val vtoyBypassChecks: Boolean? = null,
+    /** Null leaves the existing VTOY_WIN11_BYPASS_LOCAL_ACCOUNT value untouched. */
+    val vtoyLocalAccount: Boolean? = null,
     val tableValid: Boolean = true,
+    /** GPT primary header/entries were invalid; data came from the backup GPT. */
+    val partitionTableDamaged: Boolean = false,
+    /** MBR and GPT both describe partitions; every layout mutation stays blocked. */
+    val partitionTableAmbiguous: Boolean = false,
     /** Absolute FAT path currently displayed; [files] are the entries of this directory. */
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
+    /**
+     * Real directory-list failure for [currentPath]. Set by [UiIntent.FilesListFailed] and
+     * cleared by a successful listing, a path change or a device change. Never inferred
+     * from status-message text.
+     */
+    val filesError: String? = null,
     val operation: OperationProgress? = null,
     val pendingConfirmation: DestructiveConfirmation? = null,
     val linkOverwriteCandidate: String? = null,
     /** Device identity that produced [linkOverwriteCandidate]. */
     val linkOverwriteCandidateIdentity: String? = null,
-    val statusMessage: String? = null,
+    /** Attach generation that produced [linkOverwriteCandidate]. */
+    val linkOverwriteCandidateGeneration: Long? = null,
+    val statusMessage: UiMessage? = null,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
     /**
@@ -293,6 +406,73 @@ data class AppUiState(
 
     fun selectedPartition(): PartitionTab? =
         partitions.firstOrNull { it.id == selectedPartitionId } ?: partitions.firstOrNull()
+
+    /** True while one EFI partition has its write protection lifted for this attachment. */
+    val vtoyEfiWriteEnabled: Boolean
+        get() = vtoyEfiWritePartitionId != null
+
+    /**
+     * True when [partition] may be written. Non-EFI partitions are always allowed; an EFI
+     * partition only when the override names exactly that partition on this attachment.
+     */
+    fun isEfiWriteAllowed(partition: PartitionTab): Boolean {
+        if (!partition.readOnly) return true
+        val allowedStart = vtoyEfiWriteStartLba ?: return false
+        val allowedCount = vtoyEfiWriteSectorCount ?: return false
+        return partition.id == vtoyEfiWritePartitionId &&
+            partition.startLba == allowedStart &&
+            partition.sectorCount == allowedCount
+    }
+
+    /** Write-protected system partitions (ESP, EFI type, or VTOYEFI name). */
+    val efiPartitions: List<PartitionTab>
+        get() = partitions.filter { it.readOnly }
+}
+
+/** True when [binding] still names the selected device, partition and exact geometry. */
+fun PartitionBinding.matches(state: AppUiState): Boolean {
+    val device = state.device ?: return false
+    if (device != this.device) return false
+    if (state.selectedPartitionId != partitionId) return false
+    val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    return partition.startLba == startLba && partition.sectorCount == sectorCount
+}
+
+/**
+ * Whole-MiB math for the new-partition slider. Exact [ULong] bounds: Float only carries
+ * the thumb position, never the boundary value, so rounding cannot cross the free region.
+ */
+object PartitionRangeMath {
+    /** Whole MiB units that fit into [availableSectors]; 0 when [sectorsPerMib] is 0. */
+    fun availableMib(availableSectors: ULong, sectorsPerMib: ULong): ULong =
+        if (sectorsPerMib == 0UL) 0UL else availableSectors / sectorsPerMib
+
+    /** Snap a slider position to a whole MiB, clamped to [0, maxMib]. */
+    fun snapToMib(position: Float, maxMib: ULong): ULong {
+        if (maxMib == 0UL || position.isNaN()) return 0UL
+        val rounded = position.roundToLong()
+        if (rounded <= 0L) return 0UL
+        val candidate = rounded.toULong()
+        return if (candidate > maxMib) maxMib else candidate
+    }
+
+    /**
+     * Sector selection for a snapped range, or null for an empty/inverted range or when
+     * the computed end would pass [regionEnd]. All arithmetic stays in [ULong].
+     */
+    fun sectorsFor(
+        firstAligned: ULong,
+        regionEnd: ULong,
+        startMib: ULong,
+        endMib: ULong,
+        sectorsPerMib: ULong,
+    ): Pair<ULong, ULong>? {
+        if (sectorsPerMib == 0UL || endMib <= startMib) return null
+        val start = firstAligned + startMib * sectorsPerMib
+        val count = (endMib - startMib) * sectorsPerMib
+        if (start > regionEnd || count > regionEnd - start) return null
+        return start to count
+    }
 }
 
 /** Normalize a FAT path: leading slash, no trailing slash, root is "/". */

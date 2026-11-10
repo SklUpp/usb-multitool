@@ -69,9 +69,9 @@ class FormatPickerTest {
             )
         val pending = result.state.pendingConfirmation
         assertNotNull(pending)
-        assertTrue(pending!!.message.contains("exFAT"))
-        assertTrue(pending.message.contains("format partition"))
-        assertTrue(pending.message.contains(device.identity))
+        assertEquals(FilesystemId.EXFAT, pending!!.formatId)
+        assertEquals(DestructiveAction.FORMAT_PARTITION, pending.action)
+        assertEquals(device, pending.identity)
     }
 
     @Test
@@ -81,16 +81,17 @@ class FormatPickerTest {
                 ready(FilesystemId.EXT),
                 UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION),
             )
-        assertTrue(result.state.pendingConfirmation!!.message.contains("EXT4"))
+        assertEquals(
+            FilesystemId.EXT,
+            result.state.pendingConfirmation!!.formatId,
+        )
     }
 
     @Test
     fun wipeConfirmationOmitsFilesystemLabel() {
         val result =
             UiReducer.reduce(ready(FilesystemId.EXT), UiIntent.RequestDestructive(DestructiveAction.WIPE))
-        val msg = result.state.pendingConfirmation!!.message
-        assertFalse(msg.contains("EXT4"))
-        assertFalse(msg.contains(" as "))
+        assertNull(result.state.pendingConfirmation!!.formatId)
     }
 
     @Test
@@ -130,7 +131,10 @@ class FormatPickerTest {
                 ready(FilesystemId.FAT),
                 UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION),
             )
-        assertTrue(result.state.pendingConfirmation!!.message.contains("FAT/FAT32"))
+        assertEquals(
+            FilesystemId.FAT,
+            result.state.pendingConfirmation!!.formatId,
+        )
     }
 
     @Test

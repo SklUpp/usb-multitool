@@ -15,8 +15,48 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import usb.device.DiskException
+import usb.files.FilesOperations
+import usb.fs.UsbFsDirEntry
+import usb.fs.UsbFsVolume
 
 class OperationExecutorTest {
+    @Test fun renameSyncFailureAfterMarkedMutationIsPartial() = runTest {
+        val volume = object : UsbFsVolume {
+            var renamed = false
+
+            override fun list(path: String) = emptyList<UsbFsDirEntry>()
+            override fun stat(path: String): UsbFsDirEntry = error("unused")
+            override fun statOrNull(path: String): UsbFsDirEntry? = null
+            override fun mkdir(path: String) = Unit
+            override fun delete(path: String) = Unit
+            override fun rename(from: String, to: String) { renamed = true }
+            override fun read(path: String, offset: Long, length: Int) = ByteArray(0)
+            override fun write(
+                path: String,
+                data: ByteArray,
+                offset: Long,
+                create: Boolean,
+                plannedTotalSize: Long,
+            ) = Unit
+            // rename may create both links and still fail; post-rename sync failure
+            // leaves the change on disk.
+            override fun sync(): Unit = throw java.io.IOException("sync after rename failed")
+            override fun close() = Unit
+        }
+        val executor = OperationExecutor(this)
+        val operation = object : DiskOperation("Rename ubuntu.iso") {
+            override suspend fun run() {
+                // Same ordering as MainActivity.renameEntry: mark after binding checks,
+                // immediately before the engine rename.
+                mutationAttempted = true
+                FilesOperations.rename(volume, "/ubuntu.iso", "/linux.iso")
+            }
+        }
+        assertEquals(OperationState.Partial, executor.submit(operation).await())
+        assertTrue(volume.renamed)
+        assertTrue(operation.failureCause is java.io.IOException)
+    }
+
     @Test fun disconnectWaitsForRunningWorkerAndPreservesPartial() = runTest {
         val executor = OperationExecutor(this)
         val started = CompletableDeferred<Unit>()

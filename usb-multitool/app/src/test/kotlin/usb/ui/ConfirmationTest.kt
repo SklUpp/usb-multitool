@@ -17,19 +17,18 @@ class ConfirmationTest {
     @Test
     fun destructiveActionIncludesIdentityAndCapacity() {
         val request = DestructiveConfirmation.request(device, DestructiveAction.WIPE)
-        assertTrue(request.message.contains(device.identity))
-        assertTrue(request.message.contains(device.capacityLabel))
-        assertEquals("wipe", request.action)
+        assertEquals(DestructiveAction.WIPE, request.action)
         assertEquals(device, request.identity)
+        assertTrue(request.identity.identity.contains(device.identity))
+        assertTrue(request.identity.capacityLabel.isNotEmpty())
     }
 
     @Test
     fun everyDestructiveActionEmbedsDeviceFacts() {
         DestructiveAction.entries.forEach { action ->
             val request = DestructiveConfirmation.request(device, action)
-            assertTrue(action.name, request.message.contains(device.identity))
-            assertTrue(action.name, request.message.contains(device.capacityLabel))
-            assertTrue(action.name, request.message.contains(action.displayName()))
+            assertEquals(action, request.action)
+            assertEquals(device, request.identity)
         }
     }
 }
@@ -40,8 +39,15 @@ class UiStateMachineTest {
 
     private val partitions =
         listOf(
-            PartitionTab("1", "VENTOY", readOnly = false),
-            PartitionTab("2", "VTOYEFI", readOnly = true, isVtoyEfi = true),
+            PartitionTab("1", "VENTOY", readOnly = false, startLba = 0uL, sectorCount = 2048uL),
+            PartitionTab(
+                "2",
+                "VTOYEFI",
+                readOnly = true,
+                isEfiType = true,
+                startLba = 2048uL,
+                sectorCount = 4096uL,
+            ),
         )
 
     private fun ready(): AppUiState =
@@ -55,7 +61,7 @@ class UiStateMachineTest {
                     FileEntry("ubuntu.iso", isDirectory = false, sizeBytes = 2_000_000_000uL),
                     FileEntry("docs", isDirectory = true, sizeBytes = 0uL),
                 ),
-            vtoyBypassTpm = true,
+            vtoyBypassChecks = true,
         )
 
     @Test
@@ -66,7 +72,7 @@ class UiStateMachineTest {
                 UiIntent.RequestDestructive(DestructiveAction.WIPE),
             )
         assertNull(result.state.pendingConfirmation)
-        assertEquals("No USB mass-storage device", result.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.NoDevice), result.state.statusMessage)
         assertTrue(result.effects.isEmpty())
     }
 
@@ -81,7 +87,7 @@ class UiStateMachineTest {
         val result =
             UiReducer.reduce(state, UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE))
         assertNull(result.state.pendingConfirmation)
-        assertEquals("USB permission required", result.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.PermissionRequired), result.state.statusMessage)
     }
 
     @Test
@@ -104,7 +110,7 @@ class UiStateMachineTest {
         val blocked =
             UiReducer.reduce(running, UiIntent.RequestDestructive(DestructiveAction.WIPE))
         assertNull(blocked.state.pendingConfirmation)
-        assertEquals("Busy: wait for the running operation", blocked.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.WaitForOperation), blocked.state.statusMessage)
     }
 
     @Test
@@ -117,7 +123,7 @@ class UiStateMachineTest {
                     OperationProgress(OperationState.Completed, "wipe"),
                 ),
             )
-        assertEquals("Success", completed.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.Success), completed.state.statusMessage)
 
         val cancelled =
             UiReducer.reduce(
@@ -126,7 +132,7 @@ class UiStateMachineTest {
                     OperationProgress(OperationState.Cancelled, "wipe"),
                 ),
             )
-        assertEquals("Cancelled", cancelled.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.CancelledStatus), cancelled.state.statusMessage)
 
         val failed =
             UiReducer.reduce(
@@ -139,7 +145,7 @@ class UiStateMachineTest {
                     ),
                 ),
             )
-        assertEquals("I/O error", failed.state.statusMessage)
+        assertEquals(UiMessage.Raw("I/O error"), failed.state.statusMessage)
 
         val partial =
             UiReducer.reduce(
@@ -152,7 +158,7 @@ class UiStateMachineTest {
                     ),
                 ),
             )
-        assertEquals("Partial rescue map retained", partial.state.statusMessage)
+        assertEquals(UiMessage.Raw("Partial rescue map retained"), partial.state.statusMessage)
     }
 
     @Test
@@ -169,7 +175,7 @@ class UiStateMachineTest {
             )
         assertEquals(DevicePresence.Disconnected, result.state.presence)
         assertNull(result.state.pendingConfirmation)
-        assertEquals("Device disconnected", result.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.DeviceDisconnected), result.state.statusMessage)
     }
 
     @Test
@@ -177,9 +183,7 @@ class UiStateMachineTest {
         val withConfirm =
             UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.WIPE))
         assertNotNull(withConfirm.state.pendingConfirmation)
-        assertTrue(
-            withConfirm.state.pendingConfirmation!!.message.contains(device.capacityLabel),
-        )
+        assertEquals(device, withConfirm.state.pendingConfirmation!!.identity)
 
         val confirmed = UiReducer.reduce(withConfirm.state, UiIntent.ConfirmDestructive)
         assertNull(confirmed.state.pendingConfirmation)
@@ -207,7 +211,7 @@ class UiStateMachineTest {
                 UiIntent.IsoActionRequested("ubuntu.iso", IsoAction.LinkXml),
             )
         assertTrue(result.effects.isEmpty())
-        assertEquals("Device disconnected", result.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.DeviceDisconnected), result.state.statusMessage)
     }
 
     @Test
@@ -221,8 +225,8 @@ class UiStateMachineTest {
     @Test
     fun statusMessageIsUpdatedByStatusIntent() {
         val state = ready()
-        val updated = UiReducer.reduce(state, UiIntent.Status("Uploaded myfile.iso to /"))
-        assertEquals("Uploaded myfile.iso to /", updated.state.statusMessage)
+        val updated = UiReducer.reduce(state, UiIntent.Status(UiMessage.Raw("Uploaded myfile.iso to /")))
+        assertEquals(UiMessage.Raw("Uploaded myfile.iso to /"), updated.state.statusMessage)
     }
 
     @Test
@@ -310,13 +314,14 @@ class UiStateMachineTest {
         ).forEach { intent ->
             val result = UiReducer.reduce(efi, intent)
             assertTrue("$intent must not write to VTOYEFI", result.effects.isEmpty())
-            assertTrue(
+            assertEquals(
                 "explicit reason expected for $intent",
-                result.state.statusMessage!!.contains("read-only"),
+                UiMessage.Key(UiMessageKey.ReadOnlyPartition, listOf("VTOYEFI")),
+                result.state.statusMessage,
             )
         }
 
-        val enabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable(true)).state
+        val enabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable("2", true)).state
         assertEquals(
             UiEffect.Kind.UploadFile,
             UiReducer.reduce(enabled, UiIntent.UploadFile("content://docs/42")).effects.single().kind,
@@ -350,7 +355,7 @@ class UiStateMachineTest {
         val disconnected = ready().copy(presence = DevicePresence.Disconnected)
         assertTrue(UiReducer.reduce(disconnected, UiIntent.StartReadScan).effects.isEmpty())
         assertEquals(
-            "Device disconnected",
+            UiMessage.Key(UiMessageKey.DeviceDisconnected),
             UiReducer.reduce(disconnected, UiIntent.StartRescueBackup).state.statusMessage,
         )
     }
@@ -360,11 +365,14 @@ class UiStateMachineTest {
         val refused =
             UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
         assertNull(refused.state.pendingConfirmation)
-        assertEquals("Choose a GPT backup file first", refused.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.ChooseGptBackup), refused.state.statusMessage)
 
         val picked = UiReducer.reduce(ready(), UiIntent.SetBackupFile("content://b/gpt.bin"))
         assertEquals("content://b/gpt.bin", picked.state.backupUri)
-        assertTrue(picked.state.statusMessage!!.contains("gpt.bin"))
+        assertEquals(
+            UiMessage.Key(UiMessageKey.BackupReady, listOf("gpt.bin")),
+            picked.state.statusMessage,
+        )
 
         val confirmed =
             UiReducer.reduce(
@@ -391,14 +399,14 @@ class UiStateMachineTest {
                     ),
                 ),
             )
-        assertEquals(detail, completed.state.statusMessage)
+        assertEquals(UiMessage.Raw(detail), completed.state.statusMessage)
 
         val bare =
             UiReducer.reduce(
                 ready(),
                 UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, "wipe")),
             )
-        assertEquals("Success", bare.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.Success), bare.state.statusMessage)
     }
 
     @Test
@@ -422,35 +430,208 @@ class UiStateMachineTest {
         val result = UiReducer.reduce(running, UiIntent.SelectPartition("2"))
         assertTrue(result.effects.isEmpty())
         assertEquals("1", result.state.selectedPartitionId)
-        assertEquals("Device busy", result.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.DeviceBusy), result.state.statusMessage)
     }
     @Test
     fun deleteAndFormatPartitionRefusedWithoutSelectedPartition() {
         val noPart = ready().copy(selectedPartitionId = null)
         val deleteResult = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
         assertNull(deleteResult.state.pendingConfirmation)
-        assertEquals("Select a partition first", deleteResult.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.SelectPartitionFirst), deleteResult.state.statusMessage)
 
         val formatResult = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
         assertNull(formatResult.state.pendingConfirmation)
-        assertEquals("Select a partition first", formatResult.state.statusMessage)
+        assertEquals(UiMessage.Key(UiMessageKey.SelectPartitionFirst), formatResult.state.statusMessage)
     }
 
     @Test
-    fun toggleVtoyBypassTpmUpdatesState() {
+    fun toggleVtoyBypassChecksUpdatesState() {
         val initial = ready()
-        assertTrue(initial.vtoyBypassTpm)
-        val disabled = UiReducer.reduce(initial, UiIntent.SetVtoyBypassTpm(false))
-        assertFalse(disabled.state.vtoyBypassTpm)
-        val reEnabled = UiReducer.reduce(disabled.state, UiIntent.SetVtoyBypassTpm(true))
-        assertTrue(reEnabled.state.vtoyBypassTpm)
+        assertTrue(initial.vtoyBypassChecks)
+        val disabled = UiReducer.reduce(initial, UiIntent.SetVtoyBypassChecks(false))
+        assertFalse(disabled.state.vtoyBypassChecks)
+        val reEnabled = UiReducer.reduce(disabled.state, UiIntent.SetVtoyBypassChecks(true))
+        assertTrue(reEnabled.state.vtoyBypassChecks)
     }
 
     @Test
     fun confirmationIncludesPartitionNameForPartitionActions() {
         val deleteReq = UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
         assertNotNull(deleteReq.state.pendingConfirmation)
-        assertTrue(deleteReq.state.pendingConfirmation!!.message.contains("partition VENTOY"))
+        assertEquals("VENTOY", deleteReq.state.pendingConfirmation!!.targetPartitionName)
+    }
+
+    private fun renameBinding(state: AppUiState): PartitionBinding {
+        val partition = state.selectedPartition()!!
+        return PartitionBinding(
+            device = state.device!!,
+            partitionId = partition.id,
+            startLba = partition.startLba,
+            sectorCount = partition.sectorCount,
+        )
+    }
+
+    @Test
+    fun ventoyOverwriteCandidateRequiresSameAttachGeneration() {
+        val available =
+            UiReducer.reduce(ready(), UiIntent.LinkOverwriteAvailable("win11.iso")).state
+        val reattached = available.copy(
+            device = available.device!!.copy(attachGeneration = available.device!!.attachGeneration + 1L),
+        )
+        val refused = UiReducer.reduce(
+            reattached,
+            UiIntent.RequestLinkOverwrite("win11.iso"),
+        )
+        assertNull(refused.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.LinkMismatch), refused.state.statusMessage)
+
+        val accepted = UiReducer.reduce(
+            available,
+            UiIntent.RequestLinkOverwrite("win11.iso"),
+        )
+        assertEquals(
+            DestructiveAction.VENTOY_LINK_XML,
+            accepted.state.pendingConfirmation?.action,
+        )
+    }
+
+    @Test
+    fun damagedPrimaryGptBlocksTableEditsButKeepsRecovery() {
+        val damaged = ready().copy(partitionTableDamaged = true, tableValid = true)
+
+        val damagedWithFreeSpace = damaged.copy(
+            diskSectorSize = 512,
+            freeRegions = listOf(FreeRegionUi(0uL, 8192uL)),
+        )
+        val create = UiReducer.reduce(
+            damagedWithFreeSpace,
+            UiIntent.RequestCreatePartition(0uL, 2048uL),
+        )
+        assertNull(create.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.GptPrimaryDamaged), create.state.statusMessage)
+
+        val delete = UiReducer.reduce(
+            damaged,
+            UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION),
+        )
+        assertNull(delete.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.GptPrimaryDamaged), delete.state.statusMessage)
+
+        val repair = UiReducer.reduce(
+            damaged,
+            UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR),
+        )
+        assertNull(repair.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.GptPrimaryDamaged), repair.state.statusMessage)
+
+        val role = UiReducer.reduce(
+            damaged,
+            UiIntent.RequestSetPartitionRole(PartitionRole.Efi),
+        )
+        assertNull(role.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.GptPrimaryDamaged), role.state.statusMessage)
+
+        val boot = UiReducer.reduce(
+            damaged,
+            UiIntent.RequestSetPartitionBootable(true),
+        )
+        assertNull(boot.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.GptPrimaryDamaged), boot.state.statusMessage)
+
+        val format = UiReducer.reduce(
+            damaged,
+            UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION),
+        )
+        assertEquals(DestructiveAction.FORMAT_PARTITION, format.state.pendingConfirmation?.action)
+    }
+
+    @Test
+    fun renameRequiresValidNewNameAndEmitsEffect() {
+        val state = ready()
+        val binding = renameBinding(state)
+        val invalid = UiReducer.reduce(state, UiIntent.RenameEntry("ubuntu.iso", "a/b", binding))
+        assertTrue(invalid.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.InvalidEntryName), invalid.state.statusMessage)
+
+        val same = UiReducer.reduce(state, UiIntent.RenameEntry("ubuntu.iso", "ubuntu.iso", binding))
+        assertTrue(same.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.RenameSameName), same.state.statusMessage)
+
+        val renamed = UiReducer.reduce(state, UiIntent.RenameEntry("ubuntu.iso", "linux.iso", binding))
+        val effect = renamed.effects.single()
+        assertEquals(UiEffect.Kind.RenameEntry, effect.kind)
+        assertEquals("ubuntu.iso", effect.name)
+        assertEquals("linux.iso", effect.newName)
+        assertEquals(binding, effect.binding)
+    }
+
+    @Test
+    fun renameRejectsStaleDeviceOrGeometry() {
+        val state = ready()
+        val binding = renameBinding(state)
+
+        val newDevice = state.copy(device = device.copy(attachGeneration = 1L))
+        val staleDevice = UiReducer.reduce(newDevice, UiIntent.RenameEntry("ubuntu.iso", "linux.iso", binding))
+        assertTrue(staleDevice.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), staleDevice.state.statusMessage)
+
+        val changedGeometry = state.copy(
+            partitions = listOf(
+                PartitionTab("1", "VENTOY", readOnly = false, startLba = 0uL, sectorCount = 4096uL),
+            ),
+        )
+        val staleGeometry = UiReducer.reduce(
+            changedGeometry,
+            UiIntent.RenameEntry("ubuntu.iso", "linux.iso", binding),
+        )
+        assertTrue(staleGeometry.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), staleGeometry.state.statusMessage)
+
+        val otherPartition = state.copy(selectedPartitionId = "2")
+        val staleSelection = UiReducer.reduce(
+            otherPartition,
+            UiIntent.RenameEntry("ubuntu.iso", "linux.iso", binding),
+        )
+        assertTrue(staleSelection.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), staleSelection.state.statusMessage)
+    }
+
+    @Test
+    fun partitionRoleChangeNeedsConfirmationWithPinnedGeometry() {
+        val requested =
+            UiReducer.reduce(ready(), UiIntent.RequestSetPartitionRole(PartitionRole.Efi))
+        val pending = requested.state.pendingConfirmation
+        assertNotNull(pending)
+        assertEquals(DestructiveAction.SET_PARTITION_ROLE, pending!!.action)
+        assertEquals(PartitionRole.Efi, pending.partitionRole)
+        assertEquals("1", pending.partitionId)
+        assertTrue(pending.partitionStartLba == 0uL)
+        assertTrue(pending.partitionSectorCount == 2048uL)
+
+        val confirmed = UiReducer.reduce(requested.state, UiIntent.ConfirmDestructive)
+        assertEquals(DestructiveAction.SET_PARTITION_ROLE, confirmed.effects.single().action)
+    }
+
+    @Test
+    fun partitionRoleChangeOnProtectedEfiNeedsOverride() {
+        val efi = ready().copy(selectedPartitionId = "2")
+        val blocked = UiReducer.reduce(efi, UiIntent.RequestSetPartitionRole(PartitionRole.Data))
+        assertNull(blocked.state.pendingConfirmation)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.ReadOnlyPartition, listOf("VTOYEFI")),
+            blocked.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun bootableChangeNeedsConfirmation() {
+        val requested =
+            UiReducer.reduce(ready(), UiIntent.RequestSetPartitionBootable(true))
+        val pending = requested.state.pendingConfirmation
+        assertNotNull(pending)
+        assertEquals(DestructiveAction.SET_PARTITION_BOOTABLE, pending!!.action)
+        assertEquals(true, pending.partitionBootable)
+        assertEquals("1", pending.partitionId)
     }
 
     @Test
@@ -458,7 +639,7 @@ class UiStateMachineTest {
         val corrupt = ready().copy(tableValid = false)
         val createResult = UiReducer.reduce(corrupt, UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
         assertNull(createResult.state.pendingConfirmation)
-        assertTrue(createResult.state.statusMessage?.contains("Cannot create partition on corrupt table") == true)
+        assertEquals(UiMessage.Key(UiMessageKey.CorruptTableCreate), createResult.state.statusMessage)
     }
 
     @Test

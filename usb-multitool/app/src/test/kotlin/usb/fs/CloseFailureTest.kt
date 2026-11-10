@@ -20,6 +20,28 @@ class CloseFailureTest {
     }
 
     @Test
+    fun cleanupFailureAddedWithoutMaskingPrimaryOrClose() {
+        val primary = IllegalStateException("staging failed")
+        val closeErr = ExtException("EXT close/sync failed (rc=-5)")
+        val cleanupErr = java.io.IOException("delete staged copy failed")
+        val merged = mergeCloseFailure(primary, closeErr, cleanupErr)
+        assertSame(primary, merged)
+        assertEquals(2, primary.suppressed.size)
+        assertSame(closeErr, primary.suppressed[0])
+        assertSame(cleanupErr, primary.suppressed[1])
+    }
+
+    @Test
+    fun cleanupFailureSuppressedOnCloseErrorWhenNoPrimary() {
+        val closeErr = ExtException("EXT close/sync failed (rc=-5)")
+        val cleanupErr = java.io.IOException("delete staged copy failed")
+        val merged = mergeCloseFailure(null, closeErr, cleanupErr)
+        assertSame(closeErr, merged)
+        assertEquals(1, closeErr.suppressed.size)
+        assertSame(cleanupErr, closeErr.suppressed[0])
+    }
+
+    @Test
     fun closeFailureAloneReturnedWhenNoPrimary() {
         val closeErr = ExtException("EXT close/sync failed (rc=-1)")
         val merged = mergeCloseFailure(null, closeErr)

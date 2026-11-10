@@ -26,12 +26,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import usb.multitool.R
 
 @Composable
 fun DiagnosticsScreen(
@@ -43,68 +45,84 @@ fun DiagnosticsScreen(
     onPickRescueMap: () -> Unit = {},
 ) {
     var dangerExpanded by remember { mutableStateOf(false) }
+    val dangerActionLabel = stringResource(
+        if (dangerExpanded) R.string.diagnostics_collapse else R.string.diagnostics_expand,
+    )
+    val dangerStateLabel = stringResource(
+        if (dangerExpanded) R.string.diagnostics_expanded else R.string.diagnostics_collapsed,
+    )
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        SectionCard(
+            title = stringResource(R.string.diagnostics_checks_title),
+            subtitle = stringResource(R.string.diagnostics_checks_subtitle),
         ) {
-            DiagTile(
-                glyph = Glyph.Shield,
-                title = "Самотест",
-                hint = "SCSI, GPT, ФС",
-                enabled = !state.isRunning,
-                highlighted = true,
-                onClick = { onIntent(UiIntent.RunSelfTest) },
-                modifier = Modifier.weight(1f),
-            )
-            DiagTile(
-                glyph = Glyph.Scan,
-                title = "Скан чтения",
-                hint = "Битые сектора",
-                enabled = state.actionsEnabled,
-                onClick = { onIntent(UiIntent.StartReadScan) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            DiagTile(
-                glyph = Glyph.Copy,
-                title = "Образ + карта",
-                hint = "Backup ddrescue",
-                enabled = state.actionsEnabled,
-                onClick = { onIntent(UiIntent.StartRescueBackup) },
-                modifier = Modifier.weight(1f),
-            )
-            DiagTile(
-                glyph = Glyph.Gpt,
-                title = "Копия GPT",
-                hint = "Сохранить структуру",
-                enabled = state.actionsEnabled,
-                onClick = { onIntent(UiIntent.CaptureGptBackup) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        if (!state.actionsEnabled) {
-            EmptyHint(UiReducer.presenceMessage(state.presence))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DiagTile(
+                    glyph = Glyph.Shield,
+                    title = stringResource(R.string.diagnostics_self_test),
+                    hint = stringResource(R.string.diagnostics_self_test_hint),
+                    enabled = !state.isRunning,
+                    highlighted = true,
+                    onClick = { onIntent(UiIntent.RunSelfTest) },
+                    modifier = Modifier.weight(1f),
+                )
+                DiagTile(
+                    glyph = Glyph.Scan,
+                    title = stringResource(R.string.diagnostics_read_scan),
+                    hint = stringResource(R.string.diagnostics_read_scan_hint),
+                    enabled = state.actionsEnabled,
+                    onClick = { onIntent(UiIntent.StartReadScan) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
 
         SectionCard(
-            title = "Восстановление из образа",
-            subtitle = "Геометрия должна совпадать с образом.",
+            title = stringResource(R.string.diagnostics_backups_title),
+            subtitle = stringResource(R.string.diagnostics_backups_subtitle),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DiagTile(
+                    glyph = Glyph.Copy,
+                    title = stringResource(R.string.diagnostics_rescue_backup),
+                    hint = stringResource(R.string.diagnostics_rescue_backup_hint),
+                    enabled = state.actionsEnabled,
+                    onClick = { onIntent(UiIntent.StartRescueBackup) },
+                    modifier = Modifier.weight(1f),
+                )
+                DiagTile(
+                    glyph = Glyph.Gpt,
+                    title = stringResource(R.string.diagnostics_gpt_copy),
+                    hint = stringResource(R.string.diagnostics_gpt_copy_hint),
+                    enabled = state.actionsEnabled,
+                    onClick = { onIntent(UiIntent.CaptureGptBackup) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        if (!state.actionsEnabled) {
+            EmptyHint(UiReducer.presenceMessage(state.presence).localized())
+        }
+
+        SectionCard(
+            title = stringResource(R.string.diagnostics_rescue_title),
+            subtitle = stringResource(R.string.diagnostics_rescue_subtitle),
         ) {
             Text(
-                text = "Resume пропускает скопированные сектора только при совпадении карты. " +
-                    "Partial COPY отклоняется; FAILED сектора записываются нулями.",
+                text = stringResource(R.string.diagnostics_rescue_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -118,8 +136,9 @@ fun DiagnosticsScreen(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 ) {
                     Text(
-                        text = state.rescueImageUri?.substringAfterLast('/')?.let { "Образ: $it" }
-                            ?: "Выбрать образ…",
+                        text = state.rescueImageUri?.substringAfterLast('/')?.let {
+                            stringResource(R.string.diagnostics_image_named, it)
+                        } ?: stringResource(R.string.diagnostics_pick_image),
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -131,8 +150,9 @@ fun DiagnosticsScreen(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 ) {
                     Text(
-                        text = state.rescueMapUri?.substringAfterLast('/')?.let { "Карта: $it" }
-                            ?: "Выбрать карту…",
+                        text = state.rescueMapUri?.substringAfterLast('/')?.let {
+                            stringResource(R.string.diagnostics_map_named, it)
+                        } ?: stringResource(R.string.diagnostics_pick_map),
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -146,13 +166,13 @@ fun DiagnosticsScreen(
                     state.rescueMapUri != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Восстановить образ")
+                Text(stringResource(R.string.diagnostics_restore_image))
             }
         }
 
         SectionCard(
-            title = "GPT",
-            subtitle = "Резервная копия первичной и запасной таблиц.",
+            title = stringResource(R.string.diagnostics_gpt_restore_title),
+            subtitle = stringResource(R.string.diagnostics_gpt_restore_subtitle),
         ) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -168,7 +188,7 @@ fun DiagnosticsScreen(
                 ) {
                     Text(
                         text = state.backupUri?.let { it.substringAfterLast('/') }
-                            ?: "Файл GPT не выбран",
+                            ?: stringResource(R.string.diagnostics_no_gpt_file),
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = if (state.backupUri != null) FontWeight.SemiBold else FontWeight.Normal,
                         modifier = Modifier.weight(1f),
@@ -179,7 +199,10 @@ fun DiagnosticsScreen(
                         onClick = onPickBackup,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                     ) {
-                        Text("Выбрать", style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            stringResource(R.string.partitions_pick),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
                     }
                 }
             }
@@ -188,7 +211,14 @@ fun DiagnosticsScreen(
                 enabled = state.actionsEnabled && state.backupUri != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Восстановить GPT")
+                Text(stringResource(R.string.diagnostics_restore_gpt))
+            }
+            if (state.partitionTableDamaged) {
+                Text(
+                    text = stringResource(R.string.diagnostics_gpt_restore_allowed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -201,7 +231,7 @@ fun DiagnosticsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(14.dp),
+                    .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
@@ -209,16 +239,14 @@ fun DiagnosticsScreen(
                         .fillMaxWidth()
                         .clickable(
                             role = Role.Button,
-                            onClickLabel = if (dangerExpanded) "Свернуть" else "Развернуть",
+                            onClickLabel = dangerActionLabel,
                         ) { dangerExpanded = !dangerExpanded }
-                        .semantics {
-                            stateDescription = if (dangerExpanded) "Развёрнуто" else "Свёрнуто"
-                        },
+                        .semantics { stateDescription = dangerStateLabel },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = "Опасная зона: стирание устройства",
+                        text = stringResource(R.string.diagnostics_danger_title),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.error,
@@ -231,7 +259,7 @@ fun DiagnosticsScreen(
                     )
                 }
                 Text(
-                    text = "Стирание затирает все сектора нулями без возможности отмены.",
+                    text = stringResource(R.string.diagnostics_danger_body),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -246,7 +274,7 @@ fun DiagnosticsScreen(
                             contentColor = MaterialTheme.colorScheme.onError,
                         ),
                     ) {
-                        Text("Стереть устройство (нули)")
+                        Text(stringResource(R.string.diagnostics_wipe))
                     }
                 }
             }
@@ -278,7 +306,7 @@ private fun DiagTile(
         shape = RoundedCornerShape(16.dp),
         color = container,
         modifier = modifier
-            .heightIn(min = 96.dp)
+            .heightIn(min = 84.dp)
             .clickable(
                 enabled = enabled,
                 onClickLabel = title,
@@ -289,8 +317,8 @@ private fun DiagTile(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             GlyphIcon(
                 glyph = glyph,

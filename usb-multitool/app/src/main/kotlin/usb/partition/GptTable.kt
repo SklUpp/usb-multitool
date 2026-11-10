@@ -24,6 +24,15 @@ object GptTable {
     private val SIGNATURE = "EFI PART".toByteArray(StandardCharsets.US_ASCII)
     private val UNUSED = ByteArray(16)
 
+    /**
+     * Upper bound for `entryCount * entrySize`. UEFI layouts use 16–32 KiB; 1 MiB still
+     * accepts every sane table while refusing crafted counts before any allocation.
+     */
+    private const val MAX_ENTRY_ARRAY_BYTES = 1L * 1024L * 1024L
+
+    /** [headerLba] holds no GPT signature at all, so no copy lives in that sector. */
+    class MissingSignatureException(message: String) : IllegalArgumentException(message)
+
     data class Result(
         val partitions: List<Partition>,
         val header: GptHeader,
@@ -32,7 +41,16 @@ object GptTable {
         val fromBackup: Boolean = false,
     )
 
-    fun read(disk: BlockDevice, headerLba: ULong = 1UL): Result {
+    /** Sector span of the entry array described by [header]; [readHeader] bounded the size. */
+    internal fun entrySectors(header: GptHeader, sectorSize: Int): ULong =
+        ((header.entryCount.toLong() * header.entrySize.toLong() + sectorSize - 1) / sectorSize).toULong()
+
+    /**
+     * Parse and validate one header sector without touching its entry array. [read] uses it
+     * for the copy it returns; candidate selection also uses it to learn the *real*
+     * entry-array geometry of the other copy instead of predicting it.
+     */
+    internal fun readHeader(disk: BlockDevice, headerLba: ULong): GptHeader {
         val sectorSize = disk.sectorSize
         val headerBuf = ByteBuffer.allocate(sectorSize).order(ByteOrder.LITTLE_ENDIAN)
         disk.read(headerLba, headerBuf)
@@ -42,11 +60,16 @@ object GptTable {
         val sig = ByteArray(8)
         headerBuf.position(0)
         headerBuf.get(sig)
-        require(sig.contentEquals(SIGNATURE)) { "missing GPT signature" }
+        if (!sig.contentEquals(SIGNATURE)) {
+            throw MissingSignatureException("missing GPT signature at LBA $headerLba")
+        }
 
         val headerSize = headerBuf.getInt(12)
         require(headerSize in 92..sectorSize) {
             "invalid GPT header size $headerSize for sector size $sectorSize"
+        }
+        require(headerBuf.limit() >= headerSize) {
+            "GPT header truncated to ${headerBuf.limit()} of $headerSize bytes"
         }
         val storedCrc = headerBuf.getInt(16)
         val headerBytes = ByteArray(headerSize)
@@ -76,23 +99,109 @@ object GptTable {
         require(currentLba == headerLba) { "GPT header current LBA $currentLba != expected $headerLba" }
         require(firstUsable <= lastUsable) { "GPT first usable $firstUsable > last usable $lastUsable" }
 
-        val entriesBytes = entryCount * entrySize
-        val sectorsNeeded = (entriesBytes + sectorSize - 1) / sectorSize
-        require(entryLba + sectorsNeeded.toULong() <= disk.sectorCount) {
+        val entriesBytes = entryCount.toLong() * entrySize.toLong()
+        require(entriesBytes <= MAX_ENTRY_ARRAY_BYTES) {
+            "GPT entry array of $entriesBytes bytes exceeds the $MAX_ENTRY_ARRAY_BYTES byte limit"
+        }
+        val entrySectors = (entriesBytes + sectorSize - 1) / sectorSize
+        val entryBufferBytes = entrySectors * sectorSize
+        require(entryBufferBytes <= MAX_ENTRY_ARRAY_BYTES + sectorSize &&
+            entryBufferBytes <= Int.MAX_VALUE) {
+            "GPT entry buffer of $entryBufferBytes bytes is not allocatable"
+        }
+        require(entryLba >= 2UL) {
+            "GPT entry array at LBA $entryLba overlaps metadata sector 0/1"
+        }
+        require(entryLba <= disk.sectorCount && entrySectors.toULong() <= disk.sectorCount - entryLba) {
             "GPT entry array extends past disk bounds"
         }
-        val entriesBuf = ByteBuffer.allocate(sectorsNeeded * sectorSize).order(ByteOrder.LITTLE_ENDIAN)
+        // A truncated copy whose declared backup header lies past the disk end (shrunk image
+        // awaiting relocate) may also declare a usable end past the disk; anything else must fit.
+        if (backupLba < disk.sectorCount) {
+            require(lastUsable < disk.sectorCount) {
+                "GPT usable range ends at LBA $lastUsable past disk capacity ${disk.sectorCount}"
+            }
+        }
+        return GptHeader(
+            headerSize = headerSize,
+            currentLba = currentLba,
+            backupLba = backupLba,
+            firstUsable = firstUsable,
+            lastUsable = lastUsable,
+            diskGuid = diskGuid,
+            entryLba = entryLba,
+            entryCount = entryCount,
+            entrySize = entrySize,
+            entriesCrc = entriesCrc,
+            headerCrc = storedCrc,
+        )
+    }
+
+    /** Header geometry of one copy, or null when that sector holds no usable GPT header. */
+    internal fun readHeaderOrNull(disk: BlockDevice, headerLba: ULong): GptHeader? = try {
+        readHeader(disk, headerLba)
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    fun read(disk: BlockDevice, headerLba: ULong = 1UL): Result {
+        val sectorSize = disk.sectorSize
+        val header = readHeader(disk, headerLba)
+        val entryLba = header.entryLba
+        val firstUsable = header.firstUsable
+        val lastUsable = header.lastUsable
+        val backupLba = header.backupLba
+        val entrySectors = entrySectors(header, sectorSize)
+        val entryEnd = entryLba + entrySectors
+        if (headerLba == 1UL) {
+            // Primary header: every metadata sector of this copy is known, so usable space
+            // must sit strictly above the entry array and below the backup header.
+            require(firstUsable >= entryEnd) {
+                "GPT usable range starts at LBA $firstUsable inside the primary entry array " +
+                    "ending at LBA $entryEnd"
+            }
+            require(lastUsable < backupLba) {
+                "GPT usable range ends at LBA $lastUsable past the backup header at LBA $backupLba"
+            }
+            require(entryEnd <= backupLba) {
+                "primary GPT entry array ends at LBA $entryEnd past the backup header at LBA $backupLba"
+            }
+        } else {
+            // Recovered backup header: the primary entry-array location is unknown, so keep
+            // the standard primary metadata window [0, 2 + entrySectors) out of usable space.
+            require(backupLba == 1UL) {
+                "backup GPT header at LBA $headerLba points at alternate LBA $backupLba, " +
+                    "expected 1; refusing ambiguous primary recovery"
+            }
+            require(firstUsable >= 2UL + entrySectors) {
+                "GPT usable range starts at LBA $firstUsable inside presumed primary metadata " +
+                    "ending at LBA ${2UL + entrySectors}"
+            }
+            require(lastUsable < entryLba) {
+                "backup GPT usable range ends at LBA $lastUsable, " +
+                    "past its entries at LBA $entryLba"
+            }
+            require(entryEnd <= headerLba) {
+                "backup GPT entry array ends at LBA $entryEnd past its header at LBA $headerLba"
+            }
+        }
+
+        val entryBufferBytes = entrySectors * sectorSize.toULong()
+        val entriesBuf = ByteBuffer.allocate(entryBufferBytes.toInt()).order(ByteOrder.LITTLE_ENDIAN)
         disk.read(entryLba, entriesBuf)
         entriesBuf.flip()
-        val rawEntries = ByteArray(entriesBytes)
+        require(entriesBuf.remaining() >= entryBufferBytes.toInt()) {
+            "GPT entry array truncated to ${entriesBuf.remaining()} of $entryBufferBytes bytes"
+        }
+        val rawEntries = ByteArray((header.entryCount.toLong() * header.entrySize).toInt())
         entriesBuf.get(rawEntries)
         val ecrc = CRC32()
         ecrc.update(rawEntries)
-        require(ecrc.value.toInt() == entriesCrc) { "GPT entries CRC mismatch" }
+        require(ecrc.value.toInt() == header.entriesCrc) { "GPT entries CRC mismatch" }
 
         val partitions = ArrayList<Partition>()
-        for (i in 0 until entryCount) {
-            val off = i * entrySize
+        for (i in 0 until header.entryCount) {
+            val off = i * header.entrySize
             val type = rawEntries.copyOfRange(off, off + 16)
             if (type.contentEquals(UNUSED)) continue
             val start = leULong(rawEntries, off + 32)
@@ -119,19 +228,6 @@ object GptTable {
             )
         }
         rejectOverlaps(partitions)
-        val header = GptHeader(
-            headerSize = headerSize,
-            currentLba = currentLba,
-            backupLba = backupLba,
-            firstUsable = firstUsable,
-            lastUsable = lastUsable,
-            diskGuid = diskGuid,
-            entryLba = entryLba,
-            entryCount = entryCount,
-            entrySize = entrySize,
-            entriesCrc = entriesCrc,
-            headerCrc = storedCrc,
-        )
         return Result(partitions, header, rawEntries)
     }
 

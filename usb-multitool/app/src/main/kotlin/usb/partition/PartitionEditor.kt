@@ -80,6 +80,23 @@ object PartitionEditor {
         return table.copy(partitions = partitions)
     }
 
+    /**
+     * Change the on-disk type of one entry. The writer derives the GPT type GUID and the
+     * MBR type byte from [Partition.type], so this is the only honest way to mark ESP.
+     */
+    fun setType(table: PartitionTable, index: Int, type: PartitionType): PartitionTable {
+        require(index in table.partitions.indices) { "partition index out of range" }
+        return table.copy(
+            partitions = table.partitions.mapIndexed { i, p ->
+                if (i != index) {
+                    p
+                } else {
+                    p.copy(type = type.name, esp = type == PartitionType.EFI)
+                }
+            },
+        )
+    }
+
     /** First unused entry slot; existing records keep their original slot. */
     private fun allocateSlot(table: PartitionTable): Int {
         val slots = when (table.scheme) {

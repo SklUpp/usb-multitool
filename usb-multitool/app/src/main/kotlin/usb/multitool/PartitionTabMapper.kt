@@ -9,15 +9,20 @@ internal fun mapPartitionTabs(
     partitions: List<Partition>,
     filesystemProbe: (Partition) -> usb.fs.FilesystemId? = { null },
 ): List<PartitionTab> = partitions.mapIndexed { index, partition ->
-    val isEfi = isProtectedSystemPartition(partition)
+    val protected = isProtectedSystemPartition(partition)
+    val efiType = partition.esp ||
+        partition.type.equals("0xEF", ignoreCase = true) ||
+        partition.type.equals("EFI", ignoreCase = true) ||
+        partition.type.equals("C12A7328-F81F-11D2-BA4B-00A0C93EC93B", ignoreCase = true)
     PartitionTab(
         id = (index + 1).toString(),
         name = partition.name.ifBlank { "Partition ${index + 1}" },
-        readOnly = isEfi,
-        isVtoyEfi = isEfi,
+        readOnly = protected,
+        isEfiType = efiType,
         startLba = partition.startLba,
         sectorCount = partition.sectorCount,
         filesystemId = filesystemProbe(partition),
+        bootable = partition.bootable,
     )
 }
 

@@ -6,12 +6,19 @@ package usb.fs
  * When there is no primary error, returns [closeError] so the caller can decide whether
  * to surface it as status (success path) or rethrow.
  */
-internal fun mergeCloseFailure(primary: Throwable?, closeError: Throwable): Throwable {
-    if (primary != null) {
+internal fun mergeCloseFailure(
+    primary: Throwable?,
+    closeError: Throwable,
+    cleanupError: Throwable? = null,
+): Throwable {
+    val merged = if (primary != null) {
         primary.addSuppressed(closeError)
-        return primary
+        primary
+    } else {
+        closeError
     }
-    return closeError
+    if (cleanupError != null) merged.addSuppressed(cleanupError)
+    return merged
 }
 
 /**

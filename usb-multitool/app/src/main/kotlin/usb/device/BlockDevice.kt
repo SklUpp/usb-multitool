@@ -22,3 +22,7 @@ interface BlockDevice {
 
     fun sync()
 }
+
+/** Byte capacity derived from geometry; avoids requiring [UsbDisk] where only a block device is needed. */
+val BlockDevice.capacityBytes: ULong
+    get() = sectorCount * sectorSize.toULong()

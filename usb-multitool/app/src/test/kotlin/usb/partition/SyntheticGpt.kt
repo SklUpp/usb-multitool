@@ -18,22 +18,28 @@ object SyntheticGpt {
         val attributes: ULong = 0UL,
     )
 
+    /**
+     * [firstUsable] / [lastUsable] overrides craft invalid usable ranges; when omitted the
+     * fixture emits the standard metadata-tight geometry.
+     */
     fun build(
         sectorCount: ULong = 2048UL,
         sectorSize: Int = 512,
         entryCount: Int = 128,
         layout: List<Layout>? = null,
+        firstUsable: ULong? = null,
+        lastUsable: ULong? = null,
     ): ImageBlockDevice {
         require(sectorCount >= 128UL)
         val entrySize = 128
         val entryBytes = entryCount * entrySize
         val entrySectors = ((entryBytes + sectorSize - 1) / sectorSize).toULong()
         val primaryEntryLba = 2UL
-        val firstUsable = primaryEntryLba + entrySectors
         val backupHeaderLba = sectorCount - 1UL
         val backupEntriesLba = backupHeaderLba - entrySectors
-        val lastUsable = backupEntriesLba - 1UL
-        require(lastUsable > firstUsable + 10UL)
+        val usableStart = firstUsable ?: (primaryEntryLba + entrySectors)
+        val usableEnd = lastUsable ?: (backupEntriesLba - 1UL)
+        require(usableEnd > usableStart + 10UL)
 
         val image = ByteArray((sectorCount * sectorSize.toULong()).toInt())
 
@@ -46,13 +52,13 @@ object SyntheticGpt {
 
         val entries = ByteArray(entryBytes)
         val entriesLayout = layout ?: listOf(
-            Layout(0, firstUsable, firstUsable + 9UL, "EFI", efi = true),
-            Layout(1, firstUsable + 10UL, firstUsable + 29UL, "DATA"),
+            Layout(0, usableStart, usableStart + 9UL, "EFI", efi = true),
+            Layout(1, usableStart + 10UL, usableStart + 29UL, "DATA"),
         )
         for (spec in entriesLayout) {
             require(spec.slot in 0 until entryCount) { "slot ${spec.slot} out of range" }
             require(spec.end >= spec.start) { "entry end < start at slot ${spec.slot}" }
-            require(spec.start >= firstUsable && spec.end <= lastUsable) {
+            require(spec.start >= usableStart && spec.end <= usableEnd) {
                 "entry slot ${spec.slot} outside usable range"
             }
             writeEntry(entries, spec)
@@ -67,8 +73,8 @@ object SyntheticGpt {
             putLeInt(sector, 16, 0)
             putLeU64(sector, 24, current)
             putLeU64(sector, 32, backup)
-            putLeU64(sector, 40, firstUsable)
-            putLeU64(sector, 48, lastUsable)
+            putLeU64(sector, 40, usableStart)
+            putLeU64(sector, 48, usableEnd)
             DISK_GUID.copyInto(sector, 56)
             putLeU64(sector, 72, entryLba)
             putLeInt(sector, 80, entryCount)

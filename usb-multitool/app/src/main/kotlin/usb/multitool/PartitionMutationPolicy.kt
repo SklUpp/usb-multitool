@@ -10,8 +10,31 @@ internal fun isProtectedSystemPartition(partition: Partition): Boolean =
         partition.type.equals("EFI", ignoreCase = true) ||
         partition.type.equals("C12A7328-F81F-11D2-BA4B-00A0C93EC93B", ignoreCase = true)
 
-internal fun requirePartitionMutationAllowed(partition: Partition, vtoyEfiWriteEnabled: Boolean) {
-    require(vtoyEfiWriteEnabled || !isProtectedSystemPartition(partition)) {
+internal fun isEfiWriteAllowedFor(
+    partition: Partition,
+    allowedStartLba: ULong?,
+    allowedSectorCount: ULong?,
+): Boolean =
+    !isProtectedSystemPartition(partition) ||
+        (allowedStartLba != null &&
+            allowedSectorCount != null &&
+            partition.startLba == allowedStartLba &&
+            partition.sectorCount == allowedSectorCount)
+
+/**
+ * A writable mount is a mutation boundary. Refuse it while the MBR and GPT layouts disagree:
+ * a filesystem write could otherwise overwrite the area the surviving MBR record still owns.
+ */
+internal fun requireWritableMountAllowed(table: usb.partition.PartitionTable) {
+    table.requireUnambiguousLayout()
+}
+
+internal fun requirePartitionMutationAllowed(
+    partition: Partition,
+    allowedStartLba: ULong?,
+    allowedSectorCount: ULong?,
+) {
+    require(isEfiWriteAllowedFor(partition, allowedStartLba, allowedSectorCount)) {
         "${partition.name} is read-only: enable VTOYEFI writes first"
     }
 }

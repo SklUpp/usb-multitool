@@ -176,6 +176,114 @@ class PartitionTableTest {
     }
 
 
+    @Test
+    fun gptUsableRangeStartingAtLbaZeroRejected() {
+        val disk = SyntheticGpt.build(
+            sectorCount = 2048UL,
+            layout = listOf(SyntheticGpt.Layout(0, 0UL, 99UL, "DATA")),
+            firstUsable = 0UL,
+        )
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            PartitionTable.read(disk)
+        }
+        assertTrue(ex.message!!.contains("GPT usable range starts at LBA 0"))
+    }
+
+    @Test
+    fun gptUsableRangePastDiskEndRejected() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL, lastUsable = 4096UL)
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            PartitionTable.read(disk)
+        }
+        assertTrue(ex.message!!.contains("past disk capacity"))
+    }
+
+    @Test
+    fun gptUsableRangeOverBackupEntriesRejected() {
+        // Backup entries occupy LBA 2015..2046 on a 2048-sector disk; both copies declare a
+        // usable end inside that array, which is CRC-valid metadata, so the read must fail.
+        val disk = SyntheticGpt.build(sectorCount = 2048UL, lastUsable = 2015UL)
+
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            PartitionTable.read(disk)
+        }
+        assertTrue(ex.message!!.contains("past its entries"))
+    }
+
+    @Test
+    fun classicMbrWithValidBackupGptIsHybridAmbiguous() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+        val bytes = disk.snapshot()
+        // Only the backup copy survives: the primary header sector loses its signature.
+        bytes.fill(0, disk.sectorSize, 2 * disk.sectorSize)
+        // Protective entry becomes a classic one, so the MBR now claims its own partition.
+        bytes[446 + 4] = 0x83.toByte()
+        putLeInt(bytes, 446 + 8, 100)
+        putLeInt(bytes, 446 + 12, 50)
+        val hybrid = ImageBlockDevice(bytes, disk.sectorSize, disk.sectorCount)
+
+        val table = PartitionTable.read(hybrid)
+
+        assertEquals(TableScheme.HYBRID, table.scheme)
+        assertTrue(table.hybridAmbiguous)
+        assertEquals(emptyList<FreeRegion>(), table.freeRegions)
+        assertThrows(HybridAmbiguityException::class.java) {
+            PartitionWriter.commit(hybrid, PartitionEditor.delete(table, 0))
+        }
+    }
+
+    @Test
+    fun normalGptKeepsFreeSpaceInsideUsableRange() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+        val table = PartitionTable.read(disk)
+        val header = requireNotNull(table.gptHeader)
+
+        assertEquals(TableScheme.GPT, table.scheme)
+        assertEquals(false, table.gptPrimaryDamaged)
+        assertTrue(table.freeRegions.all { it.startLba >= header.firstUsable })
+        // EFI 34..43 and DATA 44..63, so free space resumes at LBA 64.
+        assertEquals(FreeRegion(64UL, 2015UL - 64UL), table.freeRegions.single())
+    }
+
+
+    @Test
+    fun signatureJunkDoesNotBreakClassicMbr() {
+        val disk = DiskFixture.empty(sectorCount = 1024UL) as ImageBlockDevice
+        val bytes = disk.snapshot()
+        bytes[510] = 0x55
+        bytes[511] = 0xAA.toByte()
+        bytes[446 + 4] = 0x83.toByte()
+        putLeInt(bytes, 446 + 8, 100)
+        putLeInt(bytes, 446 + 12, 50)
+        // Stray GPT magic in sectors that hold no valid copy must not deny a normal MBR disk.
+        "EFI PART".toByteArray(Charsets.US_ASCII).copyInto(bytes, 512)
+        "EFI PART".toByteArray(Charsets.US_ASCII).copyInto(bytes, 1023 * 512)
+
+        val table = PartitionTable.read(ImageBlockDevice(bytes, 512, 1024UL))
+
+        assertEquals(TableScheme.MBR, table.scheme)
+        assertEquals(1, table.partitions.size)
+        assertEquals(false, table.hybridAmbiguous)
+    }
+
+    @Test
+    fun junkBackupSectorDoesNotRejectValidGpt() {
+        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+        val bytes = disk.snapshot()
+        // Keep the magic but corrupt the backup header CRC: it must not deny the primary copy.
+        bytes.fill(0x7F, 2047 * 512, 2048 * 512)
+        "EFI PART".toByteArray(Charsets.US_ASCII).copyInto(bytes, 2047 * 512)
+
+        val table = PartitionTable.read(ImageBlockDevice(bytes, 512, 2048UL))
+
+        assertEquals(TableScheme.GPT, table.scheme)
+        assertEquals(false, table.gptPrimaryDamaged)
+        assertEquals(listOf("EFI", "DATA"), table.partitions.map { it.name })
+    }
+
+
     private fun sector(disk: BlockDevice, lba: ULong): ByteArray {
         val buffer = ByteBuffer.allocate(disk.sectorSize)
         disk.read(lba, buffer)

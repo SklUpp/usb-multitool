@@ -17,12 +17,18 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import usb.multitool.R
 
 @Composable
 fun VentoyScreen(
@@ -38,21 +44,25 @@ fun VentoyScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         SectionCard(
-            title = "Ventoy на флешке",
+            title = stringResource(R.string.ventoy_section_title),
             subtitle = buildString {
-                append("Мультизагрузка · встроенная версия v")
-                append(pinned)
+                append(stringResource(R.string.ventoy_pinned_prefix, pinned))
                 if (latest != null) {
-                    append(" · последняя v")
-                    append(latest)
+                    append(stringResource(R.string.ventoy_latest_suffix, latest))
                 }
             },
             trailing = {
                 Badge(
-                    text = if (updateAvailable) "Обновление" else "Встроенная",
+                    text = stringResource(
+                        if (updateAvailable) {
+                            R.string.ventoy_badge_update
+                        } else {
+                            R.string.ventoy_badge_builtin
+                        },
+                    ),
                     container = if (updateAvailable) {
                         MaterialTheme.colorScheme.tertiaryContainer
                     } else {
@@ -67,14 +77,14 @@ fun VentoyScreen(
             },
         ) {
             if (!state.actionsEnabled) {
-                EmptyHint(UiReducer.presenceMessage(state.presence))
+                EmptyHint(UiReducer.presenceMessage(state.presence).localized())
             }
             Button(
                 onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
                 enabled = state.actionsEnabled,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Обновить (ISO сохранятся)")
+                Text(stringResource(R.string.ventoy_update))
             }
             OutlinedButton(
                 onClick = {
@@ -83,54 +93,119 @@ fun VentoyScreen(
                 enabled = state.actionsEnabled,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Скачать новую версию и установить")
+                Text(stringResource(R.string.ventoy_download))
             }
             Text(
-                text = "Обновление перезаписывает загрузочные файлы и сохраняет ISO на разделе данных.",
+                text = stringResource(R.string.ventoy_update_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
         SectionCard(
-            title = "Параметры Windows",
-            subtitle = "Применяются при связывании autounattend.xml с ISO",
+            title = stringResource(R.string.efi_section_title),
+            subtitle = stringResource(R.string.efi_section_subtitle),
         ) {
-            SwitchRow(
-                label = "Обход TPM",
-                checked = state.vtoyBypassTpm,
-                onCheckedChange = { onIntent(UiIntent.SetVtoyBypassTpm(it)) },
+            val efis = state.efiPartitions.filter { it.startLba != null && it.sectorCount != null }
+            if (efis.isEmpty()) {
+                EmptyHint(stringResource(R.string.efi_missing))
+            } else {
+                var targetId by remember(
+                    state.device?.identity,
+                    state.device?.attachGeneration,
+                    state.partitions,
+                ) {
+                    mutableStateOf<String?>(null)
+                }
+                val target = efis.firstOrNull { it.id == targetId }
+                    ?: efis.firstOrNull { it.id == state.vtoyEfiWritePartitionId }
+                    ?: efis.firstOrNull { it.id == state.selectedPartitionId }
+                    ?: efis.first()
+                val unlocked = state.isEfiWriteAllowed(target)
+                if (efis.size > 1) {
+                    CompactChoice(
+                        options = efis.map { it.id to it.name },
+                        selected = target.id,
+                        onSelect = { targetId = it },
+                        label = stringResource(R.string.efi_partition_label),
+                        enabled = state.actionsEnabled,
+                    )
+                } else {
+                    InfoRow(stringResource(R.string.efi_partition_label), target.name)
+                }
+                InfoRow(
+                    label = stringResource(R.string.efi_protection_label),
+                    value = stringResource(
+                        if (unlocked) R.string.efi_protection_off else R.string.efi_protection_on,
+                    ),
+                )
+                SwitchRow(
+                    label = stringResource(R.string.efi_allow_writes),
+                    checked = unlocked,
+                    onCheckedChange = { onIntent(UiIntent.SetVtoyEfiWritable(target.id, it)) },
+                    enabled = state.actionsEnabled,
+                    hint = stringResource(R.string.efi_allow_hint),
+                )
+                InfoHint(
+                    text = stringResource(
+                        if (unlocked) R.string.efi_unlocked_short else R.string.efi_locked_short,
+                    ),
+                    infoTitle = stringResource(R.string.efi_policy_info_title),
+                    infoText = stringResource(R.string.efi_policy_info_text),
+                )
+            }
+        }
+
+        SectionCard(
+            title = stringResource(R.string.ventoy_windows_title),
+            subtitle = stringResource(R.string.ventoy_windows_subtitle),
+        ) {
+            CompactChoice(
+                options = listOf(
+                    null to stringResource(R.string.ventoy_checks_keep),
+                    true to stringResource(R.string.ventoy_checks_bypass),
+                    false to stringResource(R.string.ventoy_checks_require),
+                ),
+                selected = state.vtoyBypassChecks,
+                onSelect = { onIntent(UiIntent.SetVtoyBypassChecks(it)) },
+                label = stringResource(R.string.ventoy_checks_label),
                 enabled = state.actionsEnabled,
-                hint = "Пропустить требование TPM 2.0",
             )
-            SwitchRow(
-                label = "Обход проверки RAM",
-                checked = state.vtoyBypassRam,
-                onCheckedChange = { onIntent(UiIntent.SetVtoyBypassRam(it)) },
-                enabled = state.actionsEnabled,
-                hint = "Пропустить минимум памяти Windows 11",
+            Text(
+                text = stringResource(R.string.ventoy_checks_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            SwitchRow(
-                label = "Локальная учётная запись",
-                checked = state.vtoyLocalAccount,
-                onCheckedChange = { onIntent(UiIntent.SetVtoyLocalAccount(it)) },
+            CompactChoice(
+                options = listOf(
+                    null to stringResource(R.string.ventoy_local_keep),
+                    true to stringResource(R.string.ventoy_local_enable),
+                    false to stringResource(R.string.ventoy_local_disable),
+                ),
+                selected = state.vtoyLocalAccount,
+                onSelect = { onIntent(UiIntent.SetVtoyLocalAccount(it)) },
+                label = stringResource(R.string.ventoy_local_label),
                 enabled = state.actionsEnabled,
-                hint = "Без обязательного входа в Microsoft",
+            )
+            Text(
+                text = stringResource(R.string.ventoy_local_note),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
         SectionCard(
-            title = "Windows ISO",
-            subtitle = "/ISO на вкладке «Файлы» — здесь можно связать образы",
+            title = stringResource(R.string.ventoy_iso_title),
+            subtitle = stringResource(R.string.ventoy_iso_subtitle),
         ) {
             val isIsoDir = state.currentPath.trimEnd('/').equals("/ISO", ignoreCase = true)
             val isos = if (isIsoDir) state.files.filter { it.isIso } else emptyList()
             if (isos.isEmpty()) {
                 EmptyHint(
                     if (isIsoDir) {
-                        "В /ISO нет ISO-образов."
+                        stringResource(R.string.ventoy_iso_empty)
                     } else {
-                        "Откройте /ISO на вкладке «Файлы», чтобы связать Windows ISO."
+                        stringResource(R.string.ventoy_iso_open)
                     },
                 )
             } else {
@@ -168,13 +243,16 @@ fun VentoyScreen(
                                 enabled = state.actionsEnabled,
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                             ) {
-                                Text("Связать XML", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    stringResource(R.string.ventoy_link_xml),
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
                             }
                         }
                     }
                 }
                 Text(
-                    text = "Существующая связь требует явного подтверждения перезаписи.",
+                    text = stringResource(R.string.ventoy_link_overwrite_note),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -182,13 +260,12 @@ fun VentoyScreen(
         }
 
         SectionCard(
-            title = "Чистая установка",
-            subtitle = "Сотрёт все разделы и файлы на флешке.",
+            title = stringResource(R.string.ventoy_fresh_title),
+            subtitle = stringResource(R.string.ventoy_fresh_subtitle),
             danger = true,
         ) {
             Text(
-                text = "Записывает свежую разметку Ventoy и форматирует раздел данных. " +
-                    "Перед записью потребуется подтверждение.",
+                text = stringResource(R.string.ventoy_fresh_body),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -201,7 +278,10 @@ fun VentoyScreen(
                 ),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
             ) {
-                Text("Установить с нуля…", fontWeight = FontWeight.Bold)
+                Text(
+                    stringResource(R.string.ventoy_fresh_action),
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }

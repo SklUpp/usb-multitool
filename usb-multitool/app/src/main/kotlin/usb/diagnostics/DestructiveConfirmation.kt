@@ -13,10 +13,14 @@ data class DestructiveConfirmation(
      * live disk does not match the identity/capacity the user confirmed.
      */
     fun requireMatch(identity: String, disk: UsbDisk) {
-        if (this.identity != identity || capacityBytes != disk.geometry.capacityBytes) {
+        requireMatch(identity, disk.geometry.capacityBytes)
+    }
+
+    fun requireMatch(identity: String, liveCapacityBytes: ULong) {
+        if (this.identity != identity || capacityBytes != liveCapacityBytes) {
             throw ConfirmationMismatchException(
                 "confirmed identity=${this.identity} capacity=$capacityBytes " +
-                    "but live identity=$identity capacity=${disk.geometry.capacityBytes}",
+                    "but live identity=$identity capacity=$liveCapacityBytes",
             )
         }
     }

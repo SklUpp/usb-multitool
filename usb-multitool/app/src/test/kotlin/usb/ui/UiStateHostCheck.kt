@@ -17,15 +17,13 @@ object UiStateHostCheck {
             )
 
         val wipe = DestructiveConfirmation.request(device, DestructiveAction.WIPE)
-        require(wipe.message.contains(device.identity)) { "identity missing: ${wipe.message}" }
-        require(wipe.message.contains(device.capacityLabel)) {
-            "capacity missing: ${wipe.message}"
-        }
+        require(wipe.identity == device) { "identity missing: ${wipe.identity}" }
+        require(wipe.identity.capacityLabel.isNotEmpty()) { "capacity missing" }
 
         DestructiveAction.entries.forEach { action ->
-            val msg = DestructiveConfirmation.request(device, action).message
-            require(msg.contains(device.identity)) { "$action missing identity" }
-            require(msg.contains(device.capacityLabel)) { "$action missing capacity" }
+            val req = DestructiveConfirmation.request(device, action)
+            require(req.action == action) { "$action missing action" }
+            require(req.identity == device) { "$action missing identity" }
         }
 
         val absent =
@@ -34,7 +32,7 @@ object UiStateHostCheck {
                 UiIntent.RequestDestructive(DestructiveAction.WIPE),
             )
         require(absent.state.pendingConfirmation == null)
-        require(absent.state.statusMessage == "No USB mass-storage device")
+        require(absent.state.statusMessage == UiMessage.Key(UiMessageKey.NoDevice))
 
         val ready =
             AppUiState(
@@ -42,8 +40,15 @@ object UiStateHostCheck {
                 device = device,
                 partitions =
                     listOf(
-                        PartitionTab("1", "VENTOY", readOnly = false),
-                        PartitionTab("2", "VTOYEFI", readOnly = true, isVtoyEfi = true),
+                        PartitionTab("1", "VENTOY", readOnly = false, startLba = 0uL, sectorCount = 2048uL),
+                        PartitionTab(
+                            "2",
+                            "VTOYEFI",
+                            readOnly = true,
+                            isEfiType = true,
+                            startLba = 2048uL,
+                            sectorCount = 4096uL,
+                        ),
                     ),
                 selectedPartitionId = "1",
                 files =
@@ -53,6 +58,44 @@ object UiStateHostCheck {
                 imageUri = "content://test/win11.iso",
             )
         require(ready.actionsEnabled)
+
+        val listFailed = UiReducer.reduce(ready, UiIntent.FilesListFailed("/", "Read failed"))
+        require(listFailed.state.filesError == "Read failed")
+        val listRecovered =
+            UiReducer.reduce(listFailed.state, UiIntent.FilesListed("/", emptyList()))
+        require(listRecovered.state.filesError == null) { "successful listing must clear filesError" }
+        require(
+            UiReducer.reduce(
+                listFailed.state,
+                UiIntent.DeviceChanged(DevicePresence.Ready, device, partitions = ready.partitions),
+            ).state.filesError == null,
+        ) { "device change must clear filesError" }
+
+        val maxMib = PartitionRangeMath.availableMib(16_777_219UL * 2048UL, 2048UL)
+        require(maxMib == 16_777_219UL)
+        require(PartitionRangeMath.snapToMib(16_777_220f, maxMib) == maxMib) {
+            "Float rounding must not cross the exact MiB bound"
+        }
+        require(PartitionRangeMath.snapToMib(-5f, maxMib) == 0UL)
+        require(PartitionRangeMath.snapToMib(Float.NaN, maxMib) == 0UL)
+        require(
+            PartitionRangeMath.sectorsFor(
+                firstAligned = 0UL,
+                regionEnd = maxMib * 2048UL,
+                startMib = 0UL,
+                endMib = maxMib,
+                sectorsPerMib = 2048UL,
+            )?.second == maxMib * 2048UL,
+        )
+        require(
+            PartitionRangeMath.sectorsFor(
+                firstAligned = 0UL,
+                regionEnd = 2048UL,
+                startMib = 0UL,
+                endMib = 2UL,
+                sectorsPerMib = 2048UL,
+            ) == null,
+        )
 
         val withFree = ready.copy(freeRegions = listOf(FreeRegionUi(2048UL, 4096UL), FreeRegionUi(16384UL, 4096UL)))
         val create = UiReducer.reduce(withFree, UiIntent.RequestCreatePartition(16384UL, 1024UL)).state.pendingConfirmation
@@ -82,16 +125,16 @@ object UiStateHostCheck {
             UiReducer.reduce(busy, UiIntent.RequestDestructive(DestructiveAction.WIPE))
         require(runningBlocked.state.pendingConfirmation == null)
 
-        fun statusOf(state: OperationState, err: String? = null): String? =
+        fun statusOf(state: OperationState, err: String? = null): UiMessage? =
             UiReducer.reduce(
                 ready,
                 UiIntent.OperationUpdated(OperationProgress(state, "op", errorMessage = err)),
             ).state.statusMessage
 
-        require(statusOf(OperationState.Completed) == "Success")
-        require(statusOf(OperationState.Cancelled) == "Cancelled")
-        require(statusOf(OperationState.Failed, "boom") == "boom")
-        require(statusOf(OperationState.Partial, "kept map") == "kept map")
+        require(statusOf(OperationState.Completed) == UiMessage.Key(UiMessageKey.Success))
+        require(statusOf(OperationState.Cancelled) == UiMessage.Key(UiMessageKey.CancelledStatus))
+        require(statusOf(OperationState.Failed, "boom") == UiMessage.Raw("boom"))
+        require(statusOf(OperationState.Partial, "kept map") == UiMessage.Raw("kept map"))
         require(
             UiReducer.reduce(
                 ready,
@@ -102,7 +145,7 @@ object UiStateHostCheck {
                         resultMessage = "saved /a.bin",
                     ),
                 ),
-            ).state.statusMessage == "saved /a.bin",
+            ).state.statusMessage == UiMessage.Raw("saved /a.bin"),
         ) { "resultMessage must replace the bare Success label" }
 
         require(
@@ -121,11 +164,11 @@ object UiStateHostCheck {
         val noBackup =
             UiReducer.reduce(ready, UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
         require(noBackup.state.pendingConfirmation == null)
-        require(noBackup.state.statusMessage == "Choose a GPT backup file first")
+        require(noBackup.state.statusMessage == UiMessage.Key(UiMessageKey.ChooseGptBackup))
 
         val picked = UiReducer.reduce(ready, UiIntent.SetBackupFile("content://backup/gpt.bin"))
         require(picked.state.backupUri == "content://backup/gpt.bin")
-        require(picked.state.statusMessage!!.contains("gpt.bin"))
+        require(picked.state.statusMessage == UiMessage.Key(UiMessageKey.BackupReady, listOf("gpt.bin")))
         val restorePending =
             UiReducer.reduce(
                 picked.state,
@@ -149,7 +192,7 @@ object UiStateHostCheck {
                 UiIntent.DeviceChanged(presence = DevicePresence.Disconnected),
             )
         require(disconnected.state.pendingConfirmation == null)
-        require(disconnected.state.statusMessage == "Device disconnected")
+        require(disconnected.state.statusMessage == UiMessage.Key(UiMessageKey.DeviceDisconnected))
 
         val confirmed = UiReducer.reduce(pending.state, UiIntent.ConfirmDestructive)
         require(confirmed.effects.single().kind == UiEffect.Kind.SubmitDestructive)
@@ -162,7 +205,7 @@ object UiStateHostCheck {
             )
         require(linkReq.effects.isEmpty()) { "LinkXml must confirm before write" }
         require(linkReq.state.pendingConfirmation != null)
-        require(linkReq.state.pendingConfirmation!!.action.contains("link Ventoy"))
+        require(linkReq.state.pendingConfirmation!!.action == DestructiveAction.VENTOY_LINK_XML)
         require(!linkReq.state.pendingConfirmation!!.linkOverwrite)
         val link =
             UiReducer.reduce(linkReq.state, UiIntent.ConfirmDestructive)
@@ -178,12 +221,38 @@ object UiStateHostCheck {
         ).forEach { intent ->
             val blocked = UiReducer.reduce(efi, intent)
             require(blocked.effects.isEmpty()) { "$intent wrote to a read-only partition" }
-            require(blocked.state.statusMessage?.contains("read-only") == true) {
+            require(
+                blocked.state.statusMessage ==
+                    UiMessage.Key(UiMessageKey.ReadOnlyPartition, listOf("VTOYEFI")),
+            ) {
                 "no explicit read-only status for $intent: ${blocked.state.statusMessage}"
             }
         }
-        val efiEnabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable(true)).state
+        val efiEnabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable("2", true)).state
         require(efiEnabled.vtoyEfiWriteEnabled)
+        val sameAttach = UiReducer.reduce(
+            efiEnabled,
+            UiIntent.DeviceChanged(
+                DevicePresence.Ready,
+                efiEnabled.device,
+                partitions = efiEnabled.partitions,
+            ),
+        ).state
+        require(sameAttach.vtoyEfiWriteEnabled) {
+            "partition refresh on the same attach must keep the EFI override"
+        }
+        val reattached = UiReducer.reduce(
+            efiEnabled,
+            UiIntent.DeviceChanged(
+                DevicePresence.Ready,
+                efiEnabled.device?.copy(
+                    attachGeneration = (efiEnabled.device?.attachGeneration ?: 0L) + 1L,
+                ),
+            ),
+        ).state
+        require(!reattached.vtoyEfiWriteEnabled) {
+            "EFI write override must reset when the device is re-attached"
+        }
         require(
             UiReducer.reduce(efiEnabled, UiIntent.UploadFile("content://test/new.iso"))
                 .effects.single().kind == UiEffect.Kind.UploadFile,
@@ -200,7 +269,7 @@ object UiStateHostCheck {
         val switched = UiReducer.reduce(running, UiIntent.SelectPartition("2"))
         require(switched.effects.isEmpty()) { "partition switch during a write must not list" }
         require(switched.state.selectedPartitionId == "1") { "partition switched mid-write" }
-        require(switched.state.statusMessage == "Device busy") {
+        require(switched.state.statusMessage == UiMessage.Key(UiMessageKey.DeviceBusy)) {
             "unexpected status: ${switched.state.statusMessage}"
         }
 
@@ -216,25 +285,74 @@ object UiStateHostCheck {
         // RunSelfTest produces effect and updates status
         val selfTest = UiReducer.reduce(ready, UiIntent.RunSelfTest)
         require(selfTest.effects.single().kind == UiEffect.Kind.RunSelfTest)
-        require(selfTest.state.statusMessage?.contains("self-test") == true)
+        require(selfTest.state.statusMessage == UiMessage.Key(UiMessageKey.SelfTestStarting))
         val blockedSelfTest = UiReducer.reduce(running, UiIntent.RunSelfTest)
         require(blockedSelfTest.effects.isEmpty()) { "self-test while running must be blocked" }
-        require(blockedSelfTest.state.statusMessage?.contains("progress") == true)
+        require(blockedSelfTest.state.statusMessage == UiMessage.Key(UiMessageKey.OperationInProgress))
 
         val noPart = ready.copy(selectedPartitionId = null)
+        val renameBinding = PartitionBinding(
+            device = ready.device!!,
+            partitionId = "1",
+            startLba = 0uL,
+            sectorCount = 2048uL,
+        )
+        require(
+            UiReducer.reduce(
+                ready,
+                UiIntent.RenameEntry("win11.iso", "a/b", renameBinding),
+            ).effects.isEmpty(),
+        )
+        val renameEffect =
+            UiReducer.reduce(
+                ready,
+                UiIntent.RenameEntry("win11.iso", "win.iso", renameBinding),
+            ).effects.single()
+        require(renameEffect.kind == UiEffect.Kind.RenameEntry)
+        require(renameEffect.newName == "win.iso")
+        require(renameEffect.binding == renameBinding)
+        val staleDevice = ready.copy(device = ready.device!!.copy(attachGeneration = 1L))
+        val staleRename =
+            UiReducer.reduce(
+                staleDevice,
+                UiIntent.RenameEntry("win11.iso", "win.iso", renameBinding),
+            )
+        require(staleRename.effects.isEmpty())
+        require(staleRename.state.statusMessage == UiMessage.Key(UiMessageKey.TargetChanged))
+        val roleRequest =
+            UiReducer.reduce(ready, UiIntent.RequestSetPartitionRole(PartitionRole.Efi))
+        require(roleRequest.state.pendingConfirmation?.partitionRole == PartitionRole.Efi)
+        require(roleRequest.state.pendingConfirmation?.action == DestructiveAction.SET_PARTITION_ROLE)
+        require(roleRequest.state.pendingConfirmation?.partitionStartLba == 0uL)
+        val bootRequest =
+            UiReducer.reduce(ready, UiIntent.RequestSetPartitionBootable(true))
+        require(bootRequest.state.pendingConfirmation?.partitionBootable == true)
+
+        val damaged = ready.copy(partitionTableDamaged = true)
+        val damagedDelete =
+            UiReducer.reduce(damaged, UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
+        require(damagedDelete.state.pendingConfirmation == null)
+        require(damagedDelete.state.statusMessage == UiMessage.Key(UiMessageKey.GptPrimaryDamaged))
+        val damagedFormat =
+            UiReducer.reduce(damaged, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
+        require(damagedFormat.state.pendingConfirmation?.action == DestructiveAction.FORMAT_PARTITION)
+
         val deleteBlocked = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
         require(deleteBlocked.state.pendingConfirmation == null)
-        require(deleteBlocked.state.statusMessage == "Select a partition first")
+        require(deleteBlocked.state.statusMessage == UiMessage.Key(UiMessageKey.SelectPartitionFirst))
         val formatBlocked = UiReducer.reduce(noPart, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
         require(formatBlocked.state.pendingConfirmation == null)
-        require(formatBlocked.state.statusMessage == "Select a partition first")
+        require(formatBlocked.state.statusMessage == UiMessage.Key(UiMessageKey.SelectPartitionFirst))
 
-        val tpmToggle = UiReducer.reduce(ready, UiIntent.SetVtoyBypassTpm(false)).state
-        require(!tpmToggle.vtoyBypassTpm)
-        val ramToggle = UiReducer.reduce(ready, UiIntent.SetVtoyBypassRam(true)).state
-        require(ramToggle.vtoyBypassRam)
-        val localToggle = UiReducer.reduce(ramToggle, UiIntent.SetVtoyLocalAccount(true)).state
-        require(localToggle.vtoyLocalAccount)
+        require(ready.vtoyBypassChecks == null) { "default must preserve existing ventoy.json" }
+        val bypassToggle = UiReducer.reduce(ready, UiIntent.SetVtoyBypassChecks(true)).state
+        require(bypassToggle.vtoyBypassChecks == true)
+        val bypassOff = UiReducer.reduce(bypassToggle, UiIntent.SetVtoyBypassChecks(false)).state
+        require(bypassOff.vtoyBypassChecks == false)
+        val bypassKeep = UiReducer.reduce(bypassOff, UiIntent.SetVtoyBypassChecks(null)).state
+        require(bypassKeep.vtoyBypassChecks == null)
+        val localToggle = UiReducer.reduce(bypassKeep, UiIntent.SetVtoyLocalAccount(true)).state
+        require(localToggle.vtoyLocalAccount == true)
         val candidate = UiReducer.reduce(ready, UiIntent.LinkOverwriteAvailable("win.iso")).state
         require(candidate.linkOverwriteCandidate == "win.iso")
         require(candidate.linkOverwriteCandidateIdentity == device.identity)
@@ -261,7 +379,7 @@ object UiStateHostCheck {
         val corrupt = ready.copy(tableValid = false)
         val createBlocked = UiReducer.reduce(corrupt, UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
         require(createBlocked.state.pendingConfirmation == null)
-        require(createBlocked.state.statusMessage?.contains("Cannot create partition on corrupt table") == true)
+        require(createBlocked.state.statusMessage == UiMessage.Key(UiMessageKey.CorruptTableCreate))
 
         val busyReset = UiReducer.reduce(
             ready.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.WIPE)),
@@ -308,7 +426,7 @@ object UiStateHostCheck {
             UiReducer.reduce(fmtReady, UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
         require(fmtReq.state.pendingConfirmation != null)
         require(fmtReq.state.pendingConfirmation!!.formatId == FilesystemId.EXFAT)
-        require(fmtReq.state.pendingConfirmation!!.message.contains("exFAT"))
+        require(fmtReq.state.pendingConfirmation!!.formatId == FilesystemId.EXFAT)
         val fmtGo = UiReducer.reduce(fmtReq.state, UiIntent.ConfirmDestructive)
         require(fmtGo.effects.single().formatId == FilesystemId.EXFAT)
         require(fmtGo.effects.single().confirmation?.partitionId == "1")
@@ -341,6 +459,10 @@ object UiStateHostCheck {
             require(idle.actionsEnabled)
             val ok = UiReducer.reduce(idle, UiIntent.SetImage("content://new.iso"))
             require(ok.state.imageUri == "content://new.iso")
+            require(
+                ok.state.statusMessage ==
+                    UiMessage.Key(UiMessageKey.ImageReady, listOf("content://new.iso")),
+            )
             require(ok.state.stagedRawImagePath == null)
 
             val absent = AppUiState(

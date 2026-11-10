@@ -39,7 +39,12 @@ fun stageRawImageChunks(
         }
         return staged
     } catch (t: Throwable) {
-        ImageStaging.deleteIfManaged(filesDir, staged.absolutePath)
+        try {
+            ImageStaging.deleteIfManaged(filesDir, staged.absolutePath)
+        } catch (cleanup: Throwable) {
+            // Keep the primary failure visible; cleanup failure is diagnostic only.
+            t.addSuppressed(cleanup)
+        }
         throw t
     }
 }

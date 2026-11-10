@@ -41,6 +41,16 @@ class PartitionEditorTest {
         assertTrue(esp.partitions[0].esp)
     }
 
+    @Test fun setTypeWritesRealEfiType() {
+        val before = fixture("between-partitions")
+        val efi = PartitionEditor.setType(before, index = 0, type = PartitionType.EFI)
+        assertEquals(PartitionType.EFI.name, efi.partitions[0].type)
+        assertTrue(efi.partitions[0].esp)
+        val data = PartitionEditor.setType(efi, index = 0, type = PartitionType.BASIC)
+        assertEquals(PartitionType.BASIC.name, data.partitions[0].type)
+        assertFalse(data.partitions[0].esp)
+    }
+
     @Test
     fun createAfterDeletingLastGptPartitionLandsInsideUsableRange() {
         val disk = SyntheticGpt.build(sectorCount = 16384UL)

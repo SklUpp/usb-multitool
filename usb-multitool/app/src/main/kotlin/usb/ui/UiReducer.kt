@@ -11,10 +11,10 @@ sealed class UiIntent {
     data class SelectTab(val tab: ShellTab) : UiIntent()
 
     data class SelectPartition(val partitionId: String) : UiIntent()
-    data class SetVtoyEfiWritable(val enabled: Boolean) : UiIntent()
-    data class SetVtoyBypassTpm(val enabled: Boolean) : UiIntent()
-    data class SetVtoyBypassRam(val enabled: Boolean) : UiIntent()
-    data class SetVtoyLocalAccount(val enabled: Boolean) : UiIntent()
+    /** Lift or restore write protection for exactly [partitionId] on the current attachment. */
+    data class SetVtoyEfiWritable(val partitionId: String, val enabled: Boolean) : UiIntent()
+    data class SetVtoyBypassChecks(val enabled: Boolean?) : UiIntent()
+    data class SetVtoyLocalAccount(val enabled: Boolean?) : UiIntent()
 
     /** Choose filesystem for the next Format action (must be in FormatCatalog.supportedFormatIds). */
     data class SelectFormatFilesystem(val id: FilesystemId) : UiIntent()
@@ -27,6 +27,8 @@ sealed class UiIntent {
         val freeRegions: List<FreeRegionUi> = emptyList(),
         val sectorSize: Int = 512,
         val tableValid: Boolean = true,
+        val partitionTableDamaged: Boolean = false,
+        val partitionTableAmbiguous: Boolean = false,
     ) : UiIntent()
 
     data class OperationUpdated(val progress: OperationProgress?) : UiIntent()
@@ -68,10 +70,13 @@ sealed class UiIntent {
     /** Cycle dark theme: System (null) -> Dark (true) -> Light (false) -> System (null). */
     data object ToggleTheme : UiIntent()
 
+    /** Switch the in-app language; persisted by the host. */
+    data class SetLanguage(val language: AppLanguage) : UiIntent()
+
     /** Run the automated self-test suite over all functional engines. */
     data object RunSelfTest : UiIntent()
 
-    data class Status(val message: String?) : UiIntent()
+    data class Status(val message: UiMessage?) : UiIntent()
 
     data object CancelOperation : UiIntent()
 
@@ -89,6 +94,19 @@ sealed class UiIntent {
 
     /** Delete entry [name] from [AppUiState.currentPath] on the volume. */
     data class DeleteEntry(val name: String) : UiIntent()
+
+    /** Rename entry [from] to [to] on exactly the captured device/partition. */
+    data class RenameEntry(
+        val from: String,
+        val to: String,
+        val binding: PartitionBinding,
+    ) : UiIntent()
+
+    /** Request confirmation to change the selected partition's on-disk type (ESP or data). */
+    data class RequestSetPartitionRole(val role: PartitionRole) : UiIntent()
+
+    /** Request confirmation to change the selected partition's legacy bootable flag. */
+    data class RequestSetPartitionBootable(val bootable: Boolean) : UiIntent()
 
     /** Stream the SAF [uri] into [AppUiState.currentPath] in chunks. */
     data class UploadFile(val uri: String) : UiIntent()
@@ -124,6 +142,10 @@ data class UiEffect(
     val isoAction: IsoAction? = null,
     val path: String? = null,
     val name: String? = null,
+    /** Target name for [Kind.RenameEntry]. */
+    val newName: String? = null,
+    /** Exact device/partition target captured for this mutation. */
+    val binding: PartitionBinding? = null,
     val uri: String? = null,
     val formatId: FilesystemId? = null,
     val linkOverwrite: Boolean = false,
@@ -136,6 +158,7 @@ data class UiEffect(
         LoadFiles,
         CreateFolder,
         DeleteEntry,
+        RenameEntry,
         UploadFile,
         DownloadFile,
         StageUsbImageForRawWrite,
@@ -152,6 +175,19 @@ data class ReduceResult(
 )
 
 object UiReducer {
+    /**
+     * Actions that rewrite the partition layout. Ambiguity blocks them unconditionally:
+     * unlike an EFI read-only partition, no override may lift this.
+     */
+    private val layoutMutations = setOf(
+        DestructiveAction.CREATE_PARTITION,
+        DestructiveAction.DELETE_PARTITION,
+        DestructiveAction.FORMAT_PARTITION,
+        DestructiveAction.SET_PARTITION_ROLE,
+        DestructiveAction.SET_PARTITION_BOOTABLE,
+        DestructiveAction.GPT_REPAIR,
+    )
+
     fun reduce(state: AppUiState, intent: UiIntent): ReduceResult =
         when (intent) {
             is UiIntent.SelectTab ->
@@ -168,17 +204,65 @@ object UiReducer {
                             selectedPartitionId = intent.partitionId,
                             currentPath = "/",
                             files = emptyList(),
+                            filesError = null,
                         ),
                         effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
                     )
                 }
 
             is UiIntent.SetVtoyEfiWritable ->
-                ReduceResult(state.copy(vtoyEfiWriteEnabled = intent.enabled))
-            is UiIntent.SetVtoyBypassTpm ->
-                ReduceResult(state.copy(vtoyBypassTpm = intent.enabled))
-            is UiIntent.SetVtoyBypassRam ->
-                ReduceResult(state.copy(vtoyBypassRam = intent.enabled))
+                when {
+                    !intent.enabled ->
+                        if (state.vtoyEfiWritePartitionId == null ||
+                            state.vtoyEfiWritePartitionId == intent.partitionId
+                        ) {
+                            ReduceResult(
+                                state.copy(
+                                    vtoyEfiWritePartitionId = null,
+                                    vtoyEfiWriteStartLba = null,
+                                    vtoyEfiWriteSectorCount = null,
+                                ),
+                            )
+                        } else {
+                            ReduceResult(state)
+                        }
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    else -> {
+                        val target = state.partitions.firstOrNull {
+                            it.id == intent.partitionId && it.readOnly
+                        }
+                        val start = target?.startLba
+                        val count = target?.sectorCount
+                        when {
+                            target == null ->
+                                ReduceResult(
+                                    state.copy(
+                                        statusMessage = message(
+                                            UiMessageKey.EfiPartitionMissing,
+                                            intent.partitionId,
+                                        ),
+                                    ),
+                                )
+                            start == null || count == null ->
+                                ReduceResult(
+                                    state.copy(
+                                        statusMessage = UiMessage.Key(UiMessageKey.EfiGeometryUnknown),
+                                    ),
+                                )
+                            else ->
+                                ReduceResult(
+                                    state.copy(
+                                        vtoyEfiWritePartitionId = target.id,
+                                        vtoyEfiWriteStartLba = start,
+                                        vtoyEfiWriteSectorCount = count,
+                                    ),
+                                )
+                        }
+                    }
+                }
+            is UiIntent.SetVtoyBypassChecks ->
+                ReduceResult(state.copy(vtoyBypassChecks = intent.enabled))
             is UiIntent.SetVtoyLocalAccount ->
                 ReduceResult(state.copy(vtoyLocalAccount = intent.enabled))
 
@@ -190,7 +274,7 @@ object UiReducer {
                     if (id !in FormatCatalog.supportedFormatIds()) {
                         ReduceResult(
                             state.copy(
-                                statusMessage = "Format as ${FormatCatalog.label(id)} is not supported",
+                                statusMessage = message(UiMessageKey.FormatUnsupported, FormatCatalog.label(id)),
                             ),
                         )
                     } else {
@@ -207,28 +291,50 @@ object UiReducer {
                         ?: intent.partitions.firstOrNull()?.id
                 val candidateMatchesDevice =
                     intent.presence == DevicePresence.Ready &&
-                        intent.device?.identity == state.linkOverwriteCandidateIdentity
+                        intent.device?.identity == state.linkOverwriteCandidateIdentity &&
+                        intent.device?.attachGeneration == state.linkOverwriteCandidateGeneration
+                // The EFI write override belongs to one physical attachment: a partition
+                // refresh keeps it, a new attach generation / other stick / detach drops it.
+                val incoming = intent.device
+                val sameAttachment =
+                    intent.presence == DevicePresence.Ready &&
+                        incoming != null &&
+                        incoming.identity == state.device?.identity &&
+                        incoming.attachGeneration == state.device?.attachGeneration
+                val retainedEfi = state.vtoyEfiWritePartitionId?.takeIf { sameAttachment }?.let { id ->
+                    intent.partitions.firstOrNull {
+                        it.id == id &&
+                            it.readOnly &&
+                            it.startLba == state.vtoyEfiWriteStartLba &&
+                            it.sectorCount == state.vtoyEfiWriteSectorCount
+                    }
+                }
                 ReduceResult(
                     state.copy(
                         presence = intent.presence,
                         device = intent.device,
+                        vtoyEfiWritePartitionId = retainedEfi?.id,
+                        vtoyEfiWriteStartLba = retainedEfi?.startLba,
+                        vtoyEfiWriteSectorCount = retainedEfi?.sectorCount,
                         partitions = intent.partitions,
                         freeRegions = intent.freeRegions,
                         diskSectorSize = intent.sectorSize,
                         tableValid = intent.tableValid,
+                        partitionTableDamaged = intent.partitionTableDamaged,
+                        partitionTableAmbiguous = intent.partitionTableAmbiguous,
                         selectedPartitionId = selected,
                         currentPath = "/",
                         files = intent.files,
+                        filesError = null,
                         pendingConfirmation = null,
                         linkOverwriteCandidate = state.linkOverwriteCandidate.takeIf { candidateMatchesDevice },
                         linkOverwriteCandidateIdentity = state.linkOverwriteCandidateIdentity.takeIf { candidateMatchesDevice },
+                        linkOverwriteCandidateGeneration = state.linkOverwriteCandidateGeneration.takeIf { candidateMatchesDevice },
                         statusMessage =
-                            when (intent.presence) {
-                                DevicePresence.Absent -> "No USB mass-storage device"
-                                DevicePresence.PermissionRequired -> "USB permission required"
-                                DevicePresence.Disconnected -> "Device disconnected"
-                                DevicePresence.Busy -> "Device busy"
-                                DevicePresence.Ready -> state.statusMessage
+                            if (intent.presence == DevicePresence.Ready) {
+                                state.statusMessage
+                            } else {
+                                presenceMessage(intent.presence)
                             },
                     ),
                 )
@@ -262,20 +368,22 @@ object UiReducer {
                         statusMessage =
                             when (intent.progress?.state) {
                                 OperationState.Completed ->
-                                    // Keep a more specific status (e.g. staged-image hint) when
-                                    // the operation itself has no resultMessage.
-                                    intent.progress.resultMessage
-                                        ?: state.statusMessage?.takeIf {
-                                            it.isNotBlank() && it != "Running" && it != "Queued"
-                                        }
-                                        ?: "Success"
-                                OperationState.Cancelled -> "Cancelled"
+                                    // Keep a more specific status (for example a staged-image
+                                    // hint) when the operation has no result message.
+                                    intent.progress.resultMessage?.let(UiMessage::Raw)
+                                        ?: state.statusMessage?.takeIf { !it.isDefaultStateStatus() }
+                                        ?: UiMessage.Key(UiMessageKey.Success)
+                                OperationState.Cancelled ->
+                                    UiMessage.Key(UiMessageKey.CancelledStatus)
                                 OperationState.Failed ->
-                                    intent.progress.errorMessage ?: "Failed"
+                                    intent.progress.errorMessage?.let(UiMessage::Raw)
+                                        ?: UiMessage.Key(UiMessageKey.FailedStatus)
                                 OperationState.Partial ->
-                                    intent.progress.resultMessage ?: intent.progress.errorMessage ?: "Partial result"
-                                OperationState.Running -> "Running"
-                                OperationState.Queued -> "Queued"
+                                    (intent.progress.resultMessage ?: intent.progress.errorMessage)
+                                        ?.let(UiMessage::Raw)
+                                        ?: UiMessage.Key(UiMessageKey.PartialStatus)
+                                OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
+                                OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
                                 null -> state.statusMessage
                             },
                     ),
@@ -290,12 +398,23 @@ object UiReducer {
                         intent.startLba - region.startLba < region.sectorCount &&
                         intent.sectorCount <= region.sectorCount - (intent.startLba - region.startLba)
                 }
-                if (device == null || !state.actionsEnabled || !state.tableValid || !valid) {
-                    ReduceResult(state.copy(statusMessage = "Invalid or unavailable free region"))
+                if (state.partitionTableAmbiguous) {
+                    ReduceResult(
+                        state.copy(
+                            statusMessage = UiMessage.Key(UiMessageKey.PartitionTableAmbiguous),
+                        ),
+                    )
+                } else if (state.partitionTableDamaged) {
+                    ReduceResult(
+                        state.copy(statusMessage = UiMessage.Key(UiMessageKey.GptPrimaryDamaged)),
+                    )
+                } else if (device == null || !state.actionsEnabled || !state.tableValid || !valid) {
+                    ReduceResult(
+                        state.copy(statusMessage = UiMessage.Key(UiMessageKey.InvalidFreeRegion)),
+                    )
                 } else {
                     val base = DestructiveConfirmation.request(device, DestructiveAction.CREATE_PARTITION)
                     ReduceResult(state.copy(pendingConfirmation = base.copy(
-                        message = base.message + " Create LBA ${intent.startLba} through ${intent.startLba + intent.sectorCount - 1UL} (${intent.sectorCount} sectors).",
                         createStartLba = intent.startLba,
                         createSectorCount = intent.sectorCount,
                     )))
@@ -304,23 +423,35 @@ object UiReducer {
 
             is UiIntent.RequestDestructive -> {
                 val device = state.device
+                val blockedByAmbiguity =
+                    state.partitionTableAmbiguous && intent.action in layoutMutations
+                val blockedByDamagedGpt =
+                    state.partitionTableDamaged &&
+                        intent.action in setOf(
+                            DestructiveAction.CREATE_PARTITION,
+                            DestructiveAction.DELETE_PARTITION,
+                            DestructiveAction.GPT_REPAIR,
+                        )
                 val missingInput =
                     when {
+                        blockedByAmbiguity ->
+                            UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
+                        blockedByDamagedGpt -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
                         intent.action == DestructiveAction.RAW_WRITE &&
                             state.imageUri == null && state.stagedRawImagePath == null ->
-                            "Select or stage an ISO/IMG file first"
+                            UiMessage.Key(UiMessageKey.SelectImageFirst)
                         intent.action == DestructiveAction.GPT_RESTORE && state.backupUri == null ->
-                            "Choose a GPT backup file first"
+                            UiMessage.Key(UiMessageKey.ChooseGptBackup)
                         intent.action == DestructiveAction.RESCUE_RESTORE &&
                             (state.rescueImageUri == null || state.rescueMapUri == null) ->
-                            "Choose a rescue image and its map first"
+                            UiMessage.Key(UiMessageKey.ChooseRescueFiles)
                         (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) &&
                             state.selectedPartitionId == null ->
-                            "Select a partition first"
+                            UiMessage.Key(UiMessageKey.SelectPartitionFirst)
                         (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) ->
                             writeBlockMessage(state)
                         intent.action == DestructiveAction.CREATE_PARTITION && !state.tableValid ->
-                            "Cannot create partition on corrupt table. Wipe or restore first."
+                            UiMessage.Key(UiMessageKey.CorruptTableCreate)
                         else -> null
                     }
                 if (device != null && state.actionsEnabled && missingInput != null) {
@@ -331,7 +462,7 @@ object UiReducer {
                             statusMessage =
                                 when {
                                     device == null -> presenceMessage(state.presence)
-                                    state.isRunning -> "Busy: wait for the running operation"
+                                    state.isRunning -> UiMessage.Key(UiMessageKey.WaitForOperation)
                                     else -> presenceMessage(state.presence)
                                 },
                         ),
@@ -365,18 +496,43 @@ object UiReducer {
                 }
             }
 
+            is UiIntent.RequestSetPartitionRole ->
+                requestPartitionEdit(
+                    state,
+                    DestructiveAction.SET_PARTITION_ROLE,
+                    role = intent.role,
+                )
+
+            is UiIntent.RequestSetPartitionBootable ->
+                requestPartitionEdit(
+                    state,
+                    DestructiveAction.SET_PARTITION_BOOTABLE,
+                    bootable = intent.bootable,
+                )
+
             UiIntent.ConfirmDestructive -> {
                 val pending = state.pendingConfirmation
                 val device = state.device
-                val action =
-                    pending?.let { p ->
-                        DestructiveAction.entries.firstOrNull { it.displayName() == p.action }
-                    }
+                val action = pending?.action
                 val invalidState = when {
                     pending == null || device == null -> true
                     state.presence != DevicePresence.Ready -> true
                     state.isRunning -> true
                     action == DestructiveAction.CREATE_PARTITION && !state.tableValid -> true
+                    state.partitionTableAmbiguous &&
+                        action != null && action in layoutMutations -> true
+                    state.partitionTableDamaged &&
+                        action in setOf(
+                            DestructiveAction.CREATE_PARTITION,
+                            DestructiveAction.DELETE_PARTITION,
+                            DestructiveAction.GPT_REPAIR,
+                            DestructiveAction.SET_PARTITION_ROLE,
+                            DestructiveAction.SET_PARTITION_BOOTABLE,
+                        ) -> true
+                    action == DestructiveAction.SET_PARTITION_ROLE &&
+                        (pending?.partitionRole == null || !state.tableValid) -> true
+                    action == DestructiveAction.SET_PARTITION_BOOTABLE &&
+                        (pending?.partitionBootable == null || !state.tableValid) -> true
                     (action == DestructiveAction.DELETE_PARTITION || action == DestructiveAction.FORMAT_PARTITION) &&
                         state.selectedPartitionId == null -> true
                     else -> false
@@ -389,16 +545,17 @@ object UiReducer {
                         ReduceResult(
                             state.copy(
                                 pendingConfirmation = null,
-                                statusMessage = "No ISO selected for the Windows setup link",
+                                statusMessage = UiMessage.Key(UiMessageKey.NoIsoForLink),
                             ),
                         )
                     } else {
                         ReduceResult(
                             state.copy(
                                 pendingConfirmation = null,
-                                statusMessage =
-                                    "Writing autounattend.xml and ventoy.json for " +
-                                        "${iso.substringAfterLast('/')}…",
+                                statusMessage = message(
+                                    UiMessageKey.WritingXml,
+                                    iso.substringAfterLast('/'),
+                                ),
                             ),
                             effects = listOf(
                                 UiEffect(
@@ -432,21 +589,49 @@ object UiReducer {
                 ReduceResult(state.copy(pendingConfirmation = null))
             is UiIntent.RequestLinkOverwrite -> {
                 val device = state.device
-                val candidateMatches = state.linkOverwriteCandidate == intent.fileName && state.linkOverwriteCandidateIdentity == device?.identity
+                val candidateMatches =
+                    state.linkOverwriteCandidate == intent.fileName &&
+                        state.linkOverwriteCandidateIdentity == device?.identity &&
+                        state.linkOverwriteCandidateGeneration == device?.attachGeneration
                 if (!state.actionsEnabled || device == null) {
-                    ReduceResult(state.copy(statusMessage = "No USB device for Ventoy setup link"))
+                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)))
                 } else if (!candidateMatches) {
-                    ReduceResult(state.copy(linkOverwriteCandidate = null, linkOverwriteCandidateIdentity = null, statusMessage = "Existing Ventoy link no longer matches connected device"))
+                    ReduceResult(state.copy(
+                        linkOverwriteCandidate = null,
+                        linkOverwriteCandidateIdentity = null,
+                        linkOverwriteCandidateGeneration = null,
+                        statusMessage = UiMessage.Key(UiMessageKey.LinkMismatch),
+                    ))
                 } else {
-                    ReduceResult(state.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.VENTOY_LINK_XML, isoName = intent.fileName, linkOverwrite = true), linkOverwriteCandidate = null, linkOverwriteCandidateIdentity = null, statusMessage = null))
+                    ReduceResult(state.copy(
+                        pendingConfirmation = DestructiveConfirmation.request(
+                            device,
+                            DestructiveAction.VENTOY_LINK_XML,
+                            isoName = intent.fileName,
+                            linkOverwrite = true,
+                        ),
+                        linkOverwriteCandidate = null,
+                        linkOverwriteCandidateIdentity = null,
+                        linkOverwriteCandidateGeneration = null,
+                        statusMessage = null,
+                    ))
                 }
             }
             is UiIntent.LinkOverwriteAvailable -> {
                 val device = state.device
                 if (!state.actionsEnabled || device == null) {
-                    ReduceResult(state.copy(linkOverwriteCandidate = null, linkOverwriteCandidateIdentity = null))
+                    ReduceResult(state.copy(
+                        linkOverwriteCandidate = null,
+                        linkOverwriteCandidateIdentity = null,
+                        linkOverwriteCandidateGeneration = null,
+                    ))
                 } else {
-                    ReduceResult(state.copy(linkOverwriteCandidate = intent.fileName, linkOverwriteCandidateIdentity = device.identity, statusMessage = "Existing Ventoy link detected; choose explicit overwrite"))
+                    ReduceResult(state.copy(
+                        linkOverwriteCandidate = intent.fileName,
+                        linkOverwriteCandidateIdentity = device.identity,
+                        linkOverwriteCandidateGeneration = device.attachGeneration,
+                        statusMessage = UiMessage.Key(UiMessageKey.LinkOverwriteNeeded),
+                    ))
                 }
             }
 
@@ -459,7 +644,7 @@ object UiReducer {
                     IsoAction.SendToRawWriter -> {
                         val name = intent.fileName.substringAfterLast('/')
                         ReduceResult(
-                            state.copy(statusMessage = "Staging $name for raw write…"),
+                            state.copy(statusMessage = message(UiMessageKey.StagingFile, name)),
                             listOf(
                                 UiEffect(
                                     UiEffect.Kind.StageUsbImageForRawWrite,
@@ -475,7 +660,7 @@ object UiReducer {
                         val device = state.device
                         if (device == null) {
                             ReduceResult(
-                                state.copy(statusMessage = "No USB device for Ventoy setup link"),
+                                state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)),
                             )
                         } else {
                             ReduceResult(
@@ -495,45 +680,51 @@ object UiReducer {
                 }
             }
 
-            is UiIntent.SetImage ->
+            is UiIntent.SetImage -> {
+                val uri = intent.uri
                 if (!state.actionsEnabled) {
                     // Busy / pending confirm — do not clear staged source under a live raw write.
                     ReduceResult(state)
                 } else {
                     ReduceResult(
                         state.copy(
-                            imageUri = intent.uri,
-                            stagedRawImagePath = if (intent.uri != null) null else state.stagedRawImagePath,
-                            stagedRawImageLabel = if (intent.uri != null) null else state.stagedRawImageLabel,
+                            imageUri = uri,
+                            stagedRawImagePath = if (uri != null) null else state.stagedRawImagePath,
+                            stagedRawImageLabel = if (uri != null) null else state.stagedRawImageLabel,
                             statusMessage =
-                                if (intent.uri == null) "Image cleared" else "Image ready for raw write",
+                                if (uri == null) {
+                                    UiMessage.Key(UiMessageKey.ImageCleared)
+                                } else {
+                                    UiMessage.Key(UiMessageKey.ImageReady, listOf(uri))
+                                },
                         ),
                     )
                 }
+            }
 
             is UiIntent.SetStagedRawImage ->
                 if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
-                    ReduceResult(state.copy(statusMessage = "Cannot change staged image while operation is active"))
+                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.CannotChangeStaged)))
                 } else {
                     ReduceResult(
                         state.copy(
                             stagedRawImagePath = intent.path,
                             stagedRawImageLabel = intent.label,
                             imageUri = null,
-                            statusMessage = "Staged ${intent.label} — confirm raw write on Partitions",
+                            statusMessage = message(UiMessageKey.StagedImageReady, intent.label),
                         ),
                     )
                 }
 
             is UiIntent.ClearStagedRawImage ->
                 if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
-                    ReduceResult(state.copy(statusMessage = "Cannot clear staged image while operation is active"))
+                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.CannotClearStaged)))
                 } else {
                     ReduceResult(
                         state.copy(
                             stagedRawImagePath = null,
                             stagedRawImageLabel = null,
-                            statusMessage = "Staged raw image cleared",
+                            statusMessage = UiMessage.Key(UiMessageKey.StagedCleared),
                         ),
                     )
                 }
@@ -543,9 +734,12 @@ object UiReducer {
                         backupUri = intent.uri,
                         statusMessage =
                             if (intent.uri == null) {
-                                "GPT backup cleared"
+                                UiMessage.Key(UiMessageKey.BackupCleared)
                             } else {
-                                "GPT backup ready: ${intent.uri.substringAfterLast('/')}"
+                                message(
+                                    UiMessageKey.BackupReady,
+                                    intent.uri.substringAfterLast('/'),
+                                )
                             },
                     ),
                 )
@@ -555,6 +749,8 @@ object UiReducer {
             UiIntent.StartRescueBackup -> nonDestructiveEffect(state, UiEffect.Kind.RescueBackup)
 
             UiIntent.CaptureGptBackup -> nonDestructiveEffect(state, UiEffect.Kind.CaptureGptBackup)
+
+            is UiIntent.SetLanguage -> ReduceResult(state.copy(language = intent.language))
 
             UiIntent.ToggleTheme -> {
                 val next = when (state.darkTheme) {
@@ -567,10 +763,10 @@ object UiReducer {
 
             UiIntent.RunSelfTest ->
                 if (state.isRunning) {
-                    ReduceResult(state.copy(statusMessage = "Operation already in progress"))
+                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.OperationInProgress)))
                 } else {
                     ReduceResult(
-                        state.copy(statusMessage = "Starting automated self-test..."),
+                        state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelfTestStarting)),
                         effects = listOf(UiEffect(UiEffect.Kind.RunSelfTest)),
                     )
                 }
@@ -580,8 +776,14 @@ object UiReducer {
                     state.copy(
                         rescueImageUri = intent.uri,
                         statusMessage =
-                            if (intent.uri == null) "Rescue image cleared"
-                            else "Rescue image ready: ${intent.uri.substringAfterLast('/')}",
+                            if (intent.uri == null) {
+                                UiMessage.Key(UiMessageKey.RescueImageCleared)
+                            } else {
+                                message(
+                                    UiMessageKey.RescueImageReady,
+                                    intent.uri.substringAfterLast('/'),
+                                )
+                            },
                     ),
                 )
 
@@ -590,8 +792,14 @@ object UiReducer {
                     state.copy(
                         rescueMapUri = intent.uri,
                         statusMessage =
-                            if (intent.uri == null) "Rescue map cleared"
-                            else "Rescue map ready: ${intent.uri.substringAfterLast('/')}",
+                            if (intent.uri == null) {
+                                UiMessage.Key(UiMessageKey.RescueMapCleared)
+                            } else {
+                                message(
+                                    UiMessageKey.RescueMapReady,
+                                    intent.uri.substringAfterLast('/'),
+                                )
+                            },
                     ),
                 )
 
@@ -606,7 +814,7 @@ object UiReducer {
             is UiIntent.OpenDirectory -> {
                 val target = normalizeFatPath(intent.path)
                 ReduceResult(
-                    state.copy(currentPath = target, files = emptyList()),
+                    state.copy(currentPath = target, files = emptyList(), filesError = null),
                     effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
                 )
             }
@@ -617,7 +825,7 @@ object UiReducer {
                     ReduceResult(state)
                 } else {
                     ReduceResult(
-                        state.copy(currentPath = target, files = emptyList()),
+                        state.copy(currentPath = target, files = emptyList(), filesError = null),
                         effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
                     )
                 }
@@ -632,7 +840,7 @@ object UiReducer {
                     block != null ->
                         ReduceResult(state.copy(statusMessage = block))
                     !validEntryName(name) ->
-                        ReduceResult(state.copy(statusMessage = "Enter a folder name without / or \\"))
+                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.InvalidFolderName)))
                     else ->
                         ReduceResult(
                             state,
@@ -656,7 +864,7 @@ object UiReducer {
                     block != null ->
                         ReduceResult(state.copy(statusMessage = block))
                     !validEntryName(intent.name) ->
-                        ReduceResult(state.copy(statusMessage = "Select a valid entry to delete"))
+                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectEntryToDelete)))
                     else ->
                         ReduceResult(
                             state,
@@ -666,6 +874,36 @@ object UiReducer {
                                         UiEffect.Kind.DeleteEntry,
                                         path = state.currentPath,
                                         name = intent.name,
+                                    ),
+                                ),
+                        )
+                }
+            }
+
+            is UiIntent.RenameEntry -> {
+                val block = writeBlockMessage(state)
+                when {
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    bindingProblem(state, intent.binding) != null ->
+                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)))
+                    block != null ->
+                        ReduceResult(state.copy(statusMessage = block))
+                    !validEntryName(intent.from) || !validEntryName(intent.to) ->
+                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.InvalidEntryName)))
+                    intent.from == intent.to ->
+                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.RenameSameName)))
+                    else ->
+                        ReduceResult(
+                            state,
+                            effects =
+                                listOf(
+                                    UiEffect(
+                                        UiEffect.Kind.RenameEntry,
+                                        path = state.currentPath,
+                                        name = intent.from,
+                                        newName = intent.to,
+                                        binding = intent.binding,
                                     ),
                                 ),
                         )
@@ -699,7 +937,7 @@ object UiReducer {
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     !validEntryName(intent.name) ->
-                        ReduceResult(state.copy(statusMessage = "Select a file to download"))
+                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectFileToDownload)))
                     else ->
                         ReduceResult(
                             state,
@@ -720,7 +958,7 @@ object UiReducer {
                     // Late result for a directory the user already left.
                     ReduceResult(state)
                 } else {
-                    ReduceResult(state.copy(files = intent.files))
+                    ReduceResult(state.copy(files = intent.files, filesError = null))
                 }
 
             is UiIntent.FilesListFailed ->
@@ -728,7 +966,11 @@ object UiReducer {
                     ReduceResult(state)
                 } else {
                     ReduceResult(
-                        state.copy(files = emptyList(), statusMessage = intent.message),
+                        state.copy(
+                            files = emptyList(),
+                            filesError = intent.message,
+                            statusMessage = UiMessage.Raw(intent.message),
+                        ),
                     )
                 }
 
@@ -755,23 +997,89 @@ object UiReducer {
             ReduceResult(state, effects = listOf(UiEffect(kind)))
         }
 
-    fun presenceMessage(presence: DevicePresence): String =
+    fun presenceMessage(presence: DevicePresence): UiMessage =
         when (presence) {
-            DevicePresence.Absent -> "No USB mass-storage device"
-            DevicePresence.PermissionRequired -> "USB permission required"
-            DevicePresence.Busy -> "Device busy"
-            DevicePresence.Disconnected -> "Device disconnected"
-            DevicePresence.Ready -> "Ready"
+            DevicePresence.Absent -> UiMessage.Key(UiMessageKey.NoDevice)
+            DevicePresence.PermissionRequired -> UiMessage.Key(UiMessageKey.PermissionRequired)
+            DevicePresence.Busy -> UiMessage.Key(UiMessageKey.DeviceBusy)
+            DevicePresence.Disconnected -> UiMessage.Key(UiMessageKey.DeviceDisconnected)
+            DevicePresence.Ready -> UiMessage.Key(UiMessageKey.Ready)
+        }
+
+    /** Small builder for keyed messages with format arguments. */
+    fun message(key: UiMessageKey, vararg args: Any): UiMessage =
+        UiMessage.Key(key, args.toList())
+
+    private fun UiMessage.isDefaultStateStatus(): Boolean =
+        this is UiMessage.Key &&
+            key in setOf(
+                UiMessageKey.RunningStatus,
+                UiMessageKey.QueuedStatus,
+            )
+
+    /** Null when [binding] still names the selected device, partition and geometry. */
+    private fun bindingProblem(state: AppUiState, binding: PartitionBinding): UiMessage? =
+        if (state.device == null) {
+            presenceMessage(state.presence)
+        } else if (!binding.matches(state)) {
+            UiMessage.Key(UiMessageKey.TargetChanged)
+        } else {
+            null
         }
 
     /**
-     * Explicit reason writes to the selected partition are refused, or null when allowed.
-     * A read-only partition (VTOYEFI) stays untouched until the user enables writes.
+     * Build a confirmation for a partition-table edit. The payload pins the selected
+     * partition ID and geometry so the host can re-check them against the live table.
      */
-    fun writeBlockMessage(state: AppUiState): String? {
-        val partition = state.selectedPartition() ?: return "Select a partition first"
-        if (!partition.readOnly || state.vtoyEfiWriteEnabled) return null
-        return "${partition.name} is read-only: enable VTOYEFI writes first"
+    private fun requestPartitionEdit(
+        state: AppUiState,
+        action: DestructiveAction,
+        role: PartitionRole? = null,
+        bootable: Boolean? = null,
+    ): ReduceResult {
+        val device = state.device
+        val target = state.selectedPartition()
+        val problem = when {
+            device == null || !state.actionsEnabled -> presenceMessage(state.presence)
+            target == null -> UiMessage.Key(UiMessageKey.SelectPartitionFirst)
+            state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
+            state.partitionTableDamaged -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
+            !state.tableValid -> UiMessage.Key(UiMessageKey.TableDamaged)
+            target.startLba == null || target.sectorCount == null ->
+                UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
+            !state.isEfiWriteAllowed(target) ->
+                message(UiMessageKey.ReadOnlyPartition, target.name)
+            else -> null
+        }
+        if (problem != null || device == null || target == null) {
+            return ReduceResult(state.copy(statusMessage = problem))
+        }
+        val base = DestructiveConfirmation.request(device, action, target.name, target = target)
+        return ReduceResult(
+            state.copy(
+                pendingConfirmation = base.copy(
+                    partitionRole = role,
+                    partitionBootable = bootable,
+                ),
+            ),
+        )
+    }
+
+    /**
+     * Explicit reason writes to the selected partition are refused, or null when allowed.
+     * An EFI partition stays untouched unless the override names that exact partition;
+     * lifting it for one ESP never unlocks another.
+     */
+    fun writeBlockMessage(state: AppUiState): UiMessage? {
+        val partition = state.selectedPartition()
+            ?: return UiMessage.Key(UiMessageKey.SelectPartitionFirst)
+        // Unconditional before the EFI override: in an ambiguous layout the MBR record may
+        // own the sectors under the selected GPT partition, so no override may lift the block.
+        if (state.partitionTableAmbiguous) {
+            return UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
+        }
+        if (state.isEfiWriteAllowed(partition)) return null
+        return message(UiMessageKey.ReadOnlyPartition, partition.name)
     }
 
     /** A single FAT entry name: no separators, no dot entries. */

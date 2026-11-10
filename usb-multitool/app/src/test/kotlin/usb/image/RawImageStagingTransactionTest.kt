@@ -77,6 +77,36 @@ class RawImageStagingTransactionTest {
         assertTrue(ImageStaging.listStagingFiles(root).isEmpty())
     }
 
+    @Test
+    fun cleanupFailureDoesNotReplacePrimaryFailure() {
+        val root = root()
+        val bytes = ByteArray(10) { 1 }
+        val volume = FakeVolume(bytes)
+        var staged: File? = null
+        volume.readHook = {
+            val file = ImageStaging.listStagingFiles(root).single()
+            file.delete()
+            file.mkdir()
+            File(file, "child").writeText("kept")
+            staged = file
+            throw IllegalStateException("primary staging failure")
+        }
+        try {
+            val error = assertThrows(IllegalStateException::class.java) {
+                stageRawImageChunks(root, volume, "/image", bytes.size.toLong(), "x.img", DiskOperation(), 3)
+            }
+            assertEquals("primary staging failure", error.message)
+            assertEquals(1, error.suppressed.size)
+            assertTrue(error.suppressed[0] is java.io.IOException)
+        } finally {
+            staged?.let { dir ->
+                File(dir, "child").delete()
+                dir.delete()
+            }
+            root.delete()
+        }
+    }
+
     private class FakeVolume(private val bytes: ByteArray) : UsbFsVolume {
         val readSizes = mutableListOf<Int>()
         var readHook: (() -> Unit)? = null

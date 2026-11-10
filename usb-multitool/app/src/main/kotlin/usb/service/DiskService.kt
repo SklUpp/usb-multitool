@@ -78,8 +78,8 @@ class DiskService : Service() {
 
     private fun startForegroundInternal() {
         val notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("USB Multitool")
-            .setContentText("Disk operation in progress")
+            .setContentTitle(getString(usb.multitool.R.string.app_name))
+            .setContentText(getString(usb.multitool.R.string.notification_operation_text))
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
@@ -98,7 +98,7 @@ class DiskService : Service() {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Disk operations",
+            context.getString(usb.multitool.R.string.notification_channel_operations),
             NotificationManager.IMPORTANCE_LOW,
         )
         manager.createNotificationChannel(channel)
@@ -182,7 +182,7 @@ class DiskService : Service() {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Disk operations",
+                context.getString(usb.multitool.R.string.notification_channel_operations),
                 NotificationManager.IMPORTANCE_LOW,
             )
             manager.createNotificationChannel(channel)
