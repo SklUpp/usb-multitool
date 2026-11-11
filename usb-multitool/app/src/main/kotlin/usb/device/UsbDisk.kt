@@ -92,7 +92,7 @@ open class UsbDisk(
                     throw sense
                 }
                 CswStatus.PHASE_ERROR -> {
-                    session.bulkOnlyReset()
+                    resetOrClose()
                     closeSession()
                     throw DiskException.IoFailure("phase error on SYNCHRONIZE CACHE(10)")
                 }
@@ -129,7 +129,7 @@ open class UsbDisk(
                     closeSession()
                     throw e
                 }
-                session.bulkOnlyReset()
+                resetOrClose()
                 attempt++
                 continue
             } catch (e: DiskException.Disconnected) {
@@ -140,7 +140,7 @@ open class UsbDisk(
             }
 
             if (result.status == CswStatus.PHASE_ERROR) {
-                session.bulkOnlyReset()
+                resetOrClose()
                 closeSession()
                 throw DiskException.IoFailure("BOT phase error")
             }
@@ -210,6 +210,19 @@ open class UsbDisk(
         runCatching { session.close() }
     }
 
+    /**
+     * BOT reset recovery. If the reset itself fails the pipe is untrustworthy:
+     * close the session, then rethrow the reset failure unaltered.
+     */
+    private fun resetOrClose() {
+        try {
+            session.bulkOnlyReset()
+        } catch (e: Exception) {
+            closeSession()
+            throw e
+        }
+    }
+
     private fun requireAligned(bytes: Int) {
         require(bytes % sectorSize == 0) {
             "length $bytes not multiple of sectorSize $sectorSize"
@@ -225,6 +238,19 @@ open class UsbDisk(
 
     companion object {
         /**
+         * BOT reset recovery before a probe retry. A failed reset means the pipe
+         * cannot be trusted: close the session and rethrow the reset failure.
+         */
+        private fun resetOrClose(session: BotSession) {
+            try {
+                session.bulkOnlyReset()
+            } catch (e: Exception) {
+                runCatching { session.close() }
+                throw e
+            }
+        }
+
+        /**
          * READ CAPACITY(10); if last LBA is 0xFFFFFFFF, fall back to READ CAPACITY(16).
          * A CSW FAILED always gets a REQUEST SENSE (BOT requirement); a pending
          * UNIT ATTENTION is cleared and the same command retried once.
@@ -236,11 +262,11 @@ open class UsbDisk(
                 val status10 = try {
                     session.transfer(ScsiCommand.readCapacity10(), buf10)
                 } catch (e: DiskException.IoFailure) {
-                    session.bulkOnlyReset()
+                    resetOrClose(session)
                     return readCapacity16(session)
                 }
                 if (status10.status == CswStatus.PHASE_ERROR) {
-                    session.bulkOnlyReset()
+                    resetOrClose(session)
                     throw DiskException.IoFailure("phase error on READ CAPACITY(10)")
                 }
                 if (status10.status == CswStatus.FAILED) {
@@ -295,7 +321,7 @@ open class UsbDisk(
                         throw DiskException.IoFailure("READ CAPACITY(16) failed")
                     }
                     CswStatus.PHASE_ERROR -> {
-                        session.bulkOnlyReset()
+                        resetOrClose(session)
                         throw DiskException.IoFailure("phase error on READ CAPACITY(16)")
                     }
                 }

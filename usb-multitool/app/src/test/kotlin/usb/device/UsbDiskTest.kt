@@ -446,6 +446,56 @@ class UsbDiskTest {
             session.commands,
         )
     }
+
+    @Test
+    fun failedResetOnPhaseErrorClosesSessionAndPropagatesResetError() {
+        val session = object : FakeBotSession(phaseErrorOnOps = setOf(ScsiCommand.OP_READ10)) {
+            override fun bulkOnlyReset() {
+                throw DiskException.IoFailure("reset failed")
+            }
+        }
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+
+        val thrown = assertThrows(DiskException.IoFailure::class.java) { disk.read(0UL, out) }
+
+        assertEquals("reset failed", thrown.message)
+        assertTrue(disk.isClosed)
+        assertFalse(session.isConnected())
+        assertThrows(DiskException.Closed::class.java) { disk.read(0UL, out) }
+    }
+
+    @Test
+    fun failedResetOnStallClosesSessionInsteadOfRetrying() {
+        val session = object : FakeBotSession(stallsBeforeSuccess = 1) {
+            override fun bulkOnlyReset() {
+                throw DiskException.IoFailure("reset failed")
+            }
+        }
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val out = ByteBuffer.allocate(512)
+
+        val thrown = assertThrows(DiskException.IoFailure::class.java) { disk.read(0UL, out) }
+
+        assertEquals("reset failed", thrown.message)
+        assertTrue(disk.isClosed)
+        assertFalse(session.isConnected())
+        assertEquals(1, session.commands.count { it == ScsiCommand.OP_READ10 })
+    }
+
+    @Test
+    fun failedResetDuringCapacityProbeClosesSession() {
+        val session = object : FakeBotSession(stallOnOps = setOf(ScsiCommand.OP_READ_CAPACITY10)) {
+            override fun bulkOnlyReset() {
+                throw DiskException.IoFailure("reset failed")
+            }
+        }
+
+        val thrown = assertThrows(DiskException.IoFailure::class.java) { UsbDisk(session) }
+
+        assertEquals("reset failed", thrown.message)
+        assertFalse(session.isConnected())
+    }
 }
 
 class RecoveryOrderTest {
