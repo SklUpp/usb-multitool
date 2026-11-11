@@ -163,6 +163,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.VentoyUiStateTest \
   usb.ui.VentoySettingsUiTest \
   usb.ui.PhoneImportUiTest \
+  usb.ui.FilesPickUiTest \
   usb.ui.UiEffectTypingTest \
   usb.ui.ServiceOperationMappingTest \
   usb.ui.TargetDiskLayoutEditorTest \

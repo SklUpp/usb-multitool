@@ -656,9 +656,15 @@ class FilesPickUiTest {
                 is WindowsImportLaunch.Exhausted,
         )
 
-        // A restored last-code context also stays exhausted.
+        // A restored last-code context also stays exhausted once its pending context
+        // is retired; while one is pending, begin reports Busy first.
         val restored = WindowsImportLaunchQueue(codes)
         assertTrue(restored.restore(final))
+        assertTrue(
+            restored.begin(WindowsImportKind.Image, "/ISO", "session-a", "stick-a", 4L)
+                is WindowsImportLaunch.Busy,
+        )
+        assertTrue(restored.resetByRequestCode(final.requestCode))
         assertTrue(
             restored.begin(WindowsImportKind.Image, "/ISO", "session-a", "stick-a", 4L)
                 is WindowsImportLaunch.Exhausted,
