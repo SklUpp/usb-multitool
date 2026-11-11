@@ -144,19 +144,13 @@ void destroy_block_device(JNIEnv *env, JniBlockDevice *bdev)
     delete bdev;
 }
 
-std::string jstring_to_string(JNIEnv *env, jstring js)
-{
-    if (!js) return "";
-    const char *p = env->GetStringUTFChars(js, nullptr);
-    std::string s = p ? p : "";
-    if (p) env->ReleaseStringUTFChars(js, p);
-    return s;
-}
+void throw_ntfs(JNIEnv *env, const char *msg);
 
 /* GetStringUTFChars yields modified UTF-8: an astral character becomes two surrogate
  * code units encoded as separate 3-byte sequences, which a standard UTF-8 decoder
- * (ntfs-3g's ntfs_mbstoucs) rejects. Hand the label over as UTF-16 and let the engine
- * produce standard UTF-8; unpaired surrogates/NULs fail before anything is mounted. */
+ * (ntfs-3g's ntfs_mbstoucs) rejects. Convert Java UTF-16 to standard UTF-8 for both
+ * labels and filesystem paths so list/stat/read/write/rename agree on non-BMP names.
+ * Unpaired surrogates and embedded NULs fail closed. */
 bool jstring_to_utf8(JNIEnv *env, jstring js, std::string &out)
 {
     out.clear();
@@ -171,6 +165,24 @@ bool jstring_to_utf8(JNIEnv *env, jstring js, std::string &out)
     if (rc != 0) return false;
     out = buffer.c_str();
     return true;
+}
+
+/* Path helper: standard UTF-8 or pending NtfsException. Callers must return on false. */
+bool path_from_jstring(JNIEnv *env, jstring js, std::string &out)
+{
+    if (jstring_to_utf8(env, js, out)) return true;
+    throw_ntfs(env, "invalid path encoding");
+    return false;
+}
+
+/* ASCII confirmation tokens only; modified UTF-8 is fine for these literals. */
+std::string jstring_to_string(JNIEnv *env, jstring js)
+{
+    if (!js) return "";
+    const char *p = env->GetStringUTFChars(js, nullptr);
+    std::string s = p ? p : "";
+    if (p) env->ReleaseStringUTFChars(js, p);
+    return s;
 }
 
 /* ntfs_ucstombs emits standard UTF-8, while NewStringUTF expects modified UTF-8,
@@ -278,8 +290,8 @@ Java_usb_fs_NtfsFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
 {
     auto *wrapper = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!wrapper) return nullptr;
-
-    std::string p = jstring_to_string(env, path);
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return nullptr;
     NtfsDirEntry *entries = nullptr;
     size_t count = 0;
 
@@ -349,8 +361,14 @@ Java_usb_fs_NtfsFs_nativeStat(JNIEnv *env, jclass, jlong handle, jstring path,
         }
         return nullptr;
     }
-
-    std::string p = jstring_to_string(env, path);
+    std::string p;
+    if (!path_from_jstring(env, path, p)) {
+        if (outErrno) {
+            jint e = EINVAL;
+            env->SetIntArrayRegion(outErrno, 0, 1, &e);
+        }
+        return nullptr;
+    }
     NtfsStat st{};
     int rc = ntfs_engine_stat(wrapper->vol_handle, p.c_str(), &st);
     if (rc != 0) {
@@ -391,8 +409,11 @@ Java_usb_fs_NtfsFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path,
         set_err(EINVAL);
         return nullptr;
     }
-
-    std::string p = jstring_to_string(env, path);
+    std::string p;
+    if (!path_from_jstring(env, path, p)) {
+        set_err(EINVAL);
+        return nullptr;
+    }
     std::vector<uint8_t> buf(static_cast<size_t>(length));
     size_t out_read = 0;
 
@@ -419,8 +440,8 @@ Java_usb_fs_NtfsFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
 {
     auto *wrapper = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!wrapper || !data) return -1;
-
-    std::string p = jstring_to_string(env, path);
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return -1;
     jsize len = env->GetArrayLength(data);
     std::vector<uint8_t> buf(static_cast<size_t>(len));
     env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte *>(buf.data()));
@@ -587,7 +608,9 @@ Java_usb_fs_NtfsFs_nativeMkdir(JNIEnv *env, jclass, jlong handle, jstring path)
         throw_ntfs(env, "mkdir failed: bad handle");
         return;
     }
-    int rc = ntfs_engine_mkdir(w->vol_handle, jstring_to_string(env, path).c_str());
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return;
+    int rc = ntfs_engine_mkdir(w->vol_handle, p.c_str());
     if (rc != 0) {
         const char *msg = "mkdir failed";
         if (rc == -EROFS) msg = "Read-only NTFS volume";
@@ -607,7 +630,9 @@ Java_usb_fs_NtfsFs_nativeDelete(JNIEnv *env, jclass, jlong handle, jstring path)
         throw_ntfs(env, "delete failed: bad handle");
         return;
     }
-    int rc = ntfs_engine_delete(w->vol_handle, jstring_to_string(env, path).c_str());
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return;
+    int rc = ntfs_engine_delete(w->vol_handle, p.c_str());
     if (rc != 0) {
         const char *msg = "delete failed";
         if (rc == -ENOENT) msg = "Path not found";
@@ -626,9 +651,10 @@ Java_usb_fs_NtfsFs_nativeRename(JNIEnv *env, jclass, jlong handle, jstring from,
         throw_ntfs(env, "rename failed: bad handle");
         return;
     }
-    int rc = ntfs_engine_rename(w->vol_handle,
-                                jstring_to_string(env, from).c_str(),
-                                jstring_to_string(env, to).c_str());
+    std::string from_path;
+    std::string to_path;
+    if (!path_from_jstring(env, from, from_path) || !path_from_jstring(env, to, to_path)) return;
+    int rc = ntfs_engine_rename(w->vol_handle, from_path.c_str(), to_path.c_str());
     if (rc != 0) {
         const char *msg = "rename failed";
         if (rc == -EEXIST) msg = "Destination exists";

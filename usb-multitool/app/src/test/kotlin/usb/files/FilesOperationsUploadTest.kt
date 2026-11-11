@@ -1,12 +1,16 @@
 package usb.files
 
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import org.junit.Test
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import usb.fs.FilesystemSpace
 import usb.fs.UsbFsDirEntry
+import usb.fs.UsbFsUsageVolume
 import usb.fs.UsbFsVolume
 import usb.operation.DiskOperation
 
@@ -137,6 +141,97 @@ class FilesOperationsUploadTest {
         assertEquals(1, volume.deleteCount)
     }
 
+    @Test fun knownSizeLargerThanFreeSpaceRejectsBeforeWrite() {
+        val volume = SpaceAwareVolume(freeBytes = 3uL, totalBytes = 10uL)
+        val failure =
+            runCatching {
+                FilesOperations.upload(
+                    ByteArrayInputStream(byteArrayOf(1, 2, 3, 4)),
+                    "/x",
+                    volume,
+                    DiskOperation("upload-space"),
+                    4,
+                    knownSizeBytes = 4L,
+                )
+            }.exceptionOrNull()
+
+        assertTrue(failure is IOException)
+        assertEquals(
+            FilesOperationPolicy.insufficientSpaceMessage(3uL, 4L),
+            failure!!.message,
+        )
+        assertEquals(0, volume.writeCount)
+        assertEquals(1, volume.spaceCalls)
+    }
+
+    @Test fun knownSizeFittingFreeSpaceWritesAndPassesPlannedTotal() {
+        val volume = SpaceAwareVolume(freeBytes = 10uL, totalBytes = 10uL)
+        FilesOperations.upload(
+            ByteArrayInputStream(byteArrayOf(1, 2, 3, 4)),
+            "/x",
+            volume,
+            DiskOperation("upload-fit"),
+            2,
+            knownSizeBytes = 4L,
+        )
+        assertEquals(2, volume.writeCount)
+        assertEquals(listOf(4L, 4L), volume.plannedTotals)
+        assertEquals(1, volume.spaceCalls)
+    }
+
+    @Test fun unknownSizeSkipsFreeSpaceQuery() {
+        val volume = SpaceAwareVolume(freeBytes = 0uL, totalBytes = 0uL)
+        FilesOperations.upload(
+            ByteArrayInputStream(byteArrayOf(1, 2)),
+            "/x",
+            volume,
+            DiskOperation("upload-unknown"),
+            2,
+            knownSizeBytes = null,
+        )
+        assertEquals(1, volume.writeCount)
+        assertEquals(0, volume.spaceCalls)
+    }
+
+    @Test fun spaceQueryFailureDoesNotBlockUpload() {
+        val volume =
+            SpaceAwareVolume(freeBytes = 0uL, totalBytes = 0uL, spaceFailure = IOException("space"))
+        FilesOperations.upload(
+            ByteArrayInputStream(byteArrayOf(9)),
+            "/x",
+            volume,
+            DiskOperation("upload-space-fail"),
+            4,
+            knownSizeBytes = 1L,
+        )
+        assertEquals(1, volume.writeCount)
+        assertEquals(1, volume.spaceCalls)
+    }
+
+    @Test fun volumeWithoutUsageIgnoresKnownSize() {
+        val volume = RecordingVolume()
+        FilesOperations.upload(
+            ByteArrayInputStream(byteArrayOf(1, 2, 3)),
+            "/x",
+            volume,
+            DiskOperation("upload-no-usage"),
+            4,
+            knownSizeBytes = 3L,
+        )
+        assertEquals(1, volume.writes.size)
+    }
+
+    @Test fun requireFreeSpaceHelperRejectsOnlyWhenBothKnown() {
+        val volume = SpaceAwareVolume(freeBytes = 1uL, totalBytes = 2uL)
+        runCatching { FilesOperations.requireFreeSpaceBeforeWrite(volume, 2L) }
+            .exceptionOrNull()
+            ?.let { assertTrue(it is IOException) }
+            ?: fail("expected IOException")
+        FilesOperations.requireFreeSpaceBeforeWrite(volume, null)
+        FilesOperations.requireFreeSpaceBeforeWrite(volume, 0L)
+        FilesOperations.requireFreeSpaceBeforeWrite(RecordingVolume(), 99L)
+    }
+
     private class RecordingVolume : UsbFsVolume {
         data class Write(val offset: Long, val data: ByteArray, val create: Boolean)
 
@@ -170,6 +265,39 @@ class FilesOperationsUploadTest {
             writeHook?.invoke()
         }
         override fun sync() { syncCount++ }
+        override fun close() = Unit
+    }
+
+    private class SpaceAwareVolume(
+        private val freeBytes: ULong,
+        private val totalBytes: ULong,
+        private val spaceFailure: Throwable? = null,
+    ) : UsbFsVolume, UsbFsUsageVolume {
+        var writeCount = 0
+        var spaceCalls = 0
+        val plannedTotals = mutableListOf<Long>()
+        private var written = false
+
+        override fun space(): FilesystemSpace {
+            spaceCalls++
+            spaceFailure?.let { throw it }
+            return FilesystemSpace(totalBytes = totalBytes, freeBytes = freeBytes)
+        }
+
+        override fun list(path: String) = emptyList<UsbFsDirEntry>()
+        override fun stat(path: String) = UsbFsDirEntry(path, false, 0)
+        override fun statOrNull(path: String) =
+            if (written) UsbFsDirEntry(path, false, 0) else null
+        override fun mkdir(path: String) = Unit
+        override fun delete(path: String) = Unit
+        override fun rename(from: String, to: String) = Unit
+        override fun read(path: String, offset: Long, length: Int) = ByteArray(0)
+        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) {
+            writeCount++
+            plannedTotals += plannedTotalSize
+            written = true
+        }
+        override fun sync() = Unit
         override fun close() = Unit
     }
 

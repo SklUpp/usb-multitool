@@ -29,4 +29,9 @@ ${CC:-gcc} -std=gnu11 -O2 -g \
   "${LWEXT4_SRC[@]}" \
   -lpthread
 
-(cd "$BUILD" && ./ext_host_test)
+"${CC:-gcc}" -std=gnu11 -O2 -g \
+  -I"$SRC" \
+  -o "$BUILD/ext_name_utf8_host_test" \
+  "$SRC/host/ext_name_utf8_host_test.c"
+
+(cd "$BUILD" && ./ext_host_test && ./ext_name_utf8_host_test)

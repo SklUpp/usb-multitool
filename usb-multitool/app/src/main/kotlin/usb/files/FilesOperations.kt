@@ -2,7 +2,11 @@ package usb.files
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.provider.OpenableColumns
+import java.io.IOException
+import usb.fs.FilesystemSpace
 import usb.fs.UsbFsDirEntry
+import usb.fs.UsbFsUsageVolume
 import usb.fs.UsbFsVolume
 import usb.operation.DiskOperation
 
@@ -29,9 +33,18 @@ object FilesOperations {
         chunkBytes: Int,
         onCleanupFailure: (Throwable) -> Unit = {},
     ) {
+        val knownSize = openableSizeBytes(resolver, uri)
         val input = resolver.openInputStream(uri) ?: error("cannot open $uri for reading")
         input.use { stream ->
-            upload(stream, target, volume, operation, chunkBytes, onCleanupFailure)
+            upload(
+                stream,
+                target,
+                volume,
+                operation,
+                chunkBytes,
+                knownSizeBytes = knownSize,
+                onCleanupFailure = onCleanupFailure,
+            )
         }
     }
 
@@ -41,9 +54,15 @@ object FilesOperations {
         volume: UsbFsVolume,
         operation: DiskOperation,
         chunkBytes: Int,
+        knownSizeBytes: Long? = null,
         onCleanupFailure: (Throwable) -> Unit = {},
     ) {
         require(volume.statOrNull(target) == null) { FilesOperationPolicy.duplicateMessage(target) }
+        // Reject only when both size and free space are known. Unknown size or an
+        // unreliable space() query skips preflight rather than inventing a failure.
+        requireFreeSpaceBeforeWrite(volume, knownSizeBytes)
+        val plannedTotal =
+            knownSizeBytes?.takeIf { it >= 0L } ?: -1L
         val buffer = ByteArray(chunkBytes)
         var offset = 0L
         var created = false
@@ -55,13 +74,21 @@ object FilesOperations {
                 val data = if (read == buffer.size) buffer else buffer.copyOf(read)
                 val firstWrite = !created
                 created = true
-                volume.write(target, data, offset = offset, create = firstWrite)
+                val planned =
+                    if (plannedTotal >= 0L) maxOf(plannedTotal, offset + data.size.toLong())
+                    else offset + data.size.toLong()
+                volume.write(target, data, offset = offset, create = firstWrite, plannedTotalSize = planned)
                 offset += read
                 operation.report(offset)
             }
             if (!created) {
                 created = true
-                volume.write(target, ByteArray(0), create = true)
+                volume.write(
+                    target,
+                    ByteArray(0),
+                    create = true,
+                    plannedTotalSize = if (plannedTotal >= 0L) plannedTotal else 0L,
+                )
             }
             volume.sync()
         } catch (failure: Throwable) {
@@ -105,6 +132,43 @@ object FilesOperations {
                 operation.failureCause = usb.device.DiskException.IoFailure("Download destination truncated ($offset of $size bytes)", failure)
                 throw failure
             }
+        }
+    }
+
+    /**
+     * SAF/content size when the provider reports a non-negative value; null when
+     * unknown so upload can skip free-space preflight instead of guessing.
+     */
+    internal fun openableSizeBytes(resolver: ContentResolver, uri: Uri): Long? {
+        return try {
+            resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) return null
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index < 0 || cursor.isNull(index)) return null
+                cursor.getLong(index).takeIf { it >= 0L }
+            }
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
+    /**
+     * When [needBytes] is known and [volume] can report free space, refuse before the
+     * first write. Missing usage support, failed space queries, or unknown size leave
+     * the stream path unchanged (no invented reject).
+     */
+    internal fun requireFreeSpaceBeforeWrite(volume: UsbFsVolume, needBytes: Long?) {
+        if (needBytes == null || needBytes < 0L) return
+        if (needBytes == 0L) return
+        val usage = volume as? UsbFsUsageVolume ?: return
+        val space: FilesystemSpace =
+            try {
+                usage.space()
+            } catch (_: Throwable) {
+                return
+            }
+        if (space.freeBytes < needBytes.toULong()) {
+            throw IOException(FilesOperationPolicy.insufficientSpaceMessage(space.freeBytes, needBytes))
         }
     }
 }

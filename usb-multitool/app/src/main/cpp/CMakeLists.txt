@@ -179,4 +179,11 @@ if(NOT ANDROID)
     target_link_libraries(exfat_fsck_host_test
         exfatprogs_fsck
     )
+
+    add_executable(ext_name_utf8_host_test
+        host/ext_name_utf8_host_test.c
+    )
+    target_include_directories(ext_name_utf8_host_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
 endif()

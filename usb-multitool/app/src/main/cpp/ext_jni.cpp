@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ext_engine.h"
+#include "ext_name_utf8.h"
 #include "usb_block.h"
 
 namespace {
@@ -124,13 +125,52 @@ void destroy_block_device(JNIEnv *env, JniBlockDevice *bdev)
     delete bdev;
 }
 
-std::string jstring_to_string(JNIEnv *env, jstring js)
+void throw_ext(JNIEnv *env, const char *msg);
+
+/* GetStringUTFChars is modified UTF-8/CESU-8; lwext4 and on-disk names are standard
+ * UTF-8. Convert Java UTF-16 via ext_utf16_to_utf8 so non-BMP path segments match
+ * list output. Refuse unpaired surrogates and embedded NULs. */
+bool jstring_to_utf8(JNIEnv *env, jstring js, std::string &out)
 {
-    if (!js) return "";
-    const char *p = env->GetStringUTFChars(js, nullptr);
-    std::string s = p ? p : "";
-    if (p) env->ReleaseStringUTFChars(js, p);
-    return s;
+    out.clear();
+    if (!js) return true;
+    const jsize len = env->GetStringLength(js);
+    if (len == 0) return true;
+    const jchar *chars = env->GetStringChars(js, nullptr);
+    if (!chars) return false;
+    std::string buffer(static_cast<size_t>(len) * 3 + 1, '\0');
+    int n = ext_utf16_to_utf8(reinterpret_cast<const uint16_t *>(chars),
+                              static_cast<size_t>(len), &buffer[0], buffer.size());
+    env->ReleaseStringChars(js, chars);
+    if (n < 0) return false;
+    for (int i = 0; i < n; i++) {
+        if (buffer[static_cast<size_t>(i)] == '\0') return false;
+    }
+    out.assign(buffer.data(), static_cast<size_t>(n));
+    return true;
+}
+
+bool path_from_jstring(JNIEnv *env, jstring js, std::string &out)
+{
+    if (jstring_to_utf8(env, js, out)) return true;
+    throw_ext(env, "invalid path encoding");
+    return false;
+}
+
+/* On-disk names are standard UTF-8; NewStringUTF cannot carry 4-byte sequences.
+ * Malformed bytes fail the whole listing (see ext_utf8_to_utf16_strict) instead of
+ * being dropped or replaced, which would alias two entries under one display name. */
+bool utf8_name_to_utf16(const char *name, std::u16string &out)
+{
+    out.clear();
+    if (!name) return true;
+    const size_t cap = std::strlen(name) + 1;
+    std::vector<uint16_t> units(cap);
+    size_t len = 0;
+    if (!ext_utf8_to_utf16_strict(name, units.data(), units.size(), &len)) return false;
+    out.reserve(len);
+    for (size_t i = 0; i < len; i++) out.push_back(static_cast<char16_t>(units[i]));
+    return true;
 }
 
 void throw_ext(JNIEnv *env, const char *msg)
@@ -138,7 +178,6 @@ void throw_ext(JNIEnv *env, const char *msg)
     jclass exCls = env->FindClass("usb/fs/ExtException");
     if (exCls) env->ThrowNew(exCls, msg);
 }
-
 } // namespace
 
 extern "C" {
@@ -202,7 +241,8 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w) return nullptr;
-    std::string p = jstring_to_string(env, path);
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return nullptr;
     ExtDirEntry *entries = nullptr;
     size_t count = 0;
     int rc = ext_engine_list(w->vol_handle, p.c_str(), &entries, &count);
@@ -239,11 +279,26 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
         return nullptr;
     }
     for (size_t i = 0; i < count; i++) {
-        jstring name = env->NewStringUTF(entries[i].name);
+        std::u16string u16;
+        if (!utf8_name_to_utf16(entries[i].name, u16)) {
+            free(entries);
+            throw_ext(env, "directory listing failed: invalid filename encoding");
+            return nullptr;
+        }
+        jstring name = env->NewString(reinterpret_cast<const jchar *>(u16.data()),
+                                      static_cast<jsize>(u16.size()));
+        if (!name || env->ExceptionCheck()) {
+            free(entries);
+            return nullptr;
+        }
         jobject obj = env->NewObject(entryCls, ctor, name,
                                      static_cast<jboolean>(entries[i].is_directory),
                                      static_cast<jlong>(entries[i].size));
         env->DeleteLocalRef(name);
+        if (!obj || env->ExceptionCheck()) {
+            free(entries);
+            return nullptr;
+        }
         env->SetObjectArrayElement(arr, static_cast<jsize>(i), obj);
         env->DeleteLocalRef(obj);
     }
@@ -263,8 +318,16 @@ Java_usb_fs_ExtFs_nativeStat(JNIEnv *env, jclass, jlong handle, jstring path,
         }
         return nullptr;
     }
+    std::string p;
+    if (!path_from_jstring(env, path, p)) {
+        if (outErrno) {
+            jint e = EINVAL;
+            env->SetIntArrayRegion(outErrno, 0, 1, &e);
+        }
+        return nullptr;
+    }
     ExtStat st{};
-    int rc = ext_engine_stat(w->vol_handle, jstring_to_string(env, path).c_str(), &st);
+    int rc = ext_engine_stat(w->vol_handle, p.c_str(), &st);
     if (rc != 0) {
         if (outErrno) {
             jint e = rc; /* negative errno from engine */
@@ -290,9 +353,11 @@ Java_usb_fs_ExtFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path,
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w || length < 0) return nullptr;
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return nullptr;
     std::vector<uint8_t> buf(static_cast<size_t>(length));
     size_t got = 0;
-    if (ext_engine_read(w->vol_handle, jstring_to_string(env, path).c_str(),
+    if (ext_engine_read(w->vol_handle, p.c_str(),
                         static_cast<uint64_t>(offset), buf.data(),
                         static_cast<size_t>(length), &got) != 0) {
         return nullptr;
@@ -311,11 +376,13 @@ Java_usb_fs_ExtFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w || !data) return -1;
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return -1;
     jsize len = env->GetArrayLength(data);
     std::vector<uint8_t> buf(static_cast<size_t>(len));
     env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte *>(buf.data()));
     size_t wrote = 0;
-    int rc = ext_engine_write(w->vol_handle, jstring_to_string(env, path).c_str(),
+    int rc = ext_engine_write(w->vol_handle, p.c_str(),
                               static_cast<uint64_t>(offset), buf.data(),
                               static_cast<size_t>(len), create != JNI_FALSE, &wrote);
     if (rc != 0) {
@@ -331,7 +398,9 @@ Java_usb_fs_ExtFs_nativeMkdir(JNIEnv *env, jclass, jlong handle, jstring path)
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w) return;
-    int rc = ext_engine_mkdir(w->vol_handle, jstring_to_string(env, path).c_str());
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return;
+    int rc = ext_engine_mkdir(w->vol_handle, p.c_str());
     if (rc != 0) throw_ext(env, "mkdir failed");
 }
 
@@ -340,7 +409,9 @@ Java_usb_fs_ExtFs_nativeDelete(JNIEnv *env, jclass, jlong handle, jstring path)
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w) return;
-    int rc = ext_engine_delete(w->vol_handle, jstring_to_string(env, path).c_str());
+    std::string p;
+    if (!path_from_jstring(env, path, p)) return;
+    int rc = ext_engine_delete(w->vol_handle, p.c_str());
     if (rc != 0) {
         const char *msg = "delete failed";
         if (rc == -ENOENT) msg = "Path not found";
@@ -354,8 +425,10 @@ Java_usb_fs_ExtFs_nativeRename(JNIEnv *env, jclass, jlong handle, jstring from, 
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w) return;
-    int rc = ext_engine_rename(w->vol_handle, jstring_to_string(env, from).c_str(),
-                               jstring_to_string(env, to).c_str());
+    std::string from_path;
+    std::string to_path;
+    if (!path_from_jstring(env, from, from_path) || !path_from_jstring(env, to, to_path)) return;
+    int rc = ext_engine_rename(w->vol_handle, from_path.c_str(), to_path.c_str());
     if (rc != 0) throw_ext(env, "rename failed");
 }
 

@@ -23,6 +23,9 @@ object FilesOperationPolicy {
     fun duplicateMessage(target: String): String =
         "$target already exists: delete it first (delete asks for confirmation)"
 
+    fun insufficientSpaceMessage(freeBytes: ULong, needBytes: Long): String =
+        "not enough free space: free=$freeBytes, need=$needBytes"
+
     fun deleteError(name: String, target: String, message: String): String? =
         if (message.contains("Directory not empty")) {
             "Cannot delete \"$name\": directory is not empty — remove its contents first"
