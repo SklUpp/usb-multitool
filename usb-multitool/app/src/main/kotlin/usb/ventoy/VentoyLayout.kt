@@ -76,6 +76,51 @@ object VentoyLayout {
         return probe(disk)?.isVentoy == true
     }
 
+    /**
+     * Raw signature check for a damaged Ventoy layout that [probe] rejects (bad CRC, version
+     * unreadable). Reads only the partition tables; no version, no mount, no guesses from
+     * unrelated GPT/MBR content. False means "not provably Ventoy", never "definitely clean".
+     *
+     * I/O/transport failures are **not** converted to false: the caller must report ReadError.
+     * Expected invalid layout (bad signature/geometry) is the only false result.
+     */
+    internal fun looksLikeVentoyLayout(disk: BlockDevice): Boolean {
+        if (disk.sectorSize != SECTOR_SIZE) return false
+        val mbr = ByteArray(SECTOR_SIZE)
+        disk.read(0L, ByteBuffer.wrap(mbr))
+        if (mbr[510] != 0x55.toByte() || mbr[511] != 0xAA.toByte()) return false
+        val firstType = mbr[446 + 4].toInt() and 0xFF
+        if (firstType == 0xEE) {
+            val hdr = ByteArray(SECTOR_SIZE)
+            disk.read(1L, ByteBuffer.wrap(hdr))
+            if (String(hdr, 0, 8, Charsets.US_ASCII) != "EFI PART") return false
+            val table = ByteArray(32 * SECTOR_SIZE)
+            disk.read(2L, ByteBuffer.wrap(table))
+            for (index in 0 until 128) {
+                val nameOffset = index * 128 + 56
+                val name = String(table, nameOffset, 14, Charsets.UTF_16LE)
+                if (name == "VTOYEFI") return true
+            }
+            return false
+        }
+        val p1Type = mbr[446 + 4].toInt() and 0xFF
+        val p2Type = mbr[462 + 4].toInt() and 0xFF
+        fun le32(offset: Int): Int =
+            (mbr[offset].toInt() and 0xFF) or
+                ((mbr[offset + 1].toInt() and 0xFF) shl 8) or
+                ((mbr[offset + 2].toInt() and 0xFF) shl 16) or
+                ((mbr[offset + 3].toInt() and 0xFF) shl 24)
+        val p1Start = le32(446 + 8)
+        val p1Count = le32(446 + 12)
+        val p2Start = le32(462 + 8)
+        val p2Count = le32(462 + 12)
+        return p1Type != 0 &&
+            p2Type == 0xEF &&
+            p1Start == PART1_START_SECTOR.toInt() &&
+            p2Start == p1Start + p1Count &&
+            p2Count == EFI_PART_SECTORS.toInt()
+    }
+
     fun probe(disk: BlockDevice): VentoyProbeResult? = probe(disk, ::readVentoyVersionFromPart2)
 
     /** Testable seam: [versionReader] must return the real FAT read in production. */
@@ -1330,36 +1375,73 @@ object WindowsSetup {
 
     /**
      * Set or remove one validated global control key; all other entries/keys are preserved.
-     * Unknown keys are rejected by the caller before this function.
+     * Known keys are restricted to their catalog values; other keys are explicit key/value.
      */
-    fun setControl(existingJson: String?, key: String, value: String?): String {
-        require(key == "VTOY_WIN11_BYPASS_CHECK" || key == "VTOY_WIN11_BYPASS_NRO") {
-            "unsupported Ventoy control key \"$key\""
-        }
-        require(value == null || value == "0" || value == "1") {
-            "control value must be \"0\", \"1\", or null"
-        }
+    fun setControl(existingJson: String?, key: String, value: String?): String =
+        applyControls(existingJson, listOf(VentoyControlSetting(key, value)))
+            ?: existingJson
+            ?: "{}"
+
+    /**
+     * Apply explicit control writes in one pass. A null value removes the key. Every other
+     * `control` entry, `auto_install` entry, and top-level JSON key stays untouched.
+     * Returns null when nothing would change, so the caller can skip the write entirely.
+     */
+    fun applyControls(
+        existingJson: String?,
+        settings: List<VentoyControlSetting>,
+    ): String? {
+        require(settings.isNotEmpty()) { "no Ventoy control setting to apply" }
+        VentoyControlCatalog.problem(settings)?.let { throw IllegalArgumentException(it) }
         val root = parseRootOrThrow(existingJson)
+        val rawControl = root["control"]
+        if (rawControl != null && rawControl !is List<*>) {
+            throw IllegalStateException(
+                "\"control\" is not a JSON array; refusing to overwrite it",
+            )
+        }
+        val hadControl = rawControl is List<*>
         val controlList: MutableList<Any?> =
-            ((root["control"] as? List<*>)?.toMutableList()) ?: mutableListOf()
-        var found = false
+            ((rawControl as? List<*>)?.toMutableList()) ?: mutableListOf()
+        val byKey = settings.associateBy { it.key }
+        var changed = false
         val kept = ArrayList<Any?>()
         for (item in controlList) {
             val map = item as? Map<*, *>
-            if (map != null && map.containsKey(key)) {
-                found = true
-                if (value != null) {
-                    val updated = linkedMapOf<String, Any?>()
-                    for ((k, v) in map) updated[k.toString()] = v
-                    updated[key] = value
-                    kept.add(updated)
-                }
-            } else {
+            if (map == null || map.keys.none { it.toString() in byKey }) {
                 kept.add(item)
+                continue
+            }
+            val updated = linkedMapOf<String, Any?>()
+            for ((rawKey, rawValue) in map) {
+                val entryKey = rawKey.toString()
+                val setting = byKey[entryKey]
+                when {
+                    setting == null -> updated[entryKey] = rawValue
+                    setting.value != null -> {
+                        if (rawValue?.toString() != setting.value) changed = true
+                        updated[entryKey] = setting.value
+                    }
+                    // null removes just this key; an empty object is dropped below.
+                    else -> changed = true
+                }
+            }
+            if (updated.isNotEmpty()) kept.add(updated)
+        }
+        for (setting in settings) {
+            val value = setting.value ?: continue
+            val present = controlList.any {
+                (it as? Map<*, *>)?.containsKey(setting.key) == true
+            }
+            if (!present) {
+                kept.add(linkedMapOf(setting.key to value))
+                changed = true
             }
         }
-        if (!found && value != null) kept.add(linkedMapOf(key to value))
-        root["control"] = kept
+        if (!changed) return null
+        // A removal-only snapshot on a file that never had `control` must not invent an
+        // empty array (or create a ventoy.json) just to report a no-op.
+        if (hadControl || kept.isNotEmpty()) root["control"] = kept
         return MiniJson.stringify(root)
     }
 

@@ -8,8 +8,10 @@ import usb.partition.TableScheme
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendParams
 import usb.ventoy.AutounattendState
+import usb.ventoy.FolderReadProblem
 import usb.ventoy.UnreadableProblem
-import usb.ventoy.VentoySetting
+import usb.ventoy.VentoyControlSetting
+import usb.ventoy.VentoyGlobalSettings
 import kotlin.math.roundToLong
 
 /**
@@ -198,6 +200,7 @@ enum class UiMessageKey {
     SchemeMbrTooLarge,
     CannotReadUsb,
     CannotReadPartitionTable,
+    FolderListChanged,
     Success,
     CancelledStatus,
     FailedStatus,
@@ -356,6 +359,11 @@ data class DestructiveConfirmation(
     val allowDestructiveTemplate: Boolean = false,
     /** SHA-256 of the inspected template bytes this confirmation applies to. */
     val templateSha256: String? = null,
+    /**
+     * Exact global control writes chosen when the confirmation was opened. Only install,
+     * download-install, and update carry it; later edits on screen cannot change it.
+     */
+    val ventoyControls: List<VentoyControlSetting> = emptyList(),
 ) {
     companion object {
         fun request(
@@ -385,6 +393,7 @@ data class DestructiveConfirmation(
             templatePath: String? = null,
             allowDestructiveTemplate: Boolean = false,
             templateSha256: String? = null,
+            ventoyControls: List<VentoyControlSetting> = emptyList(),
         ): DestructiveConfirmation =
             DestructiveConfirmation(
                 action = action,
@@ -430,6 +439,15 @@ data class DestructiveConfirmation(
                     if (action == DestructiveAction.VENTOY_LINK_XML) allowDestructiveTemplate else false,
                 templateSha256 =
                     if (action == DestructiveAction.VENTOY_LINK_XML) templateSha256 else null,
+                ventoyControls =
+                    if (action == DestructiveAction.VENTOY_INSTALL ||
+                        action == DestructiveAction.VENTOY_UPDATE ||
+                        action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL
+                    ) {
+                        ventoyControls
+                    } else {
+                        emptyList()
+                    },
             )
 
         /**
@@ -677,7 +695,7 @@ sealed interface OperationTitle {
     }
 
     data object SetVentoyGlobalSetting : OperationTitle {
-        override val logLabel: String get() = "Set Ventoy global setting"
+        override val logLabel: String get() = "Apply Ventoy global settings"
     }
 
     data object BindImagesToUnattendXml : OperationTitle {
@@ -966,15 +984,41 @@ data class AppUiState(
     /** Separate target-PC disk-layout acknowledgement; no USB identity. */
     val diskLayoutConfirmation: DiskLayoutConfirmation? = null,
     val pendingAutounattendGeneration: PendingAutounattendGeneration? = null,
-    /** Real raw `control` entries; null = not loaded. */
-    val ventoyGlobalSettings: List<VentoySetting>? = null,
-    /** Existing directories on the Ventoy data partition, including "/". */
+    /** Real `control` read result; null = not loaded. Missing/Empty/ReadError stay distinct. */
+    val ventoyGlobalSettings: VentoyGlobalSettings? = null,
+    /**
+     * Explicit control writes chosen by the user. They are written after a confirmed
+     * install/update, or by [UiIntent.RequestApplyVentoyControls] against an existing stick.
+     * A null value removes the key. Empty = nothing chosen; update leaves the file untouched.
+     */
+    val pendingVentoyControls: List<VentoyControlSetting> = emptyList(),
+    /**
+     * Folder the lazy browser currently shows. Always normalized and absolute; `/` is the
+     * data-partition root. Reset to the root when the attachment or the stick changes.
+     */
+    val ventoyFolderPath: String = "/",
+    /**
+     * Direct child directories of [ventoyFolderPath], absolute. One level only: no depth or
+     * entry cap, so every existing folder can be reached by entering it. null = not read
+     * for this path yet (or the answer is stale), never "no subfolders".
+     */
     val ventoyFolders: List<String>? = null,
-    val ventoyFoldersError: String? = null,
+    /** Why the last read failed; the UI localizes it and never shows a raw engine message. */
+    val ventoyFoldersError: FolderReadProblem? = null,
+    /**
+     * A read for [ventoyFolderPath] is on its way. Distinguishes "no subfolders" from
+     * "not read yet" when a refresh keeps the previous rows on screen.
+     */
+    val ventoyFoldersLoading: Boolean = false,
+    /**
+     * A read was requested while the device was busy. It is released once the USB lane is
+     * free again, so a null list cannot look like a read that never finishes.
+     */
+    val ventoyFoldersPending: Boolean = false,
     /**
      * Id of the newest folder-list request. Bumped when the request is emitted, so two
      * refreshes in one epoch cannot land out of order; answers must echo it plus
-     * [ventoyCacheEpoch].
+     * [ventoyCacheEpoch] and [ventoyFolderPath].
      */
     val ventoyFoldersRequest: Long = 0L,
     /** Same ordering contract as [ventoyFoldersRequest] for [ventoyGlobalSettings]. */

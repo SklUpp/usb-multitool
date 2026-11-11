@@ -10,11 +10,15 @@ internal const val FR_NO_PATH: Int = 5
 internal const val FR_DENIED: Int = 7
 
 /**
- * Shared by [FatVolume.statOrNull] and host tests: FR_NO_FILE → null (absent);
- * any other FatFsException → IllegalStateException (never look creatable).
+ * Shared by [FatVolume.statOrNull] and host tests: FR_NO_FILE (absent entry) and FR_NO_PATH
+ * (absent directory component) both mean "does not exist", so both are null; any other
+ * failure is an I/O fault and is never made to look creatable.
  */
 internal fun mapFatStatOrNullFailure(path: String, failure: FatFsException): UsbFsDirEntry? {
-    if (failure.message.orEmpty().endsWith("stat failed: $FR_NO_FILE")) {
+    val message = failure.message.orEmpty()
+    if (message.endsWith("stat failed: $FR_NO_FILE") ||
+        message.endsWith("stat failed: $FR_NO_PATH")
+    ) {
         return null
     }
     throw IllegalStateException(

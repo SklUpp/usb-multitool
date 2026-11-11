@@ -7,6 +7,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.testutil.InMemoryUsbVolume
 
 /**
  * Pins the `/ventoy/ventoy.json` merge contract used by VentoySetup. FatFs is native,
@@ -105,5 +106,50 @@ class VentoySetupTest {
             fail("expected VentoyOverwriteRequiredException")
         } catch (_: VentoyOverwriteRequiredException) {
         }
+    }
+
+    @Test
+    fun listingReturnsOnlyDirectChildDirectories() {
+        val volume = InMemoryUsbVolume()
+        volume.mkdir("/ventoy")
+        volume.mkdir("/ISO/Windows")
+        volume.putFile("/readme.txt", "x".toByteArray())
+
+        assertEquals(listOf("/ISO", "/ventoy"), VentoySetup.listSubdirectories(volume, "/"))
+        assertEquals(listOf("/ISO/Windows"), VentoySetup.listSubdirectories(volume, "/ISO"))
+    }
+
+    @Test
+    fun listingHasNoEntryOrDepthCapBeyond512() {
+        val volume = InMemoryUsbVolume()
+        // The fixture always carries /ISO, like a real Ventoy data partition.
+        val expected = listOf("/ISO") + (1..600).map { "/D$it" }
+        expected.forEach { path ->
+            volume.mkdir(path)
+            // Nested folders must not leak into the parent's answer.
+            volume.mkdir("$path/nested")
+        }
+
+        val listed = VentoySetup.listSubdirectories(volume, "/")
+
+        assertEquals(expected.size, listed.size)
+        assertEquals(expected.toSet(), listed.toSet())
+    }
+
+    @Test
+    fun missingOrNonDirectoryPathIsAnErrorNotEmptyList() {
+        val volume = InMemoryUsbVolume()
+        val missing =
+            assertThrows(VentoySetup.FolderUnavailableException::class.java) {
+                VentoySetup.listSubdirectories(volume, "/gone")
+            }
+        assertEquals(FolderReadProblem.Missing, missing.problem)
+
+        volume.putFile("/file.txt", byteArrayOf())
+        val notDirectory =
+            assertThrows(VentoySetup.FolderUnavailableException::class.java) {
+                VentoySetup.listSubdirectories(volume, "/file.txt")
+            }
+        assertEquals(FolderReadProblem.NotDirectory, notDirectory.problem)
     }
 }

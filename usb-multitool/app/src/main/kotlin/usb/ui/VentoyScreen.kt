@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
@@ -27,10 +29,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
+import usb.ventoy.FolderReadProblem
 
 @Composable
 fun VentoyScreen(
@@ -89,7 +96,9 @@ fun VentoyScreen(
         }
         catalogLoadEpoch = state.ventoyCacheEpoch
         if (state.ventoyGlobalSettings == null) onIntent(UiIntent.LoadVentoyGlobalSettings)
-        if (state.ventoyFolders == null) onIntent(UiIntent.LoadVentoyFolders)
+        if (state.ventoyFolders == null && !state.ventoyFoldersLoading) {
+            onIntent(UiIntent.LoadVentoyFolders)
+        }
         if (state.windowsIsoCandidates == null) onIntent(UiIntent.LoadWindowsIsoCandidates)
     }
     Column(
@@ -265,9 +274,8 @@ private fun ImportFromPhoneCard(
         state.device?.attachGeneration,
     ) { mutableStateOf<String?>(null) }
 
-    // A folder list is finite (512 entries, depth 6) and may be incomplete or failed, so a
-    // path missing from it does not prove deletion: absence never clears the destination.
-    // The row marks an unlisted path instead of silently dropping the user's choice.
+    // The listing covers one folder level, so a remembered path usually lives in another
+    // folder: absence from it never proves deletion and never clears the destination.
     //
     // A reopen signal is different: the import failed because the directory is missing, and
     // the reducer has just nulled the folder list; drop the destination before the picker
@@ -282,12 +290,21 @@ private fun ImportFromPhoneCard(
         onIntent(UiIntent.ImportFolderPickOpened)
     }
 
-    // Two different limits for a remembered path: present in the read list at all, and
-    // present in the 40 rows the dialog can actually show. Only the second one is choosable.
-    val folders = state.ventoyFolders
-    val visibleFolders = folders?.take(40)
+    // The listing is one directory level, so a remembered path is normally in another
+    // folder: absence from it proves nothing and must not produce a "gone"/"unlisted" hint.
     val imageDest = imageDestination
     val xmlDest = xmlDestination
+
+    // Every open re-reads the current folder: the stick may have changed since the tab was
+    // entered. A null list already has a read in flight (tab entry or picker reopen).
+    LaunchedEffect(folderKind) {
+        if (folderKind != null &&
+            state.ventoyFolders != null &&
+            !state.ventoyFoldersLoading
+        ) {
+            onIntent(UiIntent.LoadVentoyFolders)
+        }
+    }
 
 
     SectionCard(
@@ -297,12 +314,6 @@ private fun ImportFromPhoneCard(
         ImportRow(
             label = stringResource(R.string.import_image_label),
             destination = imageDest,
-            destinationListed = folders == null ||
-                imageDest == null ||
-                imageDest in folders,
-            destinationVisible = visibleFolders == null ||
-                imageDest == null ||
-                imageDest in visibleFolders,
             enabled = state.actionsEnabled,
             onClick = { folderKind = WindowsImportKind.Image },
         )
@@ -310,12 +321,6 @@ private fun ImportFromPhoneCard(
             label = stringResource(R.string.import_template_label),
             hint = stringResource(R.string.import_template_hint),
             destination = xmlDest,
-            destinationListed = folders == null ||
-                xmlDest == null ||
-                xmlDest in folders,
-            destinationVisible = visibleFolders == null ||
-                xmlDest == null ||
-                xmlDest in visibleFolders,
             enabled = state.actionsEnabled,
             onClick = { folderKind = WindowsImportKind.XmlTemplate },
         )
@@ -351,14 +356,13 @@ private fun ImportFromPhoneCard(
 
     folderKind?.let { kind ->
         ImportFolderDialog(
-            kind = kind,
-            previousDestination = if (kind == WindowsImportKind.XmlTemplate) {
-                xmlDestination
-            } else {
-                imageDestination
-            },
+            currentPath = state.ventoyFolderPath,
             folders = state.ventoyFolders,
             folderError = state.ventoyFoldersError,
+            loading = state.ventoyFoldersLoading,
+            blocked = !state.actionsEnabled,
+            onEnter = { onIntent(UiIntent.OpenVentoyFolder(it)) },
+            onUp = { onIntent(UiIntent.VentoyFolderUp) },
             onRefresh = { onIntent(UiIntent.LoadVentoyFolders) },
             onPick = { directory ->
                 folderKind = null
@@ -392,8 +396,6 @@ private fun ImportFromPhoneCard(
 private fun ImportRow(
     label: String,
     destination: String?,
-    destinationListed: Boolean,
-    destinationVisible: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
     hint: String? = null,
@@ -425,21 +427,6 @@ private fun ImportRow(
                 MaterialTheme.colorScheme.onSurface
             },
         )
-        if (destination != null && !destinationListed) {
-            Text(
-                text = stringResource(R.string.import_destination_unlisted),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        } else if (destination != null && !destinationVisible) {
-            // Exists in the read list but past the 40 shown rows: not a deletion, and not
-            // reachable until list navigation exists.
-            Text(
-                text = stringResource(R.string.import_destination_hidden),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
         OutlinedButton(
             onClick = onClick,
             enabled = enabled,
@@ -450,45 +437,50 @@ private fun ImportRow(
     }
 }
 
-/** Only an existing folder on the data partition may be a destination. */
+/**
+ * One existing directory level at a time. Tapping a row enters that folder, Up goes to the
+ * parent, and the confirm button chooses the folder that is open right now. A listing that
+ * was not read for the current path, or that failed, cannot confirm anything: it is
+ * "unreadable", never "gone", and it never emits a hint about a remembered destination.
+ */
 @Composable
 private fun ImportFolderDialog(
-    kind: WindowsImportKind,
-    previousDestination: String?,
+    currentPath: String,
     folders: List<String>?,
-    folderError: String?,
+    folderError: FolderReadProblem?,
+    loading: Boolean,
+    blocked: Boolean,
+    onEnter: (String) -> Unit,
+    onUp: () -> Unit,
     onRefresh: () -> Unit,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val options = folders.orEmpty()
-    val shown = options.take(40)
-    // Trusted = the list was read and the host reported no error. A null or failed list is
-    // "unreadable", never "gone", so nothing may be selected or confirmed from it.
-    val listTrusted = folders != null && folderError == null
-    // The only preselection is the folder the card already showed, only once a trusted list
-    // is loaded and only if it is an actually displayed row. A manual choice is never
-    // overwritten; no default and no fallback to another folder.
-    var chosen by remember(kind, previousDestination) { mutableStateOf<String?>(null) }
-    var userPicked by remember(kind, previousDestination) { mutableStateOf(false) }
-    LaunchedEffect(kind, folders, folderError) {
-        if (!listTrusted) return@LaunchedEffect
-        val current = chosen
-        if (userPicked) {
-            if (current != null && current !in shown) chosen = null
-        } else if (current == null) {
-            chosen = previousDestination?.takeIf { it in shown }
+    val listed = folders.orEmpty()
+    // Only a settled successful read for this path can confirm a destination.
+    val trusted = folders != null && folderError == null && !loading
+    val parent = usb.ventoy.folderParent(currentPath)
+    val errorText =
+        when (folderError) {
+            FolderReadProblem.Missing -> stringResource(R.string.import_folder_missing)
+            FolderReadProblem.NotDirectory ->
+                stringResource(R.string.import_folder_not_directory)
+            FolderReadProblem.Unreadable -> stringResource(R.string.import_folder_read_failed)
+            null -> null
         }
-    }
-    // Confirmation needs a trustworthy list and a choice that is still in it.
-    val selection = chosen?.takeIf { listTrusted && it in options }
-    val previousInList = previousDestination != null && previousDestination in options
-    val previousHidden = previousInList && previousDestination !in shown
-    val previousMissing = previousDestination != null && listTrusted && !previousInList
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.import_folder_title)) },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(R.string.import_folder_title))
+                Text(
+                    text = stringResource(R.string.import_folder_current, currentPath),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
+            }
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
@@ -496,46 +488,69 @@ private fun ImportFolderDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                when {
-                    folders == null -> Text(
-                        text = stringResource(R.string.import_folder_unavailable),
+                if (blocked) {
+                    Text(
+                        text = stringResource(R.string.import_folder_blocked),
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-
-                    options.isEmpty() -> Text(
-                        text = stringResource(R.string.import_folder_unavailable),
+                }
+                if (loading && listed.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.import_folder_refreshing),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                when {
+                    errorText != null -> Text(
+                        text = errorText,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
 
-                    else -> Column(
-                        // Weighted with fill = false: the error line and the Refresh button
-                        // below are measured first, so the folder list can only consume the
-                        // height that is actually left in the dialog slot.
+                    loading && listed.isEmpty() -> Text(
+                        text = stringResource(R.string.import_folder_loading),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+
+                    folders == null && !blocked -> Text(
+                        text = stringResource(R.string.import_folder_not_loaded),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+
+                    folders == null -> Unit
+
+                    listed.isEmpty() -> Text(
+                        text = stringResource(R.string.import_folder_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+
+                    else -> LazyColumn(
+                        // Weighted with fill = false: the navigation row below is measured
+                        // first, so the list can only consume the height left in the dialog
+                        // slot. Every child is reachable; no row cap and no eager composition.
                         modifier = Modifier
                             .weight(1f, fill = false)
                             .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        options.take(40).forEach { folder ->
-                            val current = folder == selection
+                        items(items = listed, key = { it }) { folder ->
+                            val name = usb.ventoy.folderName(folder)
+                            val openLabel =
+                                stringResource(R.string.import_folder_open, name)
                             TextButton(
-                                onClick = {
-                                    chosen = folder
-                                    userPicked = true
-                                },
+                                onClick = { onEnter(folder) },
+                                enabled = !blocked,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Text(
-                                    text = folder,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = if (current) FontWeight.Bold else null,
-                                    color = if (current) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
+                                    text = "$name/",
+                                    modifier = Modifier.clearAndSetSemantics {
+                                        contentDescription = openLabel
                                     },
+                                    style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -543,43 +558,26 @@ private fun ImportFolderDialog(
                         }
                     }
                 }
-                if (previousHidden) {
-                    Text(
-                        text = stringResource(R.string.import_folder_hidden_by_limit),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                } else if (previousMissing) {
-                    Text(
-                        text = stringResource(R.string.import_folder_selection_gone),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (folders != null && options.size > 40) {
-                    Text(
-                        text = stringResource(R.string.list_first_40),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                folderError?.let { error ->
-                    Text(
-                        text = error,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                TextButton(onClick = onRefresh) {
-                    Text(stringResource(R.string.unattend_refresh))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (parent != null) {
+                        TextButton(onClick = onUp, enabled = !blocked) {
+                            Text(stringResource(R.string.import_folder_up))
+                        }
+                    }
+                    TextButton(onClick = onRefresh, enabled = !blocked) {
+                        Text(stringResource(R.string.unattend_refresh))
+                    }
                 }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { selection?.let(onPick) },
-                enabled = selection != null,
-            ) { Text(stringResource(R.string.import_start)) }
+                onClick = { onPick(currentPath) },
+                enabled = trusted && !blocked,
+            ) { Text(stringResource(R.string.import_folder_use)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }

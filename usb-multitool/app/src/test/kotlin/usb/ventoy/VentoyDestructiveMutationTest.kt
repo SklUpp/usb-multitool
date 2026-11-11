@@ -3,8 +3,10 @@ package usb.ventoy
 import java.nio.ByteBuffer
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import usb.device.DiskException
 import usb.device.FakeBotSession
@@ -73,6 +75,125 @@ class VentoyDestructiveMutationTest {
         } finally {
             disk.close()
         }
+    }
+
+    @Test
+    fun settingsFailureAfterInstallIsPartialWithCauseAndKeepsRetry() {
+        val op =
+            object : DiskOperation(name = "Ventoy install") {
+                override suspend fun run() = Unit
+            }
+        val cause = IllegalStateException("settings volume is full")
+        try {
+            VentoyOperations.persistControls(
+                RecordingDisk(),
+                listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+                op,
+                after = "installed",
+                apply = { _, _, _ -> throw cause },
+            )
+            fail("settings failure must escape as VentoyMutationFailedException")
+        } catch (failure: VentoyMutationFailedException) {
+            assertSame(cause, failure.cause)
+            assertTrue(failure.message.orEmpty().contains("Ventoy was installed"))
+            assertTrue(failure.message.orEmpty().contains("Retry"))
+            assertEquals(OperationState.Partial, op.state)
+            assertSame(failure, op.failureCause)
+        }
+    }
+
+    @Test
+    fun emptyControlsNeverWriteOrTouchTheSettingsVolume() {
+        val op =
+            object : DiskOperation(name = "Ventoy update") {
+                override suspend fun run() = Unit
+            }
+        var invoked = false
+        VentoyOperations.persistControls(
+            RecordingDisk(),
+            emptyList(),
+            op,
+            after = "updated",
+            apply = { _, _, _ ->
+                invoked = true
+                true
+            },
+        )
+        assertFalse("empty settings must not touch partition 1", invoked)
+        assertFalse(op.mutationAttempted)
+    }
+
+    @Test
+    fun successfulSettingsWriteMarksMutation() {
+        val op =
+            object : DiskOperation(name = "Ventoy install") {
+                override suspend fun run() = Unit
+            }
+        VentoyOperations.persistControls(
+            RecordingDisk(),
+            listOf(VentoyControlSetting("KEY", "value")),
+            op,
+            after = "installed",
+            apply = { _, _, onMutation ->
+                onMutation()
+                true
+            },
+        )
+        assertTrue(op.mutationAttempted)
+    }
+
+    @Test
+    fun damagedLayoutSignatureIsDistinguishableFromACleanDisk() {
+        assertTrue(
+            "seeded Ventoy tables keep their signature without a version/mount",
+            VentoyLayout.looksLikeVentoyLayout(seedMbrVentoyStick()),
+        )
+        assertFalse(
+            "an arbitrary disk must not be reported as damaged Ventoy",
+            VentoyLayout.looksLikeVentoyLayout(RecordingDisk()),
+        )
+    }
+
+    @Test
+    fun noOpSettingsApplyReportsFalseAndNeverMarksMutation() {
+        val op =
+            object : DiskOperation(name = "Ventoy install") {
+                override suspend fun run() = Unit
+            }
+        val written =
+            VentoyOperations.persistControls(
+                RecordingDisk(),
+                listOf(VentoyControlSetting("KEY", "same")),
+                op,
+                after = "installed",
+                apply = { _, _, _ -> false },
+            )
+        assertFalse(written)
+        assertFalse(op.mutationAttempted)
+    }
+
+    @Test
+    fun ventoyUpdateWithoutStagedControlsNeverWritesPartition1() = runTest {
+        val disk = seedMbrVentoyStick()
+        val probe = VentoyLayout.probe(disk) ?: error("seed must probe as Ventoy")
+        disk.resetStats()
+        val op =
+            object : DiskOperation(name = "Ventoy update without settings") {
+                override suspend fun run() {
+                    VentoyOperations.update(
+                        disk,
+                        assets,
+                        this,
+                        versionReader = { _, _, _ -> Result.success("1.1.18") },
+                    )
+                }
+            }
+
+        assertEquals(OperationState.Completed, OperationExecutor(this).submit(op).await())
+        assertFalse(
+            "update must keep the existing ventoy.json untouched on partition 1",
+            disk.wasRangeWritten(probe.part1StartLba.toLong(), probe.part1SectorCount.toLong()),
+        )
     }
 
     @Test

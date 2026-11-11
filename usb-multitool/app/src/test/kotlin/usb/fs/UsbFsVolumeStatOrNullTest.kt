@@ -19,6 +19,13 @@ class UsbFsVolumeStatOrNullTest {
     }
 
     @Test
+    fun fatAbsentFrNoPathIsNull() {
+        // FR_NO_PATH is the same "does not exist" contract for a missing parent directory.
+        val failure = FatFsException("stat failed: $FR_NO_PATH")
+        assertNull(mapFatStatOrNullFailure("/missing/dir/file.bin", failure))
+    }
+
+    @Test
     fun fatIoFaultDoesNotLookAbsent() {
         val failure = FatFsException("stat failed: 1") // FR_DISK_ERR
         try {

@@ -13,9 +13,14 @@ import usb.partition.TableScheme
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendParams
 import usb.ventoy.AutounattendState
+import usb.ventoy.FolderReadProblem
 import usb.ventoy.UnreadableProblem
+import usb.ventoy.VentoyControlCatalog
+import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.XmlPath
+import usb.ventoy.folderParent
+import usb.ventoy.normalizeFolderPath
 import usb.ventoy.autounattendPlanSha256
 
 
@@ -268,19 +273,28 @@ sealed class UiIntent {
 
     /** Global ventoy.json control entries, raw values included. */
     data object LoadVentoyGlobalSettings : UiIntent()
+    /** Re-read the direct children of [AppUiState.ventoyFolderPath]. */
     data object LoadVentoyFolders : UiIntent()
+    /** Enter one listed child folder; unlisted values are ignored as stale. */
+    data class OpenVentoyFolder(val path: String) : UiIntent()
+    /** Go to the parent folder; a no-op at the data-partition root. */
+    data object VentoyFolderUp : UiIntent()
     /**
      * Drop stick-scoped Ventoy/XML catalogs after a disk mutation. Keeps the template path
      * so the Ventoy tab can re-read; never mounts by itself.
      */
     data object InvalidateVentoyStickCaches : UiIntent()
     data class VentoyFoldersLoaded(
-        val paths: List<String>,
-        val error: String? = null,
+        /** Direct child directories of [path], absolute; never recursive. */
+        val folders: List<String>,
+        /** Localized by the UI; no raw engine text crosses this boundary. */
+        val error: FolderReadProblem? = null,
         /** Must match [AppUiState.ventoyCacheEpoch] or the post is stale. */
         val epoch: Long = 0L,
         /** Must match [AppUiState.ventoyFoldersRequest], else an older list arrived late. */
         val requestToken: Long = 0L,
+        /** Must match [AppUiState.ventoyFolderPath] or the answer belongs to another folder. */
+        val path: String = "/",
     ) : UiIntent()
     data class VentoyGlobalSettingsLoaded(
         val settings: VentoyGlobalSettings,
@@ -289,8 +303,12 @@ sealed class UiIntent {
         /** Must match [AppUiState.ventoyGlobalSettingsRequest], else an older read arrived late. */
         val requestToken: Long = 0L,
     ) : UiIntent()
-    /** Only known keys. null value removes the key; "0"/"1" set it. */
-    data class RequestSetVentoyGlobalSetting(val key: String, val value: String?) : UiIntent()
+    /** Only catalog-known keys and validated values. null value removes the key. */
+    data class StageVentoyControl(val key: String, val value: String?) : UiIntent()
+    /** Forget one staged change without touching the stick. */
+    data class DiscardStagedVentoyControl(val key: String) : UiIntent()
+    /** Write the staged controls to an existing Ventoy stick, or retry after a Partial. */
+    data object RequestApplyVentoyControls : UiIntent()
 
     data class RequestBindAutounattend(
         val xmlName: String,
@@ -559,11 +577,11 @@ sealed interface UiEffect {
 
     data class LoadVentoyGlobalSettings(val requestToken: Long) : UiEffect
 
-    data class LoadVentoyFolders(val requestToken: Long) : UiEffect
+    /** Read one directory level; [path] is normalized before it reaches the host. */
+    data class LoadVentoyFolders(val requestToken: Long, val path: String = "/") : UiEffect
 
-    data class SetVentoyGlobalSetting(
-        val settingKey: String,
-        val settingValue: String?,
+    data class ApplyVentoyControls(
+        val settings: List<VentoyControlSetting>,
     ) : UiEffect
 
     data class BindAutounattend(
@@ -973,10 +991,18 @@ object UiReducer {
                         pendingAutounattendGeneration = null,
                         ventoyGlobalSettings =
                             if (keepVentoy) state.ventoyGlobalSettings else null,
+                        ventoyFolderPath =
+                            if (keepVentoy) state.ventoyFolderPath else "/",
+                        pendingVentoyControls =
+                            if (keepVentoy) state.pendingVentoyControls else emptyList(),
                         ventoyFolders =
                             if (keepVentoy) state.ventoyFolders else null,
                         ventoyFoldersError =
                             if (keepVentoy) state.ventoyFoldersError else null,
+                        ventoyFoldersLoading =
+                            if (keepVentoy) state.ventoyFoldersLoading else false,
+                        ventoyFoldersPending =
+                            if (keepVentoy) state.ventoyFoldersPending else false,
                         ventoyCacheEpoch =
                             if (keepVentoy) state.ventoyCacheEpoch else state.ventoyCacheEpoch + 1,
                         linkOverwriteCandidate =
@@ -1018,6 +1044,18 @@ object UiReducer {
                 val base =
                     state.copy(
                         operation = progress,
+                        // A settings write succeeded and its bytes are final; a Partial keeps
+                        // the staged list for an explicit retry.
+                        pendingVentoyControls =
+                            if (terminal &&
+                                progress != null &&
+                                progress.state == OperationState.Completed &&
+                                progress.title.clearsPendingVentoyControls()
+                            ) {
+                                emptyList()
+                            } else {
+                                state.pendingVentoyControls
+                            },
                         // A write, format or file mutation can change free space while the
                         // geometry stays identical, so the old number is not current.
                         filesystemUsage =
@@ -1561,6 +1599,9 @@ object UiReducer {
                                         } else {
                                             null
                                         },
+                                    // Snapshot now: later edits on screen cannot change what
+                                    // the confirmed install/update will write.
+                                    ventoyControls = state.pendingVentoyControls,
                                 ),
                         ),
                     )
@@ -1658,6 +1699,13 @@ object UiReducer {
                     action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE &&
                         (pending.xmlTargetName.isNullOrBlank() ||
                             state.pendingAutounattendGeneration == null) -> true
+                    // The confirmed control snapshot must still be writable.
+                    (action == DestructiveAction.VENTOY_INSTALL ||
+                        action == DestructiveAction.VENTOY_UPDATE ||
+                        action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL) &&
+                        pending?.ventoyControls?.let {
+                            VentoyControlCatalog.problem(it) != null
+                        } == true -> true
                     else -> false
                 }
                 // Fail-closed: null device/pending/action never reach effect branches.
@@ -2499,16 +2547,21 @@ object UiReducer {
                     // reopen the picker over it.
                     ReduceResult(state)
                 } else {
-                    // The cached folder list is proven stale: drop it and invalidate every
-                    // in-flight answer under a new token. A busy/confirming UI only defers
-                    // the re-read and the picker demand; neither may start USB work or open
-                    // a dialog over a destructive confirmation.
+                    // The cached folder list is proven stale: drop it, restart from the root
+                    // (the old folder itself may be the one that vanished) and invalidate
+                    // every in-flight answer under a new token. A busy/confirming UI only
+                    // defers the re-read and the picker demand; neither may start USB work
+                    // or open a dialog over a destructive confirmation.
                     val token = state.ventoyFoldersRequest + 1L
+                    val path = "/"
                     val loadNow = state.actionsEnabled
                     ReduceResult(
                         state.copy(
+                            ventoyFolderPath = path,
                             ventoyFolders = null,
                             ventoyFoldersError = null,
+                            ventoyFoldersLoading = loadNow,
+                            ventoyFoldersPending = false,
                             ventoyFoldersRequest = token,
                             pendingImportFolderPick = if (loadNow) intent.kind else null,
                             deferredImportFolderPick = if (loadNow) null else intent.kind,
@@ -2516,7 +2569,12 @@ object UiReducer {
                         ),
                         effects =
                             if (loadNow) {
-                                listOf(UiEffect.LoadVentoyFolders(requestToken = token))
+                                listOf(
+                                    UiEffect.LoadVentoyFolders(
+                                        requestToken = token,
+                                        path = path,
+                                    ),
+                                )
                             } else {
                                 emptyList()
                             },
@@ -3081,25 +3139,74 @@ object UiReducer {
                 )
             }
 
-            UiIntent.LoadVentoyFolders -> {
-                val token = state.ventoyFoldersRequest + 1L
-                ReduceResult(
-                    state.copy(ventoyFoldersRequest = token),
-                    effects = listOf(UiEffect.LoadVentoyFolders(requestToken = token)),
-                )
+            UiIntent.LoadVentoyFolders ->
+                // Refresh keeps the current rows until the new answer lands; the token still
+                // disowns every older read. A busy/confirming UI marks the request as pending
+                // so the release pass can start it once USB work is allowed; it must not
+                // create an endless retry by itself.
+                if (!state.actionsEnabled) {
+                    ReduceResult(
+                        state.copy(
+                            ventoyFoldersPending = true,
+                            statusMessage =
+                                if (state.presence == DevicePresence.Ready) {
+                                    UiMessage.Key(UiMessageKey.WaitForOperation)
+                                } else {
+                                    presenceMessage(state.presence)
+                                },
+                        ),
+                    )
+                } else {
+                    startFolderRead(state, state.ventoyFolderPath, keepList = true)
+                }
+
+            is UiIntent.OpenVentoyFolder -> {
+                if (!state.actionsEnabled) {
+                    ReduceResult(state)
+                } else {
+                    val target =
+                        try {
+                            normalizeFolderPath(intent.path)
+                        } catch (_: IllegalArgumentException) {
+                            null
+                        }
+                    when {
+                        target == null || target !in state.ventoyFolders.orEmpty() ->
+                            // The row came from a list that no longer matches the state.
+                            ReduceResult(
+                                state.copy(
+                                    statusMessage = UiMessage.Key(UiMessageKey.FolderListChanged),
+                                ),
+                            )
+                        else -> startFolderRead(state, target, keepList = false)
+                    }
+                }
             }
+
+            UiIntent.VentoyFolderUp ->
+                if (!state.actionsEnabled) {
+                    ReduceResult(state)
+                } else {
+                    when (val parent = folderParent(state.ventoyFolderPath)) {
+                        null -> ReduceResult(state)
+                        else -> startFolderRead(state, parent, keepList = false)
+                    }
+                }
 
             is UiIntent.VentoyFoldersLoaded ->
                 if (intent.epoch != state.ventoyCacheEpoch ||
-                    intent.requestToken != state.ventoyFoldersRequest
+                    intent.requestToken != state.ventoyFoldersRequest ||
+                    intent.path != state.ventoyFolderPath
                 ) {
-                    // Invalidation or a newer refresh already owns the answer.
+                    // Invalidation, navigation or a newer refresh already owns the answer.
                     ReduceResult(state)
                 } else {
                     ReduceResult(
                         state.copy(
-                            ventoyFolders = intent.paths,
+                            ventoyFolders = intent.folders,
                             ventoyFoldersError = intent.error,
+                            ventoyFoldersLoading = false,
+                            ventoyFoldersPending = false,
                         ),
                     )
                 }
@@ -3112,49 +3219,80 @@ object UiReducer {
                 } else {
                     ReduceResult(
                         state.copy(
-                            ventoyGlobalSettings = intent.settings.entries,
-                            // Only fires while Ventoy tab open (or manual refresh); surface mount errors.
+                            ventoyGlobalSettings = intent.settings,
+                            // Only fires while Ventoy tab open (or manual refresh); surface
+                            // a real read/parse failure without turning it into "empty".
                             statusMessage =
-                                intent.settings.error?.let(UiMessage::Raw) ?: state.statusMessage,
+                                when (val loaded = intent.settings) {
+                                    is VentoyGlobalSettings.ReadError ->
+                                        if (loaded.damagedLayout) {
+                                            // The card has a localized explanation; do not leak
+                                            // an English technical string into the status bar.
+                                            state.statusMessage
+                                        } else {
+                                            UiMessage.Raw(loaded.message)
+                                        }
+                                    else -> state.statusMessage
+                                },
                         ),
                     )
                 }
 
-            is UiIntent.RequestSetVentoyGlobalSetting -> {
-                val known =
-                    intent.key == "VTOY_WIN11_BYPASS_CHECK" ||
-                        intent.key == "VTOY_WIN11_BYPASS_NRO"
+            is UiIntent.StageVentoyControl -> {
+                val problem =
+                    if (intent.value == null) {
+                        // Removal matches an existing key verbatim; no creation pattern.
+                        VentoyControlCatalog.problem(
+                            listOf(VentoyControlSetting(intent.key, null)),
+                        )
+                    } else {
+                        VentoyControlCatalog.keyProblem(intent.key)
+                            ?: VentoyControlCatalog.valueProblem(intent.key, intent.value)
+                    }
+                if (problem != null) {
+                    ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
+                } else {
+                    val staged = LinkedHashMap<String, VentoyControlSetting>()
+                    state.pendingVentoyControls.forEach { staged[it.key] = it }
+                    staged[intent.key] = VentoyControlSetting(intent.key, intent.value)
+                    ReduceResult(
+                        state.copy(
+                            pendingVentoyControls = staged.values.toList(),
+                            statusMessage = null,
+                        ),
+                    )
+                }
+            }
+
+            is UiIntent.DiscardStagedVentoyControl ->
+                ReduceResult(
+                    state.copy(
+                        pendingVentoyControls =
+                            state.pendingVentoyControls.filterNot { it.key == intent.key },
+                    ),
+                )
+
+            UiIntent.RequestApplyVentoyControls ->
                 when {
-                    !known ->
-                        ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
-                                    "\"${intent.key}\" is not a validated Ventoy control key",
-                                ),
-                            ),
-                        )
-                    intent.value != null && intent.value != "0" && intent.value != "1" ->
-                        ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
-                                    "Value must be exactly \"0\", \"1\", or null to remove the key",
-                                ),
-                            ),
-                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    state.pendingVentoyControls.isEmpty() ->
+                        ReduceResult(
+                            state.copy(
+                                statusMessage = UiMessage.Raw("No Ventoy setting changes to apply"),
+                            ),
+                        )
                     else ->
                         ReduceResult(
                             state,
-                            effects = listOf(
-                                UiEffect.SetVentoyGlobalSetting(
-                                    settingKey = intent.key,
-                                    settingValue = intent.value,
+                            effects =
+                                listOf(
+                                    UiEffect.ApplyVentoyControls(
+                                        settings = state.pendingVentoyControls,
+                                    ),
                                 ),
-                            ),
                         )
                 }
-            }
 
             is UiIntent.RequestBindAutounattend ->
                 if (!state.actionsEnabled) {
@@ -3580,8 +3718,62 @@ object UiReducer {
                             ),
                         )
                 }
-        }.let { result -> releaseDeferredImportFolderPick(result) }
+        }.let { result -> releaseDeferredVentoyFolderRead(result) }
+            .let { result -> releaseDeferredImportFolderPick(result) }
             .let { result -> releaseDeferredIsoImport(result) }
+
+    /**
+     * Starts a folder read requested while USB work was not allowed. Runs after every
+     * intent, so the Busy/Permission/confirmation -> Ready edge itself releases it even
+     * though the screen's LaunchedEffect may not restart. One-shot: the pending flag is
+     * cleared before the effect, and a failed read settles into an error, so an unusable
+     * folder can never turn into a retry loop.
+     */
+    private fun releaseDeferredVentoyFolderRead(result: ReduceResult): ReduceResult {
+        val state = result.state
+        if (!state.ventoyFoldersPending) return result
+        if (state.tab != ShellTab.Ventoy) {
+            // Nothing on screen shows the list; the next tab entry asks again.
+            return result.copy(state = state.copy(ventoyFoldersPending = false))
+        }
+        if (!state.actionsEnabled) return result
+        // Never stack a second mount next to effects from this intent.
+        if (result.effects.isNotEmpty()) return result
+        val started = startFolderRead(state, state.ventoyFolderPath, keepList = true)
+        val status = started.state.statusMessage
+        val blockedStatus =
+            status is UiMessage.Key &&
+                (status.key == UiMessageKey.DeviceBusy ||
+                    status.key == UiMessageKey.WaitForOperation)
+        return if (blockedStatus) {
+            started.copy(state = started.state.copy(statusMessage = null))
+        } else {
+            started
+        }
+    }
+
+    /**
+     * Start one directory read. The token is the single ordering key: both navigation and
+     * refresh bump it, so only the newest answer may publish rows for [path].
+     */
+    private fun startFolderRead(
+        state: AppUiState,
+        path: String,
+        keepList: Boolean,
+    ): ReduceResult {
+        val token = state.ventoyFoldersRequest + 1L
+        return ReduceResult(
+            state.copy(
+                ventoyFolderPath = path,
+                ventoyFolders = if (keepList) state.ventoyFolders else null,
+                ventoyFoldersError = null,
+                ventoyFoldersLoading = true,
+                ventoyFoldersPending = false,
+                ventoyFoldersRequest = token,
+            ),
+            effects = listOf(UiEffect.LoadVentoyFolders(requestToken = token, path = path)),
+        )
+    }
 
     /**
      * Runs after every intent: once mounting is allowed again (operation terminal, a
@@ -3622,6 +3814,7 @@ object UiReducer {
                 pendingImportFolderPick = pickerKind,
                 pendingImportFolderPickLoad = false,
                 deferredImportFolderPick = null,
+                ventoyFoldersLoading = true,
                 ventoyFoldersRequest = if (alreadyLoading) next.ventoyFoldersRequest else token,
             )
         return result.copy(
@@ -3630,7 +3823,11 @@ object UiReducer {
                 if (alreadyLoading) {
                     result.effects
                 } else {
-                    result.effects + UiEffect.LoadVentoyFolders(requestToken = token)
+                    result.effects +
+                        UiEffect.LoadVentoyFolders(
+                            requestToken = token,
+                            path = next.ventoyFolderPath,
+                        )
                 },
         )
     }
@@ -3732,6 +3929,16 @@ object UiReducer {
             ?: DestructiveConfirmation.fileLabel(state.stagedRawImagePath)
             ?: DestructiveConfirmation.fileLabel(state.imageUri)
 
+    private fun OperationTitle.clearsPendingVentoyControls(): Boolean =
+        when (this) {
+            is OperationTitle.Destructive ->
+                action == DestructiveAction.VENTOY_INSTALL ||
+                    action == DestructiveAction.VENTOY_UPDATE ||
+                    action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL
+            OperationTitle.SetVentoyGlobalSetting -> true
+            else -> false
+        }
+
     /**
      * Titles that rewrite the data partition or partition table enough that retained
      * Ventoy/XML catalogs and the open XML document must not stay on screen.
@@ -3806,8 +4013,11 @@ object UiReducer {
             diskLayoutConfirmation = null,
             pendingAutounattendGeneration = null,
             ventoyGlobalSettings = null,
+            ventoyFolderPath = "/",
             ventoyFolders = null,
             ventoyFoldersError = null,
+            ventoyFoldersLoading = false,
+            ventoyFoldersPending = false,
             ventoyCacheEpoch = state.ventoyCacheEpoch + 1,
             pendingWindowsUnlink = null,
             linkOverwriteCandidatePaths = emptyList(),

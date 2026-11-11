@@ -51,6 +51,11 @@ import usb.ventoy.LayoutPartition
 import usb.ventoy.LocalAccount
 import usb.ventoy.SettingStatus
 import usb.ventoy.UnreadableProblem
+import usb.ventoy.VentoyControlCatalog
+import usb.ventoy.VentoyControlSetting
+import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoyKnownControl
+import usb.ventoy.VentoySetting
 import usb.ventoy.XmlPath
 
 /**
@@ -449,7 +454,11 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
     }
 }
 
-/** Global `control` entries: raw value verbatim, no normalisation, unknown keys read-only. */
+/**
+ * Global `control` entries. Missing, empty, and unreadable stay distinct; known keys offer
+ * explicit choices, other keys stay editable as key/value, and every edit is staged until
+ * Apply now or the confirmed install/update writes it.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) {
@@ -466,120 +475,97 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
             stringResource(R.string.settings_file_label),
             XmlPath.CONFIG_PATH,
         )
-        val entries = state.ventoyGlobalSettings
-        if (entries == null) {
-            // null = not read yet, or nothing is attached to read from. No in-flight flag
-            // exists for this catalog, so never claim that a read is in progress: report the
-            // presence state when there is no usable stick, otherwise that it is not read.
-            EmptyHint(
-                if (state.presence == DevicePresence.Ready) {
-                    stringResource(R.string.settings_not_loaded)
-                } else {
-                    UiReducer.presenceMessage(state.presence).localized()
-                },
-            )
-            TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
-                Text(stringResource(R.string.unattend_refresh))
+        val settings = state.ventoyGlobalSettings
+        val entries = (settings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
+        when (settings) {
+            null -> {
+                // null = not read yet, or nothing is attached to read from. No in-flight flag
+                // exists for this catalog, so never claim that a read is in progress.
+                EmptyHint(
+                    if (state.presence == DevicePresence.Ready) {
+                        stringResource(R.string.settings_not_loaded)
+                    } else {
+                        UiReducer.presenceMessage(state.presence).localized()
+                    },
+                )
+                TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
+                    Text(stringResource(R.string.settings_retry))
+                }
+                StagedControls(state = state, onIntent = onIntent)
+                return@SectionCard
             }
-            return@SectionCard
-        }
-        if (entries.isEmpty()) {
-            EmptyHint(stringResource(R.string.settings_empty))
-        }
-        entries.forEach { setting ->
-            Column(modifier = Modifier.fillMaxWidth()) {
+            VentoyGlobalSettings.Missing -> EmptyHint(stringResource(R.string.settings_missing))
+            VentoyGlobalSettings.Empty -> EmptyHint(stringResource(R.string.settings_empty))
+            is VentoyGlobalSettings.ReadError -> {
                 Text(
-                    text = setting.key,
+                    text = stringResource(
+                        if (settings.damagedLayout) {
+                            R.string.settings_damaged_layout
+                        } else {
+                            R.string.settings_read_error
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error,
                 )
-                Text(
-                    text = stringResource(R.string.settings_raw, setting.rawValue),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // Only keys this app actually understands get an explanation; unknown keys
-                // stay raw and read-only rather than being described by guesswork.
-                // Two different upgrades: CHECK is the hardware checks, NRO only the
-                // online-account requirement. Sharing one explanation would mislabel NRO.
-                val keyHint = when (setting.key) {
-                    "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_hint
-                    "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
-                    else -> null
-                }
-                keyHint?.let {
+                if (!settings.damagedLayout) {
                     Text(
-                        text = stringResource(it),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                when (val status = setting.status) {
-                    is SettingStatus.Known -> {
-                        Text(
-                            text = if (status.valid) {
-                                stringResource(R.string.settings_valid)
-                            } else {
-                                stringResource(R.string.settings_invalid, status.expected)
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (status.valid) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
-                        )
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.RequestSetVentoyGlobalSetting(setting.key, "1"),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) { Text(stringResource(R.string.settings_set_one)) }
-                            TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.RequestSetVentoyGlobalSetting(setting.key, "0"),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) { Text(stringResource(R.string.settings_set_zero)) }
-                            TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.RequestSetVentoyGlobalSetting(setting.key, null),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) { Text(stringResource(R.string.settings_remove)) }
-                        }
-                    }
-                    SettingStatus.UnknownKey -> Text(
-                        text = stringResource(R.string.settings_unknown_key),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    SettingStatus.Unreadable -> Text(
-                        text = stringResource(R.string.settings_unreadable),
+                        text = settings.message,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
+                    Text(stringResource(R.string.settings_retry))
+                }
+                // Staged choices stay actionable: an install can still write them, and a
+                // failed settings retry must remain reachable without re-reading.
+                StagedControls(state = state, onIntent = onIntent)
+                return@SectionCard
+            }
+            is VentoyGlobalSettings.Present -> Unit
+        }
+
+        Text(
+            text = stringResource(R.string.settings_known_header),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        VentoyControlCatalog.known.forEach { known ->
+            KnownControlRow(
+                known = known,
+                entries = entries,
+                pending = state.pendingVentoyControls,
+                actionsEnabled = state.actionsEnabled,
+                onIntent = onIntent,
+            )
+        }
+
+        val extra = entries.filter { VentoyControlCatalog.known(it.key) == null }
+        if (extra.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.settings_extra_header),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            extra.forEach { entry ->
+                ExtraControlRow(
+                    entry = entry,
+                    pending = state.pendingVentoyControls.firstOrNull { it.key == entry.key },
+                    actionsEnabled = state.actionsEnabled,
+                    onIntent = onIntent,
+                )
             }
         }
+
+        AddControlRow(actionsEnabled = state.actionsEnabled, onIntent = onIntent)
+        StagedControls(state = state, onIntent = onIntent)
         Text(
             text = stringResource(R.string.settings_applies_note),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // A read/parse failure arrives as an empty list with the reason in the status block,
-        // so retry must be reachable from every loaded state, not just the unread one.
+        // Retry must be reachable from every loaded state, not just the unread one.
         TextButton(
             onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
             enabled = state.actionsEnabled,
@@ -588,6 +574,268 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun KnownControlRow(
+    known: VentoyKnownControl,
+    entries: List<VentoySetting>,
+    pending: List<VentoyControlSetting>,
+    actionsEnabled: Boolean,
+    onIntent: (UiIntent) -> Unit,
+) {
+    val staged = pending.firstOrNull { it.key == known.key }
+    val onDisk = entries.firstOrNull { it.key == known.key }
+    val current =
+        when {
+            staged != null -> staged.value ?: stringResource(R.string.settings_will_remove)
+            onDisk != null -> onDisk.rawValue
+            else -> stringResource(R.string.settings_not_set)
+        }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = knownControlTitle(known.key),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = stringResource(R.string.settings_current, current),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Only keys this app understands get an explanation; unknown keys stay raw.
+        val keyHint = when (known.key) {
+            "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_hint
+            "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
+            else -> null
+        }
+        keyHint?.let {
+            Text(
+                text = stringResource(it),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val problem = (onDisk?.status as? SettingStatus.Known)?.takeIf { !it.valid }
+        problem?.let {
+            Text(
+                text = stringResource(R.string.settings_invalid, it.expected),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            known.allowed.forEach { value ->
+                TextButton(
+                    onClick = { onIntent(UiIntent.StageVentoyControl(known.key, value)) },
+                    enabled = actionsEnabled,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) { Text(knownOptionLabel(known.key, value)) }
+            }
+            TextButton(
+                onClick = { onIntent(UiIntent.StageVentoyControl(known.key, null)) },
+                enabled = actionsEnabled,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) { Text(stringResource(R.string.settings_remove)) }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun ExtraControlRow(
+    entry: VentoySetting,
+    pending: VentoyControlSetting?,
+    actionsEnabled: Boolean,
+    onIntent: (UiIntent) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = entry.key,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = stringResource(R.string.settings_raw, entry.rawValue),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (entry.status == SettingStatus.Unreadable) {
+            Text(
+                text = stringResource(R.string.settings_unreadable),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (pending != null) {
+            Text(
+                text = stringResource(
+                    R.string.settings_staged_row,
+                    pending.key,
+                    pending.value ?: stringResource(R.string.settings_remove),
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        TextButton(
+            onClick = { onIntent(UiIntent.StageVentoyControl(entry.key, null)) },
+            enabled = actionsEnabled,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        ) { Text(stringResource(R.string.settings_remove)) }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun AddControlRow(actionsEnabled: Boolean, onIntent: (UiIntent) -> Unit) {
+    var key by remember { mutableStateOf("") }
+    var value by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = stringResource(R.string.settings_add_header),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                value = key,
+                onValueChange = {
+                    key = it
+                    problem = null
+                },
+                label = { Text(stringResource(R.string.settings_key_label)) },
+                singleLine = true,
+                enabled = actionsEnabled,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = value,
+                onValueChange = {
+                    value = it
+                    problem = null
+                },
+                label = { Text(stringResource(R.string.settings_value_label)) },
+                singleLine = true,
+                enabled = actionsEnabled,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        problem?.let {
+            Text(
+                text = stringResource(R.string.settings_validation, it),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        OutlinedButton(
+            onClick = {
+                val trimmed = key.trim()
+                val validation =
+                    VentoyControlCatalog.keyProblem(trimmed)
+                        ?: VentoyControlCatalog.valueProblem(trimmed, value)
+                if (validation != null) {
+                    problem = validation
+                } else {
+                    onIntent(UiIntent.StageVentoyControl(trimmed, value))
+                    key = ""
+                    value = ""
+                    problem = null
+                }
+            },
+            enabled = actionsEnabled && key.isNotBlank(),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(stringResource(R.string.settings_add)) }
+    }
+}
+
+@Composable
+private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
+    val pending = state.pendingVentoyControls
+    if (pending.isEmpty()) return
+    val operation = state.operation
+    val installPartial =
+        operation?.state == OperationState.Partial &&
+            operation.title in
+            setOf(
+                OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
+                OperationTitle.Destructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL),
+            )
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = stringResource(R.string.settings_staged),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        pending.forEach { setting ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(
+                        R.string.settings_staged_row,
+                        setting.key,
+                        setting.value ?: stringResource(R.string.settings_remove),
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = { onIntent(UiIntent.DiscardStagedVentoyControl(setting.key)) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) { Text(stringResource(R.string.settings_discard)) }
+            }
+        }
+        Text(
+            text = stringResource(R.string.settings_staged_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (installPartial) {
+            Text(
+                text = stringResource(R.string.settings_retry_pending),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Button(
+            onClick = { onIntent(UiIntent.RequestApplyVentoyControls) },
+            enabled = state.actionsEnabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                stringResource(
+                    if (installPartial) {
+                        R.string.settings_retry_pending_action
+                    } else {
+                        R.string.settings_apply_now
+                    },
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun knownControlTitle(key: String): String =
+    when (key) {
+        "VTOY_WIN11_BYPASS_CHECK" -> stringResource(R.string.settings_known_bypass_checks)
+        "VTOY_WIN11_BYPASS_NRO" -> stringResource(R.string.settings_known_bypass_nro)
+        else -> key
+    }
+
+@Composable
+private fun knownOptionLabel(key: String, value: String): String =
+    when (key to value) {
+        "VTOY_WIN11_BYPASS_CHECK" to "1" -> stringResource(R.string.settings_bypass_checks_on)
+        "VTOY_WIN11_BYPASS_CHECK" to "0" -> stringResource(R.string.settings_bypass_checks_off)
+        "VTOY_WIN11_BYPASS_NRO" to "1" -> stringResource(R.string.settings_nro_on)
+        "VTOY_WIN11_BYPASS_NRO" to "0" -> stringResource(R.string.settings_nro_off)
+        else -> "$key=$value"
+    }
 
 /**
  * Target-PC layout acknowledgement. Deliberately has no device identity: the disk belongs to

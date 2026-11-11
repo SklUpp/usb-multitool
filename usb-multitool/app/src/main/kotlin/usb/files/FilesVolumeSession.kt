@@ -7,6 +7,16 @@ import usb.operation.DiskOperation
 import usb.operation.OperationState
 
 /**
+ * Immutable attachment a files operation is pinned to: the USB attach generation and the
+ * device key captured when the operation was accepted. A mount/open must match the live
+ * attachment or fail instead of touching another stick.
+ */
+data class AttachmentPin(val attachGeneration: Long, val deviceKey: String)
+
+/** The live USB attachment no longer matches the operation's pin; no volume was touched. */
+class AttachmentChangedException : IllegalStateException("USB attachment changed")
+
+/**
  * Result of closing the session mount under an ownership check.
  */
 sealed class CloseEpochResult {
@@ -30,17 +40,35 @@ sealed class CloseEpochResult {
  * Success leaves the RO cache open for the next browse.
  * [withWritableVolume] Partial/close semantics are unchanged.
  *
+ * Attachment pin: every files operation passes the [AttachmentPin] captured when it was
+ * accepted. [volumeForLocked] / [withWritableVolume] require it to equal
+ * [currentAttachment] before use, include it in the cache key, and re-check it after
+ * [openMounted], so a paused operation can neither mount nor reuse another stick's volume.
+ *
+ * Detach-style close is epoch-fenced: [mountFence] captures the high-water epoch
+ * synchronously and [closeIfEpochAtMostLocked] closes only mounts at or below it. A
+ * volume mounted later (new attach) has a larger epoch, so a stale close neither leaks
+ * the old mount nor closes the new one.
+ *
  * Unconfirmed close (umount/sync threw): error is latched for the process lifetime
  * of this session. Second [close] returns the same error (never null-success).
  * [volumeForLocked] / writable ops refuse remount until a new session (process /
  * ViewModel recreate). Fail-closed: no new mount after half-closed EXT/NTFS.
  */
 class FilesVolumeSession(
-    private val openMounted: (partitionId: String, writable: Boolean) -> MountedFilesVolume,
+    /** Immutable identity of the attachment that is currently live, or null when detached. */
+    private val currentAttachment: () -> AttachmentPin?,
+    private val openMounted: (partitionId: String, writable: Boolean, pin: AttachmentPin) -> MountedFilesVolume,
 ) {
     private val lock = Any()
-    private var filesVolume: MountedFilesVolume? = null
-    private var mountEpoch: Long = 0L
+
+    /** Immutable (volume, epoch, pin); one volatile read is a consistent snapshot. */
+    private class Mounted(val volume: MountedFilesVolume, val epoch: Long, val pin: AttachmentPin)
+
+    @Volatile private var mounted: Mounted? = null
+    private var nextEpoch: Long = 0L
+    /** Highest epoch ever allocated; allocated before a mount opens, published for fences. */
+    @Volatile private var epochHighWater: Long = 0L
     private var acquireSink: ((Long) -> Unit)? = null
     /** First close/sync failure; retained so retry cannot clear or remount. */
     private var unconfirmedClose: Throwable? = null
@@ -61,7 +89,15 @@ class FilesVolumeSession(
         }
     }
 
-    fun mountEpochLocked(): Long? = if (filesVolume != null) mountEpoch else null
+    fun mountEpochLocked(): Long? = mounted?.epoch
+
+    /**
+     * Epoch fence for detach/new-attach: highest epoch allocated so far. Read without
+     * [withLock]; an epoch is allocated **before** its volume opens, so any mount that can
+     * still succeed after this read has a strictly larger epoch. A close bounded by this
+     * fence therefore drops the previous mount (even one still opening) and never a newer one.
+     */
+    fun mountFence(): Long = epochHighWater
 
     fun close(): Throwable? =
         synchronized(lock) {
@@ -71,9 +107,27 @@ class FilesVolumeSession(
             }
         }
 
+    /**
+     * Closes only the mount captured as [epoch]; a newer mount (different epoch) is
+     * [CloseEpochResult.NotOwned] and stays open. Must run under [withLock].
+     */
     fun closeIfEpochLocked(epoch: Long): CloseEpochResult {
         if (epoch == 0L) return CloseEpochResult.NotOwned
-        if (filesVolume == null || mountEpoch != epoch) return CloseEpochResult.NotOwned
+        val current = mounted ?: return CloseEpochResult.NotOwned
+        if (current.epoch != epoch) return CloseEpochResult.NotOwned
+        return closeLockedResult()
+    }
+
+    /**
+     * Closes the live mount only if it was allocated at or before [fence] (see [mountFence]).
+     * A mount opened after the fence (new attach) is [CloseEpochResult.NotOwned] and stays
+     * open. Must run under [withLock]; a close/sync failure is reported as
+     * [CloseEpochResult.ClosedFailed] and latched exactly like [close].
+     */
+    fun closeIfEpochAtMostLocked(fence: Long): CloseEpochResult {
+        if (fence <= 0L) return CloseEpochResult.NotOwned
+        val current = mounted ?: return CloseEpochResult.NotOwned
+        if (current.epoch > fence) return CloseEpochResult.NotOwned
         return closeLockedResult()
     }
 
@@ -92,10 +146,10 @@ class FilesVolumeSession(
 
     private fun closeLockedResult(): CloseEpochResult {
         unconfirmedClose?.let { return CloseEpochResult.ClosedFailed(it) }
-        val current = filesVolume ?: return CloseEpochResult.NotOwned
-        filesVolume = null
+        val current = mounted ?: return CloseEpochResult.NotOwned
+        mounted = null
         return try {
-            current.close()
+            current.volume.close()
             CloseEpochResult.ClosedOk
         } catch (t: Throwable) {
             unconfirmedClose = t
@@ -103,28 +157,66 @@ class FilesVolumeSession(
         }
     }
 
-    fun volumeForLocked(partitionId: String, writable: Boolean = false): UsbFsVolume {
+    /**
+     * Live attachment must equal [pin] before any mount/open or cached-volume reuse:
+     * an operation accepted for one stick can never observe or touch another one.
+     */
+    private fun requireLiveAttachmentLocked(pin: AttachmentPin?): AttachmentPin {
+        if (pin == null || currentAttachment() != pin) throw AttachmentChangedException()
+        return pin
+    }
+
+    fun volumeForLocked(
+        pin: AttachmentPin?,
+        partitionId: String,
+        writable: Boolean = false,
+    ): UsbFsVolume {
         unconfirmedClose?.let { closeErr ->
             throw refuseRemount(closeErr)
         }
-        val current = filesVolume
-        if (current != null && current.partitionId == partitionId && current.writable == writable) {
-            acquireSink?.invoke(mountEpoch)
-            return current.volume
+        val pinned = requireLiveAttachmentLocked(pin)
+        val current = mounted
+        if (current != null &&
+            current.pin == pinned &&
+            current.volume.partitionId == partitionId &&
+            current.volume.writable == writable
+        ) {
+            acquireSink?.invoke(current.epoch)
+            return current.volume.volume
         }
-        filesVolume = null
+        if (current != null && current.pin != pinned) {
+            // A mount of a newer attachment must never be closed or reused by an older op.
+            if (current.pin.attachGeneration > pinned.attachGeneration) {
+                throw AttachmentChangedException()
+            }
+        }
+        // Allocate the epoch before any slow step: a detach fence taken while this mount is
+        // being replaced/opened must include it (epoch <= fence), never a mount opened later.
+        nextEpoch += 1L
+        val epoch = nextEpoch
+        epochHighWater = epoch
+        mounted = null
         try {
-            current?.close()
+            current?.volume?.close()
         } catch (closeErr: Throwable) {
             unconfirmedClose = closeErr
             throw refuseRemount(closeErr)
         }
 
-        val mounted = openMounted(partitionId, writable)
-        filesVolume = mounted
-        mountEpoch += 1L
-        acquireSink?.invoke(mountEpoch)
-        return mounted.volume
+        val opened = openMounted(partitionId, writable, pinned)
+        // The stick can be swapped while the open runs (USB claim / table read): never
+        // publish a volume for an attachment that is no longer the pinned one.
+        if (currentAttachment() != pinned) {
+            try {
+                opened.close()
+            } catch (closeErr: Throwable) {
+                unconfirmedClose = closeErr
+            }
+            throw AttachmentChangedException()
+        }
+        mounted = Mounted(opened, epoch, pinned)
+        acquireSink?.invoke(epoch)
+        return opened.volume
     }
 
     private fun refuseRemount(closeErr: Throwable): IllegalStateException =
@@ -136,11 +228,12 @@ class FilesVolumeSession(
         )
 
     fun <T> withWritableVolume(
+        pin: AttachmentPin?,
         partitionId: String,
         operation: DiskOperation,
         body: (UsbFsVolume) -> T,
     ): T {
-        val volume = volumeForLocked(partitionId, writable = true)
+        val volume = volumeForLocked(pin, partitionId, writable = true)
         var primary: Throwable? = null
         try {
             return body(volume)

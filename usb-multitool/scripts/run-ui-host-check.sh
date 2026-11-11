@@ -32,6 +32,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/FolderPaths.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreInspectionModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \

@@ -131,7 +131,9 @@ fi
 for fx in \
   "$APP/src/test/kotlin/usb/device/FakeBotSession.kt" \
   "$APP/src/test/kotlin/usb/testutil/RecordingDisk.kt" \
-  "$APP/src/test/kotlin/usb/testutil/InMemoryUsbVolume.kt"
+  "$APP/src/test/kotlin/usb/testutil/InMemoryUsbVolume.kt" \
+  "$APP/src/test/kotlin/usb/partition/DiskFixture.kt" \
+  "$APP/src/test/kotlin/usb/partition/SyntheticGpt.kt"
 do
   test -f "$fx" || {
     echo "run-ventoy-junit: missing fixture $fx" >&2
@@ -201,7 +203,9 @@ done
 set -- "$@" \
   "$APP/src/test/kotlin/usb/device/FakeBotSession.kt" \
   "$APP/src/test/kotlin/usb/testutil/RecordingDisk.kt" \
-  "$APP/src/test/kotlin/usb/testutil/InMemoryUsbVolume.kt"
+  "$APP/src/test/kotlin/usb/testutil/InMemoryUsbVolume.kt" \
+  "$APP/src/test/kotlin/usb/partition/DiskFixture.kt" \
+  "$APP/src/test/kotlin/usb/partition/SyntheticGpt.kt"
 for f in "$VENTOY_TEST_DIR"/*.kt; do
   [ -f "$f" ] || continue
   set -- "$@" "$f"

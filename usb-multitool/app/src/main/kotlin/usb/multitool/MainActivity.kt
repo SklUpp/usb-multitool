@@ -1,4 +1,6 @@
 package usb.multitool
+import usb.files.AttachmentChangedException
+import usb.files.AttachmentPin
 import usb.files.FilesVolumeSession
 import usb.files.MountedFilesVolume
 import usb.files.requireFilesVolumeClosed
@@ -33,6 +35,7 @@ import androidx.lifecycle.ViewModelProvider
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendState
 import usb.ventoy.UnreadableProblem
+import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -165,6 +168,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun deviceKey(device: UsbDevice?): String? =
         device?.let { "${it.deviceId}:${it.deviceName}" }
 
+    /**
+     * Immutable pin for a files operation accepted now: attach generation + device key.
+     * Captured on the main thread before the operation is queued; null means detached and
+     * the operation must fail before touching any volume.
+     */
+    private fun currentAttachmentPin(): AttachmentPin? =
+        attachedDevice?.let { device -> AttachmentPin(attachGeneration, deviceKey(device)!!) }
+
     private val languagePrefs =
         application.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
 
@@ -198,7 +209,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * FAT call ever becomes unbounded.
      */
     private val filesSession =
-        FilesVolumeSession { partitionId, writable -> openMountedFilesVolume(partitionId, writable) }
+        FilesVolumeSession(
+            currentAttachment = { currentAttachmentPin() },
+            openMounted = { partitionId, writable, pin ->
+                openMountedFilesVolume(partitionId, writable, pin)
+            },
+        )
     /** Key of the newest free-space request; a different key asks again. */
     @Volatile private var lastUsageKey: FilesystemUsageKey? = null
     /** Key whose measurement has not reported back yet; prevents duplicate requests. */
@@ -791,7 +807,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         strict = true,
                                     )
                                     // First disk.write marks mutationAttempted (partitionDisk wrap).
-                                    VentoyOperations.install(partitionDisk, assets, this)
+                                    val settingsWritten =
+                                        VentoyOperations.install(
+                                            partitionDisk,
+                                            assets,
+                                            this,
+                                            controls = confirmed.ventoyControls,
+                                        )
+                                    result =
+                                        "Ventoy installed" +
+                                            settingsSuffix(
+                                                confirmed.ventoyControls.size,
+                                                settingsWritten,
+                                            )
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_UPDATE -> {
@@ -803,7 +831,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
-                                    VentoyOperations.update(partitionDisk, assets, this)
+                                    val settingsWritten =
+                                        VentoyOperations.update(
+                                            partitionDisk,
+                                            assets,
+                                            this,
+                                            controls = confirmed.ventoyControls,
+                                        )
+                                    result =
+                                        "Ventoy updated" +
+                                            if (confirmed.ventoyControls.isEmpty()) {
+                                                "; existing global settings preserved"
+                                            } else {
+                                                settingsSuffix(
+                                                    confirmed.ventoyControls.size,
+                                                    settingsWritten,
+                                                )
+                                            }
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> {
@@ -813,7 +857,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         isActive = { isActive() },
                                     )
                                     bytesTotal = -1L
-                                    VentoyOperations.install(partitionDisk, released.assets, this)
+                                    val settingsWritten =
+                                        VentoyOperations.install(
+                                            partitionDisk,
+                                            released.assets,
+                                            this,
+                                            controls = confirmed.ventoyControls,
+                                        )
+                                    result =
+                                        "Ventoy installed" +
+                                            settingsSuffix(
+                                                confirmed.ventoyControls.size,
+                                                settingsWritten,
+                                            )
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.RAW_WRITE -> {
@@ -1265,11 +1321,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is UiEffect.LoadVentoyGlobalSettings ->
                 loadVentoyGlobalSettings(effect.requestToken)
 
-            is UiEffect.LoadVentoyFolders -> loadVentoyFolders(effect.requestToken)
+            is UiEffect.LoadVentoyFolders ->
+                loadVentoyFolders(effect.requestToken, effect.path)
 
-            is UiEffect.SetVentoyGlobalSetting -> {
-                setVentoyGlobalSetting(effect.settingKey, effect.settingValue)
-            }
+            is UiEffect.ApplyVentoyControls -> applyVentoyControls(effect.settings)
 
             is UiEffect.BindAutounattend -> {
                 if (effect.imagePaths.isNotEmpty()) {
@@ -1463,13 +1518,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
             activeHandles.clear()
             activeHandle = null
-            scope.launch(Dispatchers.IO) {
-                if (attachGeneration == gen) {
-                    closeFilesVolume()
-                }
-            }
         }
         attachedDevice = device
+        // Fence after the device switch: any mount still opening for the previous stick was
+        // allocated at or below it and is closed below; a mount that can now succeed allocates
+        // a larger epoch, so the delayed close never touches this attach's volume.
+        val previousFence = filesSession.mountFence()
+        if (isNewDevice) {
+            scope.launch(Dispatchers.IO) { closeFilesVolumeUpToEpoch(previousFence) }
+        }
         DiskController.get().onConnected(key)
         if (manager != null) {
             usbManager = manager
@@ -1769,7 +1826,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
-        val gen = ++attachGeneration
+        ++attachGeneration
         attachedDevice = null
         lastUsageKey = null
         usageInFlightKey = null
@@ -1777,13 +1834,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         activeHandles.clear()
         activeHandle = null
-        scope.launch(Dispatchers.IO) {
-            if (attachGeneration == gen) {
-                closeFilesVolume()
-            }
-        }
+        // No mount can start while attachedDevice is null, so every mount allocated up to this
+        // fence belongs to the detached stick. The close below runs on IO; a new attach that
+        // bumps the generation first (pending permission) still cannot hide this stale mount.
+        val detachedFence = filesSession.mountFence()
+        scope.launch(Dispatchers.IO) { closeFilesVolumeUpToEpoch(detachedFence) }
         DiskController.get().onDisconnected()
         onIntent(UiIntent.DeviceChanged(presence = DevicePresence.Disconnected))
+    }
+
+    /**
+     * Close the mount allocated at or before [fence], never a newer one. Epoch (not attach
+     * generation) identifies the volume, so a new attach before this close runs cannot make
+     * it skip the stale mount or close the fresh mount. Same serialization as any files op.
+     * A close/sync failure stays latched inside the session; detach has no UI to report to.
+     */
+    private fun closeFilesVolumeUpToEpoch(fence: Long) {
+        if (fence <= 0L) return
+        filesSession.withLock { filesSession.closeIfEpochAtMostLocked(fence) }
     }
 
     /** Drop the mounted volume (and its USB claim) without blocking user code. */
@@ -1811,14 +1879,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Open disk + filesystem for [partitionId]. Called only from [FilesVolumeSession]
      * after any prior volume was closed. Failure path closes the disk claim.
      */
-    private fun openMountedFilesVolume(partitionId: String, writable: Boolean): MountedFilesVolume {
+    private fun openMountedFilesVolume(
+        partitionId: String,
+        writable: Boolean,
+        pin: AttachmentPin,
+    ): MountedFilesVolume {
         val device = attachedDevice ?: throw DiskException.Disconnected()
         val manager = usbManager ?: throw DiskException.Disconnected()
+        // Pin check before the USB claim: a paused operation must not open another stick.
+        requireAttachment(pin, device)
         val disk = UsbDiskSession.open(manager, device)
         val volume = try {
             val index = partitionId.toIntOrNull()
                 ?: throw IllegalArgumentException("invalid partition id $partitionId")
             val table = PartitionTable.read(disk)
+            // A detach/re-attach can happen during the claim or table read: re-verify the pin
+            // against the live attachment before trusting this geometry or partition range.
+            requireAttachment(pin, device)
             if (writable) requireWritableMountAllowed(table)
             val partition = table.partitions.getOrNull(index - 1)
                 ?: throw IllegalArgumentException("partition $partitionId no longer exists")
@@ -1839,6 +1916,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             throw failure
         }
         return MountedFilesVolume(partitionId, disk, volume, writable = writable)
+    }
+
+    /** Fail unless [pin] still describes the live attachment opened for [device]. */
+    private fun requireAttachment(pin: AttachmentPin, device: UsbDevice) {
+        val live = attachedDevice
+        if (attachGeneration != pin.attachGeneration ||
+            deviceKey(device) != pin.deviceKey ||
+            live == null ||
+            deviceKey(live) != pin.deviceKey
+        ) {
+            throw AttachmentChangedException()
+        }
     }
 
     /** Runs [action] with the partition selected at submit time, or reports why not. */
@@ -1909,6 +1998,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val expectedGeneration = attachGeneration
         val expectedIdentity = state.device?.identity
+        val pin = currentAttachmentPin()
         scope.launch(Dispatchers.IO) {
             val snapshot =
                 filesSession.withLock {
@@ -1920,7 +2010,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         null
                     } else {
                         try {
-                            val volume = filesSession.volumeForLocked(partitionId)
+                            val volume = filesSession.volumeForLocked(pin, partitionId)
                             FilesystemUsageProbe.measureLocked(volume, key)
                         } catch (failure: Throwable) {
                             FilesystemUsageSnapshot(
@@ -1941,6 +2031,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val generation = state.filesListGeneration
         val identity = state.device?.identity
         val attachGen = state.device?.attachGeneration ?: 0L
+        val pin = currentAttachmentPin()
         submitFilesOperation(
             title = OperationTitle.ListPath(path),
             listFailure = { message ->
@@ -1954,7 +2045,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             },
         ) {
-            val entries = usb.files.FilesOperations.list(filesSession.volumeForLocked(partitionId), path)
+            val entries =
+                usb.files.FilesOperations.list(
+                    filesSession.volumeForLocked(pin, partitionId),
+                    path,
+                )
             post(
                 UiIntent.FilesListed(
                     path = path,
@@ -1972,6 +2067,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun createFolder(path: String, name: String) {
         val target = fatChildPath(path, name)
         withWritablePartitionId { partitionId ->
+            val pin = currentAttachmentPin()
             submitFilesOperation(
                 title = OperationTitle.NewFolder(name),
                 onSuccess = {
@@ -1984,7 +2080,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
             ) { operation ->
-                filesSession.withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     operation.mutationAttempted = true
                     volume.mkdir(target)
                     volume.sync()
@@ -1997,6 +2093,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun deleteEntry(path: String, name: String) {
         val target = fatChildPath(path, name)
         withWritablePartitionId { partitionId ->
+            val pin = currentAttachmentPin()
             submitFilesOperation(
                 title = OperationTitle.DeleteEntry(name),
                 onSuccess = {
@@ -2007,7 +2104,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
             ) { operation ->
-                filesSession.withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     try {
                         operation.mutationAttempted = true
                         usb.files.FilesOperations.delete(volume, target)
@@ -2024,9 +2121,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun renameEntry(path: String, from: String, to: String, binding: PartitionBinding) {
         val target = fatChildPath(path, from)
         val renamed = fatChildPath(path, to)
-        val expectedGeneration = attachGeneration
-        val expectedDeviceKey = deviceKey(attachedDevice)
         withWritablePartitionId { partitionId ->
+            val pin = currentAttachmentPin()
             submitFilesOperation(
                 title = OperationTitle.RenameEntry(from),
                 onSuccess = {
@@ -2041,10 +2137,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 },
             ) { operation ->
                 require(partitionId == binding.partitionId) { "rename target partition changed" }
-                require(attachGeneration == expectedGeneration) { "USB attach generation changed" }
-                require(deviceKey(attachedDevice) == expectedDeviceKey) { "USB device changed" }
                 require(binding.matches(state)) { "rename target changed" }
-                filesSession.withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     // The only mutation below; mark it after binding/policy checks and
                     // volume acquisition so a rename or post-rename sync failure is Partial.
                     operation.mutationAttempted = true
@@ -2067,6 +2161,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val resolver = getApplication<Application>().contentResolver
         var uploaded: String? = null
         withWritablePartitionId { partitionId ->
+            val pin = currentAttachmentPin()
             submitFilesOperation(
                 title = OperationTitle.Upload,
                 onSuccess = {
@@ -2088,7 +2183,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val target = fatChildPath(path, name)
                 operation.bytesTotal = reportedSize ?: -1L
 
-                filesSession.withWritableVolume(partitionId, operation) { volume ->
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     operation.mutationAttempted = true
                     FilesOperations.upload(
                         resolver = resolver,
@@ -2156,8 +2251,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun stageUsbImageForRawWrite(path: String, name: String, binding: PartitionBinding) {
         val filesDir = getApplication<Application>().filesDir
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val pin = currentAttachmentPin()
         // Holder: publish SetStaged only after copy+sync+close succeed; onSuccess runs on Main.
         val stagedPathHolder = arrayOfNulls<String>(1)
         submitFilesOperation(
@@ -2197,11 +2291,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             },
         ) { operation ->
-            require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-            require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
             require(binding.matches(state)) { "raw source target changed" }
             val target = fatChildPath(path, name)
-            val volume = filesSession.volumeForLocked(binding.partitionId)
+            val volume = filesSession.volumeForLocked(pin, binding.partitionId)
             val size = volume.stat(target).size
                 operation.bytesTotal = size
                 ImageStaging.requireUsableSpaceEstimate(filesDir, size)
@@ -2247,8 +2339,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
 
     private fun loadRawSourceCandidates(binding: PartitionBinding, generation: Long) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val pin = currentAttachmentPin()
         val identity = state.device?.identity
         rawSourceHandle?.cancel()
         rawSourceHandle = submitFilesOperation(
@@ -2262,10 +2353,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             },
         ) { operation ->
-            require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-            require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
             require(binding.matches(state)) { "raw source partition changed" }
-            val volume = filesSession.volumeForLocked(binding.partitionId)
+            val volume = filesSession.volumeForLocked(pin, binding.partitionId)
             val listing = usb.image.RawSourceChooser.list(
                 volume = volume,
                 root = "/",
@@ -2273,7 +2362,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 maxDepth = 4,
                 isActive = { operation.isActive() },
             )
-            if (attachGeneration == expectedAttach && state.device?.identity == identity) {
+            if (currentAttachmentPin() == pin && state.device?.identity == identity) {
                 post(
                     UiIntent.RawSourceCandidatesLoaded(
                         generation = generation,
@@ -3273,7 +3362,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
                         UiIntent.VentoyGlobalSettingsLoaded(
-                            VentoyGlobalSettings(emptyList(), message),
+                            if (outcome.cause is usb.ventoy.IncompatibleVentoyException) {
+                                // No Ventoy layout is the honest "no ventoy.json yet" state,
+                                // not a read failure.
+                                VentoyGlobalSettings.Missing
+                            } else {
+                                VentoyGlobalSettings.ReadError(message)
+                            },
                             epoch = expectedEpoch,
                             requestToken = requestToken,
                         ),
@@ -3285,7 +3380,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun loadVentoyFolders(requestToken: Long) {
+    private fun loadVentoyFolders(requestToken: Long, path: String) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
         val expectedEpoch = state.ventoyCacheEpoch
@@ -3296,13 +3391,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val mgr = usbManager ?: throw DiskException.Disconnected()
                 val disk = UsbDiskSession.open(mgr, dev)
                 try {
-                    val folders = usb.ventoy.VentoySetup.listDirectories(disk)
+                    val folders = usb.ventoy.VentoySetup.listSubdirectories(disk, path)
                     if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
                         post(
                             UiIntent.VentoyFoldersLoaded(
                                 folders,
                                 epoch = expectedEpoch,
                                 requestToken = requestToken,
+                                path = path,
                             ),
                         )
                     }
@@ -3320,12 +3416,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     attachGeneration == expectedAttach &&
                     deviceKey(attachedDevice) == expectedKey
                 ) {
+                    val problem =
+                        (outcome.cause as? usb.ventoy.VentoySetup.FolderUnavailableException)
+                            ?.problem
+                            ?: usb.ventoy.FolderReadProblem.Unreadable
                     post(
                         UiIntent.VentoyFoldersLoaded(
                             emptyList(),
-                            outcome.cause.message ?: outcome.cause.javaClass.simpleName,
+                            problem,
                             epoch = expectedEpoch,
                             requestToken = requestToken,
+                            path = path,
                         ),
                     )
                 }
@@ -3335,21 +3436,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun setVentoyGlobalSetting(key: String, value: String?) {
-        val op = object : DiskOperation(OperationTitle.SetVentoyGlobalSetting.logLabel) {
+    private fun settingsSuffix(selected: Int, written: Boolean): String =
+        when {
+            selected == 0 -> "; no global settings chosen"
+            !written -> "; selected global settings made no change"
+            else -> "; $selected global setting" + (if (selected == 1) " saved" else "s saved")
+        }
+
+    private fun applyVentoyControls(settings: List<VentoyControlSetting>) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val title = OperationTitle.SetVentoyGlobalSetting
+        val op = object : DiskOperation(title.logLabel) {
+            @Volatile var result: String? = null
+
             override suspend fun run() {
+                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
                 val mgr = usbManager ?: throw DiskException.Disconnected()
                 val disk = UsbDiskSession.open(mgr, dev)
                 try {
-                    usb.ventoy.VentoySetup.setGlobalSetting(
-                        disk = disk,
-                        key = key,
-                        value = value,
-                        onMutation = { mutationAttempted = true },
-                    )
+                    val changed =
+                        usb.ventoy.VentoySetup.applyGlobalControls(
+                            disk = disk,
+                            settings = settings,
+                            onMutation = { mutationAttempted = true },
+                        )
                     if (mutationAttempted) commitReached = true
+                    result =
+                        if (changed) {
+                            "Applied ${settings.size} Ventoy global setting" +
+                                if (settings.size == 1) "" else "s"
+                        } else {
+                            "No Ventoy setting changed"
+                        }
                 } finally {
                     disk.close()
                 }
@@ -3359,7 +3481,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UiIntent.OperationUpdated(
                 OperationProgress(
                     state = OperationState.Running,
-                    title = OperationTitle.SetVentoyGlobalSetting,
+                    title = title,
                     cancelable = false,
                 ),
             ),
@@ -3375,8 +3497,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiIntent.OperationUpdated(
                         OperationProgress(
                             state = mappedState,
-                            title = OperationTitle.SetVentoyGlobalSetting,
+                            title = title,
                             errorMessage = message,
+                            resultMessage = op.result,
                             cancelable = false,
                         ),
                     ),
@@ -3499,13 +3622,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun downloadFile(path: String, name: String, uri: String) {
         val resolver = getApplication<Application>().contentResolver
         withPartitionId { partitionId ->
+            val pin = currentAttachmentPin()
             submitFilesOperation(
                 title = OperationTitle.DownloadEntry(name),
                 onSuccess = { onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(name)))) },
             ) { operation ->
                 val target = fatChildPath(path, name)
                 val destination = Uri.parse(uri)
-                val volume = filesSession.volumeForLocked(partitionId)
+                val volume = filesSession.volumeForLocked(pin, partitionId)
                 FilesOperations.download(
                     resolver = resolver,
                     target = target,

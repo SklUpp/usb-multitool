@@ -10,6 +10,7 @@ import usb.fs.FilesystemId
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendState
 import usb.ventoy.BindProblem
+import usb.ventoy.FolderReadProblem
 import usb.ventoy.UnreadableProblem
 
 /**
@@ -74,8 +75,9 @@ class VentoyUiStateTest {
         ),
         windowsIsoCandidatesGeneration = 3L,
         windowsIsoCandidatesIdentity = state.device?.identity,
-        ventoyGlobalSettings = emptyList(),
-        ventoyFolders = listOf("/", "/ISO"),
+        ventoyGlobalSettings = usb.ventoy.VentoyGlobalSettings.Empty,
+        ventoyFolderPath = "/",
+        ventoyFolders = listOf("/ISO"),
         statusMessage = UiMessage.Key(UiMessageKey.Probing),
     )
 
@@ -98,7 +100,7 @@ class VentoyUiStateTest {
         assertNotNull(next.autounattendCandidates)
         assertNotNull(next.windowsIsoCandidates)
         assertNotNull(next.ventoyGlobalSettings)
-        assertEquals(listOf("/", "/ISO"), next.ventoyFolders)
+        assertEquals(listOf("/ISO"), next.ventoyFolders)
         assertEquals(3L, next.windowsIsoCandidatesGeneration)
         assertNull(next.statusMessage) // Probing cleared
     }
@@ -529,7 +531,7 @@ class VentoyUiStateTest {
         val staleSettings = UiReducer.reduce(
             after,
             UiIntent.VentoyGlobalSettingsLoaded(
-                usb.ventoy.VentoyGlobalSettings(emptyList()),
+                usb.ventoy.VentoyGlobalSettings.Empty,
                 epoch = 2L,
             ),
         ).state
@@ -537,14 +539,14 @@ class VentoyUiStateTest {
 
         val freshFolders = UiReducer.reduce(
             after,
-            UiIntent.VentoyFoldersLoaded(listOf("/", "/ISO"), epoch = 3L),
+            UiIntent.VentoyFoldersLoaded(listOf("/ISO"), epoch = 3L),
         ).state
-        assertEquals(listOf("/", "/ISO"), freshFolders.ventoyFolders)
+        assertEquals(listOf("/ISO"), freshFolders.ventoyFolders)
 
         val freshSettings = UiReducer.reduce(
             after,
             UiIntent.VentoyGlobalSettingsLoaded(
-                usb.ventoy.VentoyGlobalSettings(emptyList()),
+                usb.ventoy.VentoyGlobalSettings.Empty,
                 epoch = 3L,
             ),
         ).state
@@ -557,7 +559,7 @@ class VentoyUiStateTest {
         val next = UiReducer.reduce(
             base,
             UiIntent.VentoyGlobalSettingsLoaded(
-                usb.ventoy.VentoyGlobalSettings(emptyList(), error = "mount failed"),
+                usb.ventoy.VentoyGlobalSettings.ReadError("mount failed"),
                 epoch = 1L,
             ),
         ).state
@@ -624,19 +626,19 @@ class VentoyUiStateTest {
                     requestToken = firstToken,
                 ),
             )
-        assertEquals(listOf("/", "/ISO"), late.state.ventoyFolders)
+        assertEquals(listOf("/ISO"), late.state.ventoyFolders)
         assertNull(late.state.ventoyFoldersError)
 
         val applied =
             UiReducer.reduce(
                 late.state,
                 UiIntent.VentoyFoldersLoaded(
-                    listOf("/", "/NEW"),
+                    listOf("/NEW"),
                     epoch = 1L,
                     requestToken = secondToken,
                 ),
             )
-        assertEquals(listOf("/", "/NEW"), applied.state.ventoyFolders)
+        assertEquals(listOf("/NEW"), applied.state.ventoyFolders)
     }
 
     @Test
@@ -652,7 +654,7 @@ class VentoyUiStateTest {
             UiReducer.reduce(
                 second.state,
                 UiIntent.VentoyGlobalSettingsLoaded(
-                    usb.ventoy.VentoyGlobalSettings(emptyList(), error = "late mount failure"),
+                    usb.ventoy.VentoyGlobalSettings.ReadError("late mount failure"),
                     epoch = 1L,
                     requestToken = firstToken,
                 ),
@@ -664,7 +666,7 @@ class VentoyUiStateTest {
             UiReducer.reduce(
                 late.state,
                 UiIntent.VentoyGlobalSettingsLoaded(
-                    usb.ventoy.VentoyGlobalSettings(emptyList(), error = "fresh mount failure"),
+                    usb.ventoy.VentoyGlobalSettings.ReadError("fresh mount failure"),
                     epoch = 1L,
                     requestToken = secondToken,
                 ),
@@ -674,7 +676,11 @@ class VentoyUiStateTest {
 
     @Test
     fun reopenImportFolderPickDropsFoldersAndAsksAgain() {
-        val base = withVentoy()
+        val base =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO/Windows",
+                ventoyFolders = listOf("/ISO/Windows/11"),
+            )
         val device = requireNotNull(base.device)
 
         val next =
@@ -689,11 +695,14 @@ class VentoyUiStateTest {
             )
 
         assertEquals(WindowsImportKind.Image, next.state.pendingImportFolderPick)
+        assertEquals("/", next.state.ventoyFolderPath)
         assertNull(next.state.ventoyFolders)
         assertNull(next.state.ventoyFoldersError)
+        assertTrue(next.state.ventoyFoldersLoading)
         assertEquals(base.ventoyFoldersRequest + 1L, next.state.ventoyFoldersRequest)
         val effect = next.effects.single() as UiEffect.LoadVentoyFolders
         assertEquals(next.state.ventoyFoldersRequest, effect.requestToken)
+        assertEquals("/", effect.path)
     }
 
     @Test
@@ -713,7 +722,7 @@ class VentoyUiStateTest {
             )
 
         assertNull(next.state.pendingImportFolderPick)
-        assertEquals(listOf("/", "/ISO"), next.state.ventoyFolders)
+        assertEquals(listOf("/ISO"), next.state.ventoyFolders)
         assertEquals(base.ventoyFoldersRequest, next.state.ventoyFoldersRequest)
         assertTrue(next.effects.isEmpty())
     }
@@ -1789,5 +1798,380 @@ class VentoyUiStateTest {
         assertNull(replugged.pendingImportFolderPick)
         assertNull(replugged.deferredImportFolderPick)
         assertFalse(replugged.pendingImportFolderPickLoad)
+    }
+
+    // --- lazy data-partition folder navigation ---
+
+    @Test
+    fun refreshReadsTheFolderThatIsOpen() {
+        val base =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO",
+                ventoyFolders = listOf("/ISO/Windows"),
+            )
+
+        val next = UiReducer.reduce(base, UiIntent.LoadVentoyFolders)
+
+        assertEquals("/ISO", next.state.ventoyFolderPath)
+        // A refresh keeps the rows until the new answer lands.
+        assertEquals(listOf("/ISO/Windows"), next.state.ventoyFolders)
+        assertTrue(next.state.ventoyFoldersLoading)
+        assertEquals(base.ventoyFoldersRequest + 1L, next.state.ventoyFoldersRequest)
+        val effect = next.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals("/ISO", effect.path)
+        assertEquals(next.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun enteringAListedChildLoadsThatFolder() {
+        val base = withVentoy().copy(ventoyFolders = listOf("/ISO", "/ventoy"))
+
+        val next = UiReducer.reduce(base, UiIntent.OpenVentoyFolder("/ventoy"))
+
+        assertEquals("/ventoy", next.state.ventoyFolderPath)
+        // Rows from the root must never be shown as children of the new folder.
+        assertNull(next.state.ventoyFolders)
+        assertNull(next.state.ventoyFoldersError)
+        assertTrue(next.state.ventoyFoldersLoading)
+        assertEquals(base.ventoyFoldersRequest + 1L, next.state.ventoyFoldersRequest)
+        val effect = next.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals("/ventoy", effect.path)
+        assertEquals(next.state.ventoyFoldersRequest, effect.requestToken)
+
+        val settled =
+            UiReducer.reduce(
+                next.state,
+                UiIntent.VentoyFoldersLoaded(
+                    listOf("/ventoy/theme"),
+                    epoch = next.state.ventoyCacheEpoch,
+                    requestToken = next.state.ventoyFoldersRequest,
+                    path = "/ventoy",
+                ),
+            ).state
+        assertEquals(listOf("/ventoy/theme"), settled.ventoyFolders)
+        assertFalse(settled.ventoyFoldersLoading)
+    }
+
+    @Test
+    fun enteringAnUnlistedOrRelativeFolderIsRefused() {
+        val base = withVentoy().copy(ventoyFolders = listOf("/ISO"))
+
+        for (path in listOf("/ETC", "ISO", "/ISO/Windows", "/../ISO")) {
+            val next = UiReducer.reduce(base, UiIntent.OpenVentoyFolder(path))
+            assertEquals(base.ventoyFolderPath, next.state.ventoyFolderPath)
+            assertEquals(base.ventoyFolders, next.state.ventoyFolders)
+            assertEquals(base.ventoyFoldersRequest, next.state.ventoyFoldersRequest)
+            assertTrue(next.effects.isEmpty())
+            assertNotNull(next.state.statusMessage)
+        }
+    }
+
+    @Test
+    fun upLoadsTheParentAndRootUpIsANoOp() {
+        val nested =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO/Windows",
+                ventoyFolders = listOf("/ISO/Windows/11"),
+            )
+        val up = UiReducer.reduce(nested, UiIntent.VentoyFolderUp)
+        assertEquals("/ISO", up.state.ventoyFolderPath)
+        assertNull(up.state.ventoyFolders)
+        assertTrue(up.state.ventoyFoldersLoading)
+        assertEquals("/ISO", (up.effects.single() as UiEffect.LoadVentoyFolders).path)
+
+        val root = nested.copy(ventoyFolderPath = "/", ventoyFolders = listOf("/ISO"))
+        val atRoot = UiReducer.reduce(root, UiIntent.VentoyFolderUp)
+        assertEquals(root, atRoot.state)
+        assertTrue(atRoot.effects.isEmpty())
+    }
+
+    @Test
+    fun answerForThePreviousFolderIsDropped() {
+        val base =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO",
+                ventoyFolders = listOf("/ISO/Windows"),
+                ventoyFoldersRequest = 4L,
+            )
+
+        // Same epoch and token, but it belongs to the root: navigation disowns it.
+        val stale =
+            UiReducer.reduce(
+                base,
+                UiIntent.VentoyFoldersLoaded(
+                    listOf("/ventoy"),
+                    epoch = base.ventoyCacheEpoch,
+                    requestToken = 4L,
+                    path = "/",
+                ),
+            ).state
+
+        assertEquals("/ISO", stale.ventoyFolderPath)
+        assertEquals(listOf("/ISO/Windows"), stale.ventoyFolders)
+    }
+
+    @Test
+    fun refreshFailureClearsStaleRowsAndReportsTheError() {
+        val base =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO",
+                ventoyFolders = listOf("/ISO/Windows"),
+                ventoyFoldersRequest = 2L,
+            )
+
+        val failed =
+            UiReducer.reduce(
+                base,
+                UiIntent.VentoyFoldersLoaded(
+                    emptyList(),
+                    error = FolderReadProblem.Missing,
+                    epoch = base.ventoyCacheEpoch,
+                    requestToken = 2L,
+                    path = "/ISO",
+                ),
+            ).state
+
+        assertEquals(emptyList<String>(), failed.ventoyFolders)
+        assertEquals(FolderReadProblem.Missing, failed.ventoyFoldersError)
+        assertFalse(failed.ventoyFoldersLoading)
+    }
+
+    @Test
+    fun folderNavigationIsNotQueuedWhileBusy() {
+        val busy =
+            withVentoy().copy(
+                tab = ShellTab.Ventoy,
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+                ventoyFolderPath = "/ISO",
+                ventoyFolders = listOf("/ISO/Windows"),
+            )
+
+        for (intent in
+            listOf(
+                UiIntent.VentoyFolderUp,
+                UiIntent.OpenVentoyFolder("/ISO/Windows"),
+            )) {
+            val next = UiReducer.reduce(busy, intent)
+            assertTrue("$intent must not queue USB work", next.effects.isEmpty())
+            assertEquals("/ISO", next.state.ventoyFolderPath)
+            assertEquals(listOf("/ISO/Windows"), next.state.ventoyFolders)
+            assertEquals(busy.ventoyFoldersRequest, next.state.ventoyFoldersRequest)
+            assertFalse(next.state.ventoyFoldersLoading)
+            assertFalse(next.state.ventoyFoldersPending)
+        }
+    }
+
+    @Test
+    fun busyProbeFolderRefreshWaitsAndIsReleasedOnce() {
+        // Probe Busy has no running operation: only the presence blocks folder reads.
+        val busy =
+            withVentoy().copy(
+                tab = ShellTab.Ventoy,
+                presence = DevicePresence.Busy,
+                ventoyFolderPath = "/ISO",
+                ventoyFolders = null,
+            )
+
+        val queued = UiReducer.reduce(busy, UiIntent.LoadVentoyFolders)
+        assertTrue(queued.effects.isEmpty())
+        assertTrue(queued.state.ventoyFoldersPending)
+        assertFalse(queued.state.ventoyFoldersLoading)
+        assertEquals(busy.ventoyFoldersRequest, queued.state.ventoyFoldersRequest)
+
+        // Repeated taps while busy must not stack requests or bump the token.
+        val repeated = UiReducer.reduce(queued.state, UiIntent.LoadVentoyFolders)
+        assertTrue(repeated.effects.isEmpty())
+        assertTrue(repeated.state.ventoyFoldersPending)
+        assertEquals(queued.state.ventoyFoldersRequest, repeated.state.ventoyFoldersRequest)
+
+        val ready =
+            UiReducer.reduce(
+                repeated.state,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 1L),
+                    partitions = listOf(partition()),
+                ),
+            )
+        val effect = ready.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals("/ISO", effect.path)
+        assertEquals(ready.state.ventoyFoldersRequest, effect.requestToken)
+        assertEquals(busy.ventoyFoldersRequest + 1L, ready.state.ventoyFoldersRequest)
+        assertTrue(ready.state.ventoyFoldersLoading)
+        assertFalse(ready.state.ventoyFoldersPending)
+        assertNull(ready.state.statusMessage)
+
+        // A failed answer settles into an error; the next Ready edge must not retry forever.
+        val failed =
+            UiReducer.reduce(
+                ready.state,
+                UiIntent.VentoyFoldersLoaded(
+                    emptyList(),
+                    error = FolderReadProblem.Missing,
+                    epoch = ready.state.ventoyCacheEpoch,
+                    requestToken = ready.state.ventoyFoldersRequest,
+                    path = "/ISO",
+                ),
+            ).state
+        assertFalse(failed.ventoyFoldersLoading)
+        assertFalse(failed.ventoyFoldersPending)
+        assertEquals(FolderReadProblem.Missing, failed.ventoyFoldersError)
+
+        val quiet =
+            UiReducer.reduce(
+                failed,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 1L),
+                    partitions = listOf(partition()),
+                ),
+            )
+        assertTrue(quiet.effects.none { it is UiEffect.LoadVentoyFolders })
+        assertFalse(quiet.state.ventoyFoldersPending)
+    }
+
+    @Test
+    fun runningOperationFolderRefreshIsReleasedOnTerminal() {
+        // A Running operation keeps actionsEnabled false even when DeviceChanged says Ready.
+        val busy =
+            withVentoy().copy(
+                tab = ShellTab.Ventoy,
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.ReadScan,
+                    ),
+                ventoyFolderPath = "/ISO",
+                ventoyFolders = null,
+            )
+
+        val queued = UiReducer.reduce(busy, UiIntent.LoadVentoyFolders)
+        assertTrue(queued.effects.isEmpty())
+        assertTrue(queued.state.ventoyFoldersPending)
+
+        val stillBusy =
+            UiReducer.reduce(
+                queued.state,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.ReadScan,
+                    ),
+                ),
+            )
+        assertTrue(stillBusy.effects.isEmpty())
+        assertTrue(stillBusy.state.ventoyFoldersPending)
+
+        val released =
+            UiReducer.reduce(
+                stillBusy.state,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Completed,
+                        title = OperationTitle.ReadScan,
+                    ),
+                ),
+            )
+        val effect = released.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals("/ISO", effect.path)
+        assertEquals(released.state.ventoyFoldersRequest, effect.requestToken)
+        assertEquals(busy.ventoyFoldersRequest + 1L, released.state.ventoyFoldersRequest)
+        assertEquals(DevicePresence.Ready, released.state.presence)
+        assertTrue(released.state.ventoyFoldersLoading)
+        assertFalse(released.state.ventoyFoldersPending)
+
+        // A failed answer and a repeated terminal must not re-arm the request.
+        val failed =
+            UiReducer.reduce(
+                released.state,
+                UiIntent.VentoyFoldersLoaded(
+                    emptyList(),
+                    error = FolderReadProblem.Missing,
+                    epoch = released.state.ventoyCacheEpoch,
+                    requestToken = released.state.ventoyFoldersRequest,
+                    path = "/ISO",
+                ),
+            ).state
+        assertFalse(failed.ventoyFoldersPending)
+        val repeatedTerminal =
+            UiReducer.reduce(
+                failed,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Completed,
+                        title = OperationTitle.ReadScan,
+                    ),
+                ),
+            )
+        assertTrue(repeatedTerminal.effects.none { it is UiEffect.LoadVentoyFolders })
+        assertFalse(repeatedTerminal.state.ventoyFoldersPending)
+    }
+
+    @Test
+    fun sameStickProbeKeepsTheOpenFolder() {
+        val loaded =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO/Windows",
+                ventoyFolders = listOf("/ISO/Windows/11"),
+            )
+
+        val next =
+            UiReducer.reduce(
+                loaded,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device(gen = 1L),
+                    partitions = emptyList(),
+                ),
+            ).state
+
+        assertEquals("/ISO/Windows", next.ventoyFolderPath)
+        assertEquals(listOf("/ISO/Windows/11"), next.ventoyFolders)
+    }
+
+    @Test
+    fun attachChangeResetsBrowserToTheRoot() {
+        val loaded =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO/Windows",
+                ventoyFolders = listOf("/ISO/Windows/11"),
+            )
+
+        val next =
+            UiReducer.reduce(
+                loaded,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 2L),
+                    partitions = listOf(partition()),
+                ),
+            ).state
+
+        assertEquals("/", next.ventoyFolderPath)
+        assertNull(next.ventoyFolders)
+        assertNull(next.ventoyFoldersError)
+        assertFalse(next.ventoyFoldersLoading)
+    }
+
+    @Test
+    fun invalidationResetsBrowserToTheRoot() {
+        val loaded =
+            withVentoy().copy(
+                ventoyFolderPath = "/ISO/Windows",
+                ventoyFolders = listOf("/ISO/Windows/11"),
+            )
+
+        val next = UiReducer.reduce(loaded, UiIntent.InvalidateVentoyStickCaches).state
+
+        assertEquals("/", next.ventoyFolderPath)
+        assertNull(next.ventoyFolders)
+        assertNull(next.ventoyFoldersError)
+        assertFalse(next.ventoyFoldersLoading)
     }
 }

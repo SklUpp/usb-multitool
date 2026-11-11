@@ -96,56 +96,176 @@ object VentoySetup {
     fun readLinks(disk: BlockDevice): List<AutoInstallLink> =
         withVolume(disk) { volume -> WindowsSetup.parseLinks(readText(volume, CONFIG_PATH)) }
 
-    /** Raw global control entries, preserving unknown keys and exact raw values. */
+    /** Raw global control entries, preserving unknown keys, sections, and exact raw values. */
     fun readGlobalSettings(disk: BlockDevice): VentoyGlobalSettings =
-        withVolume(disk) { volume ->
-            val json = readText(volume, CONFIG_PATH)
-            if (json.isNullOrBlank()) {
-                VentoyGlobalSettings(emptyList())
-            } else {
-                val root =
-                    try {
-                        MiniJson.parse(json) as? Map<*, *>
-                    } catch (failure: Throwable) {
-                        throw IllegalStateException(
-                            "ventoy.json is not valid JSON: ${failure.message}",
-                            failure,
-                        )
-                    } ?: throw IllegalStateException("ventoy.json root is not an object")
-                val control = root["control"] as? List<*> ?: emptyList<Any?>()
-                val entries =
-                    control.mapNotNull { item ->
-                        val map = item as? Map<*, *> ?: return@mapNotNull null
-                        val entry = map.entries.firstOrNull() ?: return@mapNotNull null
-                        val key = entry.key?.toString() ?: return@mapNotNull null
-                        val raw = entry.value?.toString() ?: ""
-                        val status =
-                            if (key == "VTOY_WIN11_BYPASS_CHECK" || key == "VTOY_WIN11_BYPASS_NRO") {
-                                SettingStatus.Known(
-                                    valid = raw == "0" || raw == "1",
-                                    expected = "0 or 1",
-                                )
-                            } else {
-                                SettingStatus.UnknownKey
-                            }
-                        VentoySetting(key, raw, status)
+        try {
+            withVolume(disk) { volume ->
+                // Absence is decided by stat; any other list/stat failure propagates and the
+                // host reports ReadError instead of silently showing "no settings".
+                val ventoyDir = volume.statOrNull(VENTOY_DIR)
+                    ?: return@withVolume VentoyGlobalSettings.Missing
+                if (!ventoyDir.isDirectory) {
+                    return@withVolume VentoyGlobalSettings.ReadError(
+                        "$VENTOY_DIR exists but is not a directory",
+                    )
+                }
+                val fileName = CONFIG_PATH.substringAfterLast('/')
+                val entries = volume.list(VENTOY_DIR)
+                val entry = entries.firstOrNull {
+                    !it.isDirectory && it.name.equals(fileName, ignoreCase = true)
+                }
+                if (entry == null) {
+                    val directory = entries.any {
+                        it.isDirectory && it.name.equals(fileName, ignoreCase = true)
                     }
-                VentoyGlobalSettings(entries)
+                    return@withVolume if (directory) {
+                        VentoyGlobalSettings.ReadError("$CONFIG_PATH is a directory, not a file")
+                    } else {
+                        VentoyGlobalSettings.Missing
+                    }
+                }
+                if (entry.size > Int.MAX_VALUE) {
+                    return@withVolume VentoyGlobalSettings.ReadError(
+                        "$CONFIG_PATH is ${entry.size} bytes; refusing to load it as text",
+                    )
+                }
+                val json =
+                    if (entry.size <= 0L) {
+                        ""
+                    } else {
+                        String(
+                            volume.read(CONFIG_PATH, 0L, entry.size.toInt()),
+                            Charsets.UTF_8,
+                        )
+                    }
+                parseGlobalSettings(json)
+            }
+        } catch (failure: IncompatibleVentoyException) {
+            // No provable Ventoy layout is the honest "no ventoy.json yet" state. A damaged
+            // layout that still carries Ventoy signatures is a read error, not empty/missing.
+            val damaged =
+                try {
+                    VentoyLayout.looksLikeVentoyLayout(disk)
+                } catch (inspectionFailure: Throwable) {
+                    if (inspectionFailure.isFatalReadFailure()) throw inspectionFailure
+                    return VentoyGlobalSettings.ReadError(
+                        "Ventoy layout could not be inspected: " +
+                            (inspectionFailure.message
+                                ?: inspectionFailure.javaClass.simpleName),
+                    )
+                }
+            if (damaged) {
+                VentoyGlobalSettings.ReadError(
+                    "Ventoy layout is present but invalid; ventoy.json cannot be read",
+                    damagedLayout = true,
+                )
+            } else {
+                VentoyGlobalSettings.Missing
             }
         }
 
-    fun setGlobalSetting(
+    /** Cancellation and JVM/linkage faults must never be turned into a Missing/ReadError result. */
+    private fun Throwable.isFatalReadFailure(): Boolean =
+        this is Error || this is java.util.concurrent.CancellationException
+
+    /**
+     * Parse an already-read file. Missing is decided by the caller (no file); this keeps
+     * empty, unparseable, and populated results distinct.
+     */
+    internal fun parseGlobalSettings(json: String): VentoyGlobalSettings {
+        if (json.isBlank()) return VentoyGlobalSettings.Empty
+        val root =
+            try {
+                MiniJson.parse(json) as? Map<*, *>
+            } catch (failure: Throwable) {
+                return VentoyGlobalSettings.ReadError(
+                    "ventoy.json is not valid JSON: " +
+                        (failure.message ?: failure.javaClass.simpleName),
+                )
+            } ?: return VentoyGlobalSettings.ReadError("ventoy.json root is not an object")
+        val rawControl = root["control"] ?: return VentoyGlobalSettings.Empty
+        val control =
+            rawControl as? List<*>
+                ?: return VentoyGlobalSettings.ReadError("\"control\" is not a JSON array")
+        val entries = ArrayList<VentoySetting>()
+        for (item in control) {
+            val map = item as? Map<*, *> ?: continue
+            for ((rawKey, rawValue) in map) {
+                val key = rawKey?.toString() ?: continue
+                val scalar =
+                    rawValue is String || rawValue is Number || rawValue is Boolean
+                val rawText =
+                    if (scalar) {
+                        rawValue.toString()
+                    } else {
+                        MiniJson.stringify(rawValue)
+                    }
+                val known = VentoyControlCatalog.known(key)
+                val status =
+                    when {
+                        known != null && scalar ->
+                            SettingStatus.Known(
+                                valid = rawText in known.allowed,
+                                expected = known.expected,
+                            )
+                        known != null -> SettingStatus.Known(valid = false, expected = known.expected)
+                        scalar -> SettingStatus.UnknownKey
+                        else -> SettingStatus.Unreadable
+                    }
+                entries.add(
+                    VentoySetting(
+                        key = key,
+                        rawValue = rawText,
+                        status = status,
+                    ),
+                )
+            }
+        }
+        return if (entries.isEmpty()) {
+            if (control.isEmpty()) {
+                VentoyGlobalSettings.Empty
+            } else {
+                VentoyGlobalSettings.ReadError(
+                    "\"control\" has no key/value entries this app can read",
+                )
+            }
+        } else {
+            VentoyGlobalSettings.Present(entries)
+        }
+    }
+
+    /**
+     * Write explicitly chosen control values in one read-merge-write. Unknown JSON sections
+     * and all other keys are preserved; a null value removes just that key.
+     * Returns false when the merge changes nothing, in which case no file is written.
+     */
+    fun applyGlobalControls(
         disk: BlockDevice,
-        key: String,
-        value: String?,
+        settings: List<VentoyControlSetting>,
         onMutation: () -> Unit = {},
-    ) = withVolume(disk) { volume ->
-        val existingJson = readText(volume, CONFIG_PATH)
-        val updated = WindowsSetup.setControl(existingJson, key, value)
-        onMutation()
-        ensureDirectory(volume, VENTOY_DIR)
-        replaceFile(volume, CONFIG_PATH, updated.toByteArray(Charsets.UTF_8))
-        updated
+    ): Boolean {
+        val changed =
+            withVolume(disk) { volume ->
+                require(settings.isNotEmpty()) { "no Ventoy control setting to apply" }
+                VentoyControlCatalog.problem(settings)?.let {
+                    throw IllegalArgumentException(it)
+                }
+                if (volume.statOrNull(CONFIG_PATH)?.isDirectory == true) {
+                    throw IllegalStateException(
+                        "$CONFIG_PATH is a directory; refusing to overwrite it",
+                    )
+                }
+                val existingJson = readText(volume, CONFIG_PATH)
+                val merged = WindowsSetup.applyControls(existingJson, settings)
+                    ?: return@withVolume false
+                onMutation()
+                ensureDirectory(volume, VENTOY_DIR)
+                replaceFile(volume, CONFIG_PATH, merged.toByteArray(Charsets.UTF_8))
+                true
+            }
+        // The FAT volume is closed; flush the block device so the reported success is durable.
+        if (changed) disk.sync()
+        return changed
     }
 
     data class UnattendRead(
@@ -222,21 +342,47 @@ object VentoySetup {
         return relativeDepth <= level
     }
 
-    fun listDirectories(disk: BlockDevice): List<String> =
-        withVolume(disk) { volume ->
-            val result = linkedSetOf("/")
-            fun walk(parent: String, depth: Int) {
-                if (depth > 6 || result.size >= 512) return
-                for (entry in volume.list(parent)) {
-                    if (!entry.isDirectory) continue
-                    val path = if (parent == "/") "/${entry.name}" else "$parent/${entry.name}"
-                    if (result.add(path)) walk(path, depth + 1)
-                    if (result.size >= 512) return
-                }
-            }
-            walk("/", 0)
-            result.sorted()
+    /**
+     * Direct child directories of one existing folder on the data partition.
+     *
+     * One level per call: navigation supplies the folder, so no depth/entry cap can hide a
+     * destination. A missing path throws [FolderUnavailableException] instead of returning
+     * an empty list, because "gone" and "has no subfolders" need different UI answers.
+     */
+    fun listSubdirectories(disk: BlockDevice, path: String): List<String> =
+        withVolume(disk) { volume -> listSubdirectories(volume, path) }
+
+    /** Volume-level variant so host tests can drive the listing without a block device. */
+    internal fun listSubdirectories(volume: UsbFsVolume, path: String): List<String> {
+        val directory = normalizeFolderPath(path)
+        val entry =
+            volume.statOrNull(directory)
+                ?: throw FolderUnavailableException(
+                    FolderReadProblem.Missing,
+                    "$directory is no longer on the Ventoy data partition",
+                )
+        if (!entry.isDirectory) {
+            throw FolderUnavailableException(
+                FolderReadProblem.NotDirectory,
+                "$directory is not a directory",
+            )
         }
+        return volume
+            .list(directory)
+            .asSequence()
+            .filter { it.isDirectory }
+            .map { child ->
+                if (directory == "/") "/${child.name}" else "$directory/${child.name}"
+            }
+            .distinct()
+            .sorted()
+            .toList()
+    }
+
+    class FolderUnavailableException(
+        val problem: FolderReadProblem,
+        message: String,
+    ) : Exception(message)
 
     fun readAutounattend(disk: BlockDevice, xmlName: String): UnattendRead =
         withVolume(disk) { volume ->

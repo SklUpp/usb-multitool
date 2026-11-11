@@ -39,6 +39,7 @@ for suite in \
   AutounattendPathTest \
   AutounattendReloadUiTest \
   VentoyUiStateTest \
+  VentoySettingsUiTest \
   PhoneImportUiTest \
   UiEffectTypingTest \
   ServiceOperationMappingTest
@@ -84,6 +85,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/Autounattend.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/FolderPaths.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreInspectionModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreSourceInspector.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
@@ -104,11 +106,13 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendPathTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendReloadUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoyUiStateTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/VentoySettingsUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiEffectTypingTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ServiceOperationMappingTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/fs/VolumeLabelTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ventoy/FolderPathsTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/XmlPathTest.kt"
 if [ -f "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt" ]; then
   set -- "$@" "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt"
@@ -144,9 +148,11 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.AutounattendPathTest \
   usb.ui.AutounattendReloadUiTest \
   usb.ui.VentoyUiStateTest \
+  usb.ui.VentoySettingsUiTest \
   usb.ui.PhoneImportUiTest \
   usb.ui.UiEffectTypingTest \
   usb.ui.ServiceOperationMappingTest \
   usb.fs.VolumeLabelTest \
   usb.ventoy.AutounattendTest \
+  usb.ventoy.FolderPathsTest \
   usb.ventoy.XmlPathTest

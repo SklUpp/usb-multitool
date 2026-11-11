@@ -91,6 +91,7 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_cannot_read_usb, *args.toTypedArray())
             UiMessageKey.CannotReadPartitionTable ->
                 stringResource(R.string.msg_cannot_read_partition_table, *args.toTypedArray())
+            UiMessageKey.FolderListChanged -> stringResource(R.string.msg_folder_list_changed)
             UiMessageKey.CreatedFolder ->
                 stringResource(R.string.msg_created_folder, *args.toTypedArray())
             UiMessageKey.DeletedPath -> stringResource(R.string.msg_deleted_path, *args.toTypedArray())
@@ -396,6 +397,15 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
                 R.string.confirm_link_new
             },
             iso,
+        )
+    }
+    if (confirmation.ventoyControls.isNotEmpty()) {
+        val removal = stringResource(R.string.settings_remove)
+        lines += stringResource(
+            R.string.confirm_ventoy_settings,
+            confirmation.ventoyControls.joinToString(", ") {
+                "${it.key}=${it.value ?: removal}"
+            },
         )
     }
     return lines
