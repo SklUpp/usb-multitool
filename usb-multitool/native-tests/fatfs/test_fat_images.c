@@ -31,7 +31,7 @@ static void exercise(const char *img, FatMkfsType type, FatFsKind expect_min, Fa
 	block = image_block_open(img, ss, sc, 1);
 	if (!block) fail("image_block_open", -1);
 
-	rc = fat_engine_mkfs(block, ss, sc, type);
+	rc = fat_engine_mkfs(block, ss, sc, type, 0);
 	if (rc != 0) fail("mkfs", rc);
 
 	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
@@ -117,7 +117,7 @@ static void test_list_over_256(void)
 	unlink(img);
 	block = image_block_open(img, ss, sc, 1);
 	if (!block) fail("list256 open", -1);
-	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT32);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT32, 0);
 	if (rc != 0) fail("list256 mkfs", rc);
 	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
 	if (rc != 0) fail("list256 mount", rc);
@@ -173,7 +173,7 @@ static void test_short_write(void)
 	unlink(img);
 	block = image_block_open(img, ss, sc, 1);
 	if (!block) fail("short open", -1);
-	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT, 0);
 	if (rc != 0) fail("short mkfs", rc);
 	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
 	if (rc != 0) fail("short mount", rc);
@@ -224,7 +224,7 @@ static void test_format_over_existing_content(void)
 	unlink(img);
 	block = image_block_open(img, ss, sc, 1);
 	if (!block) fail("reformat open", -1);
-	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT, 0);
 	if (rc != 0) fail("reformat initial mkfs", rc);
 	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
 	if (rc != 0) fail("reformat initial mount", rc);
@@ -237,7 +237,7 @@ static void test_format_over_existing_content(void)
 	/* Re-open without create: format over the existing content in place. */
 	block = image_block_open(img, ss, sc, 0);
 	if (!block) fail("reformat reopen", -1);
-	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT); /* Formatter: FilesystemId.FAT */
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT, 0); /* Formatter: FilesystemId.FAT */
 	if (rc != 0) fail("reformat mkfs", rc);
 	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
 	if (rc != 0) fail("reformat mount", rc);
@@ -280,7 +280,7 @@ static void test_path_overflow_preserves_neighbor(void)
 	block = image_block_open(img, ss, sc, 1);
 	if (!block) fail("pathovf open", -1);
 	/* Same geometry as exercise(fat16.img): FAT32 aborts (FR_MKFS_ABORTED=14) on 32 MiB. */
-	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT, 0);
 	if (rc != 0) fail("pathovf mkfs", rc);
 	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
 	if (rc != 0) fail("pathovf mount", rc);
@@ -329,7 +329,7 @@ static void exercise_label(const char *img, FatMkfsType type, uint32_t ss, uint6
 	unlink(img);
 	block = image_block_open(img, ss, sc, 1);
 	if (!block) fail("label image_block_open", -1);
-	rc = fat_engine_mkfs(block, ss, sc, type);
+	rc = fat_engine_mkfs(block, ss, sc, type, 0);
 	if (rc != 0) fail("label mkfs", rc);
 
 	/* Regression: f_setlabel needs the "N:LABEL" form. Passing a bare "N:" is a valid

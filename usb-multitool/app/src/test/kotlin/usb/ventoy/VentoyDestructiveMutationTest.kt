@@ -28,7 +28,7 @@ class VentoyDestructiveMutationTest {
      */
     private fun seedMbrVentoyStick(
         part1Sectors: Long = 8192L,
-        part2Sectors: Long = 2048L,
+        part2Sectors: Long = VentoyLayout.EFI_PART_SECTORS,
         sectorCount: ULong = 262144UL,
         session: FakeBotSession = FakeBotSession(),
     ): RecordingDisk {
@@ -67,7 +67,7 @@ class VentoyDestructiveMutationTest {
         try {
             val partitionDisk =
                 disk.withWriteTracking { mutationAttempted = true }
-            VentoyOperations.update(partitionDisk, assets, this)
+            VentoyOperations.update(partitionDisk, assets, this, versionReader = { _, _, _ -> Result.success("1.1.18") })
             armAfterBody()
             syncDestructiveDisk(disk)
         } finally {
@@ -164,7 +164,7 @@ class VentoyDestructiveMutationTest {
             object : DiskOperation(name = "Ventoy update raw") {
                 override suspend fun run() {
                     try {
-                        VentoyOperations.update(disk, assets, this)
+                        VentoyOperations.update(disk, assets, this, versionReader = { _, _, _ -> Result.success("1.1.18") })
                         assertTrue(disk.writeCount > 0)
                         disk.syncHook = { throw syncErr }
                         syncDestructiveDisk(disk)

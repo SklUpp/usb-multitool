@@ -119,7 +119,7 @@ object FatFsNative {
         plannedTotalSize: Long,
         create: Boolean,
     ): Int
-    @JvmStatic external fun nativeMkfs(blockHandle: Long, sectorSize: Int, sectorCount: Long, type: Int)
+    @JvmStatic external fun nativeMkfs(blockHandle: Long, sectorSize: Int, sectorCount: Long, type: Int, auSizeBytes: Int)
     @JvmStatic external fun nativeSetLabel(blockHandle: Long, sectorSize: Int, sectorCount: Long, label: String)
     @JvmStatic external fun nativeGetLabel(blockHandle: Long, sectorSize: Int, sectorCount: Long): String
     @JvmStatic external fun nativeProbe(blockHandle: Long, sectorSize: Int, sectorCount: Long): Int
@@ -247,10 +247,16 @@ object FatFs {
         return FatVolume(FatKind.fromCode(kindOut[0]), vol, blockHandle, ownsBlock)
     }
 
-    fun mkfs(callback: FatBlockCallback, sectorSize: Int, sectorCount: Long, type: FatMkfsType) {
+    fun mkfs(
+        callback: FatBlockCallback,
+        sectorSize: Int,
+        sectorCount: Long,
+        type: FatMkfsType,
+        auSizeBytes: Int = 0,
+    ) {
         val block = openBlock(callback, sectorSize, sectorCount)
         try {
-            FatFsNative.nativeMkfs(block, sectorSize, sectorCount, type.code)
+            FatFsNative.nativeMkfs(block, sectorSize, sectorCount, type.code, auSizeBytes)
         } finally {
             closeBlock(block)
         }

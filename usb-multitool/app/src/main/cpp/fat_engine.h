@@ -71,7 +71,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 			  uint64_t planned_total_size, int create);
 
 int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
-		    FatMkfsType type);
+		    FatMkfsType type, uint32_t au_size_bytes);
 
 /* Writes the label of an already formatted FAT/exFAT volume via f_setlabel. */
 int fat_engine_set_label(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,

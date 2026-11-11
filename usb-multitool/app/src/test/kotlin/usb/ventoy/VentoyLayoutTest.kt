@@ -15,9 +15,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.Assert.assertSame
+import org.junit.Assume
+import usb.device.BlockDevice
+import usb.fs.BlockDeviceFatCallback
+import usb.fs.FatFs
 import usb.fs.FatKind
+import usb.fs.FatMkfsType
 import usb.fs.Filesystem
 import usb.fs.FilesystemId
+import usb.fs.FormatCatalog
+import usb.fs.VolumeLabel
+import usb.partition.PartitionTable
 import usb.partition.TableScheme
 import usb.partition.VirtualPartition
 import usb.testutil.RecordingDisk
@@ -27,6 +35,19 @@ class VentoyLayoutTest {
 
 
     private val fakeAssets = syntheticVentoyAssets(efiPartSectors = 2048)
+
+    /** Deterministic version reader: the production FAT path is exercised separately. */
+    private val knownVersion: (BlockDevice, ULong, ULong) -> Result<String> =
+        { _, _, _ -> Result.success("1.1.18") }
+
+    private fun updateWithKnownVersion(
+        disk: RecordingDisk,
+        assets: VentoyAssets = fakeAssets,
+    ): PartitionTable = VentoyInstaller.updateChecked(
+        disk = disk,
+        assets = assets,
+        versionReader = knownVersion,
+    )
 
     /**
      * Layout-only fixture. Host JVM without FatFs fails format after layout write
@@ -291,7 +312,7 @@ class VentoyLayoutTest {
         disk.write(p1Start.toLong(), ByteBuffer.wrap(canaryData))
         disk.resetStats()
         val updatedAssets = syntheticVentoyAssets(release = "1.1.18", efiPartSectors = 2048)
-        val updatedTable = VentoyInstaller.update(disk, updatedAssets)
+        val updatedTable = updateWithKnownVersion(disk, updatedAssets)
         assertEquals(2, updatedTable.partitions.size)
         assertEquals(p1Start, updatedTable.partitions[0].startLba)
         assertEquals(p1Count, updatedTable.partitions[0].sectorCount)
@@ -388,26 +409,34 @@ class VentoyLayoutTest {
     }
 
     @Test
-    fun updateRefusesToTruncateAnUndersizedVtoyefi() {
-        val disk = syntheticStick(part1Sectors = 8192, part2Sectors = 2048)
-        val probe = VentoyLayout.probe(disk)
-        assertNotNull("synthetic stick must probe as Ventoy", probe)
-        assertEquals(2048UL, probe!!.part2SectorCount)
-
-        val bytesBefore = disk.bytes.toSortedMap().mapValues { it.value.toList() }
-        disk.resetStats()
-
-        // 65536-sector release image into a 2048-sector partition.
+    fun updateRefusesNonExactVtoyefiSize() {
+        // Upstream is_disk_contains_ventoy: Part2 must be exactly 65536 sectors.
+        val undersized = syntheticStick(part1Sectors = 8192, part2Sectors = 2048)
+        assertNull("non-exact Part2 must fail closed", VentoyLayout.probe(undersized))
+        undersized.resetStats()
         try {
-            VentoyInstaller.update(disk, syntheticVentoyAssets(efiPartSectors = 65536))
-            fail("Expected VentoyPayloadTooLargeException instead of a silent truncation")
-        } catch (e: VentoyPayloadTooLargeException) {
-            assertTrue("message must name the needed sectors: ${e.message}", e.message!!.contains("65536"))
-            assertTrue("message must name the available sectors: ${e.message}", e.message!!.contains("2048"))
+            VentoyInstaller.update(undersized, fakeAssets)
+            fail("expected IncompatibleVentoyException for non-exact VTOYEFI size")
+        } catch (_: IncompatibleVentoyException) {
         }
+        assertEquals("probe/update miss must not write", 0, undersized.writeCount)
 
-        assertEquals("update must not write when the payload cannot fit", 0, disk.writeCount)
-        assertEquals(bytesBefore, disk.bytes.toSortedMap().mapValues { it.value.toList() })
+        val oversized = syntheticStick(part1Sectors = 8192, part2Sectors = 70_000)
+        assertNull("oversized Part2 must fail closed", VentoyLayout.probe(oversized))
+    }
+
+    @Test
+    fun updateRefusesEfiLargerThanOfficialPart2() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        disk.resetStats()
+        val assets = syntheticVentoyAssets(efiPartSectors = (VentoyLayout.EFI_PART_SECTORS + 1).toInt())
+        try {
+            updateWithKnownVersion(disk, assets)
+            fail("expected VentoyPayloadTooLargeException")
+        } catch (_: VentoyPayloadTooLargeException) {
+        }
+        assertEquals("oversized EFI must fail before disk writes", 0, disk.writeCount)
     }
 
     @Test
@@ -832,7 +861,7 @@ class VentoyLayoutTest {
             val hugeCore = ByteArray((sectors * 512).toInt()) { 0x5A }
             val assets = syntheticVentoyAssets(efiPartSectors = 2048, coreBytes = hugeCore)
             try {
-                VentoyInstaller.update(disk, assets)
+                updateWithKnownVersion(disk, assets)
                 fail("expected $sectors-sector GPT core update to fail preflight")
             } catch (_: VentoyPayloadTooLargeException) {
             }
@@ -1017,7 +1046,7 @@ class VentoyLayoutTest {
             if (blows == 1) throw RuntimeException("injected write fault")
         }
         try {
-            VentoyInstaller.update(disk, fakeAssets)
+            updateWithKnownVersion(disk, fakeAssets)
             fail("expected VentoyMutationFailedException")
         } catch (e: VentoyMutationFailedException) {
             assertTrue(e.message!!.contains("after the disk was modified"))
@@ -1091,6 +1120,294 @@ class VentoyLayoutTest {
         } catch (e: java.util.concurrent.CancellationException) {
             fail("post-mutation cancel must be Partial via VentoyMutationFailedException, got bare cancel: $e")
         }
+    }
+
+
+    @Test
+    fun parseVentoyVersionFromGrubCfgMatchesUpstream() {
+        assertEquals(
+            "1.1.18",
+            VentoyLayout.parseVentoyVersionFromGrubCfg("set VENTOY_VERSION=\"1.1.18\"\n"),
+        )
+        assertEquals(
+            "1.0.99",
+            VentoyLayout.parseVentoyVersionFromGrubCfg("VENTOY_VERSION=1.0.99\r\n"),
+        )
+        assertNull(VentoyLayout.parseVentoyVersionFromGrubCfg("no version here"))
+        assertNull(VentoyLayout.parseVentoyVersionFromGrubCfg("VENTOY_VERSION="))
+    }
+
+    @Test
+    fun ventoyExfatAuSizeMatchesUpstreamClusterRule() {
+        val sector = VentoyLayout.SECTOR_SIZE
+        // disk_sector_num / 2097152 → GiB; ≤32 → 64 sectors, else 256.
+        assertEquals(64 * sector, VentoyInstaller.ventoyExfatAuSizeBytes(2_097_152UL))
+        assertEquals(64 * sector, VentoyInstaller.ventoyExfatAuSizeBytes(32UL * 2_097_152UL))
+        assertEquals(256 * sector, VentoyInstaller.ventoyExfatAuSizeBytes(33UL * 2_097_152UL))
+    }
+
+    @Test
+    fun installWritesUniqueDiskAndPartGuidsAndBoot446() {
+        val d1 = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        val d2 = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(d1, gpt = true)
+        installLayoutExpectingMissingNativeFormat(d2, gpt = true)
+
+        fun diskGuid(d: RecordingDisk): ByteArray =
+            d.bytes[1UL]!!.copyOfRange(56, 72)
+        fun partGuid(d: RecordingDisk, entry: Int): ByteArray =
+            d.bytes[2UL]!!.copyOfRange(entry * 128 + 16, entry * 128 + 32)
+
+        val g1 = diskGuid(d1)
+        val g2 = diskGuid(d2)
+        assertFalse("DiskGuid must not be all zero", g1.all { it == 0.toByte() })
+        assertFalse("DiskGuid must differ across installs", g1.contentEquals(g2))
+        assertFalse(
+            "Part1/Part2 GUIDs must differ",
+            partGuid(d1, 0).contentEquals(partGuid(d1, 1)),
+        )
+        assertFalse(
+            "Part1 GUID must differ across installs",
+            partGuid(d1, 0).contentEquals(partGuid(d2, 0)),
+        )
+
+        // Install copies boot.img[0..446); signature at 0x1B8 is then rewritten.
+        val mbr = d1.bytes[0UL]!!
+        assertEquals(
+            fakeAssets.bootImg[444],
+            mbr[444],
+        )
+        assertEquals(
+            fakeAssets.bootImg[445],
+            mbr[445],
+        )
+    }
+
+    @Test
+    fun updateWritesExactEfiPartSectorsAndSkipsGptWhenAttrOk() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        // Attr already Long.MIN_VALUE from install — update must not rewrite GPT headers/tables.
+        disk.resetStats()
+        updateWithKnownVersion(disk, fakeAssets)
+        val probe = requireNotNull(VentoyLayout.probe(disk))
+        val part2Start = probe.part2StartLba.toLong()
+        val covered = BooleanArray(VentoyLayout.EFI_PART_SECTORS.toInt())
+        for ((start, count) in disk.writtenRanges) {
+            for (i in 0 until count) {
+                val lba = start + i
+                if (lba >= part2Start && lba < part2Start + VentoyLayout.EFI_PART_SECTORS) {
+                    covered[(lba - part2Start).toInt()] = true
+                }
+            }
+        }
+        assertTrue(
+            "update must rewrite every official Part2 sector",
+            covered.all { it },
+        )
+        assertFalse("primary GPT header untouched when attr ok", disk.wasRangeWritten(1L, 1L))
+        assertFalse("primary GPT table untouched when attr ok", disk.wasRangeWritten(2L, 1L))
+    }
+
+    @Test
+    fun probeReportsAbsentVersionWithoutError() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        val probe = requireNotNull(VentoyLayout.probe(disk) { _, _, _ -> Result.success("") })
+        // Synthetic Part2 is not a FAT volume; absence is explicit, never a pinned version.
+        assertEquals("", probe.version)
+        assertNull(probe.versionError)
+        assertTrue(probe.isVentoy)
+        assertEquals(VentoyLayout.EFI_PART_SECTORS.toULong(), probe.part2SectorCount)
+    }
+
+    @Test
+    fun probeExposesVersionReadFailureInsteadOfMaskingIt() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        val boom = java.io.IOException("fat read failed")
+        val probe = requireNotNull(VentoyLayout.probe(disk) { _, _, _ -> Result.failure(boom) })
+        assertEquals("", probe.version)
+        assertSame(boom, probe.versionError)
+    }
+
+    @Test
+    fun updateRestoresNonZeroRsvWithoutFalsePartial() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        val sectorBytes = VentoyLayout.SECTOR_SIZE
+        val rsv = ByteArray((VentoyLayout.RSV_SECTORS * sectorBytes).toInt()) { i ->
+            ((i * 7 + 3) and 0xFF).toByte()
+        }
+        for (i in 0 until VentoyLayout.RSV_SECTORS.toInt()) {
+            val from = i * sectorBytes
+            disk.write(
+                (VentoyLayout.RSV_LBA + i).toULong(),
+                ByteBuffer.wrap(rsv.copyOfRange(from, from + sectorBytes)),
+            )
+        }
+        disk.resetStats()
+
+        // Core write covers LBA 2040..2047; restoring RSV afterwards must not look like a
+        // read-back mismatch (regression guard for the false-Partial path).
+        updateWithKnownVersion(disk, fakeAssets)
+
+        for (i in 0 until VentoyLayout.RSV_SECTORS.toInt()) {
+            val from = i * sectorBytes
+            assertArrayEquals(
+                "update must restore RSV sector $i",
+                rsv.copyOfRange(from, from + sectorBytes),
+                requireNotNull(disk.bytes[(VentoyLayout.RSV_LBA + i).toULong()]) { "RSV sector $i missing" },
+            )
+        }
+        assertTrue(
+            "core prefix before the RSV window must still be verified",
+            disk.wasRangeWritten(34L, VentoyLayout.RSV_LBA - 34L),
+        )
+    }
+
+    @Test
+    fun installFailsClosedOnReadBackMismatch() {
+        val corruptLba = 34UL
+        val disk = object : RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512) {
+            override fun read(lba: ULong, destination: ByteBuffer) {
+                super.read(lba, destination)
+                if (lba == corruptLba) {
+                    val a = destination.array()
+                    a[0] = (a[0].toInt() xor 0x5A).toByte()
+                }
+            }
+        }
+        try {
+            VentoyInstaller.install(disk, fakeAssets, gpt = true)
+            fail("read-back mismatch must fail closed as Partial")
+        } catch (e: VentoyMutationFailedException) {
+            assertTrue(
+                "message must name the verify failure: ${e.message}",
+                e.message!!.contains("write verify failed"),
+            )
+        }
+    }
+
+    @Test
+    fun ventoyFormatLabelIsValidExfatLabel() {
+        assertTrue(FormatCatalog.supportsVolumeLabel(FilesystemId.EXFAT))
+        assertEquals("Ventoy", VolumeLabel.normalize("Ventoy"))
+        assertNull(VolumeLabel.problem("Ventoy", FilesystemId.EXFAT))
+    }
+
+    @Test
+    fun updateRefusesMissingVersionBeforeAnyWrite() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        disk.resetStats()
+        try {
+            VentoyInstaller.updateChecked(
+                disk,
+                fakeAssets,
+                versionReader = { _, _, _ -> Result.success("") },
+            )
+            fail("update must refuse a disk without a VENTOY_VERSION marker")
+        } catch (e: IncompatibleVentoyException) {
+            assertTrue(
+                "message must name the marker: ${e.message}",
+                e.message!!.contains("VENTOY_VERSION"),
+            )
+        }
+        assertEquals("refusal must happen before any write", 0, disk.writeCount)
+    }
+
+    @Test
+    fun updateRefusesUnreadableVersionAndKeepsCause() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        disk.resetStats()
+        val boom = java.io.IOException("fat read failed")
+        try {
+            VentoyInstaller.updateChecked(
+                disk,
+                fakeAssets,
+                versionReader = { _, _, _ -> Result.failure(boom) },
+            )
+            fail("update must refuse when VTOYEFI cannot be read")
+        } catch (e: IncompatibleVentoyException) {
+            assertTrue(
+                "message must state the refusal: ${e.message}",
+                e.message!!.contains("Cannot read the Ventoy version"),
+            )
+            assertSame("FAT/IO cause must not be masked", boom, e.cause)
+        }
+        assertEquals("refusal must happen before any write", 0, disk.writeCount)
+    }
+
+    @Test
+    fun updateRejectsGarbageVersion() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        disk.resetStats()
+        try {
+            VentoyInstaller.updateChecked(
+                disk,
+                fakeAssets,
+                versionReader = { _, _, _ -> Result.success("bad\u0000token") },
+            )
+            fail("update must reject an invalid VENTOY_VERSION marker")
+        } catch (e: IncompatibleVentoyException) {
+            assertTrue(e.message!!.contains("no valid VENTOY_VERSION"))
+        }
+        assertEquals("refusal must happen before any write", 0, disk.writeCount)
+    }
+
+    @Test
+    fun updatePropagatesMissingFatEngineUnwrapped() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        disk.resetStats()
+        val missing = usb.EngineMissingException("FatFs", UnsatisfiedLinkError("native"))
+        try {
+            VentoyInstaller.updateChecked(
+                disk,
+                fakeAssets,
+                versionReader = { _, _, _ -> Result.failure(missing) },
+            )
+            fail("update must fail closed when the FAT engine is absent")
+        } catch (e: usb.EngineMissingException) {
+            assertSame("engine-missing must not be wrapped or masked", missing, e)
+        }
+        assertEquals("refusal must happen before any write", 0, disk.writeCount)
+    }
+
+    @Test
+    fun probeReadsVersionFromRealFatWhenNativeAvailable() {
+        val part1Sectors = 8192L
+        val part2Sectors = VentoyLayout.EFI_PART_SECTORS
+        val disk = syntheticStick(part1Sectors = part1Sectors, part2Sectors = part2Sectors)
+        val part2 = VirtualPartition(
+            startLba = 2048UL + part1Sectors.toULong(),
+            sectorCount = part2Sectors.toULong(),
+            disk = disk,
+        )
+        val callback = BlockDeviceFatCallback(part2)
+        try {
+            FatFs.mkfs(callback, part2.sectorSize, part2.sectorCount.toLong(), FatMkfsType.FAT)
+        } catch (missingNative: UnsatisfiedLinkError) {
+            // Direct JNI call: no requireLinkedEngine wrapper, so the raw linker error surfaces.
+            // Only a genuinely absent native library may skip; a real mkfs failure must fail.
+            Assume.assumeNoException("FatFs native not linked in this test run", missingNative)
+            return
+        }
+        FatFs.mount(callback, part2.sectorSize, part2.sectorCount.toLong()).use { volume ->
+            volume.mkdir("/grub")
+            volume.write(
+                "/grub/grub.cfg",
+                "set VENTOY_VERSION=\"1.1.18\"\n".toByteArray(),
+                create = true,
+            )
+            volume.sync()
+        }
+        val probe = requireNotNull(VentoyLayout.probe(disk))
+        assertEquals("1.1.18", probe.version)
+        assertNull(probe.versionError)
     }
 
     @Test

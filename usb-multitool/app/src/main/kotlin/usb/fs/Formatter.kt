@@ -19,12 +19,14 @@ object Formatter {
         partition: VirtualPartition,
         id: FilesystemId,
         label: String = "",
+        /** Allocation unit size in bytes for FatFs f_mkfs; 0 = library default. */
+        auSizeBytes: Int = 0,
     ) {
         requireSupported(id)
         val normalizedLabel = requireWritableLabel(id, label)
         when (id) {
             FilesystemId.FAT, FilesystemId.EXFAT -> {
-                FormatNative.fat(partition, id)
+                FormatNative.fat(partition, id, auSizeBytes)
                 if (normalizedLabel.isNotEmpty()) {
                     FatFs.setLabel(
                         callback = BlockDeviceFatCallback(partition),
@@ -76,12 +78,13 @@ object Formatter {
 }
 
 internal object FormatNative {
-    fun fat(partition: VirtualPartition, id: FilesystemId) {
+    fun fat(partition: VirtualPartition, id: FilesystemId, auSizeBytes: Int = 0) {
         FatFs.mkfs(
             callback = BlockDeviceFatCallback(partition),
             sectorSize = partition.sectorSize,
             sectorCount = partition.sectorCount.toLong(),
             type = fatMkfsType(id, partition),
+            auSizeBytes = auSizeBytes,
         )
     }
 

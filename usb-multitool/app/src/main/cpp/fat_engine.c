@@ -494,7 +494,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 }
 
 int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
-		    FatMkfsType type)
+		    FatMkfsType type, uint32_t au_size_bytes)
 {
 	FatVolume *v;
 	MKFS_PARM opt;
@@ -532,7 +532,7 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 	opt.n_fat = 1;
 	opt.align = 0;
 	opt.n_root = 0;
-	opt.au_size = 0;
+	opt.au_size = au_size_bytes;
 
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	/* Mount work area without immediate mount so f_mkfs can bind the drive. */

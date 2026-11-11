@@ -3,10 +3,12 @@ package usb.ventoy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.CRC32
+import usb.EngineMissingException
 import usb.device.BlockDevice
 import usb.requireLinkedEngine
 import usb.fs.BlockDeviceFatCallback
 import usb.fs.FatFs
+import usb.fs.FatFsException
 import usb.fs.FatKind
 import usb.fs.FilesystemId
 import usb.fs.Formatter
@@ -17,7 +19,7 @@ import usb.partition.PartitionType
 import usb.partition.TableScheme
 import usb.partition.VirtualPartition
 
-class IncompatibleVentoyException(message: String) : Exception(message)
+class IncompatibleVentoyException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 class VentoyOverwriteRequiredException(message: String) : Exception(message)
 
@@ -42,7 +44,10 @@ data class VentoyProbeResult(
     val diskUuid: ByteArray,
     val diskSignature: Int,
     val rsvData: ByteArray,
+    /** Parsed `VENTOY_VERSION` or empty when the marker/file is absent. */
     val version: String,
+    /** Non-null only when reading VTOYEFI failed (FAT/IO/engine); never swallowed silently. */
+    val versionError: Throwable? = null,
 )
 
 object VentoyLayout {
@@ -54,6 +59,13 @@ object VentoyLayout {
     const val MBR_CORE_MAX_SECTORS = 2047L
     const val GPT_CORE_MAX_SECTORS = 2014L
 
+    /** Ventoy reserved-data window restored after core writes (upstream LBA 2040..2047). */
+    const val RSV_LBA = 2040L
+    const val RSV_SECTORS = 8L
+
+    /** `grub.cfg` is a small text file; anything larger is not a valid Ventoy marker. */
+    const val MAX_GRUB_CFG_BYTES = 1_048_576L
+
     fun isVentoyDisk(disk: BlockDevice): Boolean {
         if (disk.sectorSize == 4096) {
             throw UnsupportedSectorSizeException("Upstream Ventoy does not support 4K native devices")
@@ -64,7 +76,13 @@ object VentoyLayout {
         return probe(disk)?.isVentoy == true
     }
 
-    fun probe(disk: BlockDevice): VentoyProbeResult? {
+    fun probe(disk: BlockDevice): VentoyProbeResult? = probe(disk, ::readVentoyVersionFromPart2)
+
+    /** Testable seam: [versionReader] must return the real FAT read in production. */
+    internal fun probe(
+        disk: BlockDevice,
+        versionReader: (BlockDevice, ULong, ULong) -> Result<String>,
+    ): VentoyProbeResult? {
         if (disk.sectorSize == 4096) {
             throw UnsupportedSectorSizeException("Upstream Ventoy does not support 4K native devices")
         }
@@ -113,7 +131,8 @@ object VentoyLayout {
             if (p1Last < p1Start || p2Last < p2Start) return null
             if (p2Start != (p1Last + 1UL)) return null
             if (p1Start != PART1_START_SECTOR.toULong()) return null
-            if (p2Count < 2048UL) return null
+            // Upstream is_disk_contains_ventoy: Part2 size is exactly 65536 sectors.
+            if (p2Count != EFI_PART_SECTORS.toULong()) return null
             if (p1Last - p1Start + 1UL < 2048UL) return null
             if (p1Start >= disk.sectorCount || p1Last >= disk.sectorCount) return null
             if (p2Start >= disk.sectorCount || p2Last >= disk.sectorCount) return null
@@ -127,8 +146,9 @@ object VentoyLayout {
             val nameStr = String(nameBytes, Charsets.UTF_16LE)
             if (nameStr != "VTOYEFI") return null
 
-            val rsv = ByteBuffer.allocate(8 * SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            disk.read(2040L, rsv)
+            val rsv = ByteBuffer.allocate((RSV_SECTORS * SECTOR_SIZE).toInt()).order(ByteOrder.LITTLE_ENDIAN)
+            disk.read(RSV_LBA, rsv)
+            val versionResult = versionReader(disk, p2Start, p2Count)
 
             return VentoyProbeResult(
                 isVentoy = true,
@@ -140,7 +160,9 @@ object VentoyLayout {
                 diskUuid = uuid,
                 diskSignature = sig,
                 rsvData = rsv.array(),
-                version = VentoyAssets.PINNED_RELEASE,
+                // Real version from Part2 FAT /grub/grub.cfg; absence vs failure is explicit.
+                version = versionResult.getOrNull().orEmpty(),
+                versionError = versionResult.exceptionOrNull(),
             )
         } else {
             val p0Start = (ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL).toULong()
@@ -152,12 +174,14 @@ object VentoyLayout {
             if (p0Count == 0UL || p1Count == 0UL) return null
             if (p0Count < 2048UL) return null
             if (p0Start != PART1_START_SECTOR.toULong() || (p0Start + p0Count) != p1Start) return null
-            if (p1Count < 2048UL || p1Flag != 0xEF) return null
+            // Upstream: Part2 size must be exactly VENTOY_SECTOR_NUM (65536); type 0xEF.
+            if (p1Count != EFI_PART_SECTORS.toULong() || p1Flag != 0xEF) return null
             if (p0Start >= disk.sectorCount || p0Count > disk.sectorCount - p0Start) return null
             if (p1Start >= disk.sectorCount || p1Count > disk.sectorCount - p1Start) return null
 
-            val rsv = ByteBuffer.allocate(8 * SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            disk.read(2040L, rsv)
+            val rsv = ByteBuffer.allocate((RSV_SECTORS * SECTOR_SIZE).toInt()).order(ByteOrder.LITTLE_ENDIAN)
+            disk.read(RSV_LBA, rsv)
+            val versionResult = versionReader(disk, p1Start, p1Count)
 
             return VentoyProbeResult(
                 isVentoy = true,
@@ -169,7 +193,8 @@ object VentoyLayout {
                 diskUuid = uuid,
                 diskSignature = sig,
                 rsvData = rsv.array(),
-                version = VentoyAssets.PINNED_RELEASE,
+                version = versionResult.getOrNull().orEmpty(),
+                versionError = versionResult.exceptionOrNull(),
             )
         }
     }
@@ -235,6 +260,84 @@ object VentoyLayout {
         }
         return crc.inv()
     }
+
+    /**
+     * Upstream `vtoyfat` reads Part2 FAT `/grub/grub.cfg` and extracts `VENTOY_VERSION=`.
+     * Returns [Result.failure] for FAT/IO/engine failures (never swallowed); a mounted FAT
+     * volume without the marker/file yields an empty [Result.success] (absent, not unknown).
+     */
+    internal fun readVentoyVersionFromPart2(
+        disk: BlockDevice,
+        part2StartLba: ULong,
+        part2SectorCount: ULong,
+    ): Result<String> {
+        if (part2SectorCount == 0UL) {
+            return Result.failure(IllegalArgumentException("VTOYEFI sector count is zero"))
+        }
+        return try {
+            Result.success(
+                requireLinkedEngine("FatFs") {
+                    val partition = VirtualPartition(part2StartLba, part2SectorCount, disk)
+                    FatFs.mount(
+                        BlockDeviceFatCallback(partition),
+                        partition.sectorSize,
+                        partition.sectorCount.toLong(),
+                    ).use { volume ->
+                        val entry = volume.statOrNull("/grub/grub.cfg")
+                        when {
+                            entry == null -> ""
+                            entry.isDirectory ->
+                                throw FatFsException("/grub/grub.cfg is a directory, not a file")
+                            entry.size <= 0L || entry.size > MAX_GRUB_CFG_BYTES ->
+                                throw FatFsException("/grub/grub.cfg size ${entry.size} is invalid")
+                            else -> parseVentoyVersionFromGrubCfg(
+                                volume.read("/grub/grub.cfg", 0L, entry.size.toInt())
+                                    .toString(Charsets.US_ASCII),
+                            ).orEmpty()
+                        }
+                    }
+                },
+            )
+        } catch (cancel: java.util.concurrent.CancellationException) {
+            throw cancel
+        } catch (failure: Throwable) {
+            Result.failure(failure)
+        }
+    }
+
+    /**
+     * Sanity gate for the parsed marker: non-blank printable token, bounded length.
+     * Deliberately does not pin a release format (upstream versions/packagings vary).
+     */
+    internal fun isValidVentoyVersion(value: String): Boolean {
+        val v = value.trim()
+        if (v.isEmpty() || v.length > 32) return false
+        return v.all {
+            it in '0'..'9' || it in 'a'..'z' || it in 'A'..'Z' ||
+                it == '.' || it == '-' || it == '_' || it == '+'
+        }
+    }
+
+    /**
+     * Byte-exact parse of upstream `get_ventoy_version` in `vtoyfat.c`:
+     * find `VENTOY_VERSION=`, optional opening quote, then run until `"`, CR, LF, or NUL.
+     */
+    internal fun parseVentoyVersionFromGrubCfg(text: String): String? {
+        val marker = "VENTOY_VERSION="
+        val at = text.indexOf(marker)
+        if (at < 0) return null
+        var pos = at + marker.length
+        if (pos < text.length && text[pos] == '"') pos++
+        var end = pos
+        while (end < text.length) {
+            val c = text[end]
+            if (c == '"' || c == '\r' || c == '\n' || c == '\u0000') break
+            end++
+        }
+        val ver = text.substring(pos, end).trim()
+        return ver.takeIf { it.isNotEmpty() }
+    }
+
 
 }
 
@@ -322,18 +425,21 @@ object VentoyInstaller {
             // GPT dd also stops at LBA 2047); real bytes are never dropped here.
             coreBuf.put(decompressedCore, 0, minOf(decompressedCore.size, coreBuf.capacity()))
             coreBuf.array()[500] = 35 // Blocklist marker
+            val coreExpected = coreBuf.array().copyOf()
             coreBuf.flip()
             disk.write(34L, coreBuf)
 
-            // Construct GPT tables
+            // Construct GPT tables — unique DiskGuid/PartGuid per install (upstream CoCreateGuid).
+            val diskGuid = randomGptGuidBytes()
+            val part1Guid = randomGptGuidBytes()
+            val part2Guid = randomGptGuidBytes()
             val tblBuf = ByteBuffer.allocate(32 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
             val tbl = tblBuf.array()
             // Entry 0: Ventoy Data (Partition 1)
             // Windows basic data GUID: ebd0a0a2-b9e5-4433-87c0-68b6b72699c7
             putGuid(tbl, 0, 0xebd0a0a2.toInt(), 0xb9e5.toShort(), 0x4433.toShort(),
                 byteArrayOf(0x87.toByte(), 0xc0.toByte(), 0x68.toByte(), 0xb6.toByte(), 0xb7.toByte(), 0x26.toByte(), 0x99.toByte(), 0xc7.toByte()))
-            putGuid(tbl, 16, 0x11111111, 0x2222.toShort(), 0x3333.toShort(),
-                byteArrayOf(0x44, 0x55, 0x66, 0x77, 0x88.toByte(), 0x99.toByte(), 0xAA.toByte(), 0xBB.toByte()))
+            part1Guid.copyInto(tbl, 16)
             ByteBuffer.wrap(tbl, 32, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(part1Start)
             ByteBuffer.wrap(tbl, 40, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(part1End)
             ByteBuffer.wrap(tbl, 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(0L)
@@ -342,8 +448,7 @@ object VentoyInstaller {
             // Entry 1: VTOYEFI (Partition 2)
             putGuid(tbl, 128, 0xebd0a0a2.toInt(), 0xb9e5.toShort(), 0x4433.toShort(),
                 byteArrayOf(0x87.toByte(), 0xc0.toByte(), 0x68.toByte(), 0xb6.toByte(), 0xb7.toByte(), 0x26.toByte(), 0x99.toByte(), 0xc7.toByte()))
-            putGuid(tbl, 128 + 16, 0x22222222, 0x3333.toShort(), 0x4444.toShort(),
-                byteArrayOf(0x55, 0x66, 0x77, 0x88.toByte(), 0x99.toByte(), 0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte()))
+            part2Guid.copyInto(tbl, 128 + 16)
             ByteBuffer.wrap(tbl, 128 + 32, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(part2Start)
             ByteBuffer.wrap(tbl, 128 + 40, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(part2End)
             ByteBuffer.wrap(tbl, 128 + 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(Long.MIN_VALUE)
@@ -361,6 +466,7 @@ object VentoyInstaller {
             ByteBuffer.wrap(pHdrArr, 32, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 1L)
             ByteBuffer.wrap(pHdrArr, 40, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(34L)
             ByteBuffer.wrap(pHdrArr, 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(diskSectors - 34L)
+            diskGuid.copyInto(pHdrArr, 56)
             ByteBuffer.wrap(pHdrArr, 72, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(2L)
             ByteBuffer.wrap(pHdrArr, 80, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(128)
             ByteBuffer.wrap(pHdrArr, 84, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(128)
@@ -379,19 +485,20 @@ object VentoyInstaller {
             val backCrc = crc32(bHdrArr, 0, 92)
             ByteBuffer.wrap(bHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(backCrc)
 
-            // Protective MBR
+            // Protective MBR — upstream install dd boot.img count=446
             val mbrBuf = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
             val mbr = mbrBuf.array()
-            assets.bootImg.copyInto(mbr, 0, 0, minOf(assets.bootImg.size, 440))
+            copyBootCode(assets.bootImg, mbr, INSTALL_BOOT_BYTES)
             mbr[92] = 0x22
             mbr[446] = 0x00 // Not active
             mbr[450] = 0xEE.toByte() // Protective MBR
             putChs(mbr, 446 + 1, head = 0, sector = 1, cylinder = 0)
             putChs(mbr, 446 + 5, head = 254, sector = 63, cylinder = 1023)
-            val rng = java.util.Random()
-            val randUuid = ByteArray(16).apply { rng.nextBytes(this) }
+            val randUuid = randomRawBytes(16)
             randUuid.copyInto(mbr, 0x180)
-            ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(rng.nextInt())
+            // Upstream: last 4 bytes of a fresh uuid as disk signature
+            ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(ByteBuffer.wrap(randomRawBytes(4)).order(ByteOrder.LITTLE_ENDIAN).int)
             ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(1)
             val protSectors = minOf(diskSectors - 1L, 0xFFFFFFFFL).toInt()
             ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(protSectors)
@@ -404,6 +511,14 @@ object VentoyInstaller {
             disk.write(2L, ByteBuffer.wrap(tbl))
             disk.write(diskSectors - 33L, ByteBuffer.wrap(tbl))
             disk.write(diskSectors - 1L, ByteBuffer.wrap(bHdrArr))
+
+            requireReadBack(disk, 0L, mbr)
+            requireReadBack(disk, 1L, pHdrArr)
+            requireReadBack(disk, 2L, tbl)
+            requireReadBack(disk, diskSectors - 33L, tbl)
+            requireReadBack(disk, diskSectors - 1L, bHdrArr)
+            requireReadBack(disk, 34L, coreExpected)
+            requirePart2Ends(disk, part2Start, decompressedEfi)
         } else {
             // Write legacy GRUB stage1 at LBA 1
             val coreBuf = ByteBuffer.allocate(
@@ -411,20 +526,21 @@ object VentoyInstaller {
             ).order(ByteOrder.LITTLE_ENDIAN)
             val copyLen = decompressedCore.size
             coreBuf.put(decompressedCore, 0, copyLen)
+            val coreExpected = coreBuf.array().copyOf(coreBuf.position())
             coreBuf.flip()
             disk.write(1L, coreBuf)
 
-            // Construct MBR
+            // Construct MBR — upstream install boot.img count=446
             val mbrBuf = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
             val mbr = mbrBuf.array()
-            assets.bootImg.copyInto(mbr, 0, 0, minOf(assets.bootImg.size, 440))
+            copyBootCode(assets.bootImg, mbr, INSTALL_BOOT_BYTES)
             // Partition 1
             mbr[446] = 0x80.toByte() // Active bootable
             mbr[450] = 0x07.toByte() // exFAT/NTFS
-            val rng = java.util.Random()
-            val randUuid = ByteArray(16).apply { rng.nextBytes(this) }
+            val randUuid = randomRawBytes(16)
             randUuid.copyInto(mbr, 0x180)
-            ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(rng.nextInt())
+            ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(ByteBuffer.wrap(randomRawBytes(4)).order(ByteOrder.LITTLE_ENDIAN).int)
             ByteBuffer.wrap(mbr, 446 + 8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part1Start.toInt())
             ByteBuffer.wrap(mbr, 446 + 12, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(part1Count.toInt())
             fillMbrPartChs(mbr, 446, diskSectors, part1Start, part1Count)
@@ -440,12 +556,19 @@ object VentoyInstaller {
             mbr[511] = 0xAA.toByte()
 
             disk.write(0L, mbrBuf)
+            requireReadBack(disk, 0L, mbr)
+            requireReadBack(disk, 1L, coreExpected)
+            requirePart2Ends(disk, part2Start, decompressedEfi)
         }
 
         disk.sync()
 
         // Part1 exFAT only after layout preflight+writes; failure here is Partial.
-        formatDataPartitionExfat(disk, part1Start.toULong(), part1Count.toULong())
+        formatDataPartitionExfat(
+            disk = disk,
+            startLba = part1Start.toULong(),
+            sectorCount = part1Count.toULong(),
+        )
         disk.sync()
 
         return PartitionTable(
@@ -469,14 +592,14 @@ object VentoyInstaller {
             diskSectorCount = disk.sectorCount,
             sectorSize = disk.sectorSize,
         )
-            } catch (t: Throwable) {
-                if (t is VentoyMutationFailedException) throw t
-                // Disk already mutated — even cancel is Partial, never untouched Cancelled.
-                throw VentoyMutationFailedException(
-                    "Ventoy install failed after the disk was modified: ${t.message}",
-                    t,
-                )
-            }
+        } catch (t: Throwable) {
+            if (t is VentoyMutationFailedException) throw t
+            // Disk already mutated — even cancel is Partial, never untouched Cancelled.
+            throw VentoyMutationFailedException(
+                "Ventoy install failed after the disk was modified: ${t.message}",
+                t,
+            )
+        }
     }
 
     fun update(
@@ -484,6 +607,21 @@ object VentoyInstaller {
         assets: VentoyAssets,
         isActive: () -> Boolean = { true },
         onProgress: (done: Long, total: Long) -> Unit = { _, _ -> },
+    ): PartitionTable = updateChecked(
+        disk = disk,
+        assets = assets,
+        isActive = isActive,
+        onProgress = onProgress,
+        versionReader = VentoyLayout::readVentoyVersionFromPart2,
+    )
+
+    /** Update with an explicit version reader; tests inject it, production uses the FAT read. */
+    internal fun updateChecked(
+        disk: BlockDevice,
+        assets: VentoyAssets,
+        isActive: () -> Boolean = { true },
+        onProgress: (done: Long, total: Long) -> Unit = { _, _ -> },
+        versionReader: (BlockDevice, ULong, ULong) -> Result<String>,
     ): PartitionTable {
         checkActive(isActive, "Ventoy update")
         if (disk.sectorSize == 4096) {
@@ -495,10 +633,30 @@ object VentoyInstaller {
         assets.validateChecksums(strict = true)
 
         // Refuse anything that is not an existing Ventoy layout: update never formats.
-        val probe = VentoyLayout.probe(disk)
+        val probe = VentoyLayout.probe(disk, versionReader)
         if (probe == null || !probe.isVentoy) {
             throw IncompatibleVentoyException(
                 "Disk is not a recognized Ventoy layout; refusing update (use install to create one)",
+            )
+        }
+
+        // Structure alone is forgeable: require a real, readable VENTOY_VERSION marker.
+        val versionFailure = probe.versionError
+        if (versionFailure != null) {
+            when (versionFailure) {
+                is java.util.concurrent.CancellationException -> throw versionFailure
+                is EngineMissingException -> throw versionFailure
+                else -> throw IncompatibleVentoyException(
+                    "Cannot read the Ventoy version from VTOYEFI; refusing update: " +
+                        "${versionFailure.message}",
+                    versionFailure,
+                )
+            }
+        }
+        if (!VentoyLayout.isValidVentoyVersion(probe.version)) {
+            throw IncompatibleVentoyException(
+                "VTOYEFI carries no valid VENTOY_VERSION marker (got '${probe.version}'); " +
+                    "refusing update without proof this is a real Ventoy disk",
             )
         }
 
@@ -510,12 +668,19 @@ object VentoyInstaller {
         val decompressedEfi = assets.decompressEfiPartImg()
 
         // Payload preflight — before ANY disk mutation.
+        // Upstream always rewrites exactly VENTOY_SECTOR_NUM (65536) into Part2.
+        if (probe.part2SectorCount != VentoyLayout.EFI_PART_SECTORS.toULong()) {
+            throw IncompatibleVentoyException(
+                "VTOYEFI size is ${probe.part2SectorCount} sectors; upstream requires exactly " +
+                    "${VentoyLayout.EFI_PART_SECTORS}",
+            )
+        }
         val efiSectors =
             (decompressedEfi.size.toLong() + VentoyLayout.SECTOR_SIZE - 1) / VentoyLayout.SECTOR_SIZE
-        if (efiSectors > probe.part2SectorCount.toLong()) {
+        if (efiSectors > VentoyLayout.EFI_PART_SECTORS) {
             throw VentoyPayloadTooLargeException(
                 "EFI payload needs $efiSectors sectors but the VTOYEFI partition has only " +
-                    "${probe.part2SectorCount}; update would truncate the boot image",
+                    "${VentoyLayout.EFI_PART_SECTORS}; update would truncate the boot image",
             )
         }
         val coreLimitSectors = if (probe.scheme == TableScheme.GPT) {
@@ -558,42 +723,42 @@ object VentoyInstaller {
         checkActive(isActive, "Ventoy update")
 
         try {
-        // 1. Write new VTOYEFI partition image at part2Start. First mutation → Partial on failure.
-        val payloadBytes = probe.part2SectorCount.toLong() * VentoyLayout.SECTOR_SIZE
-        writeBufferToDisk(disk, part2Start, decompressedEfi, probe.part2SectorCount.toLong()) { done ->
+        // 1. Write new VTOYEFI image — always exactly 65536 sectors (upstream VENTOY_SECTOR_NUM).
+        val payloadBytes = VentoyLayout.EFI_PART_SECTORS * VentoyLayout.SECTOR_SIZE
+        writeBufferToDisk(disk, part2Start, decompressedEfi, VentoyLayout.EFI_PART_SECTORS) { done ->
             onProgress(done, payloadBytes)
         }
         checkActive(isActive, "Ventoy update")
 
         // 2. Write new core.img in boot gap
+        val coreExpected: ByteArray
         if (probe.scheme == TableScheme.GPT) {
             val coreBuf = ByteBuffer.allocate(
                 VentoyLayout.GPT_CORE_MAX_SECTORS.toInt() * VentoyLayout.SECTOR_SIZE,
             ).order(ByteOrder.LITTLE_ENDIAN)
-            // Preflight proved any tail beyond 2014 sectors is zero padding; real bytes
-            // are never dropped here (matches upstream's 2014-sector GPT write).
             coreBuf.put(decompressedCore, 0, minOf(decompressedCore.size, coreBuf.capacity()))
             coreBuf.array()[500] = 35
+            coreExpected = coreBuf.array().copyOf()
             coreBuf.flip()
             disk.write(34L, coreBuf)
         } else {
             val coreBuf = ByteBuffer.allocate(
                 VentoyLayout.MBR_CORE_MAX_SECTORS.toInt() * VentoyLayout.SECTOR_SIZE,
             ).order(ByteOrder.LITTLE_ENDIAN)
-            val copyLen = decompressedCore.size
-            coreBuf.put(decompressedCore, 0, copyLen)
+            coreBuf.put(decompressedCore, 0, decompressedCore.size)
+            coreExpected = coreBuf.array().copyOf(coreBuf.position())
             coreBuf.flip()
             disk.write(1L, coreBuf)
         }
         // 3. Restore reserved data at LBA 2040
         val rsvBuf = ByteBuffer.wrap(probe.rsvData)
-        disk.write(2040L, rsvBuf)
+        disk.write(VentoyLayout.RSV_LBA, rsvBuf)
 
-        // 4. Update MBR boot code (preserving original UUID and signature)
+        // 4. Update MBR boot code (upstream update: 440 bytes; preserve UUID + signature)
         val mbrBuf = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
         disk.read(0L, mbrBuf)
         val mbr = mbrBuf.array()
-        assets.bootImg.copyInto(mbr, 0, 0, minOf(assets.bootImg.size, 440))
+        copyBootCode(assets.bootImg, mbr, UPDATE_BOOT_BYTES)
         probe.diskUuid.copyInto(mbr, 0x180, 0, 16)
         ByteBuffer.wrap(mbr, 0x1B8, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(probe.diskSignature)
         if (probe.scheme == TableScheme.MBR) {
@@ -604,36 +769,53 @@ object VentoyInstaller {
         mbrBuf.clear()
         disk.write(0L, mbrBuf)
 
-        // 5. If GPT, refresh partition table attributes and recompute CRC
+        // 5. GPT: vtoygpt-style — rewrite attr/CRC only when Part2 attr is wrong.
         if (probe.scheme == TableScheme.GPT) {
             val tblBuf = ByteBuffer.allocate(32 * VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
             disk.read(2L, tblBuf)
             val tbl = tblBuf.array()
-            // Set Part 2 attribute 0x8000000000000000L
-            ByteBuffer.wrap(tbl, 128 + 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(Long.MIN_VALUE)
-            val tblCrc = crc32(tbl)
+            val curAttr = ByteBuffer.wrap(tbl, 128 + 48, 8).order(ByteOrder.LITTLE_ENDIAN).long
+            if (curAttr != Long.MIN_VALUE) {
+                ByteBuffer.wrap(tbl, 128 + 48, 8).order(ByteOrder.LITTLE_ENDIAN).putLong(Long.MIN_VALUE)
+                val tblCrc = crc32(tbl)
 
-            val primHdr = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            disk.read(1L, primHdr)
-            val pHdrArr = primHdr.array()
-            ByteBuffer.wrap(pHdrArr, 88, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(tblCrc)
-            ByteBuffer.wrap(pHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(0)
-            val primCrc = crc32(pHdrArr, 0, 92)
-            ByteBuffer.wrap(pHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(primCrc)
+                val primHdr = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+                disk.read(1L, primHdr)
+                val pHdrArr = primHdr.array()
+                ByteBuffer.wrap(pHdrArr, 88, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(tblCrc)
+                ByteBuffer.wrap(pHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(0)
+                val primCrc = crc32(pHdrArr, 0, 92)
+                ByteBuffer.wrap(pHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(primCrc)
 
-            val backHdr = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-            disk.read(diskSectors - 1L, backHdr)
-            val bHdrArr = backHdr.array()
-            ByteBuffer.wrap(bHdrArr, 88, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(tblCrc)
-            ByteBuffer.wrap(bHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(0)
-            val backCrc = crc32(bHdrArr, 0, 92)
-            ByteBuffer.wrap(bHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(backCrc)
+                val backHdr = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+                disk.read(diskSectors - 1L, backHdr)
+                val bHdrArr = backHdr.array()
+                ByteBuffer.wrap(bHdrArr, 88, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(tblCrc)
+                ByteBuffer.wrap(bHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(0)
+                val backCrc = crc32(bHdrArr, 0, 92)
+                ByteBuffer.wrap(bHdrArr, 16, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(backCrc)
 
-            disk.write(2L, ByteBuffer.wrap(tbl))
-            disk.write(1L, ByteBuffer.wrap(pHdrArr))
-            disk.write(diskSectors - 33L, ByteBuffer.wrap(tbl))
-            disk.write(diskSectors - 1L, ByteBuffer.wrap(bHdrArr))
+                disk.write(2L, ByteBuffer.wrap(tbl))
+                disk.write(1L, ByteBuffer.wrap(pHdrArr))
+                disk.write(diskSectors - 33L, ByteBuffer.wrap(tbl))
+                disk.write(diskSectors - 1L, ByteBuffer.wrap(bHdrArr))
+
+                requireReadBack(disk, 2L, tbl)
+                requireReadBack(disk, 1L, pHdrArr)
+                requireReadBack(disk, diskSectors - 33L, tbl)
+                requireReadBack(disk, diskSectors - 1L, bHdrArr)
+            }
         }
+
+        requireReadBack(disk, 0L, mbr)
+        if (probe.scheme == TableScheme.GPT) {
+            // RSV window (2040..2047) is restored separately; core bytes end before it.
+            requireReadBack(disk, 34L, coreExpected, VentoyLayout.RSV_LBA - 34L)
+        } else {
+            requireReadBack(disk, 1L, coreExpected, VentoyLayout.RSV_LBA - 1L)
+        }
+        requireReadBack(disk, VentoyLayout.RSV_LBA, probe.rsvData)
+        requirePart2Ends(disk, part2Start, decompressedEfi)
 
         disk.sync()
 
@@ -669,7 +851,6 @@ object VentoyInstaller {
     }
 
 
-
     /**
      * Format Ventoy data partition (partition 1) as exFAT.
      * Call only after geometry/payload preflight + layout writes.
@@ -684,7 +865,13 @@ object VentoyInstaller {
         startLba: ULong,
         sectorCount: ULong,
         format: (VirtualPartition) -> Unit = { partition ->
-            Formatter.format(partition, FilesystemId.EXFAT)
+            // Upstream: mkexfatfs -n Ventoy -s {64|256}
+            Formatter.format(
+                partition,
+                FilesystemId.EXFAT,
+                label = "Ventoy",
+                auSizeBytes = ventoyExfatAuSizeBytes(disk.sectorCount, disk.sectorSize),
+            )
         },
         probeKind: (VirtualPartition) -> FatKind = { partition ->
             FatFs.probe(
@@ -704,6 +891,17 @@ object VentoyInstaller {
                 "Ventoy part1 format verify failed: probe=$kind, expected EXFAT",
             )
         }
+    }
+
+    /**
+     * Upstream VentoyWorker.sh: cluster sectors = 64 if disk ≤ 32 GiB else 256.
+     * GiB divisor is 2097152 sectors (512-byte LBA). Returns au_size bytes for FatFs.
+     */
+    internal fun ventoyExfatAuSizeBytes(diskSectorCount: ULong, sectorSize: Int = VentoyLayout.SECTOR_SIZE): Int {
+        require(sectorSize > 0) { "sectorSize must be positive" }
+        val diskSizeGb = diskSectorCount / 2_097_152UL
+        val clusterSectors = if (diskSizeGb > 32UL) 256 else 64
+        return clusterSectors * sectorSize
     }
 
     /**
@@ -901,6 +1099,76 @@ object VentoyInstaller {
         val crc = CRC32()
         crc.update(data, offset, length)
         return crc.value.toInt()
+    }
+
+    /** Upstream install writes boot.img count=446; update uses 440 to keep signature region. */
+    private const val INSTALL_BOOT_BYTES = 446
+    private const val UPDATE_BOOT_BYTES = 440
+
+    private fun copyBootCode(bootImg: ByteArray, mbr: ByteArray, count: Int) {
+        require(count in 1..minOf(bootImg.size, 446)) {
+            "boot.img copy count $count out of range (boot=${bootImg.size})"
+        }
+        bootImg.copyInto(mbr, 0, 0, count)
+    }
+
+    /** Random 16-byte GPT GUID in mixed-endian on-disk form (matches CoCreateGuid layout). */
+    private fun randomGptGuidBytes(): ByteArray {
+        // On-disk GPT GUID bytes (mixed-endian fields). Uniqueness only; no fixed IDs.
+        return randomRawBytes(16)
+    }
+
+    private fun randomRawBytes(n: Int): ByteArray {
+        val out = ByteArray(n)
+        java.security.SecureRandom().nextBytes(out)
+        return out
+    }
+
+    /**
+     * Fail closed: critical write must match read-back or Partial mutation.
+     * Verify [expected]'s first [sectorLimit] sectors against disk at [lba].
+     * [sectorLimit] lets callers exclude the RSV window that legitimately overlaps
+     * the core region; a real mismatch still fails closed as Partial.
+     */
+    private fun requireReadBack(
+        disk: BlockDevice,
+        lba: Long,
+        expected: ByteArray,
+        sectorLimit: Long = (expected.size / VentoyLayout.SECTOR_SIZE).toLong(),
+    ) {
+        val available = (expected.size / VentoyLayout.SECTOR_SIZE).toLong()
+        // Clamp: short core payloads legitimately cover fewer sectors than the RSV gap allows.
+        val sectors = minOf(sectorLimit, available)
+        require(sectors > 0L) { "read-back buffer $available sectors is empty" }
+        val bytes = sectors * VentoyLayout.SECTOR_SIZE
+        val buf = ByteBuffer.allocate(bytes.toInt()).order(ByteOrder.LITTLE_ENDIAN)
+        disk.read(lba, buf)
+        val actual = buf.array()
+        for (i in actual.indices) {
+            if (actual[i] != expected[i]) {
+                throw VentoyMutationFailedException(
+                    "Ventoy write verify failed at LBA $lba ($bytes bytes)",
+                )
+            }
+        }
+    }
+
+    /**
+     * Verify Part2 head and last payload sector after install/update.
+     * Full 32 MiB compare skipped (cost); ends catch short/truncated writes.
+     */
+    private fun requirePart2Ends(disk: BlockDevice, part2Start: Long, efi: ByteArray) {
+        if (efi.isEmpty()) return
+        val headExpected = ByteArray(VentoyLayout.SECTOR_SIZE)
+        efi.copyInto(headExpected, 0, 0, minOf(efi.size, VentoyLayout.SECTOR_SIZE))
+        requireReadBack(disk, part2Start, headExpected)
+        val lastOff = ((efi.size - 1) / VentoyLayout.SECTOR_SIZE) * VentoyLayout.SECTOR_SIZE
+        if (lastOff > 0) {
+            val last = ByteArray(VentoyLayout.SECTOR_SIZE)
+            val n = minOf(VentoyLayout.SECTOR_SIZE, efi.size - lastOff)
+            efi.copyInto(last, 0, lastOff, lastOff + n)
+            requireReadBack(disk, part2Start + (lastOff / VentoyLayout.SECTOR_SIZE).toLong(), last)
+        }
     }
 }
 

@@ -379,12 +379,13 @@ Java_usb_fs_FatFsNative_nativeWrite(JNIEnv *env, jclass, jlong volume, jstring p
 
 extern "C" JNIEXPORT void JNICALL
 Java_usb_fs_FatFsNative_nativeMkfs(JNIEnv *env, jclass, jlong blockHandle, jint sectorSize,
-				   jlong sectorCount, jint type)
+				   jlong sectorCount, jint type, jint auSizeBytes)
 {
 	int rc = fat_engine_mkfs(static_cast<uint64_t>(blockHandle),
 				 static_cast<uint32_t>(sectorSize),
 				 static_cast<uint64_t>(sectorCount),
-				 static_cast<FatMkfsType>(type));
+				 static_cast<FatMkfsType>(type),
+				 static_cast<uint32_t>(auSizeBytes > 0 ? auSizeBytes : 0));
 	if (rc != 0) throw_fat(env, "usb/fs/FatFsException", ("mkfs failed: " + std::to_string(rc)).c_str());
 }
 

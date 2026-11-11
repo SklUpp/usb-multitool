@@ -20,11 +20,25 @@ object VentoyOperations {
         disk: BlockDevice,
         assets: VentoyAssets,
         operation: DiskOperation,
+    ) = update(disk, assets, operation, VentoyLayout::readVentoyVersionFromPart2)
+
+    /** Same update with an injected version reader (tests only). */
+    internal fun update(
+        disk: BlockDevice,
+        assets: VentoyAssets,
+        operation: DiskOperation,
+        versionReader: (BlockDevice, ULong, ULong) -> Result<String>,
     ) = mutate(operation) {
-        VentoyInstaller.update(disk, assets, isActive = operation::isActive) { done, total ->
-            operation.bytesTotal = total
-            operation.report(done)
-        }
+        VentoyInstaller.updateChecked(
+            disk = disk,
+            assets = assets,
+            isActive = operation::isActive,
+            onProgress = { done, total ->
+                operation.bytesTotal = total
+                operation.report(done)
+            },
+            versionReader = versionReader,
+        )
     }
 
     private inline fun mutate(operation: DiskOperation, body: () -> Unit) {
