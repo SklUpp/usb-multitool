@@ -96,6 +96,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreSourceInspector.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/OperationProgressMapper.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/FilesPickTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/WindowsImportLaunchQueue.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FormatPickerTest.kt" \
