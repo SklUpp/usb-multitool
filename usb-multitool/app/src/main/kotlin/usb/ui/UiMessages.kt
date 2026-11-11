@@ -69,12 +69,34 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_rescue_map_ready, *args.toTypedArray())
             UiMessageKey.ChooseGptBackup -> stringResource(R.string.msg_choose_gpt_backup)
             UiMessageKey.ChooseRescueFiles -> stringResource(R.string.msg_choose_rescue_files)
+            UiMessageKey.ChooseBackupFolder -> stringResource(R.string.msg_choose_backup_folder)
+            UiMessageKey.BackupFolderReady ->
+                stringResource(R.string.msg_backup_folder_ready, *args.toTypedArray())
+            UiMessageKey.BackupFolderPermissionLost ->
+                stringResource(R.string.msg_backup_folder_permission_lost)
+            UiMessageKey.CheckingArchive -> stringResource(R.string.msg_checking_archive)
+            UiMessageKey.ArchiveEmpty -> stringResource(R.string.msg_archive_empty)
+            UiMessageKey.ArchiveMissingImage -> stringResource(R.string.msg_archive_missing_image)
+            UiMessageKey.ArchiveMissingMap -> stringResource(R.string.msg_archive_missing_map)
+            UiMessageKey.ArchiveMultipleImages ->
+                stringResource(R.string.msg_archive_multiple_images, *args.toTypedArray())
+            UiMessageKey.ArchiveUnexpectedFiles ->
+                stringResource(R.string.msg_archive_unexpected_files, *args.toTypedArray())
+            UiMessageKey.ArchiveUnreadable ->
+                stringResource(R.string.msg_archive_unreadable, *args.toTypedArray())
             UiMessageKey.SourceInspectionRejected ->
                 stringResource(R.string.msg_source_inspection_rejected, *args.toTypedArray())
             UiMessageKey.RescueMapSectorSizeMismatch ->
                 stringResource(R.string.msg_rescue_map_sector_size_mismatch, *args.toTypedArray())
             UiMessageKey.RescueMapDiskTooSmall ->
                 stringResource(R.string.msg_rescue_map_disk_too_small, *args.toTypedArray())
+            UiMessageKey.RescueMapImageTooShort ->
+                stringResource(
+                    R.string.msg_rescue_map_image_too_short,
+                    *args.toTypedArray(),
+                )
+            UiMessageKey.RescueMapImageGeometryOverflow ->
+                stringResource(R.string.msg_rescue_map_image_geometry_overflow)
             UiMessageKey.RescueMapPartialCopy ->
                 stringResource(R.string.msg_rescue_map_partial_copy, *args.toTypedArray())
             UiMessageKey.GptBackupSectorSizeMismatch ->
@@ -409,6 +431,15 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             confirmation.rescueMapName ?: confirmation.rescueMapUri,
         )?.let { name ->
             lines += stringResource(R.string.confirm_rescue_map_source, name)
+        }
+        confirmation.rescueMapInspection?.summary?.identity?.let { source ->
+            if (source != confirmation.identity.identity) {
+                lines += stringResource(
+                    R.string.confirm_rescue_source_identity,
+                    source,
+                    confirmation.identity.identity,
+                )
+            }
         }
         lines += rescueImageInspectionLines(confirmation.rescueImageInspection)
         lines += rescueMapInspectionLines(confirmation.rescueMapInspection)

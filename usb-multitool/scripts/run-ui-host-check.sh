@@ -18,6 +18,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/FormatBytes.kt" \
   "$ROOT/app/src/main/kotlin/usb/diagnostics/ScanReport.kt" \
   "$ROOT/app/src/main/kotlin/usb/diagnostics/RescueMap.kt" \
+  "$ROOT/app/src/main/kotlin/usb/diagnostics/BackupArchive.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FilesystemId.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FormatCatalog.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/PartitionModels.kt" \
@@ -28,6 +29,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/partition/PartitionTable.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/RawRangePlan.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawWriteOutcome.kt" \
+  "$ROOT/app/src/main/kotlin/usb/image/ImageFormat.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawRangeProbe.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/WindowsTemplate.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \

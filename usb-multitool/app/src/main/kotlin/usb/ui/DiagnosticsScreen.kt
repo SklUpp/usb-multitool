@@ -48,8 +48,10 @@ fun DiagnosticsScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickBackup: () -> Unit = {},
-    onPickRescueImage: () -> Unit = {},
-    onPickRescueMap: () -> Unit = {},
+    onPickBackupFolder: () -> Unit = {},
+    onStartRescueBackup: () -> Unit = {},
+    onCreateGptCopy: () -> Unit = {},
+    onPickRestoreFolder: () -> Unit = {},
 ) {
     var dangerExpanded by remember { mutableStateOf(false) }
     val dangerActionLabel = stringResource(
@@ -105,41 +107,8 @@ fun DiagnosticsScreen(
 
         SectionCard(
             title = stringResource(R.string.diagnostics_backups_title),
-            subtitle = stringResource(R.string.diagnostics_backups_subtitle),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                DiagTile(
-                    glyph = Glyph.Copy,
-                    title = stringResource(R.string.diagnostics_rescue_backup),
-                    hint = stringResource(R.string.diagnostics_rescue_backup_hint),
-                    enabled = state.actionsEnabled,
-                    onClick = { onIntent(UiIntent.StartRescueBackup) },
-                    modifier = Modifier.weight(1f),
-                )
-                DiagTile(
-                    glyph = Glyph.Gpt,
-                    title = stringResource(R.string.diagnostics_gpt_copy),
-                    hint = stringResource(R.string.diagnostics_gpt_copy_hint),
-                    enabled = state.actionsEnabled,
-                    onClick = { onIntent(UiIntent.CaptureGptBackup) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-
-        if (!state.actionsEnabled) {
-            EmptyHint(UiReducer.presenceMessage(state.presence).localized())
-        }
-
-        SectionCard(
-            title = stringResource(R.string.diagnostics_rescue_title),
-            subtitle = stringResource(R.string.diagnostics_rescue_subtitle),
             trailing = {
-                // The full restore policy is one tap away instead of a wall of text
-                // between the file pickers and the restore button.
+                // The full restore policy is one tap away; the blocks stay compact.
                 InfoHelpButton(
                     infoTitle = stringResource(R.string.diagnostics_rescue_title),
                     infoText = stringResource(R.string.diagnostics_rescue_note),
@@ -149,37 +118,97 @@ fun DiagnosticsScreen(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.diagnostics_backup_folder),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = state.backupFolderName
+                            ?: state.backupFolderUri?.substringAfterLast('/')
+                            ?: stringResource(R.string.diagnostics_backup_folder_none),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (state.backupFolderUri != null && !state.backupFolderUsable) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 OutlinedButton(
-                    onClick = onPickRescueImage,
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    onClick = onPickBackupFolder,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     Text(
-                        text = state.rescueImageUri?.substringAfterLast('/')?.let {
-                            stringResource(R.string.diagnostics_image_named, it)
-                        } ?: stringResource(R.string.diagnostics_pick_image),
-                        style = MaterialTheme.typography.labelSmall,
+                        stringResource(
+                            if (state.backupFolderUri == null) {
+                                R.string.diagnostics_pick_folder
+                            } else {
+                                R.string.diagnostics_change_folder
+                            },
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+
+            SubsectionHeader(
+                title = stringResource(R.string.diagnostics_rescue_backup),
+                infoTitle = stringResource(R.string.diagnostics_rescue_title),
+                infoText = stringResource(R.string.diagnostics_rescue_note),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = onStartRescueBackup,
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.diagnostics_create_image),
+                        style = MaterialTheme.typography.labelMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
                 OutlinedButton(
-                    onClick = onPickRescueMap,
+                    onClick = onPickRestoreFolder,
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                 ) {
+                    GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        text = state.rescueMapUri?.substringAfterLast('/')?.let {
-                            stringResource(R.string.diagnostics_map_named, it)
-                        } ?: stringResource(R.string.diagnostics_pick_map),
-                        style = MaterialTheme.typography.labelSmall,
+                        text = stringResource(R.string.diagnostics_restore_image),
+                        style = MaterialTheme.typography.labelMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
             if (state.rescueImageUri != null) {
+                Text(
+                    text = stringResource(
+                        R.string.diagnostics_image_named,
+                        state.rescueImageInspection?.displayName
+                            ?: state.rescueImageUri?.substringAfterLast('/').orEmpty(),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 InspectionText(
                     rescueImageInspectionLines(
                         state.rescueImageInspection?.takeIf { it.uri == state.rescueImageUri },
@@ -187,82 +216,80 @@ fun DiagnosticsScreen(
                 )
             }
             if (state.rescueMapUri != null) {
+                Text(
+                    text = stringResource(
+                        R.string.diagnostics_map_named,
+                        state.rescueMapInspection?.displayName
+                            ?: state.rescueMapUri?.substringAfterLast('/').orEmpty(),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 InspectionText(
                     rescueMapInspectionLines(
                         state.rescueMapInspection?.takeIf { it.uri == state.rescueMapUri },
                     ),
                 )
             }
-            Button(
-                onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE)) },
-                enabled = state.actionsEnabled &&
-                    state.rescueImageUri != null &&
-                    state.rescueMapUri != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.diagnostics_restore_image))
-            }
-        }
 
-        SectionCard(
-            title = stringResource(R.string.diagnostics_gpt_restore_title),
-            subtitle = stringResource(R.string.diagnostics_gpt_restore_subtitle),
-            trailing = {
-                InfoHelpButton(
-                    infoTitle = stringResource(R.string.diagnostics_gpt_restore_info_title),
-                    infoText = stringResource(R.string.diagnostics_gpt_restore_info_text),
-                )
-            },
-        ) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            SubsectionHeader(
+                title = stringResource(R.string.diagnostics_gpt_copy),
+                infoTitle = stringResource(R.string.diagnostics_gpt_restore_info_title),
+                infoText = stringResource(R.string.diagnostics_gpt_restore_info_text),
+            )
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Button(
+                    onClick = onCreateGptCopy,
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                 ) {
+                    GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        text = state.backupUri?.let { it.substringAfterLast('/') }
-                            ?: stringResource(R.string.diagnostics_no_gpt_file),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = if (state.backupUri != null) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
+                        text = stringResource(R.string.diagnostics_create_gpt_copy),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    OutlinedButton(
-                        onClick = onPickBackup,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            stringResource(R.string.diagnostics_pick_backup),
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
+                }
+                OutlinedButton(
+                    onClick = onPickBackup,
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.diagnostics_restore_gpt),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
             if (state.backupUri != null) {
+                Text(
+                    text = stringResource(
+                        R.string.diagnostics_backup_file_named,
+                        state.backupInspection?.displayName
+                            ?: state.backupUri?.substringAfterLast('/').orEmpty(),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 InspectionText(
                     gptBackupInspectionLines(
                         state.backupInspection?.takeIf { it.uri == state.backupUri },
                     ),
                 )
-            }
-            Button(
-                onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE)) },
-                enabled = state.actionsEnabled && state.backupUri != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.diagnostics_restore_gpt))
             }
             if (state.partitionTableDamaged) {
                 Text(
@@ -271,6 +298,10 @@ fun DiagnosticsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+
+        if (!state.actionsEnabled) {
+            EmptyHint(UiReducer.presenceMessage(state.presence).localized())
         }
 
         Surface(
@@ -333,6 +364,27 @@ fun DiagnosticsScreen(
                 }
             }
         }
+    }
+}
+
+/** Sub-block heading with its policy help next to it, not as body text. */
+@Composable
+private fun SubsectionHeader(
+    title: String,
+    infoTitle: String,
+    infoText: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        InfoHelpButton(infoTitle = infoTitle, infoText = infoText)
     }
 }
 

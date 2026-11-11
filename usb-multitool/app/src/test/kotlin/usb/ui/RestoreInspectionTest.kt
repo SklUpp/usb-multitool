@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.diagnostics.MapKind
 import usb.diagnostics.RescueMap
+import usb.image.ImageFormat
 import usb.partition.GptBackup
 import usb.partition.SyntheticGpt
 
@@ -31,10 +32,16 @@ class RestoreInspectionTest {
 
     @Test
     fun imageInspectionCarriesSafMetadataWithoutTouchingTheImage() {
-        val inspection = RestoreSourceInspector.inspectImage("content://docs/stick.img", "stick.img", 4096L)
+        val inspection = RestoreSourceInspector.inspectImage(
+            "content://docs/stick.img",
+            "stick.img",
+            4096L,
+            ImageFormat.IMG,
+        )
         assertEquals("content://docs/stick.img", inspection.uri)
         assertEquals("stick.img", inspection.name)
         assertEquals(4096L, inspection.sizeBytes)
+        assertEquals(ImageFormat.IMG, inspection.format)
         assertNull(RestoreSourceInspector.inspectImage("content://docs/x", null, null).sizeBytes)
     }
 
@@ -309,7 +316,12 @@ class RestoreInspectionTest {
     fun malformedMapAndPartialCopyBlockTheRescueConfirmation() {
         val imageUri = "content://docs/stick.img"
         val mapUri = "content://docs/stick.map"
-        val image = RescueImageInspection(imageUri, "stick.img", 1_048_576L)
+        val image = RescueImageInspection(
+            imageUri,
+            "stick.img",
+            1_048_576L,
+            ImageFormat.IMG,
+        )
         val malformed =
             ready().copy(
                 rescueImageUri = imageUri,
@@ -355,7 +367,12 @@ class RestoreInspectionTest {
                 rescueMapUri = mapUri,
                 // Encoded gzip/xz source is far smaller than the decoded image; the map's
                 // decoded byte requirement must not reject it before the stream is read.
-                rescueImageInspection = RescueImageInspection(imageUri, "stick.img.gz", 1000L),
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img.gz",
+                    1000L,
+                    ImageFormat.GZIP,
+                ),
                 rescueMapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary()),
             )
         val result = UiReducer.reduce(state, UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
@@ -364,12 +381,229 @@ class RestoreInspectionTest {
     }
 
     @Test
+    fun gzipMagicUnderImgNameSkipsStoredSizeComparison() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        assertEquals(
+            ImageFormat.GZIP,
+            usb.image.classifyImageContent("stick.img", byteArrayOf(0x1f, 0x8b.toByte())),
+        )
+        val map = RescueMap.forRestore(2048UL, sectorSize = 512)
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                // Encoded gzip is far shorter than the decoded map requirement.
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    1000L,
+                    ImageFormat.GZIP,
+                ),
+                rescueMapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary()),
+            )
+        val result = UiReducer.reduce(state, UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+        assertNotNull(result.state.pendingConfirmation)
+    }
+
+    @Test
+    fun oversizedRawImageIsAValidPrefixOfTheMap() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        val map = RescueMap.forCopy(2048UL, sectorSize = 512, identity = device.identity)
+        map.markCopied(0UL, 2048UL)
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    1_048_576L + 4096L,
+                    ImageFormat.IMG,
+                ),
+                rescueMapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary()),
+            )
+        val result = UiReducer.reduce(
+            state,
+            UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+        )
+        assertNotNull(result.state.pendingConfirmation)
+    }
+
+    @Test
+    fun shortRawImageIsRejectedBeforeTheDestructiveConfirmation() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        val map = RescueMap.forCopy(2048UL, sectorSize = 512, identity = device.identity)
+        map.markCopied(0UL, 2048UL)
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    1_048_575L,
+                    ImageFormat.IMG,
+                ),
+                rescueMapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary()),
+            )
+        val result = UiReducer.reduce(
+            state,
+            UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+        )
+        assertNull(result.state.pendingConfirmation)
+        assertEquals(
+            UiMessage.Key(
+                UiMessageKey.RescueMapImageTooShort,
+                listOf("1048575", "1048576"),
+            ),
+            result.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun unknownSizeRawImageIsAllowedAndTheStreamValidatesShortReads() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        val map = RescueMap.forCopy(2048UL, sectorSize = 512, identity = device.identity)
+        map.markCopied(0UL, 2048UL)
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    null,
+                    ImageFormat.IMG,
+                ),
+                rescueMapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary()),
+            )
+        val result = UiReducer.reduce(
+            state,
+            UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+        )
+        assertNotNull(result.state.pendingConfirmation)
+        // The engine's dense stream check turns an actually short unknown-size source
+        // into Partial/Failed before Completed; the picker cannot prove it in advance.
+        assertNull(
+            rescueImageLengthIssue(null, 2048UL, 512, ImageFormat.IMG),
+        )
+        assertEquals(
+            RescueImageLengthIssue.OVERFLOW,
+            rescueImageLengthIssue(1L, ULong.MAX_VALUE, 512, ImageFormat.IMG),
+        )
+    }
+
+    @Test
+    fun sourceIdentityDoesNotBlockRestoreToAReplacementDisk() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        val map = RescueMap.forCopy(
+            sectorCount = 2048UL,
+            sectorSize = 512,
+            identity = "dead-stick",
+        )
+        map.markCopied(0UL, 2048UL)
+        val mapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary())
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    1_048_576L,
+                    ImageFormat.IMG,
+                ),
+                rescueMapInspection = mapInspection,
+            )
+        val result = UiReducer.reduce(
+            state,
+            UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+        )
+        assertNotNull(result.state.pendingConfirmation)
+        assertEquals(mapInspection, result.state.pendingConfirmation?.rescueMapInspection)
+        assertEquals(
+            "dead-stick",
+            result.state.pendingConfirmation?.rescueMapInspection?.summary?.identity,
+        )
+    }
+
+    @Test
+    fun restoreMapIdentityMismatchIsAllowedForResumeReset() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        val map = RescueMap.forRestore(
+            sectorCount = 2048UL,
+            sectorSize = 512,
+            identity = "dead-stick",
+        )
+        map.markCopied(0UL, 2048UL)
+        val mapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary())
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    1_048_576L,
+                    ImageFormat.IMG,
+                ),
+                rescueMapInspection = mapInspection,
+            )
+        val result = UiReducer.reduce(
+            state,
+            UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+        )
+        assertNotNull(result.state.pendingConfirmation)
+        assertEquals(mapInspection, result.state.pendingConfirmation?.rescueMapInspection)
+    }
+
+    @Test
+    fun negativeProviderSizeIsUnknownAndDoesNotBlock() {
+        val imageUri = "content://docs/stick.img"
+        val mapUri = "content://docs/stick.map"
+        val map = RescueMap.forCopy(
+            sectorCount = 2048UL,
+            sectorSize = 512,
+            identity = device.identity,
+        )
+        map.markCopied(0UL, 2048UL)
+        val state =
+            ready().copy(
+                rescueImageUri = imageUri,
+                rescueMapUri = mapUri,
+                rescueImageInspection = RescueImageInspection(
+                    imageUri,
+                    "stick.img",
+                    -1L,
+                    ImageFormat.IMG,
+                ),
+                rescueMapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary()),
+            )
+        val result = UiReducer.reduce(
+            state,
+            UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+        )
+        assertNotNull(result.state.pendingConfirmation)
+    }
+
+    @Test
     fun validRescueInspectionsAreSnapshottedIntoTheConfirmation() {
         val imageUri = "content://docs/stick.img"
         val mapUri = "content://docs/stick.map"
         val map = RescueMap.forRestore(2048UL, sectorSize = 512)
         map.markCopied(0UL, 2048UL)
-        val image = RescueImageInspection(imageUri, "stick.img", 1_048_576L)
+        val image = RescueImageInspection(
+            imageUri,
+            "stick.img",
+            1_048_576L,
+            ImageFormat.IMG,
+        )
         val mapInspection = RescueMapInspection(mapUri, "stick.map", 80L, map.summary())
         val state =
             ready().copy(

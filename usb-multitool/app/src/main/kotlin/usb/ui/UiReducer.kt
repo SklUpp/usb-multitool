@@ -334,6 +334,16 @@ sealed class UiIntent {
     /** Real copy finished; the imported template path is now selectable without another tap. */
     data class WindowsTemplateImported(val path: String) : UiIntent()
 
+    /**
+     * Persisted SAF tree for image+map folders and GPT copies. [usable] is false when the
+     * grant is gone; the UI then asks again instead of writing to an unknown tree.
+     */
+    data class SetBackupFolder(
+        val uri: String?,
+        val name: String? = null,
+        val usable: Boolean = false,
+    ) : UiIntent()
+
     /** SAF [uri] of the GPT critical-sector backup chosen for the next restore. */
     data class SetBackupFile(
         val uri: String?,
@@ -3394,6 +3404,24 @@ object UiReducer {
                     ),
                 )
 
+            is UiIntent.SetBackupFolder ->
+                ReduceResult(
+                    state.copy(
+                        backupFolderUri = intent.uri,
+                        backupFolderName = intent.name,
+                        backupFolderUsable = intent.uri != null && intent.usable,
+                        statusMessage =
+                            when {
+                                intent.uri == null -> UiMessage.Key(UiMessageKey.ChooseBackupFolder)
+                                intent.usable -> message(
+                                    UiMessageKey.BackupFolderReady,
+                                    intent.name ?: intent.uri.orEmpty(),
+                                )
+                                else -> UiMessage.Key(UiMessageKey.BackupFolderPermissionLost)
+                            },
+                    ),
+                )
+
             is UiIntent.SetBackupFile -> {
                 if (intent.requestId < state.backupSelectionGeneration) {
                     ReduceResult(state)
@@ -3959,6 +3987,22 @@ object UiReducer {
         )
     }
 
+    /** Localized reason for a folder that cannot be restored; never guesses a pair. */
+    fun archiveInvalidMessage(invalid: usb.diagnostics.BackupArchive.Selection.Invalid): UiMessage {
+        val names = invalid.detail.joinToString(", ")
+        return when (invalid.problem) {
+            usb.diagnostics.BackupArchive.Problem.Empty -> UiMessage.Key(UiMessageKey.ArchiveEmpty)
+            usb.diagnostics.BackupArchive.Problem.MissingImage ->
+                UiMessage.Key(UiMessageKey.ArchiveMissingImage)
+            usb.diagnostics.BackupArchive.Problem.MissingMap ->
+                UiMessage.Key(UiMessageKey.ArchiveMissingMap)
+            usb.diagnostics.BackupArchive.Problem.MultipleImages ->
+                UiMessage.Key(UiMessageKey.ArchiveMultipleImages, listOf(names))
+            usb.diagnostics.BackupArchive.Problem.UnexpectedFiles ->
+                UiMessage.Key(UiMessageKey.ArchiveUnexpectedFiles, listOf(names))
+        }
+    }
+
     /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */
     private fun nonDestructiveEffect(state: AppUiState, effect: UiEffect): ReduceResult =
         if (!state.actionsEnabled) {
@@ -4355,8 +4399,11 @@ object UiReducer {
 
     /**
      * Refuse the destructive rescue confirmation when a bounded inspection failed or the
-     * map cannot apply to the live disk. SAF size is never compared with decoded bytes; a
-     * gzip/xz source is validated only by the live stream at restore.
+     * map cannot apply to the live disk. A raw ISO/IMG is a stream prefix: a known size
+     * shorter than map sectors × sector size is blocked, extra trailing bytes are allowed.
+     * Compressed sources never compare their stored (encoded) size. Overflow of
+     * sectors × sector size is refused. This proves geometry agreement, never physical
+     * media integrity.
      */
     private fun rescueRestoreInspectionProblem(state: AppUiState): UiMessage? {
         val imageUri = state.rescueImageUri ?: return null
@@ -4399,9 +4446,33 @@ object UiReducer {
                 )
             }
         }
-        // SAF SIZE is the encoded source length; a gzip/xz rescue image is smaller than the
-        // decoded stream and cannot be compared with the map's decoded byte requirement.
-        // Only the live stream read validates the decoded image.
+        // Magic decides raw vs compressed before SIZE is used. Compressed sources are
+        // decoded by the stream; a raw image may be longer than the map requirement
+        // (restore reads only mapped sectors), but must never be shorter.
+        val sectorSize = summary.sectorSize ?: state.diskSectorSize.takeIf { it > 0 }
+        if (sectorSize != null) {
+            val actual = image?.sizeBytes?.takeIf { it >= 0L }
+            when (rescueImageLengthIssue(actual, summary.sectorCount, sectorSize, image?.format)) {
+                RescueImageLengthIssue.SHORT ->
+                    return UiMessage.Key(
+                        UiMessageKey.RescueMapImageTooShort,
+                        listOf(
+                            actual.toString(),
+                            usb.diagnostics.BackupArchive.expectedImageBytes(
+                                summary.sectorCount,
+                                sectorSize,
+                            ).toString(),
+                        ),
+                    )
+                RescueImageLengthIssue.OVERFLOW ->
+                    return UiMessage.Key(UiMessageKey.RescueMapImageGeometryOverflow)
+                null -> Unit
+            }
+        }
+        // A COPY map's identity is the source disk. Restoring onto a replacement disk is
+        // the primary disaster-recovery path and RescueRestorePrep pins the destination,
+        // discards inherited progress when identity differs, and rewrites all sectors.
+        // The confirmation shows the source identity difference instead of blocking.
         return null
     }
 

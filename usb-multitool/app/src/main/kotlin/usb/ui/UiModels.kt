@@ -160,12 +160,34 @@ enum class UiMessageKey {
     RescueMapReady,
     ChooseGptBackup,
     ChooseRescueFiles,
+    /** No SAF tree has been chosen for backup output. */
+    ChooseBackupFolder,
+    /** Args = display name. */
+    BackupFolderReady,
+    /** Persisted tree grant or document is gone; the user must choose it again. */
+    BackupFolderPermissionLost,
+    /** Folder validation in progress; real bytes are not invented. */
+    CheckingArchive,
+    /** The picked folder contains no files. */
+    ArchiveEmpty,
+    ArchiveMissingImage,
+    ArchiveMissingMap,
+    /** Args = comma-separated names. */
+    ArchiveMultipleImages,
+    /** Args = comma-separated names of files that are neither .img nor .map. */
+    ArchiveUnexpectedFiles,
+    /** Args = exact provider/read failure. */
+    ArchiveUnreadable,
     /** A bounded inspection failed; args = source label, exact reason. */
     SourceInspectionRejected,
     /** Args = map sector size, disk sector size. */
     RescueMapSectorSizeMismatch,
     /** Args = map sector count, live disk sector count. */
     RescueMapDiskTooSmall,
+    /** Args = actual image bytes, minimum required bytes. */
+    RescueMapImageTooShort,
+    /** Map sector count × sector size overflows the supported length. */
+    RescueMapImageGeometryOverflow,
     /** Args = never-read sector count. */
     RescueMapPartialCopy,
     /** Args = backup sector size, disk sector size. */
@@ -1105,6 +1127,15 @@ data class AppUiState(
      */
     val stagedRawImagePath: String? = null,
     val stagedRawImageLabel: String? = null,
+    /**
+     * User-chosen SAF tree shared by image+map folders and GPT copies. Persisted by the
+     * host; [backupFolderUsable] is false when the persisted grant is gone or the tree
+     * cannot be queried, so the next create asks for the folder again instead of writing
+     * to an unknown location.
+     */
+    val backupFolderUri: String? = null,
+    val backupFolderName: String? = null,
+    val backupFolderUsable: Boolean = false,
     val backupUri: String? = null,
     /** Bounded inspection of [backupUri] (file facts only; live geometry is rechecked on request). */
     val backupInspection: GptBackupInspection? = null,

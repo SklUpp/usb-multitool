@@ -77,9 +77,12 @@ import usb.diagnostics.Rescue
 import usb.diagnostics.RescueMap
 import usb.diagnostics.RescueOperations
 import usb.files.FilesOperations
+import usb.diagnostics.BackupArchive
+import usb.diagnostics.RescueArchiveOperations
 import usb.diagnostics.RescueBackupOperations
 import usb.diagnostics.RescueRestorePrep
-import usb.diagnostics.RescueSink
+import usb.saf.SafArchiveTarget
+import usb.saf.SafBackupFolder
 import usb.fs.UsbFsDirEntry
 import usb.fs.ExtException
 import usb.fs.NtfsException
@@ -133,6 +136,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val LANGUAGE_KEY = "language"
         /** Persisted two-state theme; absent means the dark default. */
         const val THEME_KEY = "dark_theme"
+        /** Persisted SAF tree shared by image+map folders and GPT copies. */
+        const val BACKUP_FOLDER_URI_KEY = "backup_folder_uri"
+        const val BACKUP_FOLDER_NAME_KEY = "backup_folder_name"
         /**
          * One 1 MiB chunk per filesystem call. The FAT engine opens, seeks, writes and
          * syncs per call, so a larger chunk cuts that overhead 16×. The buffer is
@@ -156,8 +162,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var attachGeneration = 0L
     /** Pick generations make slow SAF inspections lose to the newest selection. */
     private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
-    private val rescueImagePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
-    private val rescueMapPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile
     var attachedDevice: UsbDevice? = null
         private set
@@ -180,7 +185,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         application.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
 
     init {
-        state = state.copy(language = readLanguage(), darkTheme = readDarkTheme())
+        val folder = readBackupFolder()
+        state = state.copy(
+            language = readLanguage(),
+            darkTheme = readDarkTheme(),
+            backupFolderUri = folder.uri,
+            backupFolderName = folder.name,
+            backupFolderUsable = folder.usable,
+        )
         DiskService.initialize(application)
         // Fail closed: never auto-delete staging after restart (name ≠ proof of ownership).
         // Leftovers stay on disk; user must re-stage in this process. Notify only.
@@ -319,6 +331,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun readDarkTheme(): Boolean =
         runCatching { languagePrefs.getBoolean(THEME_KEY, true) }.getOrDefault(true)
+
+    private data class StoredBackupFolder(
+        val uri: String?,
+        val name: String?,
+        val usable: Boolean,
+    )
+
+    private fun hasPersistedWrite(uriString: String): Boolean =
+        runCatching {
+            getApplication<Application>().contentResolver.persistedUriPermissions.any {
+                it.isWritePermission && it.uri.toString() == uriString
+            }
+        }.getOrDefault(false)
+
+    private fun readBackupFolder(): StoredBackupFolder {
+        val uri = languagePrefs.getString(BACKUP_FOLDER_URI_KEY, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: return StoredBackupFolder(null, null, false)
+        val name = languagePrefs.getString(BACKUP_FOLDER_NAME_KEY, null)
+        return StoredBackupFolder(uri, name, hasPersistedWrite(uri))
+    }
+
+    /** True when the persisted write grant still exists; the provider is checked on write. */
+    fun hasUsableBackupFolder(): Boolean {
+        val uri = state.backupFolderUri ?: return false
+        return state.backupFolderUsable && hasPersistedWrite(uri)
+    }
+
+    /**
+     * Persist the user's tree choice. Returns false when the grant was not persisted or
+     * the provider cannot describe the tree; the caller then keeps the picker flow open.
+     */
+    fun onBackupFolderPicked(uri: Uri): Boolean {
+        val resolver = getApplication<Application>().contentResolver
+        runCatching {
+            resolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        val persisted = hasPersistedWrite(uri.toString())
+        val name = runCatching {
+            SafBackupFolder(resolver, uri).displayName()
+        }.getOrNull()
+        val usable = persisted
+        if (usable) {
+            languagePrefs.edit()
+                .putString(BACKUP_FOLDER_URI_KEY, uri.toString())
+                .putString(BACKUP_FOLDER_NAME_KEY, name)
+                .apply()
+        }
+        onIntent(UiIntent.SetBackupFolder(uri.toString(), name, usable))
+        return usable
+    }
 
     fun onIntent(intent: UiIntent) {
         if (intent is UiIntent.SetLanguage) {
@@ -1057,13 +1123,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             UiEffect.RescueBackup ->
                 submitReadOnlyDiskOperation(OperationTitle.RescueBackup) { disk, operation, _ ->
-                    val dir = backupDirectory()
+                    val folder = requireBackupFolder()
                     val stamp = "${timestamp()}-${System.nanoTime()}"
-                    val image = File(dir, "rescue-$stamp.img")
-                    if (image.exists()) {
-                        throw IllegalStateException("rescue image name collision: ${image.name}")
-                    }
-                    val mapFile = File(dir, "rescue-$stamp.map")
+                    val folderName = BackupArchive.folderName(stamp)
                     val sectorSize = disk.geometry.sectorSize
                     val deviceId =
                         state.device
@@ -1074,47 +1136,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 "(resume and backup maps would be ambiguous across same-model sticks)",
                         )
                     }
-                    val identity = deviceId.identity
                     val need = usb.diagnostics.RescueRangePolicy.requireSignedBytes(
                         disk.geometry.sectorCount,
                         disk.geometry.sectorSize,
                     )
                     operation.bytesTotal = need
-                    // usableSpace is an estimate, not a reservation.
-                    val usable = dir.usableSpace
-                    if (usable in 1 until need) {
-                        throw java.io.IOException(
-                            "not enough free space under ${dir.path}: usable=$usable, need≈$need (estimate)",
-                        )
-                    }
-                    val copyMap =
-                        RescueMap.forCopy(
-                            disk.geometry.sectorCount,
-                            sectorSize = sectorSize,
-                            identity = identity,
-                        )
-                    RescueBackupOperations.copy(
-                        disk = disk,
-                        image = image,
-                        mapFile = mapFile,
-                        map = copyMap,
-                        operation = operation,
-                    )
-                    val copied = copyMap.copied.sumOf { it.last - it.first + 1UL }
-                    val unreadable = copyMap.failed.sumOf { it.last - it.first + 1UL }
-                    val note =
-                        if (copyMap.partial) {
-                            " (partial/incomplete — map kept for diagnosis; in-app backup resume " +
-                                "is not supported — re-run backup to finish NON_TRIED sectors)"
-                        } else {
-                            ""
+                    // Provider-reported estimate only; null means it was not reported.
+                    folder.availableBytes()?.let { usable ->
+                        if (usable >= 0 && usable < need) {
+                            throw java.io.IOException(
+                                "not enough free space in the selected folder: " +
+                                    "usable=$usable, need≈$need (provider estimate)",
+                            )
                         }
-                    "Rescue backup: image ${image.absolutePath}, map ${mapFile.absolutePath}: " +
-                        "$copied copied, $unreadable unreadable of ${copyMap.sectorCount} sectors$note"
+                    }
+                    val archiveUri = folder.createSubfolder(folderName)
+                    // Fail closed before the first image byte: write+fsync+read-back must work.
+                    folder.probeWriteSupport(archiveUri)
+                    val imageUri = folder.createFile(
+                        archiveUri,
+                        BackupArchive.IMAGE_NAME,
+                        "application/octet-stream",
+                    )
+                    val imageOut = folder.openSyncedOutput(imageUri)
+                    try {
+                        val target = SafArchiveTarget(
+                            image = imageOut,
+                            checkpoints = usb.diagnostics.CheckpointPublisher(
+                                store = usb.saf.SafCheckpointStore(folder, archiveUri),
+                                baseName = BackupArchive.MAP_NAME,
+                            ),
+                            sectorSize = sectorSize,
+                        )
+                        val copyMap =
+                            RescueMap.forCopy(
+                                disk.geometry.sectorCount,
+                                sectorSize = sectorSize,
+                                identity = deviceId.identity,
+                            )
+                        RescueArchiveOperations.copy(
+                            disk = disk,
+                            target = target,
+                            map = copyMap,
+                            operation = operation,
+                        )
+                        val copied = copyMap.copied.sumOf { it.last - it.first + 1UL }
+                        val unreadable = copyMap.failed.sumOf { it.last - it.first + 1UL }
+                        val note =
+                            if (copyMap.partial) {
+                                " (partial/incomplete — map kept; re-run backup)"
+                            } else {
+                                ""
+                            }
+                        "Rescue backup: folder $folderName " +
+                            "(${BackupArchive.IMAGE_NAME} + ${BackupArchive.MAP_NAME}): " +
+                            "$copied copied, $unreadable unreadable of " +
+                            "${copyMap.sectorCount} sectors$note"
+                    } finally {
+                        runCatching { imageOut.close() }
+                    }
                 }
 
             UiEffect.CaptureGptBackup ->
                 submitReadOnlyDiskOperation(OperationTitle.GptCriticalBackup) { disk, operation, _ ->
+                    val folder = requireBackupFolder()
                     val blob = GptBackup.backupCriticalSectors(disk)
                     val info = GptCriticalBackup.inspectCaptured(
                         blob = blob,
@@ -1122,11 +1207,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         primarySectors = GptBackup.primarySectors(disk.sectorSize),
                         backupSectors = GptBackup.backupSectors(disk.sectorSize),
                     )
-                    val file = File(backupDirectory(), "gpt-critical-${timestamp()}.bin")
-                    file.writeBytes(blob)
-                    operation.bytesTotal = blob.size.toLong()
-                    operation.report(blob.size.toLong())
-                    "GPT critical backup saved: ${file.absolutePath} (${blob.size} bytes, " +
+                    val name = BackupArchive.gptFileName("${timestamp()}-${System.nanoTime()}")
+                    val fileUri = folder.createRootFile(name, "application/octet-stream")
+                    val output = folder.openSyncedOutput(fileUri)
+                    var touched = false
+                    var closed = false
+                    try {
+                        operation.bytesTotal = blob.size.toLong()
+                        output.output.write(blob)
+                        touched = true
+                        operation.mutationAttempted = true
+                        output.sync()
+                        operation.report(blob.size.toLong())
+                        output.close()
+                        closed = true
+                    } catch (failure: Throwable) {
+                        if (touched) {
+                            when (operation.state) {
+                                is usb.operation.OperationState.Partial,
+                                is usb.operation.OperationState.Failed -> Unit
+                                else -> {
+                                    operation.state = usb.operation.OperationState.Partial
+                                    if (operation.failureCause == null) {
+                                        operation.failureCause = failure
+                                    }
+                                }
+                            }
+                        }
+                        throw failure
+                    } finally {
+                        if (!closed) runCatching { output.close() }
+                    }
+                    "GPT critical backup saved: $name (${blob.size} bytes, " +
                         "${info.partitions} partitions, backup header at LBA " +
                         "${info.backup.currentLba})"
                 }
@@ -1440,53 +1552,199 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.Main.immediate) {
                 if (generation == gptPickGeneration.get()) {
                     onIntent(UiIntent.SetBackupFile(target, inspection, generation))
+                    if (inspection.error == null &&
+                        inspection.summary != null &&
+                        state.actionsEnabled
+                    ) {
+                        // The chosen file already passed bounded validation: show the
+                        // destructive warning now instead of demanding another tap.
+                        onIntent(
+                            UiIntent.RequestDestructive(usb.ui.DestructiveAction.GPT_RESTORE),
+                        )
+                    }
                 }
             }
         }
     }
 
-    /** SAF metadata only; the rescue image itself is never opened or read. */
-    fun onRescueImagePicked(uri: Uri) {
-        val target = uri.toString()
-        val generation = rescueImagePickGeneration.incrementAndGet()
-        val resolver = getApplication<Application>().contentResolver
-        scope.launch(Dispatchers.IO) {
-            val (name, size) = contentInfo(resolver, uri)
-            val inspection = RestoreSourceInspector.inspectImage(target, name, size)
-            withContext(Dispatchers.Main.immediate) {
-                if (generation == rescueImagePickGeneration.get()) {
-                    onIntent(UiIntent.SetRescueImage(target, inspection, generation))
+    private fun classifyRescueImage(
+        resolver: ContentResolver,
+        uri: Uri,
+        name: String?,
+    ): usb.image.ImageFormat? =
+        runCatching {
+            resolver.openInputStream(uri)?.use { input ->
+                val header = ByteArray(6)
+                var read = 0
+                while (read < header.size) {
+                    val n = input.read(header, read, header.size - read)
+                    if (n <= 0) break
+                    read += n
                 }
+                usb.image.classifyImageContent(name, header.copyOf(read))
             }
-        }
-    }
+        }.getOrNull()
 
-    /** Bounded UTF-8 read through the same cap/decoder the restore path uses. */
-    fun onRescueMapPicked(uri: Uri) {
-        val target = uri.toString()
-        val generation = rescueMapPickGeneration.incrementAndGet()
+    /**
+     * A restore folder is the unit: exactly one `.img` and one `.map`. Listing, map decode
+     * and image metadata happen off the main thread; a newer folder pick invalidates an
+     * older result. On success the existing destructive confirmation opens with the same
+     * inspection types as the old per-file pickers.
+     */
+    fun onRescueArchiveFolderPicked(uri: Uri) {
+        val generation = rescueArchivePickGeneration.incrementAndGet()
         val resolver = getApplication<Application>().contentResolver
+        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
         scope.launch(Dispatchers.IO) {
-            val (name, size) = contentInfo(resolver, uri)
-            val inspection =
-                try {
-                    RestoreSourceInspector.inspectMap(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        text = readTextDocument(target),
-                    )
-                } catch (failure: Exception) {
-                    usb.ui.RescueMapInspection(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        error = failure.message ?: failure.javaClass.simpleName,
+            var invalid: BackupArchive.Selection.Invalid? = null
+            var imageUri: String? = null
+            var mapUri: String? = null
+            var imageInspection: usb.ui.RescueImageInspection? = null
+            var mapInspection: usb.ui.RescueMapInspection? = null
+            var failureMessage: String? = null
+            try {
+                val folder = SafBackupFolder(resolver, uri)
+                val entries = folder.listRootFiles().map {
+                    BackupArchive.Entry(
+                        name = it.name,
+                        uri = it.uri.toString(),
+                        isDirectory = it.isDirectory,
+                        sizeBytes = it.sizeBytes,
                     )
                 }
+                when (val selection = BackupArchive.select(entries)) {
+                    is BackupArchive.Selection.Invalid -> invalid = selection
+                    is BackupArchive.Selection.Ready -> {
+                        val pair = selection.pair
+                        imageUri = pair.image.uri
+                        val imageFormat = classifyRescueImage(
+                            resolver,
+                            Uri.parse(pair.image.uri),
+                            pair.image.name,
+                        )
+                        imageInspection = RestoreSourceInspector.inspectImage(
+                            uri = pair.image.uri,
+                            name = pair.image.name,
+                            sizeBytes = pair.image.sizeBytes,
+                            format = imageFormat,
+                        )
+                        val imageBytes = pair.image.sizeBytes
+                        val rejections = mutableListOf<String>()
+                        // Canonical first, then newest generation. A truncated/older map
+                        // never hides a valid one; a partial COPY is not chosen.
+                        for (candidate in pair.maps) {
+                            val inspection = try {
+                                RestoreSourceInspector.inspectMap(
+                                    uri = candidate.uri,
+                                    name = candidate.name,
+                                    sizeBytes = candidate.sizeBytes,
+                                    text = folder.readText(
+                                        Uri.parse(candidate.uri),
+                                        RescueMap.MAX_ENCODED_CHARS,
+                                    ),
+                                )
+                            } catch (failure: Throwable) {
+                                rejections += "${candidate.name}: " +
+                                    (failure.message ?: failure.javaClass.simpleName)
+                                continue
+                            }
+                            val summary = inspection.summary
+                            if (inspection.error != null || summary == null) {
+                                rejections += "${candidate.name}: " +
+                                    (inspection.error ?: "map details unavailable")
+                                continue
+                            }
+                            if (summary.kind == usb.diagnostics.MapKind.COPY &&
+                                summary.nonTriedSectors > 0UL
+                            ) {
+                                rejections += "${candidate.name}: incomplete checkpoint " +
+                                    "(${summary.nonTriedSectors} nontried sectors)"
+                                continue
+                            }
+                            val liveSectorSize = state.diskSectorSize.takeIf { it > 0 }
+                            if (summary.sectorSize != null && liveSectorSize != null &&
+                                summary.sectorSize != liveSectorSize
+                            ) {
+                                rejections += "${candidate.name}: sector size " +
+                                    "${summary.sectorSize} != $liveSectorSize"
+                                continue
+                            }
+                            if (liveSectorSize != null) {
+                                val liveSectors = state.device?.capacityBytes?.let {
+                                    it / liveSectorSize.toULong()
+                                }
+                                if (liveSectors != null && summary.sectorCount > liveSectors) {
+                                    rejections += "${candidate.name}: covers " +
+                                        "${summary.sectorCount} > $liveSectors sectors"
+                                    continue
+                                }
+                            }
+                            val sectorSize = summary.sectorSize
+                                ?: state.diskSectorSize.takeIf { it > 0 }
+                            if (sectorSize != null) {
+                                when (
+                                    usb.ui.rescueImageLengthIssue(
+                                        imageBytes,
+                                        summary.sectorCount,
+                                        sectorSize,
+                                        imageFormat,
+                                    )
+                                ) {
+                                    usb.ui.RescueImageLengthIssue.SHORT -> {
+                                        val expected = BackupArchive.expectedImageBytes(
+                                            summary.sectorCount,
+                                            sectorSize,
+                                        )
+                                        rejections += "${candidate.name}: image is " +
+                                            "$imageBytes bytes; map needs at least $expected"
+                                        continue
+                                    }
+                                    usb.ui.RescueImageLengthIssue.OVERFLOW -> {
+                                        rejections += "${candidate.name}: geometry overflows"
+                                        continue
+                                    }
+                                    null -> Unit
+                                }
+                            }
+                            mapUri = candidate.uri
+                            mapInspection = inspection
+                            break
+                        }
+                        if (mapUri == null) {
+                            failureMessage = rejections.joinToString("; ").ifEmpty {
+                                "no readable map for ${pair.image.name}"
+                            }
+                        }
+                    }
+                }
+            } catch (failure: Throwable) {
+                failureMessage = failure.message ?: failure.javaClass.simpleName
+            }
             withContext(Dispatchers.Main.immediate) {
-                if (generation == rescueMapPickGeneration.get()) {
-                    onIntent(UiIntent.SetRescueMap(target, inspection, generation))
+                if (generation != rescueArchivePickGeneration.get()) return@withContext
+                val rejection = failureMessage
+                if (rejection != null) {
+                    onIntent(UiIntent.SetRescueImage(null, null, generation))
+                    onIntent(UiIntent.SetRescueMap(null, null, generation))
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(UiMessageKey.ArchiveUnreadable, listOf(rejection)),
+                        ),
+                    )
+                    return@withContext
+                }
+                invalid?.let {
+                    onIntent(UiIntent.SetRescueImage(null, null, generation))
+                    onIntent(UiIntent.SetRescueMap(null, null, generation))
+                    onIntent(UiIntent.Status(UiReducer.archiveInvalidMessage(it)))
+                    return@withContext
+                }
+                onIntent(UiIntent.SetRescueImage(imageUri, imageInspection, generation))
+                onIntent(UiIntent.SetRescueMap(mapUri, mapInspection, generation))
+                if (mapInspection?.error == null && state.actionsEnabled) {
+                    onIntent(
+                        UiIntent.RequestDestructive(usb.ui.DestructiveAction.RESCUE_RESTORE),
+                    )
                 }
             }
         }
@@ -4022,6 +4280,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * App-owned external directory (`Android/data/<package>/files`): no storage permission
      * needed and the exact path can be reported. Fails loudly instead of inventing a path.
      */
+    private fun requireBackupFolder(): SafBackupFolder {
+        val uri = state.backupFolderUri
+            ?: throw IllegalStateException("backup folder not selected")
+        require(hasPersistedWrite(uri)) {
+            "backup folder access was lost; choose the folder again"
+        }
+        return SafBackupFolder(
+            getApplication<Application>().contentResolver,
+            Uri.parse(uri),
+        )
+    }
+
     private fun backupDirectory(): File =
         getApplication<Application>().getExternalFilesDir(null)
             ?: throw IllegalStateException(
@@ -4126,24 +4396,51 @@ class MainActivity : ComponentActivity() {
         viewModel.onGptBackupPicked(uri)
     }
 
-    private val rescueImagePicker = registerForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri: Uri? ->
-        if (uri == null) return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        viewModel.onRescueImagePicked(uri)
+    /** Common SAF tree for image+map folders and GPT copies. */
+    private enum class PendingFolderAction {
+        None,
+        RescueBackup,
+        GptCopy,
     }
 
-    private val rescueMapPicker = registerForActivityResult(
-        ActivityResultContracts.OpenDocument(),
+    private var pendingFolderAction = PendingFolderAction.None
+
+    private val backupFolderPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri: Uri? ->
+        val action = pendingFolderAction
+        pendingFolderAction = PendingFolderAction.None
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        if (viewModel.onBackupFolderPicked(uri)) {
+            when (action) {
+                PendingFolderAction.RescueBackup ->
+                    viewModel.onIntent(UiIntent.StartRescueBackup)
+                PendingFolderAction.GptCopy ->
+                    viewModel.onIntent(UiIntent.CaptureGptBackup)
+                PendingFolderAction.None -> Unit
+            }
+        }
+    }
+
+    /** Folder containing exactly one image and its map; read-only for the restore. */
+    private val rescueArchiveFolderPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
         if (uri == null) return@registerForActivityResult
         runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
         }
-        viewModel.onRescueMapPicked(uri)
+        viewModel.onRescueArchiveFolderPicked(uri)
     }
 
     /** Kind and destination waiting for the SAF file chosen in [windowsImportLauncher]. */
@@ -4223,6 +4520,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Create actions need the common tree. When it is missing or its grant is gone, show
+     * the tree picker first and resume exactly that action after the user chooses.
+     */
+    private fun startWithBackupFolder(action: PendingFolderAction) {
+        if (viewModel.hasUsableBackupFolder()) {
+            when (action) {
+                PendingFolderAction.RescueBackup -> viewModel.onIntent(UiIntent.StartRescueBackup)
+                PendingFolderAction.GptCopy -> viewModel.onIntent(UiIntent.CaptureGptBackup)
+                PendingFolderAction.None -> Unit
+            }
+        } else {
+            pendingFolderAction = action
+            backupFolderPicker.launch(null)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // A re-delivered CreateDocument result arrives after the activity is recreated
@@ -4238,6 +4552,11 @@ class MainActivity : ComponentActivity() {
         }
         pendingWindowsImportDirectory =
             savedInstanceState?.getString(STATE_PENDING_WINDOWS_DIRECTORY)
+        pendingFolderAction =
+            savedInstanceState?.getString(STATE_PENDING_FOLDER_ACTION)?.let { stored ->
+                runCatching { PendingFolderAction.valueOf(stored) }
+                    .getOrDefault(PendingFolderAction.None)
+            } ?: PendingFolderAction.None
         requestPermissionsIfNeeded()
         setContent {
             AppShell(
@@ -4263,11 +4582,18 @@ class MainActivity : ComponentActivity() {
                 onPickBackup = {
                     gptBackupPickerLauncher.launch(arrayOf("*/*"))
                 },
-                onPickRescueImage = {
-                    rescueImagePicker.launch(arrayOf("*/*"))
+                onPickBackupFolder = {
+                    pendingFolderAction = PendingFolderAction.None
+                    backupFolderPicker.launch(null)
                 },
-                onPickRescueMap = {
-                    rescueMapPicker.launch(arrayOf("*/*"))
+                onStartRescueBackup = {
+                    startWithBackupFolder(PendingFolderAction.RescueBackup)
+                },
+                onCreateGptCopy = {
+                    startWithBackupFolder(PendingFolderAction.GptCopy)
+                },
+                onPickRestoreFolder = {
+                    rescueArchiveFolderPicker.launch(null)
                 },
             )
         }
@@ -4276,6 +4602,7 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
+        outState.putString(STATE_PENDING_FOLDER_ACTION, pendingFolderAction.name)
         outState.putString(STATE_PENDING_WINDOWS_KIND, pendingWindowsImportKind.name)
         pendingWindowsImportDirectory?.let {
             outState.putString(STATE_PENDING_WINDOWS_DIRECTORY, it)
@@ -4385,6 +4712,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
         private const val STATE_PENDING_DOWNLOAD = "usb.multitool.PENDING_DOWNLOAD"
+        private const val STATE_PENDING_FOLDER_ACTION = "usb.multitool.PENDING_FOLDER_ACTION"
         private const val STATE_PENDING_WINDOWS_KIND = "usb.multitool.PENDING_WINDOWS_KIND"
         private const val STATE_PENDING_WINDOWS_DIRECTORY =
             "usb.multitool.PENDING_WINDOWS_DIRECTORY"

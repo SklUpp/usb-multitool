@@ -121,8 +121,10 @@ fun AppShell(
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
-    onPickRescueImage: () -> Unit = {},
-    onPickRescueMap: () -> Unit = {},
+    onPickBackupFolder: () -> Unit = {},
+    onStartRescueBackup: () -> Unit = {},
+    onCreateGptCopy: () -> Unit = {},
+    onPickRestoreFolder: () -> Unit = {},
 ) {
     val isDark = state.darkTheme
     val colors = if (isDark) darkDesignColors() else lightDesignColors()
@@ -279,8 +281,10 @@ fun AppShell(
                                 onIntent = onIntent,
                                 modifier = Modifier.fillMaxSize(),
                                 onPickBackup = onPickBackup,
-                                onPickRescueImage = onPickRescueImage,
-                                onPickRescueMap = onPickRescueMap,
+                                onPickBackupFolder = onPickBackupFolder,
+                                onStartRescueBackup = onStartRescueBackup,
+                                onCreateGptCopy = onCreateGptCopy,
+                                onPickRestoreFolder = onPickRestoreFolder,
                             )
                         }
                     }

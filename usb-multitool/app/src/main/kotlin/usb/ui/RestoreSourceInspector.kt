@@ -9,8 +9,11 @@ import usb.partition.GptBackup
 /**
  * Bounded inspection of restore sources before the destructive confirmation.
  *
- * Rescue images are inspected through SAF metadata only: the image itself is never
- * opened or read. Rescue maps are read with the same character cap as restore and
+ * Rescue image inspection starts with SAF metadata plus a bounded 6-byte magic probe:
+ * the picker reads only that header through `openInputStream(...).use`, then this object
+ * stores the detected format. The image payload is never read into memory and the
+ * selected document is never written.
+ * Rescue maps are read with the same character cap as restore and
  * decoded with the same decoder. GPT backups are read with a hard byte cap and
  * validated by [GptCriticalBackup.inspectBlob] (headers, CRCs, geometry, entries).
  * Nothing here writes to the selected file or to the disk.
@@ -22,11 +25,17 @@ object RestoreSourceInspector {
     /** Candidate sector sizes when the live device does not report one. */
     private val SECTOR_SIZE_CANDIDATES = intArrayOf(512, 1024, 2048, 4096)
 
+    /**
+     * [format] is the result of the caller's bounded 6-byte header probe; null means the
+     * header was unreadable, so no stored-size comparison is safe before the stream opens.
+     */
     fun inspectImage(
         uri: String,
         name: String?,
         sizeBytes: Long?,
-    ): RescueImageInspection = RescueImageInspection(uri = uri, name = name, sizeBytes = sizeBytes)
+        format: usb.image.ImageFormat? = null,
+    ): RescueImageInspection =
+        RescueImageInspection(uri = uri, name = name, sizeBytes = sizeBytes, format = format)
 
     fun inspectMap(
         uri: String,

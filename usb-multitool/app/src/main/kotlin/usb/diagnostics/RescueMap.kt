@@ -155,6 +155,7 @@ class RescueMap private constructor(
             kind = kind,
             sectorCount = sectorCount,
             sectorSize = sectorSize,
+            identity = identity,
             copiedRanges = copied,
             failedRanges = failed,
             nonTriedRanges = nonTried,
@@ -296,6 +297,8 @@ data class RescueMapSummary(
     val kind: MapKind,
     val sectorCount: ULong,
     val sectorSize: Int?,
+    /** Source disk identity recorded by the backup; never content proof. */
+    val identity: String?,
     val copiedRanges: List<ULongRange>,
     val failedRanges: List<ULongRange>,
     val nonTriedRanges: List<ULongRange>,

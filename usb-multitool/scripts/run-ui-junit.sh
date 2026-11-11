@@ -30,6 +30,7 @@ for suite in \
   PartitionRenameUiTest \
   SchemeInitUiTest \
   ConfirmationTest \
+  BackupFolderUiTest \
   RestoreInspectionTest \
   OperationProgressMapperTest \
   StringResourceParityTest \
@@ -68,6 +69,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/FormatBytes.kt" \
   "$ROOT/app/src/main/kotlin/usb/diagnostics/ScanReport.kt" \
   "$ROOT/app/src/main/kotlin/usb/diagnostics/RescueMap.kt" \
+  "$ROOT/app/src/main/kotlin/usb/diagnostics/BackupArchive.kt" \
   "$ROOT/app/src/main/kotlin/usb/operation/DiskOperation.kt" \
   "$ROOT/app/src/main/kotlin/usb/multitool/GptCriticalBackup.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FilesystemId.kt" \
@@ -81,6 +83,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/partition/GptBackup.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/RawRangePlan.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawWriteOutcome.kt" \
+  "$ROOT/app/src/main/kotlin/usb/image/ImageFormat.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawRangeProbe.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/WindowsTemplate.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
@@ -97,6 +100,7 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRenameUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/SchemeInitUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ConfirmationTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/BackupFolderUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/RestoreInspectionTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/partition/SyntheticGpt.kt" \
   "$ROOT/app/src/test/kotlin/usb/partition/DiskFixture.kt" \
@@ -142,6 +146,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.PartitionRenameUiTest \
   usb.ui.SchemeInitUiTest \
   usb.ui.ConfirmationTest \
+  usb.ui.BackupFolderUiTest \
   usb.ui.RestoreInspectionTest \
   usb.ui.OperationProgressMapperTest \
   usb.ui.UiStateMachineTest \

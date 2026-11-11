@@ -9,13 +9,6 @@ import java.net.URL
 import java.util.zip.GZIPInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 
-enum class ImageFormat {
-    ISO,
-    IMG,
-    GZIP,
-    XZ,
-}
-
 class CountedInputStream(
     private val input: InputStream,
     val decodedSizeHint: Long? = null,
@@ -58,7 +51,7 @@ class ImageSource private constructor(
 
         fun fromUri(uri: Uri): ImageSource {
             val path = uri.toString()
-            val format = detectFormat(path)
+            val format = detectImageFormat(path)
             val declaredSize = if (format == ImageFormat.ISO || format == ImageFormat.IMG) {
                 queryFileSize(uri)
             } else null
@@ -88,8 +81,7 @@ class ImageSource private constructor(
             )
         }
 
-        /**
-         * Content-URI decode without Android types. Used by [fromContentUri] and host tests.
+        /** Content-URI decode without Android types. Used by [fromContentUri] and host tests.
          * Format is decided on the stream that will be written: read up to 6 magic bytes
          * (tolerating short reads), reconcile with DISPLAY_NAME, prepend the prefix so no
          * payload is lost. Open/read failures propagate — never fall back to raw IMG.
@@ -99,9 +91,11 @@ class ImageSource private constructor(
             displayName: String?,
             size: Long?,
         ): ImageSource {
-            val named = displayName?.let { detectFormat(it) }
+            val named = displayName?.let(::detectImageFormat)
             val provisional = when (named) {
-                ImageFormat.GZIP, ImageFormat.XZ, ImageFormat.ISO -> named
+                ImageFormat.GZIP -> ImageFormat.GZIP
+                ImageFormat.XZ -> ImageFormat.XZ
+                ImageFormat.ISO -> ImageFormat.ISO
                 else -> ImageFormat.IMG
             }
             // SIZE from the provider is the on-disk/compressed length. Do not publish it as
@@ -114,9 +108,7 @@ class ImageSource private constructor(
                     try {
                         val header = ByteArray(6)
                         val n = readPrefix(raw, header)
-                        val magic =
-                            if (n <= 0) ImageFormat.IMG else detectFormatBytes(header.copyOf(n))
-                        val format = reconcileContentFormat(named, magic)
+                        val format = classifyImageContent(displayName, header.copyOf(n))
                         source.noteFormat(format)
                         val restored = prependPrefix(header, n, raw)
                         val decodedSize =
@@ -134,7 +126,7 @@ class ImageSource private constructor(
         }
 
         fun fromFile(file: java.io.File): ImageSource {
-            val format = detectFormat(file.name)
+            val format = detectImageFormat(file.name)
             val declaredSize = if (format == ImageFormat.ISO || format == ImageFormat.IMG) {
                 if (file.exists() && file.isFile) file.length() else null
             } else null
@@ -149,7 +141,7 @@ class ImageSource private constructor(
 
         fun fromBytes(
             bytes: ByteArray,
-            format: ImageFormat = detectFormatBytes(bytes),
+            format: ImageFormat = detectImageFormatBytes(bytes),
             decodedSize: Long? = null,
         ): ImageSource = ImageSource(
             openStream = { wrap(ByteArrayInputStream(bytes), format, decodedSize) },
@@ -158,7 +150,7 @@ class ImageSource private constructor(
         )
 
         fun fromBytes(gzipOrRaw: ByteArray): ImageSource {
-            val format = detectFormatBytes(gzipOrRaw)
+            val format = detectImageFormatBytes(gzipOrRaw)
             val decoded = when (format) {
                 ImageFormat.GZIP -> gzipISize(gzipOrRaw)
                 else -> null
@@ -215,19 +207,6 @@ class ImageSource private constructor(
                 }
             }.getOrNull()
 
-        /**
-         * Compressed magic always wins so a mislabeled .iso never writes gzip/xz bytes raw.
-         * A compressed DISPLAY_NAME with non-compressed magic keeps the name so the decoder
-         * fails loudly instead of silently writing the stream as an image.
-         */
-        private fun reconcileContentFormat(named: ImageFormat?, magic: ImageFormat): ImageFormat {
-            if (magic == ImageFormat.GZIP || magic == ImageFormat.XZ) return magic
-            return when (named) {
-                ImageFormat.GZIP, ImageFormat.XZ, ImageFormat.ISO -> named
-                else -> ImageFormat.IMG
-            }
-        }
-
         /** Read up to [buffer].size bytes, tolerating short reads, stopping at EOF. */
         private fun readPrefix(input: InputStream, buffer: ByteArray): Int {
             var off = 0
@@ -258,32 +237,6 @@ class ImageSource private constructor(
                 ImageFormat.ISO, ImageFormat.IMG -> raw
             }
             return CountedInputStream(decoded, decodedSize)
-        }
-
-        private fun detectFormat(path: String): ImageFormat {
-            val lower = path.lowercase()
-            return when {
-                lower.endsWith(".gz") || lower.endsWith(".img.gz") || lower.endsWith(".iso.gz") ->
-                    ImageFormat.GZIP
-                lower.endsWith(".xz") || lower.endsWith(".img.xz") || lower.endsWith(".iso.xz") ->
-                    ImageFormat.XZ
-                lower.endsWith(".iso") -> ImageFormat.ISO
-                else -> ImageFormat.IMG
-            }
-        }
-
-        private fun detectFormatBytes(bytes: ByteArray): ImageFormat {
-            if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
-                return ImageFormat.GZIP
-            }
-            if (bytes.size >= 6 &&
-                bytes[0] == 0xFD.toByte() && bytes[1] == '7'.code.toByte() &&
-                bytes[2] == 'z'.code.toByte() && bytes[3] == 'X'.code.toByte() &&
-                bytes[4] == 'Z'.code.toByte() && bytes[5] == 0.toByte()
-            ) {
-                return ImageFormat.XZ
-            }
-            return ImageFormat.IMG
         }
 
         /** Gzip ISIZE footer (uncompressed size mod 2^32). */
