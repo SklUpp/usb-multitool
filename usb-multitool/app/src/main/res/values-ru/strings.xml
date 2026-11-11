@@ -17,7 +17,6 @@
 
     <string name="files_empty_folder">Папка пуста</string>
     <string name="files_listing">Читаю папку…</string>
-    <string name="files_efi_blocked">Запись в %1$s защищена (EFI). Разрешите её на вкладке Ventoy.</string>
 
     <string name="efi_section_title">Защита EFI</string>
     <string name="efi_missing">EFI-раздел (VTOYEFI / ESP) не найден на этом накопителе.</string>
@@ -159,17 +158,22 @@
     <string name="action_ventoy_link_xml">связывание XML-файла</string>
     <string name="action_ventoy_unattend_write">запись сгенерированного unattend XML</string>
     <string name="action_ventoy_unattend_layout">очистка и разметка диска целевого ПК через unattend</string>
-    <string name="files_section_partition">Раздел</string>
-    <string name="files_section_folder">Папка</string>
-    <string name="files_section_selection">Выбранный элемент</string>
+    <string name="files_section_partition">Разделы</string>
     <string name="files_current_partition">Текущий раздел</string>
     <string name="files_no_partitions_hint">Разделы не найдены — создайте раздел на вкладке «Разделы».</string>
     <string name="files_up">На уровень выше</string>
     <string name="files_create_folder">Создать папку</string>
     <string name="files_folder_name">Имя папки</string>
     <string name="files_clear_selection">Снять</string>
-    <string name="files_save">Сохранить</string>
-    <string name="files_upload">Загрузить</string>
+    <string name="files_copy_from_phone">Копировать с телефона</string>
+    <string name="files_save_to_phone">Сохранить на телефон</string>
+    <string name="files_write_ro">Защита EFI от записи активна</string>
+    <string name="files_write_unknown">Состояние записи не проверено</string>
+    <string name="files_current_path">Текущая папка: %1$s</string>
+    <string name="files_statuses">Статусы</string>
+    <string name="files_statuses_expanded">Статусы развёрнуты</string>
+    <string name="files_statuses_collapsed">Статусы свёрнуты</string>
+    <string name="files_status_general">Статус</string>
     <string name="files_delete_folder_confirm">Удалить папку %1$s? Она должна быть пустой — непустые папки отклоняются.</string>
     <string name="files_delete_confirm">Удалить %1$s?</string>
     <string name="files_open_folder">Открыть папку</string>
@@ -177,8 +181,6 @@
     <string name="type_folder">Папка</string>
     <string name="type_iso">ISO-образ</string>
     <string name="type_file">Файл</string>
-    <string name="files_root">Корень</string>
-    <string name="files_root_prefix">Корень / %1$s</string>
     <string name="partitions_corrupt">Таблица разделов повреждена</string>
     <string name="partitions_create_blocked_corrupt">Создание невозможно: сначала восстановите или сотрите таблицу.</string>
     <string name="partitions_create_first">Разделов нет. Создайте первый раздел в секции «Свободное место».</string>
@@ -189,8 +191,6 @@
     <string name="filesystem_usage_known">Свободно %1$s из %2$s</string>
     <string name="filesystem_usage_unavailable">недоступно</string>
     <string name="filesystem_usage_note">Измеряется внутри файловой системы; свободная область в таблице разделов — другое значение.</string>
-    <string name="files_up_action">Вверх</string>
-    <string name="files_new_folder_action">Новая папка</string>
     <string name="diagnostics_pick_backup">Выбрать файл копии…</string>
     <string name="confirm_ack">Понимаю, что данные будут удалены</string>
     <string name="partitions_raw_source_label">Источник записи</string>
@@ -378,12 +378,6 @@
         <item quantity="few">%d раздела</item>
         <item quantity="many">%d разделов</item>
         <item quantity="other">%d разделов</item>
-    </plurals>
-    <plurals name="elements_count">
-        <item quantity="one">%d элемент</item>
-        <item quantity="few">%d элемента</item>
-        <item quantity="many">%d элементов</item>
-        <item quantity="other">%d элементов</item>
     </plurals>
     <plurals name="free_regions_count">
         <item quantity="one">%d регион</item>

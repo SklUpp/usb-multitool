@@ -1082,6 +1082,7 @@ internal fun rawSourceName(uri: String?): String? = uri
  * surface with what it names, so no label floats above an unrelated background.
  * The trailing control (help, badge) is centred on the heading line only — the
  * subtitle sits below that row, so a 48 dp help button cannot drift downward.
+ * [titleColor] lets a screen use full-contrast onSurface without changing every block.
  */
 @Composable
 internal fun SectionCard(
@@ -1090,6 +1091,7 @@ internal fun SectionCard(
     danger: Boolean = false,
     subtitle: String? = null,
     trailing: (@Composable () -> Unit)? = null,
+    titleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // Uppercase must follow the in-app language, not the system one: a Turkish device
@@ -1124,7 +1126,7 @@ internal fun SectionCard(
                     color = if (danger) {
                         MaterialTheme.colorScheme.error
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        titleColor
                     },
                     modifier = Modifier
                         .weight(1f)
@@ -1400,7 +1402,10 @@ internal fun Badge(
     }
 }
 
-/** Decorative vector glyphs; callers provide adjacent text labels. */
+/**
+ * Decorative vector glyphs. Icon-only buttons must put their label in the button's semantics,
+ * because [GlyphIcon] itself is not exposed to accessibility services.
+ */
 internal enum class Glyph {
     Folder,
     File,
@@ -1413,6 +1418,17 @@ internal enum class Glyph {
     Gpt,
     Pulse,
     Plus,
+    /** Up one level in the file browser. */
+    ArrowUp,
+    Refresh,
+    FolderPlus,
+    /** Copy from the phone into the mounted volume. */
+    Upload,
+    /** Save a volume entry onto the phone. */
+    Download,
+    Pencil,
+    Trash,
+    Close,
     ChevronDown,
     ChevronUp,
     ChevronLeft,
@@ -1536,6 +1552,106 @@ internal fun GlyphIcon(
                 Glyph.Plus -> {
                     drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 5f), androidx.compose.ui.geometry.Offset(12f, 19f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 12f), androidx.compose.ui.geometry.Offset(19f, 12f), 1.8f)
+                }
+                Glyph.ArrowUp -> {
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 20f), androidx.compose.ui.geometry.Offset(12f, 5f), 1.8f)
+                    drawPath(
+                        Path().apply { moveTo(6f, 11f); lineTo(12f, 5f); lineTo(18f, 11f) },
+                        tint,
+                        style = stroke,
+                    )
+                }
+                Glyph.Refresh -> {
+                    drawArc(
+                        tint,
+                        startAngle = -55f,
+                        sweepAngle = 285f,
+                        useCenter = false,
+                        topLeft = androidx.compose.ui.geometry.Offset(4f, 4f),
+                        size = androidx.compose.ui.geometry.Size(16f, 16f),
+                        style = stroke,
+                    )
+                    drawPath(
+                        Path().apply { moveTo(13f, 3f); lineTo(19f, 5f); lineTo(17f, 11f) },
+                        tint,
+                        style = stroke,
+                    )
+                }
+                Glyph.FolderPlus -> {
+                    drawPath(
+                        Path().apply {
+                            moveTo(3f, 6f); lineTo(10f, 6f); lineTo(12f, 8f); lineTo(21f, 8f)
+                            lineTo(21f, 19f); lineTo(3f, 19f); close()
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 11f), androidx.compose.ui.geometry.Offset(12f, 17f), 1.8f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(9f, 14f), androidx.compose.ui.geometry.Offset(15f, 14f), 1.8f)
+                }
+                Glyph.Upload -> {
+                    drawPath(
+                        Path().apply {
+                            moveTo(4f, 16f); lineTo(4f, 20f); lineTo(20f, 20f); lineTo(20f, 16f)
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 16f), androidx.compose.ui.geometry.Offset(12f, 4f), 1.8f)
+                    drawPath(
+                        Path().apply { moveTo(6f, 10f); lineTo(12f, 4f); lineTo(18f, 10f) },
+                        tint,
+                        style = stroke,
+                    )
+                }
+                Glyph.Download -> {
+                    drawPath(
+                        Path().apply {
+                            moveTo(4f, 16f); lineTo(4f, 20f); lineTo(20f, 20f); lineTo(20f, 16f)
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 4f), androidx.compose.ui.geometry.Offset(12f, 16f), 1.8f)
+                    drawPath(
+                        Path().apply { moveTo(6f, 10f); lineTo(12f, 16f); lineTo(18f, 10f) },
+                        tint,
+                        style = stroke,
+                    )
+                }
+                Glyph.Pencil -> {
+                    drawPath(
+                        Path().apply {
+                            moveTo(4f, 20f); lineTo(5.5f, 15f); lineTo(15f, 5.5f)
+                            lineTo(18.5f, 9f); lineTo(9f, 18.5f); close()
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(13f, 7.5f), androidx.compose.ui.geometry.Offset(16.5f, 11f), 1.8f)
+                }
+                Glyph.Trash -> {
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(4f, 7f), androidx.compose.ui.geometry.Offset(20f, 7f), 1.8f)
+                    drawPath(
+                        Path().apply {
+                            moveTo(9f, 7f); lineTo(9f, 4f); lineTo(15f, 4f); lineTo(15f, 7f)
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawPath(
+                        Path().apply {
+                            moveTo(6f, 7f); lineTo(7f, 20f); lineTo(17f, 20f); lineTo(18f, 7f)
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(10f, 10f), androidx.compose.ui.geometry.Offset(10f, 17f), 1.6f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(14f, 10f), androidx.compose.ui.geometry.Offset(14f, 17f), 1.6f)
+                }
+                Glyph.Close -> {
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(6f, 6f), androidx.compose.ui.geometry.Offset(18f, 18f), 1.8f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(18f, 6f), androidx.compose.ui.geometry.Offset(6f, 18f), 1.8f)
                 }
                 Glyph.ChevronDown -> drawPath(
                     Path().apply { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) },

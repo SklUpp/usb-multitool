@@ -624,5 +624,39 @@ object UiStateHostCheck {
             require(cleared.state.stagedRawImageLabel == null)
         }
 
+        // Files screen truthfulness: only guaranteed EFI protection is RO; no state claims a
+        // verified RW yet, the folder path is rooted, and formats come from the name only.
+        val efiProbe = PartitionTab(
+            id = "efi",
+            name = "VTOYEFI",
+            readOnly = true,
+            isEfiType = true,
+            filesystemId = FilesystemId.FAT,
+            startLba = 1uL,
+            sectorCount = 2uL,
+        )
+        require(
+            AppUiState(partitions = listOf(efiProbe), selectedPartitionId = "efi")
+                .partitionWriteAccess(efiProbe) == PartitionWriteAccess.ReadOnly,
+        )
+        val dataProbe = PartitionTab(
+            id = "data",
+            name = "Ventoy",
+            readOnly = false,
+            filesystemId = FilesystemId.FAT,
+            startLba = 1uL,
+            sectorCount = 2uL,
+        )
+        require(
+            AppUiState(partitions = listOf(dataProbe), selectedPartitionId = "data")
+                .partitionWriteAccess(dataProbe) == PartitionWriteAccess.Unknown,
+        )
+        require(folderPathLabel("/") == "/")
+        require(folderPathLabel("/masterdvd") == "/masterdvd/")
+        require(fileFormatLabel("win11.iso", isDirectory = false) == "ISO")
+        require(fileFormatLabel("README", isDirectory = false) == null)
+        require(fileFormatLabel("folder.iso", isDirectory = true) == null)
+        require(fileNameParts("backup.2024", isDirectory = true) == FileNameParts("backup.2024", ""))
+        require(fileNameParts("win11.iso", isDirectory = false) == FileNameParts("win11", ".iso"))
     }
 }

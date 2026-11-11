@@ -35,6 +35,7 @@ for suite in \
   StringResourceParityTest \
   ShellLogBehaviorTest \
   FilesystemUsageUiTest \
+  FilesScreenModelTest \
   RawRangeUiStateTest \
   AutounattendPathTest \
   AutounattendReloadUiTest \
@@ -104,6 +105,7 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/ShellLogBehaviorTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/RawRangeUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FilesystemUsageUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/FilesScreenModelTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendPathTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendReloadUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoyUiStateTest.kt" \
@@ -147,6 +149,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.ShellLogBehaviorTest \
   usb.ui.RawRangeUiStateTest \
   usb.ui.FilesystemUsageUiTest \
+  usb.ui.FilesScreenModelTest \
   usb.ui.AutounattendPathTest \
   usb.ui.AutounattendReloadUiTest \
   usb.ui.VentoyUiStateTest \

@@ -14,6 +14,7 @@ import usb.ventoy.LayoutPartition
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import java.util.Locale
 import kotlin.math.roundToLong
 
 /**
@@ -555,6 +556,17 @@ data class PartitionTab(
 
 data class FreeRegionUi(val startLba: ULong, val sectorCount: ULong)
 
+/**
+ * Partition-level write state shown on the Files screen. Only a verified fact is reported:
+ * [ReadOnly] means guaranteed EFI write protection. Browsing always opens the volume
+ * read-only and a writable mount is created per mutation, so the current state has no
+ * confirmed writable fact; every unprotected partition is [Unknown], never claimed as RW.
+ */
+enum class PartitionWriteAccess {
+    ReadOnly,
+    Unknown,
+}
+
 data class FileEntry(
     val name: String,
     val isDirectory: Boolean,
@@ -562,6 +574,39 @@ data class FileEntry(
 ) {
     val isIso: Boolean
         get() = !isDirectory && name.endsWith(".iso", ignoreCase = true)
+}
+
+/** Path shown relative to the root of a mounted volume, with both slashes: "/" or "/a/b/". */
+fun folderPathLabel(path: String): String {
+    val trimmed = path.trim('/')
+    return if (trimmed.isEmpty()) "/" else "/$trimmed/"
+}
+
+/**
+ * Extension-derived format of a real file name, uppercase; null when the name has no
+ * extension or starts with a dot. Nothing is inferred beyond the characters in the name.
+ */
+fun fileFormatLabel(name: String, isDirectory: Boolean): String? {
+    if (isDirectory) return null
+    val dot = name.lastIndexOf('.')
+    if (dot !in 1 until name.lastIndex) return null
+    return name.substring(dot + 1).uppercase(Locale.ROOT)
+}
+
+/**
+ * Display split of a real entry name: folders stay whole (dots and all), files keep their
+ * extension in a separately ellipsized suffix, and names without an extension stay whole.
+ */
+data class FileNameParts(val base: String, val suffix: String)
+
+fun fileNameParts(name: String, isDirectory: Boolean): FileNameParts {
+    if (isDirectory) return FileNameParts(name, "")
+    val dot = name.lastIndexOf('.')
+    return if (dot in 1 until name.lastIndex) {
+        FileNameParts(name.substring(0, dot), name.substring(dot))
+    } else {
+        FileNameParts(name, "")
+    }
 }
 
 enum class IsoAction {
@@ -1123,6 +1168,19 @@ data class AppUiState(
             partition.startLba == allowedStart &&
             partition.sectorCount == allowedCount
     }
+
+    /**
+     * Guaranteed write state of [partition] on this attachment, never a mount mode.
+     * EFI protection is authoritative: without the explicit override the answer is
+     * [PartitionWriteAccess.ReadOnly]. Everything else is [PartitionWriteAccess.Unknown]
+     * because browsing mounts read-only and a writable mount exists only per mutation.
+     */
+    fun partitionWriteAccess(partition: PartitionTab): PartitionWriteAccess =
+        if (!isEfiWriteAllowed(partition)) {
+            PartitionWriteAccess.ReadOnly
+        } else {
+            PartitionWriteAccess.Unknown
+        }
 
     /** Write-protected system partitions (ESP, EFI type, or VTOYEFI name). */
     val efiPartitions: List<PartitionTab>

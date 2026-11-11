@@ -17,7 +17,6 @@
 
     <string name="files_empty_folder">Folder is empty</string>
     <string name="files_listing">Reading the folder…</string>
-    <string name="files_efi_blocked">EFI protection blocks writes to %1$s. Allow EFI writes on the Ventoy tab.</string>
 
     <string name="efi_section_title">EFI protection</string>
     <string name="efi_missing">No EFI partition (VTOYEFI / ESP) on this disk.</string>
@@ -159,17 +158,22 @@
     <string name="action_ventoy_link_xml">linking the XML file</string>
     <string name="action_ventoy_unattend_write">writing the generated unattend XML</string>
     <string name="action_ventoy_unattend_layout">wiping and partitioning the target PC disk via unattend</string>
-    <string name="files_section_partition">Partition</string>
-    <string name="files_section_folder">Folder</string>
-    <string name="files_section_selection">Selected item</string>
+    <string name="files_section_partition">Partitions</string>
     <string name="files_current_partition">Current partition</string>
     <string name="files_no_partitions_hint">No partitions found — create one on the Partitions tab.</string>
     <string name="files_up">Up one level</string>
     <string name="files_create_folder">New folder</string>
     <string name="files_folder_name">Folder name</string>
     <string name="files_clear_selection">Clear</string>
-    <string name="files_save">Save</string>
-    <string name="files_upload">Upload</string>
+    <string name="files_copy_from_phone">Copy from phone</string>
+    <string name="files_save_to_phone">Save to phone</string>
+    <string name="files_write_ro">EFI write protection is active</string>
+    <string name="files_write_unknown">Write state not verified</string>
+    <string name="files_current_path">Current folder: %1$s</string>
+    <string name="files_statuses">Statuses</string>
+    <string name="files_statuses_expanded">Statuses expanded</string>
+    <string name="files_statuses_collapsed">Statuses collapsed</string>
+    <string name="files_status_general">Status</string>
     <string name="files_delete_folder_confirm">Delete folder %1$s? It must be empty — non-empty folders are refused.</string>
     <string name="files_delete_confirm">Delete %1$s?</string>
     <string name="files_open_folder">Open folder</string>
@@ -177,8 +181,6 @@
     <string name="type_folder">Folder</string>
     <string name="type_iso">ISO image</string>
     <string name="type_file">File</string>
-    <string name="files_root">Root</string>
-    <string name="files_root_prefix">Root / %1$s</string>
     <string name="partitions_corrupt">Partition table is damaged</string>
     <string name="partitions_create_blocked_corrupt">Cannot create: repair or wipe the table first.</string>
     <string name="partitions_create_first">No partitions. Create the first one in the Free space section.</string>
@@ -189,8 +191,6 @@
     <string name="filesystem_usage_known">Free %1$s of %2$s</string>
     <string name="filesystem_usage_unavailable">unavailable</string>
     <string name="filesystem_usage_note">Measured inside the filesystem; the free region in the partition table is a different value.</string>
-    <string name="files_up_action">Up</string>
-    <string name="files_new_folder_action">New folder</string>
     <string name="diagnostics_pick_backup">Choose backup file…</string>
     <string name="confirm_ack">I understand the data will be erased</string>
     <string name="partitions_raw_source_label">Write source</string>
@@ -378,12 +378,6 @@
         <item quantity="few">%d partitions</item>
         <item quantity="many">%d partitions</item>
         <item quantity="other">%d partitions</item>
-    </plurals>
-    <plurals name="elements_count">
-        <item quantity="one">%d element</item>
-        <item quantity="few">%d elements</item>
-        <item quantity="many">%d elements</item>
-        <item quantity="other">%d elements</item>
     </plurals>
     <plurals name="free_regions_count">
         <item quantity="one">%d region</item>
