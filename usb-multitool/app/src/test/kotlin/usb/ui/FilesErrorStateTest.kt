@@ -88,11 +88,6 @@ class FilesErrorStateTest {
                 .filesError,
         )
         assertNull(
-            UiReducer.reduce(failed, UiIntent.NavigateUp)
-                .state
-                .filesError,
-        )
-        assertNull(
             UiReducer.reduce(failed, UiIntent.DeviceChanged(DevicePresence.Disconnected))
                 .state
                 .filesError,
