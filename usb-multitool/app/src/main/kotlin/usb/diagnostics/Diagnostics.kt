@@ -302,7 +302,6 @@ object Rescue {
                 }
             }
         } finally {
-            DdrescueNative.persistHint(map)
             // Final checkpoint even on cancel/abort so Partial retains a usable map.
             try {
                 checkpoint(map.snapshot())
@@ -736,33 +735,4 @@ object Rescue {
         }
         return off
     }
-}
-
-internal object DdrescueNative {
-    @Volatile var libraryLoaded: Boolean = false
-        private set
-
-    @Volatile var engineLinked: Boolean = false
-        private set
-
-    init {
-        try {
-            System.loadLibrary("usb_native")
-            libraryLoaded = true
-            engineLinked = nativeEngineLinked()
-        } catch (_: UnsatisfiedLinkError) {
-            libraryLoaded = false
-            engineLinked = false
-        }
-    }
-
-    fun persistHint(map: RescueMap) {
-        // In-memory map is authoritative on JVM. Native mapfile flush needs engine.
-        if (!libraryLoaded || !engineLinked) return
-        nativePersist(map.sectorCount.toLong(), map.partial)
-    }
-
-    @JvmStatic external fun nativePersist(sectorCount: Long, partial: Boolean)
-
-    @JvmStatic external fun nativeEngineLinked(): Boolean
 }

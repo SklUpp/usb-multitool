@@ -227,6 +227,7 @@ class FatVolume internal constructor(
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
         requireValidRange(offset, length.toLong())
+        requireIoRange(offset, length, MAX_FAT_EXT_IO_BYTES)
         return FatFsNative.nativeRead(volumeHandle, path, offset, length)
     }
 
@@ -238,6 +239,7 @@ class FatVolume internal constructor(
         plannedTotalSize: Long,
     ) {
         ensureOpen()
+        requireIoRange(offset, data.size, MAX_FAT_EXT_IO_BYTES)
         val planned = resolvePlannedTotal(offset, data.size, plannedTotalSize)
         requireWithinFileLimit(planned, FatFsNative.nativeMaxFileSize(kind.code), kind)
         val wrote = FatFsNative.nativeWrite(volumeHandle, path, offset, data, planned, create)

@@ -435,7 +435,9 @@ int ntfs_engine_sync(uint64_t vol_handle)
     if (!v || !v->vol) return -EINVAL;
 
     if (v->vol->dev) {
-        ntfs_device_sync(v->vol->dev);
+        /* ntfs_device_sync returns 0/-1 without setting errno; report -EIO. */
+        int rc = ntfs_device_sync(v->vol->dev);
+        if (rc < 0) return -EIO;
     }
     return usb_block_sync(v->block_handle);
 }

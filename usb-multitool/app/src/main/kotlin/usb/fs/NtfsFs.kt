@@ -310,6 +310,7 @@ class NtfsVolume internal constructor(
 
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
+        requireIoRange(offset, length, MAX_NTFS_IO_BYTES)
         val err = IntArray(1)
         val data = NtfsFs.nativeRead(handle, path, offset, length, err)
             ?: throw when (err[0]) {
@@ -329,6 +330,7 @@ class NtfsVolume internal constructor(
         plannedTotalSize: Long,
     ) {
         ensureWritable()
+        requireIoRange(offset, data.size, MAX_NTFS_IO_BYTES)
         val wrote = NtfsFs.nativeWrite(handle, path, offset, data, create)
         if (wrote < 0 || wrote != data.size) {
             throw NtfsException("short write on $path: $wrote of ${data.size}")

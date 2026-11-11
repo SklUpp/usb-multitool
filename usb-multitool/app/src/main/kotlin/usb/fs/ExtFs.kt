@@ -135,6 +135,11 @@ class ExtVolume internal constructor(
         check(open) { "EXT volume closed" }
     }
 
+    private fun ensureWritable() {
+        ensureOpen()
+        if (readOnly) throw ExtException("Read-only EXT volume")
+    }
+
     override fun space(): FilesystemSpace {
         ensureOpen()
         val out = LongArray(2)
@@ -164,6 +169,7 @@ class ExtVolume internal constructor(
 
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
+        requireIoRange(offset, length, MAX_FAT_EXT_IO_BYTES)
         return ExtFs.nativeRead(handle, path, offset, length)
             ?: throw ExtException("Failed to read: $path")
     }
@@ -175,7 +181,8 @@ class ExtVolume internal constructor(
         create: Boolean,
         plannedTotalSize: Long,
     ) {
-        ensureOpen()
+        ensureWritable()
+        requireIoRange(offset, data.size, MAX_FAT_EXT_IO_BYTES)
         val wrote = ExtFs.nativeWrite(handle, path, offset, data, create)
         if (wrote < 0 || wrote != data.size) {
             throw ExtException("short write on $path: $wrote of ${data.size}")
@@ -183,12 +190,12 @@ class ExtVolume internal constructor(
     }
 
     override fun mkdir(path: String) {
-        ensureOpen()
+        ensureWritable()
         ExtFs.nativeMkdir(handle, path)
     }
 
     override fun delete(path: String) {
-        ensureOpen()
+        ensureWritable()
         try {
             ExtFs.nativeDelete(handle, path)
         } catch (failure: ExtException) {
@@ -200,7 +207,7 @@ class ExtVolume internal constructor(
     }
 
     override fun rename(from: String, to: String) {
-        ensureOpen()
+        ensureWritable()
         ExtFs.nativeRename(handle, from, to)
     }
 

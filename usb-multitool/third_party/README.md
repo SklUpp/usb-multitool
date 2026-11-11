@@ -18,7 +18,7 @@ commit recorded in `UPSTREAM.md`.
   4. Local patch: `third_party/fatfs/patches/ff16p4-sync-fs-errors.diff` — `sync_fs` now treats a failed FSInfo sector write or exFAT VBR read/write as `FR_DISK_ERR` and clears `fsi_flag` only after the sector reached the medium. Upstream cleared the flag first and ignored the write result, so a later flush reported success for metadata that never landed and could not retry.
 - Unpack into: `third_party/fatfs/`
 - License: FatFs license (BSD-style; see archive `LICENSE.txt`)
-- Bridge: `disk_read` / `disk_write` / `disk_ioctl` → `usb_partition_*` in `fs_bridge.c`
+- Bridge: `fat_engine.c` / `fat_jni.cpp` — `disk_read` / `disk_write` / `disk_ioctl` go through the `usb_block.c` handle
 
 ## ntfs-3g
 
@@ -37,7 +37,7 @@ commit recorded in `UPSTREAM.md`.
 - Tag fallback: `v1.0.0` (`890484c72dbb321535127625c3686e51f1f424b9`) if the tip moves
 - Unpack into: `third_party/lwext4/`
 - License: GPL-2.0-or-later
-- Bridge: `ext4_blockdev` callbacks → `usb_partition_read` / `usb_partition_write`
+- Bridge: `ext_engine.c` — `ext4_blockdev` callbacks → `usb_block_read` / `usb_block_write`
 - Local patch (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
 
 ## exfatprogs (exFAT fsck only)
@@ -85,4 +85,5 @@ app `externalNativeBuild` CMake arguments.
 - See `ddrescue/README.md`
 - URL: https://ftp.gnu.org/gnu/ddrescue/ddrescue-1.30.tar.lz
 - Revision: **1.30**
-- Bridge: `app/src/main/cpp/ddrescue_bridge.c`
+- Bridge: none compiled. The rescue map is maintained in Kotlin (`RescueMap`) and
+  checkpointed by the app; no native ddrescue code is linked.
