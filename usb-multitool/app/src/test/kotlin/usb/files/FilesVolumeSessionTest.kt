@@ -2,6 +2,7 @@ package usb.files
 
 import java.io.IOException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -183,6 +184,226 @@ class FilesVolumeSessionTest {
             assertSame(a, b)
         }
         assertEquals(1, opens)
+    }
+
+
+
+
+    @Test
+    fun o2FailBeforeAcquireDoesNotCloseForeignMount() {
+        val events = mutableListOf<String>()
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
+            }
+        // B already holds RO cache.
+        session.withLock { session.volumeForLocked("B") }
+        assertTrue(events.isEmpty())
+        session.withLock {
+            var token = 0L
+            var primary: Throwable? = null
+            try {
+                session.withAcquireRecorder({ token = it }) {
+                    error("binding changed before volume")
+                }
+            } catch (t: IllegalStateException) {
+                primary = t
+            } finally {
+                if (primary != null && token != 0L) {
+                    session.releaseAcquiredAfterErrorLocked(token, primary)
+                }
+            }
+            assertEquals(0L, token)
+            // Foreign mount B still open — never closed by fail-before-acquire.
+            assertTrue(session.mountEpochLocked() != null)
+        }
+        assertTrue(events.isEmpty()) // no close
+    }
+
+    @Test
+    fun o2FailAfterAcquireClosesBeforeNextOpSameMountReuse() {
+        val events = mutableListOf<String>()
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
+            }
+        // Op A: acquire then fail — O2 closes under same lock.
+        session.withLock {
+            var token = 0L
+            var primary: Throwable? = null
+            try {
+                session.withAcquireRecorder({ token = it }) {
+                    session.volumeForLocked("1")
+                    error("list failed")
+                }
+            } catch (t: IllegalStateException) {
+                primary = t
+            } finally {
+                if (primary != null && token != 0L) {
+                    session.releaseAcquiredAfterErrorLocked(token, primary)
+                }
+            }
+            assertTrue(token != 0L)
+            assertNull(session.mountEpochLocked())
+        }
+        assertEquals(listOf("volume", "disk"), events)
+
+        // Op B: same partition — fresh open, not poisoned reuse of A's failed handle.
+        events.clear()
+        session.withLock {
+            session.volumeForLocked("1")
+            assertTrue(session.mountEpochLocked() != null)
+        }
+        assertTrue(events.isEmpty()) // open only, no prior close in this phase
+    }
+
+    @Test
+    fun o2SuccessKeepsRoCacheForNextBrowse() {
+        val events = mutableListOf<String>()
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
+            }
+        session.withLock {
+            var token = 0L
+            session.withAcquireRecorder({ token = it }) {
+                session.volumeForLocked("1")
+            }
+            // Success: do NOT release — RO cache stays.
+            assertTrue(token != 0L)
+            assertTrue(session.mountEpochLocked() != null)
+        }
+        assertTrue(events.isEmpty())
+        session.withLock {
+            val a = session.volumeForLocked("1")
+            val b = session.volumeForLocked("1")
+            assertSame(a, b)
+        }
+        assertEquals(0, events.size)
+    }
+
+    @Test
+    fun o2CloseErrorSuppressedOntoPrimaryNotReplacing() {
+        val closeErr = IOException("volume sync unconfirmed")
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null)
+            }
+        val primary = IOException("list failed: 5")
+        session.withLock {
+            var token = 0L
+            session.withAcquireRecorder({ token = it }) {
+                session.volumeForLocked("1")
+            }
+            val result = session.releaseAcquiredAfterErrorLocked(token, primary)
+            assertTrue(result is CloseEpochResult.ClosedFailed)
+            assertSame(closeErr, (result as CloseEpochResult.ClosedFailed).error)
+            assertEquals(1, primary.suppressed.size)
+            assertSame(closeErr, primary.suppressed[0])
+            assertEquals("list failed: 5", primary.message)
+            assertNull(session.mountEpochLocked())
+        }
+        val publish =
+            FilesOperationPolicy.planCloseDiagnostic(
+                primary = primary,
+                quiet = true,
+                hasBoundFailure = true,
+                opStillCurrent = true,
+            )
+        assertTrue(publish is CloseDiagnosticPublish.LogOnly)
+        assertEquals(
+            "list failed: 5",
+            FilesOperationPolicy.primaryErrorMessage(primary),
+        )
+    }
+
+    @Test
+    fun o2PartialWritableCloseUnchangedSemantics() {
+        val closeErr = IOException("EXT close/sync failed")
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null)
+            }
+        val op = DiskOperation(name = "mkdir")
+        op.state = OperationState.Running
+        session.withLock {
+            try {
+                session.withWritableVolume("1", op) { /* body ok */ }
+                fail("expected CloseAfterSuccessException")
+            } catch (e: CloseAfterSuccessException) {
+                assertSame(closeErr, e.cause)
+                assertEquals(OperationState.Partial, op.state)
+            }
+        }
+    }
+
+    @Test
+    fun o2ReleaseNotOwnedWhenAlreadyClosedIsHarmless() {
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, volumeClose = null, diskClose = null)
+            }
+        val primary = IOException("x")
+        session.withLock {
+            var token = 0L
+            session.withAcquireRecorder({ token = it }) {
+                session.volumeForLocked("1")
+            }
+            assertEquals(CloseEpochResult.ClosedOk, session.closeIfEpochLocked(token))
+            assertEquals(
+                CloseEpochResult.NotOwned,
+                session.releaseAcquiredAfterErrorLocked(token, primary),
+            )
+            assertEquals(0, primary.suppressed.size)
+        }
+    }
+
+
+    @Test
+    fun o2CancelPathCloseFailureSurvivesAsExplicitChannel() {
+        // Mirrors submitFilesOperation: body throws cancel-like error after acquire;
+        // close fails; host keeps ClosedFailed aside so await Cancelled can still log it
+        // even when executor drops failureCause for RO cancel.
+        val closeErr = IOException("volume sync unconfirmed")
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null)
+            }
+        val cancel = RuntimeException("cancelled")
+        var explicit: Throwable? = null
+        session.withLock {
+            var token = 0L
+            var bodyError: Throwable? = null
+            try {
+                session.withAcquireRecorder({ token = it }) {
+                    session.volumeForLocked("1")
+                    throw cancel
+                }
+            } catch (t: Throwable) {
+                bodyError = t
+            } finally {
+                val err = bodyError
+                if (err != null && token != 0L) {
+                    when (val r = session.releaseAcquiredAfterErrorLocked(token, err)) {
+                        is CloseEpochResult.ClosedFailed -> explicit = r.error
+                        else -> Unit
+                    }
+                }
+            }
+        }
+        assertSame(closeErr, explicit)
+        assertSame(closeErr, cancel.suppressed.single())
+        // Terminal would stay Cancelled; diagnostic still publishable:
+        val d =
+            FilesOperationPolicy.planCloseDiagnostic(
+                primary = null, // executor cleared
+                quiet = true,
+                hasBoundFailure = true,
+                opStillCurrent = true,
+                explicitClose = explicit,
+            )
+        assertTrue(d is CloseDiagnosticPublish.LogOnly)
+        assertNull(session.mountEpochLocked())
     }
 
     private fun mounted(

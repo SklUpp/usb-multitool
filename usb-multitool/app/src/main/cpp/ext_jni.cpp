@@ -207,9 +207,20 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
     size_t count = 0;
     int rc = ext_engine_list(w->vol_handle, p.c_str(), &entries, &count);
     if (rc != 0) {
-        throw_ext(env, rc == -EOVERFLOW
-                           ? "directory listing exceeds the supported entry count"
-                           : "directory listing failed");
+        // Match ntfs_jni / delete path: only ENOENT is path-absent (UI may fall back to
+        // root). EIO and other faults keep a generic listing-failed message so they
+        // surface as filesError, never as a silent empty folder.
+        const char *msg = "directory listing failed";
+        if (rc == -EOVERFLOW) {
+            msg = "directory listing exceeds the supported entry count";
+        } else if (rc == -ENOENT) {
+            msg = "Path not found";
+        } else if (rc == -ENOTDIR) {
+            msg = "Not a directory";
+        } else if (rc == -EIO) {
+            msg = "directory listing failed: unreadable directory";
+        }
+        throw_ext(env, msg);
         return nullptr;
     }
     jclass entryCls = env->FindClass("usb/fs/ExtDirEntry");

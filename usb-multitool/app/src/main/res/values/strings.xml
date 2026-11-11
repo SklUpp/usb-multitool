@@ -8,6 +8,7 @@
     <string name="log_collapse">Collapse log</string>
 
     <string name="files_empty_folder">Folder is empty</string>
+    <string name="files_listing">Reading the folder…</string>
     <string name="files_efi_blocked">EFI protection blocks writes to %1$s. Allow EFI writes on the Ventoy tab.</string>
 
     <string name="efi_section_title">EFI protection</string>

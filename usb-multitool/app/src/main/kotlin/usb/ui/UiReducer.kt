@@ -1,5 +1,7 @@
 package usb.ui
 
+import usb.fs.FR_NO_FILE
+import usb.fs.FR_NO_PATH
 import usb.fs.FilesystemId
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsageKey
@@ -15,6 +17,7 @@ import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.XmlPath
 import usb.ventoy.autounattendPlanSha256
+
 
 /**
  * Pure state transitions for the four-screen shell.
@@ -121,6 +124,17 @@ sealed class UiIntent {
         val truncated: Boolean = false,
         val unreadable: Int = 0,
     ) : UiIntent()
+
+    /**
+     * Bound raw-source scan failure. Applied only while [generation] and [identity]
+     * still match the open chooser request — never a free [Status] that can clobber B.
+     */
+    data class RawSourceCandidatesFailed(
+        val generation: Long,
+        val identity: String?,
+        val message: String,
+    ) : UiIntent()
+
     /** Stage [path] from the selected partition; selection alone never writes. */
     data class SelectRawSource(val path: String, val name: String) : UiIntent()
     data object CancelRawSourceLoad : UiIntent()
@@ -326,16 +340,30 @@ sealed class UiIntent {
         val uri: String,
     ) : UiIntent()
 
-    /** Result of a real FAT list of [path]; applied only while that path is displayed. */
+    /**
+     * Result of a real FAT list of [path] on [partitionId]. Applied only while that path,
+     * partition, identity, attach generation and [generation] still match the display.
+     */
     data class FilesListed(
         val path: String,
         val files: List<FileEntry>,
+        val generation: Long,
+        val identity: String?,
+        val partitionId: String,
+        val attachGeneration: Long,
     ) : UiIntent()
 
-    /** Real list failure for [path]; displayed entries are voided, never faked. */
+    /**
+     * Real list failure for [path] on [partitionId]; displayed entries are voided, never
+     * faked. Same freshness guards as [FilesListed].
+     */
     data class FilesListFailed(
         val path: String,
         val message: String,
+        val generation: Long,
+        val identity: String?,
+        val partitionId: String,
+        val attachGeneration: Long,
     ) : UiIntent()
 
     /** Append a timestamped line to the bounded operation log. */
@@ -487,12 +515,15 @@ object UiReducer {
                             currentPath = "/",
                             files = emptyList(),
                             filesError = null,
+                            filesListGeneration = state.filesListGeneration + 1L,
+                            filesPending = true,
                             // A value measured for the previous partition is not current.
                             filesystemUsage = null,
                             rawSourceCandidates = null,
                             rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
                             rawSourceCandidatesIdentity = null,
                             rawSourceCandidatesTruncated = false,
+                            rawSourceCandidatesError = null,
                             pendingIsoImport = null,
                             isoImportError = null,
                             isoImportGeneration = state.isoImportGeneration + 1,
@@ -576,74 +607,172 @@ object UiReducer {
             }
 
             is UiIntent.DeviceChanged -> {
-                val selected =
-                    intent.partitions
-                        .firstOrNull { it.id == state.selectedPartitionId }
-                        ?.id
-                        ?: intent.partitions.firstOrNull()?.id
-                val candidateMatchesDevice =
-                    intent.presence == DevicePresence.Ready &&
-                        intent.device?.identity == state.linkOverwriteCandidateIdentity &&
-                        intent.device?.attachGeneration == state.linkOverwriteCandidateGeneration
                 val incoming = intent.device
-                // Same physical stick across Busy/Ready/permission: identity + attachGeneration.
-                // Host must stamp attachGeneration on Busy/Permission too, or resume always wipes.
+                val previous = state.device
                 val sameStick =
                     incoming != null &&
-                        state.device != null &&
-                        incoming.identity == state.device.identity &&
-                        incoming.attachGeneration == state.device.attachGeneration
-                // Ventoy/XML is stick-scoped; drop only on detach or a different attachment.
+                        previous != null &&
+                        incoming.identity == previous.identity &&
+                        incoming.attachGeneration == previous.attachGeneration
+                // Label-only identity is weak: EFI / destructive confirmation need the
+                // same attach generation (sameStick) plus a stable USB serial on both sides.
+                val trustedStick =
+                    sameStick &&
+                        incoming != null &&
+                        previous != null &&
+                        deviceIdentityTrusted(previous, incoming)
+                // Busy/PermissionRequired probe on the live stick must not wipe browse
+                // state: host sends empty partitions until Ready.
+                val probingRetain =
+                    sameStick &&
+                        (intent.presence == DevicePresence.Busy ||
+                            intent.presence == DevicePresence.PermissionRequired)
+                val partitions =
+                    if (probingRetain && intent.partitions.isEmpty()) {
+                        state.partitions
+                    } else {
+                        intent.partitions
+                    }
+                val selected =
+                    partitions
+                        .firstOrNull { it.id == state.selectedPartitionId }
+                        ?.id
+                        ?: partitions.firstOrNull()?.id
+                val candidateMatchesDevice =
+                    intent.presence == DevicePresence.Ready &&
+                        trustedStick &&
+                        intent.device?.identity == state.linkOverwriteCandidateIdentity &&
+                        intent.device?.attachGeneration == state.linkOverwriteCandidateGeneration
+                // Ventoy/XML is scoped to the current attachment.
                 val keepVentoy =
                     sameStick &&
                         intent.presence != DevicePresence.Disconnected &&
                         intent.presence != DevicePresence.Absent
-                // EFI override: hold through Busy of the same stick; re-check geometry on Ready.
-                val retainedEfi =
-                    when {
-                        !sameStick -> null
-                        intent.presence != DevicePresence.Ready ->
-                            state.vtoyEfiWritePartitionId?.let { id ->
-                                Triple(id, state.vtoyEfiWriteStartLba, state.vtoyEfiWriteSectorCount)
-                            }
-                        else ->
-                            state.vtoyEfiWritePartitionId?.let { id ->
-                                intent.partitions.firstOrNull {
-                                    it.id == id &&
-                                        it.readOnly &&
-                                        it.startLba == state.vtoyEfiWriteStartLba &&
-                                        it.sectorCount == state.vtoyEfiWriteSectorCount
-                                }?.let { Triple(it.id, it.startLba, it.sectorCount) }
-                            }
+                // The EFI write override belongs to one physical attachment: a partition
+                // refresh keeps it only with a trusted identity match.
+                val sameAttachment = intent.presence == DevicePresence.Ready && sameStick
+                val retainPrivileged = trustedStick && (sameAttachment || probingRetain)
+                val retainedEfi = state.vtoyEfiWritePartitionId?.takeIf { retainPrivileged }?.let { id ->
+                    partitions.firstOrNull {
+                        it.id == id &&
+                            it.readOnly &&
+                            it.startLba == state.vtoyEfiWriteStartLba &&
+                            it.sectorCount == state.vtoyEfiWriteSectorCount
+                    }
+                }
+                // Keep the open folder on the same stick while the previously selected
+                // partition is still known. Detach / other stick / missing id → root.
+                val keepPath =
+                    sameStick &&
+                        state.selectedPartitionId != null &&
+                        selected == state.selectedPartitionId &&
+                        intent.presence != DevicePresence.Disconnected &&
+                        intent.presence != DevicePresence.Absent
+                val path = if (keepPath) state.currentPath else "/"
+                val reloadFiles =
+                    intent.presence == DevicePresence.Ready && selected != null
+                // Probe keeps the request id so a late list still binds; Ready/detach bump.
+                val filesGeneration =
+                    if (probingRetain) {
+                        state.filesListGeneration
+                    } else {
+                        state.filesListGeneration + 1L
+                    }
+                // Busy probe often reports capacity 0 before geometry is known — keep the
+                // last confirmed capacity on the same attachment so identity stays honest.
+                val device =
+                    if (probingRetain &&
+                        incoming != null &&
+                        previous != null &&
+                        incoming.capacityBytes == 0uL &&
+                        previous.capacityBytes > 0uL
+                    ) {
+                        incoming.copy(capacityBytes = previous.capacityBytes)
+                    } else {
+                        incoming
                     }
                 ReduceResult(
                     state.copy(
                         presence = intent.presence,
-                        device = intent.device,
-                        vtoyEfiWritePartitionId = retainedEfi?.first,
-                        vtoyEfiWriteStartLba = retainedEfi?.second,
-                        vtoyEfiWriteSectorCount = retainedEfi?.third,
-                        partitions = intent.partitions,
-                        freeRegions = intent.freeRegions,
-                        diskSectorSize = intent.sectorSize,
-                        tableValid = intent.tableValid,
-                        partitionTableDamaged = intent.partitionTableDamaged,
-                        partitionTableAmbiguous = intent.partitionTableAmbiguous,
-                        partitionScheme = intent.partitionScheme,
-                        rawGeometry = intent.rawGeometry,
-                        rangeProbe = null,
-                        rangeProbeRequestedRange = null,
+                        device = device,
+                        vtoyEfiWritePartitionId = retainedEfi?.id,
+                        vtoyEfiWriteStartLba = retainedEfi?.startLba,
+                        vtoyEfiWriteSectorCount = retainedEfi?.sectorCount,
+                        partitions = partitions,
+                        freeRegions =
+                            if (probingRetain && intent.partitions.isEmpty()) {
+                                state.freeRegions
+                            } else {
+                                intent.freeRegions
+                            },
+                        diskSectorSize =
+                            if (probingRetain && intent.partitions.isEmpty()) {
+                                state.diskSectorSize
+                            } else {
+                                intent.sectorSize
+                            },
+                        tableValid =
+                            if (probingRetain && intent.partitions.isEmpty()) {
+                                state.tableValid
+                            } else {
+                                intent.tableValid
+                            },
+                        partitionTableDamaged =
+                            if (probingRetain && intent.partitions.isEmpty()) {
+                                state.partitionTableDamaged
+                            } else {
+                                intent.partitionTableDamaged
+                            },
+                        partitionTableAmbiguous =
+                            if (probingRetain && intent.partitions.isEmpty()) {
+                                state.partitionTableAmbiguous
+                            } else {
+                                intent.partitionTableAmbiguous
+                            },
+                        partitionScheme =
+                            if (probingRetain && intent.partitions.isEmpty()) {
+                                state.partitionScheme
+                            } else {
+                                intent.partitionScheme
+                            },
+                        rawGeometry =
+                            if (probingRetain && intent.partitions.isEmpty() && intent.rawGeometry == null) {
+                                state.rawGeometry
+                            } else {
+                                intent.rawGeometry
+                            },
+                        rangeProbe = if (probingRetain) state.rangeProbe else null,
+                        rangeProbeRequestedRange =
+                            if (probingRetain) state.rangeProbeRequestedRange else null,
                         selectedPartitionId = selected,
-                        currentPath = "/",
-                        files = intent.files,
-                        filesError = null,
+                        currentPath = path,
+                        // Probe keeps the last listing; Ready clears until FilesListed lands.
+                        files = when {
+                            reloadFiles -> emptyList()
+                            probingRetain -> state.files
+                            else -> intent.files
+                        },
+                        filesError = if (probingRetain) state.filesError else null,
+                        filesListGeneration = filesGeneration,
+                        filesPending = reloadFiles,
                         // A refresh may describe another attachment or geometry.
-                        filesystemUsage = null,
-                        pendingConfirmation = null,
-                        rawSourceCandidates = null,
-                        rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
-                        rawSourceCandidatesIdentity = null,
-                        rawSourceCandidatesTruncated = false,
+                        filesystemUsage = if (probingRetain) state.filesystemUsage else null,
+                        pendingConfirmation =
+                            if (probingRetain && trustedStick) state.pendingConfirmation else null,
+                        rawSourceCandidates =
+                            if (probingRetain) state.rawSourceCandidates else null,
+                        rawSourceCandidatesGeneration =
+                            if (probingRetain) {
+                                state.rawSourceCandidatesGeneration
+                            } else {
+                                state.rawSourceCandidatesGeneration + 1
+                            },
+                        rawSourceCandidatesIdentity =
+                            if (probingRetain) state.rawSourceCandidatesIdentity else null,
+                        rawSourceCandidatesTruncated =
+                            if (probingRetain) state.rawSourceCandidatesTruncated else false,
+                        rawSourceCandidatesError =
+                            if (probingRetain) state.rawSourceCandidatesError else null,
                         windowsIsoCandidates =
                             if (keepVentoy) state.windowsIsoCandidates else null,
                         windowsIsoCandidatesGeneration =
@@ -715,6 +844,12 @@ object UiReducer {
                                 presenceMessage(intent.presence)
                             },
                     ),
+                    effects =
+                        if (reloadFiles) {
+                            listOf(UiEffect(UiEffect.Kind.LoadFiles, path = path))
+                        } else {
+                            emptyList()
+                        },
                 )
             }
 
@@ -1668,6 +1803,7 @@ object UiReducer {
                                 rawSourceCandidatesGeneration = generation,
                                 rawSourceCandidatesIdentity = device.identity,
                                 rawSourceCandidatesTruncated = false,
+                                rawSourceCandidatesError = null,
                             ),
                             effects = listOf(
                                 UiEffect(
@@ -1720,9 +1856,43 @@ object UiReducer {
                         state.copy(
                             rawSourceCandidates = accepted,
                             rawSourceCandidatesTruncated = intent.truncated,
+                            rawSourceCandidatesError = null,
                             statusMessage = notice,
                         ),
                     )
+                }
+            }
+
+            is UiIntent.RawSourceCandidatesFailed -> {
+                val device = state.device
+                if (device == null ||
+                    intent.generation != state.rawSourceCandidatesGeneration ||
+                    intent.identity != device.identity
+                ) {
+                    // Stale chooser A — keep B status/candidates; log so close/I/O is not silent.
+                    ReduceResult(appendLogLine(state, "Raw sources (stale): ${intent.message}"))
+                } else {
+                    // Bound chooser error always; global status only when no other op owns the slot.
+                    val opOwnsStatus =
+                        state.operation?.state == OperationState.Running ||
+                            state.operation?.state == OperationState.Queued
+                    val next =
+                        state.copy(
+                            rawSourceCandidates = emptyList(),
+                            rawSourceCandidatesError = intent.message,
+                            rawSourceCandidatesTruncated = false,
+                            statusMessage =
+                                if (opOwnsStatus) {
+                                    state.statusMessage
+                                } else {
+                                    UiMessage.Raw(intent.message)
+                                },
+                        )
+                    if (opOwnsStatus) {
+                        ReduceResult(appendLogLine(next, "Raw sources: ${intent.message}"))
+                    } else {
+                        ReduceResult(next)
+                    }
                 }
             }
 
@@ -1794,6 +1964,7 @@ object UiReducer {
                         rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
                         rawSourceCandidatesIdentity = null,
                         rawSourceCandidatesTruncated = false,
+                        rawSourceCandidatesError = null,
                     ),
                     effects = listOf(UiEffect(UiEffect.Kind.CancelRawSources)),
                 )
@@ -2841,7 +3012,13 @@ object UiReducer {
             is UiIntent.OpenDirectory -> {
                 val target = normalizeFatPath(intent.path)
                 ReduceResult(
-                    state.copy(currentPath = target, files = emptyList(), filesError = null),
+                    state.copy(
+                        currentPath = target,
+                        files = emptyList(),
+                        filesError = null,
+                        filesListGeneration = state.filesListGeneration + 1L,
+                        filesPending = true,
+                    ),
                     effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
                 )
             }
@@ -2852,7 +3029,13 @@ object UiReducer {
                     ReduceResult(state)
                 } else {
                     ReduceResult(
-                        state.copy(currentPath = target, files = emptyList(), filesError = null),
+                        state.copy(
+                            currentPath = target,
+                            files = emptyList(),
+                            filesError = null,
+                            filesListGeneration = state.filesListGeneration + 1L,
+                            filesPending = true,
+                        ),
                         effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
                     )
                 }
@@ -2981,21 +3164,63 @@ object UiReducer {
                 }
 
             is UiIntent.FilesListed ->
-                if (intent.path != state.currentPath) {
-                    // Late result for a directory the user already left.
+                if (!filesListMatches(
+                        state,
+                        intent.path,
+                        intent.generation,
+                        intent.identity,
+                        intent.partitionId,
+                        intent.attachGeneration,
+                    )
+                ) {
+                    // Late result for another path, partition, attachment or request.
                     ReduceResult(state)
                 } else {
-                    ReduceResult(state.copy(files = intent.files, filesError = null))
+                    ReduceResult(
+                        state.copy(
+                            files = intent.files,
+                            filesError = null,
+                            filesPending = false,
+                        ),
+                    )
                 }
 
             is UiIntent.FilesListFailed ->
-                if (intent.path != state.currentPath) {
+                if (!filesListMatches(
+                        state,
+                        intent.path,
+                        intent.generation,
+                        intent.identity,
+                        intent.partitionId,
+                        intent.attachGeneration,
+                    )
+                ) {
                     ReduceResult(state)
+                } else if (
+                    intent.path != "/" &&
+                    intent.path.isNotEmpty() &&
+                    isMissingDirectoryListError(intent.message)
+                ) {
+                    // Only a proven absent directory falls back to root. Unknown I/O
+                    // stays visible so a disk error is never painted as "empty folder".
+                    val generation = state.filesListGeneration + 1L
+                    ReduceResult(
+                        state.copy(
+                            currentPath = "/",
+                            files = emptyList(),
+                            filesError = null,
+                            filesListGeneration = generation,
+                            filesPending = true,
+                            statusMessage = UiMessage.Raw(intent.message),
+                        ),
+                        effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
+                    )
                 } else {
                     ReduceResult(
                         state.copy(
                             files = emptyList(),
                             filesError = intent.message,
+                            filesPending = false,
                             statusMessage = UiMessage.Raw(intent.message),
                         ),
                     )
@@ -3037,6 +3262,18 @@ object UiReducer {
                         )
                 }
         }
+
+    /** Ring-append one log line without clobbering status or bound fields. */
+    private fun appendLogLine(state: AppUiState, line: String): AppUiState {
+        val trimmed = line.take(500)
+        val updated =
+            if (state.logLines.size >= AppUiState.LOG_MAX_LINES) {
+                state.logLines.drop(state.logLines.size - AppUiState.LOG_MAX_LINES + 1) + trimmed
+            } else {
+                state.logLines + trimmed
+            }
+        return state.copy(logLines = updated)
+    }
 
     /**
      * One measurement request for the live selection, or nothing when it cannot be bound:
@@ -3205,6 +3442,62 @@ object UiReducer {
         } else {
             null
         }
+
+    /**
+     * True only when a directory-list answer still names the displayed path, the
+     * selected partition, the live attachment and the newest request id. A quiet list
+     * finished after the user switched partition or the stick reattached must not paint
+     * foreign entries or clear a fresher error.
+     */
+    private fun filesListMatches(
+        state: AppUiState,
+        path: String,
+        generation: Long,
+        identity: String?,
+        partitionId: String,
+        attachGeneration: Long,
+    ): Boolean {
+        val device = state.device ?: return false
+        return path == state.currentPath &&
+            generation == state.filesListGeneration &&
+            identity == device.identity &&
+            attachGeneration == device.attachGeneration &&
+            partitionId == state.selectedPartitionId
+    }
+
+
+    /**
+     * True when [incoming] is safe to treat as the same physical stick as [previous]
+     * for privileged state (EFI write override, destructive confirmation).
+     * Requires a stable USB serial on both sides; matching capacity alone is never
+     * enough (two different sticks can share size). Caller already checked
+     * identity string + attachGeneration via sameStick.
+     */
+    private fun deviceIdentityTrusted(previous: DeviceIdentity, incoming: DeviceIdentity): Boolean {
+        if (!previous.hasStableSerial || !incoming.hasStableSerial) return false
+        return previous.serialNumber?.trim() == incoming.serialNumber?.trim()
+    }
+
+    /**
+     * Directory-list failures that mean the path is gone (safe to fall back to root).
+     * FatFs absence is the exact nativeList shape `list failed: FR_NO_FILE|FR_NO_PATH`
+     * from fat_jni — never a bare trailing ": 5" from an unrelated I/O exception.
+     * EXT/NTFS absence is the exact jni message `Path not found` (ENOENT only).
+     * Generic `directory listing failed` / EIO stay as [AppUiState.filesError].
+     */
+    internal fun isMissingDirectoryListError(message: String): Boolean {
+        val m = message
+        // FatFs R0.16 via fat_jni.cpp throw_fat("list failed: " + rc)
+        if (m == "list failed: $FR_NO_FILE" || m == "list failed: $FR_NO_PATH") return true
+        // EXT / NTFS list ENOENT (ext_jni / ntfs_jni throw "Path not found")
+        if (m == "Path not found" || m.startsWith("Path not found:")) return true
+        if (m.contains("No such file")) return true
+        if (m.contains("ENOENT")) return true
+        return false
+    }
+
+
+
 
     /**
      * Build a confirmation for a partition-table edit. The payload pins the selected

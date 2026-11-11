@@ -784,6 +784,18 @@ data class AppUiState(
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
     /**
+     * Id of the newest directory-list request. [UiIntent.FilesListed] /
+     * [UiIntent.FilesListFailed] answers must echo this value together with path,
+     * selected partition, identity and attach generation; anything else is dropped.
+     */
+    val filesListGeneration: Long = 0L,
+    /**
+     * True while a real list for [currentPath] is outstanding. Empty [files] then means
+     * "not loaded yet", never "folder is empty". Cleared by a matching list result,
+     * a path change that does not reload, or a device change that does not reload.
+     */
+    val filesPending: Boolean = false,
+    /**
      * Real directory-list failure for [currentPath]. Set by [UiIntent.FilesListFailed] and
      * cleared by a successful listing, a path change or a device change. Never inferred
      * from status-message text.
@@ -824,7 +836,11 @@ data class AppUiState(
     val rawSourceCandidatesGeneration: Long = 0L,
     val rawSourceCandidatesIdentity: String? = null,
     val rawSourceCandidatesTruncated: Boolean = false,
-    /** Files on the real Ventoy data partition (null = not loaded); any path, any extension. */
+    /**
+     * Bound scan failure for the current [rawSourceCandidatesGeneration].
+     * Stale chooser errors must not land here or in [statusMessage].
+     */
+    val rawSourceCandidatesError: String? = null,
     val windowsIsoCandidates: List<RawSourceCandidate>? = null,
     val windowsIsoCandidatesGeneration: Long = 0L,
     val windowsIsoCandidatesIdentity: String? = null,

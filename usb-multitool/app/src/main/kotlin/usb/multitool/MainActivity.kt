@@ -1396,9 +1396,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         tableResult.onSuccess {
                             if (partitions.isEmpty()) {
                                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.NoPartitionsFound)))
-                            } else {
-                                listDirectory(this@MainViewModel.state.currentPath)
                             }
+                            // DeviceChanged(Ready) already emits LoadFiles for the retained
+                            // path; a second quiet list here would only race the first.
                         }.onFailure { err ->
                             val key = if (isTransport) {
                                 UiMessageKey.CannotReadUsb
@@ -1775,15 +1775,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Re-list the displayed directory from the real volume. */
     fun listDirectory(path: String, status: UiMessage? = null) = withPartitionId { partitionId ->
+        val generation = state.filesListGeneration
+        val identity = state.device?.identity
+        val attachGen = state.device?.attachGeneration ?: 0L
         submitFilesOperation(
             title = OperationTitle.ListPath(path),
-            failurePath = path,
+            listFailure = { message ->
+                UiIntent.FilesListFailed(
+                    path = path,
+                    message = message,
+                    generation = generation,
+                    identity = identity,
+                    partitionId = partitionId,
+                    attachGeneration = attachGen,
+                )
+            },
             onSuccess = { status?.let { onIntent(UiIntent.Status(it)) } },
         ) {
             val entries = usb.files.FilesOperations.list(filesSession.volumeForLocked(partitionId), path)
-            post(UiIntent.FilesListed(path, entries.map { it.toFileEntry() }))
+            post(
+                UiIntent.FilesListed(
+                    path = path,
+                    files = entries.map { it.toFileEntry() },
+                    generation = generation,
+                    identity = identity,
+                    partitionId = partitionId,
+                    attachGeneration = attachGen,
+                ),
+            )
         }
     }
+
 
     private fun createFolder(path: String, name: String) {
         val target = fatChildPath(path, name)
@@ -2054,6 +2076,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rawSourceHandle = submitFilesOperation(
             title = OperationTitle.ListRawSources,
             quiet = true,
+            listFailure = { message ->
+                UiIntent.RawSourceCandidatesFailed(
+                    generation = generation,
+                    identity = identity,
+                    message = message,
+                )
+            },
         ) { operation ->
             require(attachGeneration == expectedAttach) { "USB attach generation changed" }
             require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
@@ -3167,35 +3196,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Enqueue one real FAT operation on the shared disk thread. The mounted volume and
      * the volume side of a mutation are serialized by the files session lock; [onSuccess] re-lists
      * the affected directory after a mutation so the UI never shows invented entries.
+     *
+     * O2: on body failure after a real [FilesVolumeSession.volumeForLocked] acquire, the mount
+     * is closed under the same lock before unlock — never a deferred launch that could close B.
+     * Fail-before-acquire leaves the RO cache of another op untouched. Success keeps RO cache.
      */
     private fun submitFilesOperation(
         title: OperationTitle,
         bytesTotal: Long = -1L,
-        failurePath: String? = null,
+        /**
+         * Bound failure intent (FilesListFailed / RawSourceCandidatesFailed).
+         * Quiet work must supply this so errors never land as free Status on op B.
+         */
+        listFailure: ((String) -> UiIntent)? = null,
         onSuccess: (() -> Unit)? = null,
         onTerminal: ((usb.operation.OperationState) -> Unit)? = null,
-        quiet: Boolean = failurePath != null,
+        quiet: Boolean = listFailure != null,
         body: (DiskOperation) -> Unit,
     ): OperationHandle {
         val label = title.logLabel
+        // Close failure must survive CancellationException paths where OperationExecutor
+        // leaves failureCause null for read-only cancel. Terminal stays Cancelled.
+        val closeDiagnostic = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
         val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
             override suspend fun run() {
                 filesSession.withLock {
-                    body(this)
+                    var acquireToken = 0L
+                    var bodyError: Throwable? = null
+                    try {
+                        filesSession.withAcquireRecorder({ token -> acquireToken = token }) {
+                            body(this)
+                        }
+                    } catch (t: Throwable) {
+                        bodyError = t
+                        throw t
+                    } finally {
+                        // O2: error after acquire → close before next op can enter the lock.
+                        // Partial/writable already closed inside withWritableVolume → NotOwned.
+                        // Fail-before-acquire (token 0) → do not touch foreign mount.
+                        val err = bodyError
+                        if (err != null && acquireToken != 0L) {
+                            when (
+                                val released =
+                                    filesSession.releaseAcquiredAfterErrorLocked(acquireToken, err)
+                            ) {
+                                is usb.files.CloseEpochResult.ClosedFailed ->
+                                    closeDiagnostic.set(released.error)
+                                else -> Unit
+                            }
+                        }
+                    }
                 }
             }
         }
-        if (!quiet) onIntent(
-            UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Running,
-                    title = title,
-                    bytesTotal = bytesTotal,
+        if (FilesOperationPolicy.publishOperationProgress(quiet)) {
+            onIntent(
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = title,
+                        bytesTotal = bytesTotal,
+                    ),
                 ),
-            ),
-        )
+            )
+        }
         val handle = DiskController.get().submit(operation)
-        // A quiet listing must never become the CancelOperation target of a live write.
         if (!quiet) activeHandle = handle
         activeHandles.add(handle)
         scope.launch {
@@ -3204,16 +3269,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 var lastLogged = -1L
                 while (true) {
                     delay(PROGRESS_TICK_MS)
-                    if (!quiet) onIntent(
-                        UiIntent.OperationUpdated(
-                            OperationProgress(
-                                state = OperationState.Running,
-                                title = title,
-                                bytesDone = operation.bytesDone,
-                                bytesTotal = operation.bytesTotal,
+                    if (FilesOperationPolicy.publishOperationProgress(quiet)) {
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Running,
+                                    title = title,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    }
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastLogAt >= LOG_TICK_MS && operation.bytesDone != lastLogged) {
                         lastLogAt = now
@@ -3229,64 +3296,110 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 ticker.cancel()
+                val plan =
+                    FilesOperationPolicy.planTerminal(
+                        quiet = quiet,
+                        hasBoundFailure = listFailure != null,
+                    )
+                fun publishCloseDiagnostics(cause: Throwable?) {
+                    val stillCurrent = activeHandle === handle || quiet
+                    when (
+                        val d =
+                            FilesOperationPolicy.planCloseDiagnostic(
+                                primary = cause,
+                                quiet = quiet,
+                                hasBoundFailure = listFailure != null,
+                                opStillCurrent = stillCurrent || activeHandle === handle,
+                                explicitClose = closeDiagnostic.get(),
+                            )
+                    ) {
+                        usb.files.CloseDiagnosticPublish.None -> Unit
+                        is usb.files.CloseDiagnosticPublish.LogOnly ->
+                            onIntent(UiIntent.AppendLog(logLine(d.message)))
+                    }
+                }
                 when (outcome) {
                     is usb.operation.OperationState.Failed -> {
-                        val message =
-                            outcome.cause.message
-                                ?: outcome.cause.javaClass.simpleName
-                        if (failurePath != null) {
-                            onIntent(UiIntent.FilesListFailed(failurePath, message))
-                        } else {
+                        val cause = outcome.cause
+                        val message = FilesOperationPolicy.primaryErrorMessage(cause)
+                        if (plan.postBoundFailure) {
+                            onIntent(listFailure!!(message))
+                        } else if (plan.postStatus) {
                             onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                        } else {
+                            onIntent(UiIntent.AppendLog(logLine("$label failed: $message")))
                         }
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Failed,
-                                    title = title,
-                                    errorMessage = message,
+                        if (plan.postOperationProgress) {
+                            onIntent(
+                                UiIntent.OperationUpdated(
+                                    OperationProgress(
+                                        state = OperationState.Failed,
+                                        title = title,
+                                        errorMessage = message,
+                                    ),
                                 ),
-                            ),
-                        )
-                        // The USB claim may be gone; reopen for the next attempt.
-                        scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
+                            )
+                        }
+                        publishCloseDiagnostics(cause)
                         onTerminal?.invoke(outcome)
                     }
                     is usb.operation.OperationState.Cancelled -> {
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(state = OperationState.Cancelled, title = title),
-                            ),
-                        )
+                        if (plan.postBoundFailure) {
+                            onIntent(listFailure!!("Cancelled"))
+                        }
+                        if (plan.postOperationProgress) {
+                            onIntent(
+                                UiIntent.OperationUpdated(
+                                    OperationProgress(state = OperationState.Cancelled, title = title),
+                                ),
+                            )
+                        }
+                        // RO cancel: executor drops failureCause; close still logged via closeDiagnostic.
+                        // Terminal stays Cancelled — never promote to Failed for close-on-cancel.
+                        publishCloseDiagnostics(operation.failureCause)
                         onTerminal?.invoke(outcome)
                     }
                     is usb.operation.OperationState.Partial -> {
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Partial,
-                                    title = title,
-                                    bytesDone = operation.bytesDone,
-                                    bytesTotal = operation.bytesTotal,
-                                    errorMessage = operation.failureCause?.message
-                                        ?: operation.failureCause?.javaClass?.simpleName
-                                        ?: "Incomplete operation",
+                        // withWritableVolume already closed under lock; do not close again.
+                        val cause = operation.failureCause
+                        val message =
+                            FilesOperationPolicy.primaryErrorMessage(
+                                cause ?: Exception("Incomplete operation"),
+                            )
+                        if (plan.postBoundFailure) {
+                            onIntent(listFailure!!(message))
+                        } else if (plan.postStatus) {
+                            onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                        }
+                        if (plan.postOperationProgress) {
+                            onIntent(
+                                UiIntent.OperationUpdated(
+                                    OperationProgress(
+                                        state = OperationState.Partial,
+                                        title = title,
+                                        bytesDone = operation.bytesDone,
+                                        bytesTotal = operation.bytesTotal,
+                                        errorMessage = message,
+                                    ),
                                 ),
-                            ),
-                        )
+                            )
+                        }
+                        publishCloseDiagnostics(cause)
                         onTerminal?.invoke(outcome)
                     }
                     else -> {
-                        if (!quiet) onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Completed,
-                                    title = title,
-                                    bytesDone = operation.bytesDone,
-                                    bytesTotal = operation.bytesTotal,
+                        if (plan.postOperationProgress) {
+                            onIntent(
+                                UiIntent.OperationUpdated(
+                                    OperationProgress(
+                                        state = OperationState.Completed,
+                                        title = title,
+                                        bytesDone = operation.bytesDone,
+                                        bytesTotal = operation.bytesTotal,
+                                    ),
                                 ),
-                            ),
-                        )
+                            )
+                        }
                         onSuccess?.invoke()
                         onTerminal?.invoke(outcome)
                     }

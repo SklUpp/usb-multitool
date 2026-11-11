@@ -8,6 +8,7 @@
     <string name="log_collapse">Свернуть журнал</string>
 
     <string name="files_empty_folder">Папка пуста</string>
+    <string name="files_listing">Читаю папку…</string>
     <string name="files_efi_blocked">Запись в %1$s защищена (EFI). Разрешите её на вкладке Ventoy.</string>
 
     <string name="efi_section_title">Защита EFI</string>

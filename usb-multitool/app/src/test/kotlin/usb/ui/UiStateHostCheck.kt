@@ -60,10 +60,31 @@ object UiStateHostCheck {
             )
         require(ready.actionsEnabled)
 
-        val listFailed = UiReducer.reduce(ready, UiIntent.FilesListFailed("/", "Read failed"))
+        val listFailed =
+            UiReducer.reduce(
+                ready,
+                UiIntent.FilesListFailed(
+                    path = "/",
+                    message = "Read failed",
+                    generation = ready.filesListGeneration,
+                    identity = device.identity,
+                    partitionId = "1",
+                    attachGeneration = device.attachGeneration,
+                ),
+            )
         require(listFailed.state.filesError == "Read failed")
         val listRecovered =
-            UiReducer.reduce(listFailed.state, UiIntent.FilesListed("/", emptyList()))
+            UiReducer.reduce(
+                listFailed.state,
+                UiIntent.FilesListed(
+                    path = "/",
+                    files = emptyList(),
+                    generation = listFailed.state.filesListGeneration,
+                    identity = device.identity,
+                    partitionId = "1",
+                    attachGeneration = device.attachGeneration,
+                ),
+            )
         require(listRecovered.state.filesError == null) { "successful listing must clear filesError" }
         require(
             UiReducer.reduce(

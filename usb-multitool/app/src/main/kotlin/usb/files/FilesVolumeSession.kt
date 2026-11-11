@@ -7,64 +7,103 @@ import usb.operation.DiskOperation
 import usb.operation.OperationState
 
 /**
+ * Result of closing the session mount under an ownership check.
+ */
+sealed class CloseEpochResult {
+    /** No token, already closed, or epoch no longer live. */
+    data object NotOwned : CloseEpochResult()
+
+    data object ClosedOk : CloseEpochResult()
+
+    data class ClosedFailed(val error: Throwable) : CloseEpochResult()
+}
+
+/**
  * Owns exactly one [MountedFilesVolume] and the coarse monitor that serializes
  * mount, close, usage probes, and every files operation.
  *
- * Ceiling of the lock: detach/onCleared can wait for one in-flight FAT call;
- * upgrade only if a single filesystem call becomes unbounded.
+ * O2 ownership: a files-op body that fails **after** [volumeForLocked] must
+ * [releaseAcquiredAfterErrorLocked] under the **same** [withLock] before unlock,
+ * so the next op never reuses a mount the failed op still "owns". Fail-before-acquire
+ * leaves the token empty and does not close a foreign mount.
  *
- * [openMounted] supplies a fresh disk+volume pair. Session never opens USB itself
- * so JVM tests inject fakes without Android seams.
- *
- * Close semantics:
- * - [close] returns the failure (or null); callers choose fail-closed vs swallow.
- * - Mode/partition change refuses remount when prior close/sync is unconfirmed.
- * - [withWritableVolume]: body ok + close fail → [OperationState.Partial] +
- *   [CloseAfterSuccessException]; body fail keeps primacy, close suppressed.
+ * Success leaves the RO cache open for the next browse.
+ * [withWritableVolume] Partial/close semantics are unchanged.
  */
 class FilesVolumeSession(
     private val openMounted: (partitionId: String, writable: Boolean) -> MountedFilesVolume,
 ) {
     private val lock = Any()
     private var filesVolume: MountedFilesVolume? = null
+    private var mountEpoch: Long = 0L
+    private var acquireSink: ((Long) -> Unit)? = null
 
-    /** Run [body] holding the session monitor (re-entrant with [close]/[volumeForLocked]). */
     fun <T> withLock(body: () -> T): T = synchronized(lock, body)
 
     /**
-     * Drop the mounted volume and its USB claim.
-     * Null = nothing open or close confirmed. Non-null = close/sync failure for the gate.
+     * Records each successful [volumeForLocked] acquire/reuse. Used so fail-before-acquire
+     * does not close another op's mount. Must run under [withLock].
      */
+    fun <T> withAcquireRecorder(onAcquire: (Long) -> Unit, body: () -> T): T {
+        val previous = acquireSink
+        acquireSink = onAcquire
+        try {
+            return body()
+        } finally {
+            acquireSink = previous
+        }
+    }
+
+    fun mountEpochLocked(): Long? = if (filesVolume != null) mountEpoch else null
+
     fun close(): Throwable? =
         synchronized(lock) {
-            val current = filesVolume
-            filesVolume = null
-            try {
-                current?.close()
-                null
-            } catch (t: Throwable) {
-                t
+            when (val result = closeLockedResult()) {
+                is CloseEpochResult.ClosedFailed -> result.error
+                else -> null
             }
         }
 
+    fun closeIfEpochLocked(epoch: Long): CloseEpochResult {
+        if (epoch == 0L) return CloseEpochResult.NotOwned
+        if (filesVolume == null || mountEpoch != epoch) return CloseEpochResult.NotOwned
+        return closeLockedResult()
+    }
+
     /**
-     * Mounted volume of [partitionId], opened on first use.
-     * Must run under [withLock] (or nested re-entrant from a holder of the lock).
-     *
-     * [writable]=false → RO browse. Mutations remount RW for the call duration via
-     * [withWritableVolume], which then drops the volume so the next browse is RO again.
+     * O2: after a body error, drop the mount this op acquired (if still live).
+     * [primary] keeps primacy; close failure is [mergeCloseFailure]-suppressed onto it.
+     * Must run under [withLock], still inside the failed op's execution scope.
      */
+    fun releaseAcquiredAfterErrorLocked(token: Long, primary: Throwable): CloseEpochResult {
+        val result = closeIfEpochLocked(token)
+        if (result is CloseEpochResult.ClosedFailed) {
+            mergeCloseFailure(primary, result.error)
+        }
+        return result
+    }
+
+    private fun closeLockedResult(): CloseEpochResult {
+        val current = filesVolume ?: return CloseEpochResult.NotOwned
+        filesVolume = null
+        return try {
+            current.close()
+            CloseEpochResult.ClosedOk
+        } catch (t: Throwable) {
+            CloseEpochResult.ClosedFailed(t)
+        }
+    }
+
     fun volumeForLocked(partitionId: String, writable: Boolean = false): UsbFsVolume {
         val current = filesVolume
         if (current != null && current.partitionId == partitionId && current.writable == writable) {
+            acquireSink?.invoke(mountEpoch)
             return current.volume
         }
-        // Mode change (RO↔RW) or partition change: close before reopen.
         filesVolume = null
         try {
             current?.close()
         } catch (closeErr: Throwable) {
-            // Do not remount and claim success — close/sync was not confirmed.
             throw IllegalStateException(
                 "Volume close/sync was not confirmed; refusing remount: " +
                     (closeErr.message ?: closeErr.javaClass.simpleName) +
@@ -75,15 +114,11 @@ class FilesVolumeSession(
 
         val mounted = openMounted(partitionId, writable)
         filesVolume = mounted
+        mountEpoch += 1L
+        acquireSink?.invoke(mountEpoch)
         return mounted.volume
     }
 
-    /**
-     * RW mount for a mutation. Close/umount failure after a successful body →
-     * [OperationState.Partial] + [CloseAfterSuccessException] (never Completed).
-     * Body failure keeps primacy; close error is suppressed onto it.
-     * Must run under [withLock].
-     */
     fun <T> withWritableVolume(
         partitionId: String,
         operation: DiskOperation,
@@ -97,16 +132,19 @@ class FilesVolumeSession(
             primary = t
             throw t
         } finally {
-            val closeErr = close()
-            if (closeErr != null) {
-                if (primary != null) {
-                    mergeCloseFailure(primary, closeErr)
-                } else if (operation.state != OperationState.Partial) {
-                    val wrapped = CloseAfterSuccessException(closeErr)
-                    operation.state = OperationState.Partial
-                    operation.failureCause = wrapped
-                    throw wrapped
+            when (val closeResult = closeLockedResult()) {
+                is CloseEpochResult.ClosedFailed -> {
+                    val closeErr = closeResult.error
+                    if (primary != null) {
+                        mergeCloseFailure(primary, closeErr)
+                    } else if (operation.state != OperationState.Partial) {
+                        val wrapped = CloseAfterSuccessException(closeErr)
+                        operation.state = OperationState.Partial
+                        operation.failureCause = wrapped
+                        throw wrapped
+                    }
                 }
+                else -> Unit
             }
         }
     }

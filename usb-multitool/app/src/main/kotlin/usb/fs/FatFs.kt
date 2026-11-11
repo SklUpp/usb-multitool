@@ -3,6 +3,9 @@ package usb.fs
 /** FatFs R0.16 FR_NO_FILE. */
 internal const val FR_NO_FILE: Int = 4
 
+/** FatFs R0.16 FR_NO_PATH — directory path component missing. */
+internal const val FR_NO_PATH: Int = 5
+
 /** FatFs R0.16 FR_DENIED — nonempty directory unlink, write-protect, etc. */
 internal const val FR_DENIED: Int = 7
 

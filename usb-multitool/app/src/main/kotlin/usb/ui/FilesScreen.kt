@@ -287,6 +287,9 @@ fun FilesScreen(
                 !state.actionsEnabled -> item(key = "presence") {
                     EmptyHint(UiReducer.presenceMessage(state.presence).localized())
                 }
+                state.filesPending -> item(key = "loading") {
+                    EmptyHint(stringResource(R.string.files_listing))
+                }
                 state.files.isEmpty() -> item(key = "empty") {
                     Box(
                         modifier = Modifier

@@ -294,12 +294,26 @@ class UiStateMachineTest {
 
     @Test
     fun listedFilesApplyOnlyToTheDisplayedPath() {
-        val state = ready().copy(currentPath = "/docs", files = emptyList())
+        val state = ready().copy(currentPath = "/docs", files = emptyList(), filesListGeneration = 4L)
         val entries = listOf(FileEntry("manual.pdf", isDirectory = false, sizeBytes = 10uL))
-        val applied = UiReducer.reduce(state, UiIntent.FilesListed("/docs", entries))
+        val listed =
+            UiIntent.FilesListed(
+                path = "/docs",
+                files = entries,
+                generation = 4L,
+                identity = state.device?.identity,
+                partitionId = state.selectedPartitionId!!,
+                attachGeneration = state.device?.attachGeneration ?: 0L,
+            )
+        val applied = UiReducer.reduce(state, listed)
         assertEquals(entries, applied.state.files)
+        assertFalse(applied.state.filesPending)
 
-        val stale = UiReducer.reduce(state, UiIntent.FilesListed("/", entries))
+        val stale =
+            UiReducer.reduce(
+                state,
+                listed.copy(path = "/"),
+            )
         assertTrue(stale.state.files.isEmpty())
     }
 
