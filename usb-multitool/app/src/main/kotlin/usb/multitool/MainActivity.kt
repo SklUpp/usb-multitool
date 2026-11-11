@@ -3277,6 +3277,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         allowDestructiveTemplate = effect.allowDestructiveTemplate,
                         expectedTemplateSha256 = effect.expectedTemplateSha256,
                         expectedPlanSha256 = effect.expectedPlanSha256,
+                        // UI generation is the editor path; direct non-editor callers keep false.
+                        requireDeclaredDiskSize = true,
                         onMutation = { mutationAttempted = true },
                     )
                     if (mutationAttempted) commitReached = true

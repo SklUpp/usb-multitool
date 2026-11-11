@@ -428,6 +428,9 @@ object VentoySetup {
      * Generate XML from an existing base (or a safe skeleton) and optionally bind images.
      * A previous XML is kept as `.bak` before a confirmed rewrite. Disabled blocks are
      * omitted. No XML is written when validation finds problems or a binding conflicts.
+     * [requireDeclaredDiskSize] is the editor path: it refuses a layout whose declared disk
+     * size is missing, so the user-visible sum/excess check cannot be bypassed. Direct
+     * non-editor callers keep the default and the XML contract unchanged.
      */
     fun generateAutounattend(
         disk: BlockDevice,
@@ -438,12 +441,17 @@ object VentoySetup {
         allowDestructiveTemplate: Boolean = false,
         expectedTemplateSha256: String? = null,
         expectedPlanSha256: String? = null,
+        requireDeclaredDiskSize: Boolean = false,
         options: SetupOptions = SetupOptions(),
         onMutation: () -> Unit = {},
     ): GenerateResult =
         withVolume(disk) { volume ->
             val path = requireXmlName(xmlName)
-            val validation = Autounattend.validate(params)
+            val validation =
+                Autounattend.validate(
+                    params,
+                    requireDeclaredDiskSize = requireDeclaredDiskSize,
+                )
             if (validation.problems.isNotEmpty()) {
                 throw UnattendValidationException(validation)
             }

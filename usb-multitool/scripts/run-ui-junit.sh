@@ -42,7 +42,8 @@ for suite in \
   VentoySettingsUiTest \
   PhoneImportUiTest \
   UiEffectTypingTest \
-  ServiceOperationMappingTest
+  ServiceOperationMappingTest \
+  TargetDiskLayoutEditorTest
 do
   test -f "$ROOT/app/src/test/kotlin/usb/ui/$suite.kt" || {
     echo "run-ui-junit: missing app/src/test/kotlin/usb/ui/$suite.kt" >&2
@@ -110,6 +111,7 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiEffectTypingTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ServiceOperationMappingTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/TargetDiskLayoutEditorTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/fs/VolumeLabelTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/FolderPathsTest.kt" \
@@ -152,6 +154,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.PhoneImportUiTest \
   usb.ui.UiEffectTypingTest \
   usb.ui.ServiceOperationMappingTest \
+  usb.ui.TargetDiskLayoutEditorTest \
   usb.fs.VolumeLabelTest \
   usb.ventoy.AutounattendTest \
   usb.ventoy.FolderPathsTest \

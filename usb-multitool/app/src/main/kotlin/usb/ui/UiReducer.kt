@@ -10,9 +10,12 @@ import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
 import usb.partition.TableScheme
+import usb.ventoy.Autounattend
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendParams
+import usb.ventoy.AutounattendProblem
 import usb.ventoy.AutounattendState
+import usb.ventoy.DiskLayout
 import usb.ventoy.FolderReadProblem
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlCatalog
@@ -22,6 +25,9 @@ import usb.ventoy.XmlPath
 import usb.ventoy.folderParent
 import usb.ventoy.normalizeFolderPath
 import usb.ventoy.autounattendPlanSha256
+import usb.ventoy.diskLayoutInstallTargetPartitionId
+import usb.ventoy.diskLayoutRemainingMb
+import usb.ventoy.diskLayoutTotalMb
 
 
 /**
@@ -1762,7 +1768,21 @@ object UiReducer {
                         )
                     } else {
                         val layout = pendingGen.params.diskLayout
-                        if (layout != null && layout.writeLayout) {
+                        val layoutProblems =
+                            if (layout != null && layout.writeLayout) {
+                                targetLayoutProblems(layout)
+                            } else {
+                                emptyList()
+                            }
+                        if (layoutProblems.isNotEmpty()) {
+                            ReduceResult(
+                                state.copy(
+                                    pendingConfirmation = null,
+                                    pendingAutounattendGeneration = null,
+                                    statusMessage = layoutProblemMessage(layoutProblems),
+                                ),
+                            )
+                        } else if (layout != null && layout.writeLayout) {
                             // Overwrite acknowledged; still need separate target-PC layout ack.
                             val plan =
                                 pendingGen.expectedPlanSha256
@@ -1774,13 +1794,7 @@ object UiReducer {
                             ReduceResult(
                                 state.copy(
                                     pendingConfirmation = null,
-                                    diskLayoutConfirmation =
-                                        DiskLayoutConfirmation(
-                                            diskId = layout.diskId,
-                                            partitionCount = layout.partitions.size,
-                                            writeLayout = true,
-                                            planSha256 = plan,
-                                        ),
+                                    diskLayoutConfirmation = layoutConfirmation(layout, plan),
                                     statusMessage = UiMessage.Raw(
                                         "Confirm the target PC disk layout before generating XML",
                                     ),
@@ -2973,6 +2987,8 @@ object UiReducer {
                 val planSha256 =
                     autounattendPlanSha256(intent.xmlName, intent.params, intent.imagePaths)
                 val planMatches = intent.planSha256 == null || intent.planSha256 == planSha256
+                val layoutProblems =
+                    if (layout != null && layout.writeLayout) targetLayoutProblems(layout) else emptyList()
                 when {
                     device == null ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
@@ -2984,6 +3000,14 @@ object UiReducer {
                                 statusMessage = UiMessage.Raw(
                                     "Generation plan changed; review and confirm it again",
                                 ),
+                            ),
+                        )
+                    layoutProblems.isNotEmpty() ->
+                        ReduceResult(
+                            state.copy(
+                                diskLayoutConfirmation = null,
+                                pendingAutounattendGeneration = null,
+                                statusMessage = layoutProblemMessage(layoutProblems),
                             ),
                         )
                     state.autounattendState is AutounattendState.Unreadable && sameTarget ->
@@ -3046,12 +3070,7 @@ object UiReducer {
                                         expectedPlanSha256 = planSha256,
                                     ),
                                 diskLayoutConfirmation =
-                                    DiskLayoutConfirmation(
-                                        diskId = layout.diskId,
-                                        partitionCount = layout.partitions.size,
-                                        writeLayout = true,
-                                        planSha256 = planSha256,
-                                    ),
+                                    layoutConfirmation(layout, planSha256),
                                 statusMessage = UiMessage.Raw(
                                     "Confirm the target PC disk layout before generating XML",
                                 ),
@@ -3101,25 +3120,65 @@ object UiReducer {
                         )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
-                    else ->
-                        ReduceResult(
-                            state.copy(
-                                diskLayoutConfirmation = null,
-                                pendingAutounattendGeneration = null,
-                                statusMessage = UiMessage.Raw("Generating unattend XML with disk layout"),
-                            ),
-                            effects = listOf(
-                                UiEffect.GenerateAutounattend(
-                                    xmlName = pending.xmlName,
-                                    autounattendParams = pending.params,
-                                    imagePaths = pending.imagePaths,
-                                    overwriteXml = pending.overwriteXml,
-                                    allowDestructiveTemplate = pending.allowDestructiveTemplate,
-                                    expectedTemplateSha256 = pending.expectedTemplateSha256,
-                                    expectedPlanSha256 = pending.expectedPlanSha256,
+                    else -> {
+                        val layout = pending.params.diskLayout
+                        val layoutProblems =
+                            if (layout != null && layout.writeLayout) {
+                                targetLayoutProblems(layout)
+                            } else {
+                                emptyList()
+                            }
+                        val plan =
+                            autounattendPlanSha256(
+                                pending.xmlName,
+                                pending.params,
+                                pending.imagePaths,
+                            )
+                        val snapshotMatches =
+                            state.diskLayoutConfirmation?.planSha256 == plan &&
+                                (pending.expectedPlanSha256 == null ||
+                                    pending.expectedPlanSha256 == plan)
+                        if (layoutProblems.isNotEmpty()) {
+                            ReduceResult(
+                                state.copy(
+                                    diskLayoutConfirmation = null,
+                                    pendingAutounattendGeneration = null,
+                                    statusMessage = layoutProblemMessage(layoutProblems),
                                 ),
-                            ),
-                        )
+                            )
+                        } else if (!snapshotMatches) {
+                            ReduceResult(
+                                state.copy(
+                                    diskLayoutConfirmation = null,
+                                    pendingAutounattendGeneration = null,
+                                    statusMessage = UiMessage.Raw(
+                                        "Generation plan changed; review and confirm it again",
+                                    ),
+                                ),
+                            )
+                        } else {
+                            ReduceResult(
+                                state.copy(
+                                    diskLayoutConfirmation = null,
+                                    pendingAutounattendGeneration = null,
+                                    statusMessage = UiMessage.Raw(
+                                        "Generating unattend XML with disk layout",
+                                    ),
+                                ),
+                                effects = listOf(
+                                    UiEffect.GenerateAutounattend(
+                                        xmlName = pending.xmlName,
+                                        autounattendParams = pending.params,
+                                        imagePaths = pending.imagePaths,
+                                        overwriteXml = pending.overwriteXml,
+                                        allowDestructiveTemplate = pending.allowDestructiveTemplate,
+                                        expectedTemplateSha256 = pending.expectedTemplateSha256,
+                                        expectedPlanSha256 = pending.expectedPlanSha256,
+                                    ),
+                                ),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -4213,6 +4272,40 @@ object UiReducer {
      */
     private fun importTarget(directory: String, name: String): String =
         if (directory == "/") "/$name" else "$directory/$name"
+
+    /**
+     * Editor policy: a target layout must carry the declared disk size, so the sum can be
+     * checked before any confirmation. The XML writer keeps the weaker default because the
+     * declared size is not part of the Windows layout.
+     */
+    private fun targetLayoutProblems(layout: DiskLayout): List<AutounattendProblem> =
+        Autounattend.validate(
+            AutounattendParams(diskLayout = layout),
+            requireDeclaredDiskSize = true,
+        ).problems
+
+    private fun layoutProblemMessage(
+        problems: List<AutounattendProblem>,
+    ): UiMessage.InvalidTargetLayout =
+        UiMessage.InvalidTargetLayout(problems.distinct())
+
+    /** Immutable snapshot of exactly what the acknowledgement dialog shows. */
+    private fun layoutConfirmation(
+        layout: DiskLayout,
+        planSha256: String,
+    ): DiskLayoutConfirmation =
+        DiskLayoutConfirmation(
+            diskId = layout.diskId,
+            partitionCount = layout.partitions.size,
+            writeLayout = layout.writeLayout,
+            planSha256 = planSha256,
+            partitions = layout.partitions.toList(),
+            declaredSizeMb = layout.declaredSizeMb,
+            totalMb = diskLayoutTotalMb(layout.partitions),
+            remainingMb = diskLayoutRemainingMb(layout),
+            installTargetPartitionId = diskLayoutInstallTargetPartitionId(layout.partitions),
+            wipe = layout.wipe,
+        )
 
     /**
      * Canonical equality with the writer via pure [XmlPath.resolve] (no VentoySetup/USB).

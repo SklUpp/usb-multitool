@@ -7,8 +7,10 @@ import usb.fs.FormatCatalog
 import usb.partition.TableScheme
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendParams
+import usb.ventoy.AutounattendProblem
 import usb.ventoy.AutounattendState
 import usb.ventoy.FolderReadProblem
+import usb.ventoy.LayoutPartition
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
@@ -110,6 +112,11 @@ sealed interface UiMessage {
 
     /** Structured read-scan outcome; Compose formats via string resources (language-switch safe). */
     data class ReadScan(val outcome: ReadScanOutcome) : UiMessage
+
+    /** Typed target-layout rejection; Compose localizes each problem, never `enum.name`. */
+    data class InvalidTargetLayout(
+        val problems: List<AutounattendProblem>,
+    ) : UiMessage
 }
 
 enum class UiMessageKey {
@@ -1273,6 +1280,15 @@ data class DiskLayoutConfirmation(
     val writeLayout: Boolean,
     /** SHA-256 of the exact params/image plan the user confirmed. */
     val planSha256: String? = null,
+    /** Exact layout snapshot shown in the dialog, never re-read from the live form. */
+    val partitions: List<LayoutPartition> = emptyList(),
+    val declaredSizeMb: Long? = null,
+    val totalMb: Long? = null,
+    val remainingMb: Long? = null,
+    /** First Primary receives ImageInstall; null means validation should have refused it. */
+    val installTargetPartitionId: Int? = null,
+    /** Mirrors WillWipeDisk exactly; false still rewrites the selected disk's table. */
+    val wipe: Boolean = false,
 )
 
 

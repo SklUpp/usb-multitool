@@ -5,6 +5,7 @@ import androidx.compose.ui.res.stringResource
 import usb.formatBinaryBytesPerSecond
 import usb.fs.FormatCatalog
 import usb.multitool.R
+import usb.ventoy.AutounattendProblem
 
 /** Localized text for authored reducer/status messages. [UiMessage.Raw] is shown as-is. */
 @Composable
@@ -12,6 +13,14 @@ fun UiMessage.localized(): String =
     when (this) {
         is UiMessage.Raw -> text
         is UiMessage.ReadScan -> readScanSummary(outcome)
+        is UiMessage.InvalidTargetLayout -> {
+            val detail = StringBuilder()
+            for ((index, problem) in problems.distinct().withIndex()) {
+                if (index > 0) detail.append("; ")
+                detail.append(autounattendProblemText(problem))
+            }
+            stringResource(R.string.msg_target_layout_invalid, detail.toString())
+        }
         is UiMessage.Key -> when (key) {
             UiMessageKey.NoDevice -> stringResource(R.string.msg_no_device)
             UiMessageKey.PermissionRequired -> stringResource(R.string.msg_permission_required)
@@ -139,6 +148,27 @@ fun UiMessage.localized(): String =
             UiMessageKey.LogCopied -> stringResource(R.string.msg_log_copied)
         }
     }
+
+/** Localized target-layout problem; the single mapping for dialogs and status messages. */
+@Composable
+internal fun autounattendProblemText(problem: AutounattendProblem): String =
+    stringResource(
+        when (problem) {
+            AutounattendProblem.BadLanguageTag -> R.string.unattend_problem_language
+            AutounattendProblem.BadComputerName -> R.string.unattend_problem_computer
+            AutounattendProblem.BadAccountName -> R.string.unattend_problem_account
+            AutounattendProblem.BadPartitionLabel -> R.string.unattend_problem_partition_label
+            AutounattendProblem.LayoutOverlaps -> R.string.unattend_problem_layout_overlap
+            AutounattendProblem.LayoutTooLarge -> R.string.unattend_problem_layout_size
+            AutounattendProblem.LayoutSizeOverflow -> R.string.unattend_problem_layout_overflow
+            AutounattendProblem.LayoutExceedsDiskSize -> R.string.unattend_problem_layout_exceeds
+            AutounattendProblem.LayoutDiskSizeMissing ->
+                R.string.unattend_problem_layout_disk_size_missing
+            AutounattendProblem.LayoutIncomplete -> R.string.unattend_problem_layout_incomplete
+            AutounattendProblem.LayoutImageInstallNotSupported ->
+                R.string.unattend_problem_image_install
+        },
+    )
 
 /** Formats structured scan numbers with current Compose locale resources. */
 @Composable

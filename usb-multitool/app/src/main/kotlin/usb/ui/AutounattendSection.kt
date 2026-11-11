@@ -1,6 +1,7 @@
 package usb.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -18,6 +19,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,11 +38,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
 import usb.ventoy.VentoySetup
+import usb.ventoy.Autounattend
 import usb.ventoy.AutounattendDocument
 import usb.ventoy.AutounattendParams
 import usb.ventoy.AutounattendProblem
@@ -48,6 +54,9 @@ import usb.ventoy.BindProblem
 import usb.ventoy.DiskLayout
 import usb.ventoy.DiskPartitionRole
 import usb.ventoy.LayoutPartition
+import usb.ventoy.diskLayoutInstallTargetPartitionId
+import usb.ventoy.diskLayoutRemainingMb
+import usb.ventoy.diskLayoutTotalMb
 import usb.ventoy.LocalAccount
 import usb.ventoy.SettingStatus
 import usb.ventoy.UnreadableProblem
@@ -193,7 +202,7 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                         )
                         doc.layoutProblems.forEach { problem ->
                             Text(
-                                text = stringResource(problemText(problem)),
+                                text = autounattendProblemText(problem),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -870,13 +879,60 @@ private fun LayoutConfirmDialog(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
+                confirmation.declaredSizeMb?.let { size ->
+                    Text(
+                        text = stringResource(R.string.layout_disk_size_declared, size),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                confirmation.totalMb?.let { total ->
+                    Text(
+                        text = stringResource(R.string.layout_total, total),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                confirmation.remainingMb?.let { remaining ->
+                    Text(
+                        text = stringResource(R.string.layout_remaining, remaining),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                confirmation.installTargetPartitionId?.let { partition ->
+                    Text(
+                        text = stringResource(R.string.layout_install_target, partition),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                } ?: Text(
+                    text = stringResource(R.string.layout_no_install_target),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
                 Text(
                     text = stringResource(R.string.layout_partitions, confirmation.partitionCount),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                if (confirmation.writeLayout) {
+                confirmation.partitions.forEachIndexed { index, partition ->
+                    Text(
+                        text = stringResource(
+                            R.string.layout_partition_line,
+                            index + 1,
+                            stringResource(roleText(partition.role)),
+                            partition.sizeMb,
+                            partition.label ?: "—",
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                if (confirmation.wipe) {
                     Text(
                         text = stringResource(R.string.layout_wipe),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.layout_no_wipe_rewrite),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -1011,11 +1067,29 @@ private fun GenerateDialog(
     var layoutOn by remember { mutableStateOf(false) }
     var wipe by remember { mutableStateOf(false) }
     var diskId by remember { mutableStateOf("0") }
-    val partitions = remember { mutableStateListOf<LayoutPartition>() }
+    var declaredDiskSize by remember { mutableStateOf("") }
+    val partitions = remember { mutableStateListOf<LayoutPartitionDraft>() }
     val markers = document?.destructiveMarkers.orEmpty()
     var destructiveAck by remember(document) { mutableStateOf(markers.isEmpty()) }
 
-    val layoutValid = !layoutOn || partitions.isNotEmpty()
+    val draftLayout =
+        DiskLayout(
+            writeLayout = true,
+            diskId = diskId.toLongOrNull(),
+            wipe = wipe,
+            partitions = partitions.map { it.toPartition() },
+            declaredSizeMb = declaredDiskSize.toLongOrNull(),
+        )
+    val layoutProblems =
+        if (layoutOn) {
+            Autounattend.validate(
+                AutounattendParams(diskLayout = draftLayout),
+                requireDeclaredDiskSize = true,
+            ).problems
+        } else {
+            emptyList()
+        }
+    val layoutValid = !layoutOn || layoutProblems.isEmpty()
     val accountValid = !accountOn || accountName.isNotBlank()
     // Destructive markers are only accepted with an explicit tick; a null digest would be
     // refused by the backend, so the button stays disabled instead.
@@ -1121,42 +1195,107 @@ private fun GenerateDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    OutlinedTextField(
+                        value = declaredDiskSize,
+                        onValueChange = { declaredDiskSize = it.filter { ch -> ch.isDigit() } },
+                        label = { Text(stringResource(R.string.params_layout_disk_size)) },
+                        singleLine = true,
+                        isError = draftLayout.declaredSizeMb?.let { it > 0 } != true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (draftLayout.declaredSizeMb?.let { it > 0 } != true) {
+                        Text(
+                            text = stringResource(R.string.params_layout_disk_size_missing),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    val totalMb = diskLayoutTotalMb(draftLayout.partitions)
+                    val remainingMb = diskLayoutRemainingMb(draftLayout)
+                    when {
+                        totalMb == null ->
+                            Text(
+                                text = stringResource(R.string.params_layout_overflow),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        remainingMb != null && remainingMb < 0 ->
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = stringResource(R.string.layout_total, totalMb),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                                Text(
+                                    text = stringResource(R.string.params_layout_over_by, -remainingMb),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        remainingMb != null ->
+                            Text(
+                                text = stringResource(
+                                    R.string.params_layout_usage,
+                                    totalMb,
+                                    draftLayout.declaredSizeMb ?: 0L,
+                                    remainingMb,
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        else ->
+                            Text(
+                                text = stringResource(R.string.layout_total, totalMb),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                    }
+                    diskLayoutInstallTargetPartitionId(draftLayout.partitions)?.let { target ->
+                        Text(
+                            text = stringResource(R.string.params_layout_install_target, target),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    } ?: Text(
+                        text = stringResource(R.string.params_layout_install_target_missing),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                     SwitchRow(
                         label = stringResource(R.string.params_layout_wipe),
                         checked = wipe,
                         onCheckedChange = { wipe = it },
                         enabled = actionsEnabled,
                     )
-                    partitions.forEachIndexed { index, partition ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                text = stringResource(
-                                    R.string.params_partition_size,
-                                    partition.sizeMb,
-                                    stringResource(roleText(partition.role)),
-                                ),
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(
-                                onClick = { partitions.removeAt(index) },
-                                enabled = actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                            ) { Text(stringResource(R.string.params_remove_partition)) }
-                        }
+                    partitions.forEachIndexed { index, draft ->
+                        LayoutPartitionRow(
+                            index = index,
+                            draft = draft,
+                            installTarget =
+                                diskLayoutInstallTargetPartitionId(draftLayout.partitions) == index + 1,
+                            actionsEnabled = actionsEnabled,
+                            canMoveUp = index > 0,
+                            canMoveDown = index < partitions.lastIndex,
+                            onChange = { changed -> partitions[index] = changed },
+                            onMoveUp = {
+                                val previous = partitions[index - 1]
+                                partitions[index - 1] = draft
+                                partitions[index] = previous
+                            },
+                            onMoveDown = {
+                                val next = partitions[index + 1]
+                                partitions[index + 1] = draft
+                                partitions[index] = next
+                            },
+                            onRemove = { partitions.removeAt(index) },
+                        )
                     }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         DiskPartitionRole.entries.forEach { role ->
                             TextButton(
                                 onClick = {
                                     partitions.add(
-                                        LayoutPartition(
-                                            sizeMb = defaultSizeMb(role),
+                                        LayoutPartitionDraft(
+                                            sizeText = defaultSizeMb(role).toString(),
                                             role = role,
+                                            label = "",
                                         ),
                                     )
                                 },
@@ -1165,6 +1304,15 @@ private fun GenerateDialog(
                             ) { Text(stringResource(roleText(role))) }
                         }
                     }
+                    layoutProblems
+                        .filterNot { it == AutounattendProblem.LayoutDiskSizeMissing }
+                        .forEach { problem ->
+                            Text(
+                                text = autounattendProblemText(problem),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     Text(
                         text = stringResource(R.string.params_layout_note),
                         style = MaterialTheme.typography.labelSmall,
@@ -1240,7 +1388,8 @@ private fun GenerateDialog(
                                     writeLayout = true,
                                     diskId = diskId.toLongOrNull(),
                                     wipe = wipe,
-                                    partitions = partitions.toList(),
+                                    partitions = partitions.map { it.toPartition() },
+                                    declaredSizeMb = declaredDiskSize.toLongOrNull(),
                                 )
                             } else {
                                 null
@@ -1267,22 +1416,141 @@ private fun GenerateDialog(
     )
 }
 
+/** Locally editable partition text; conversion never hides an invalid size as a valid one. */
+private data class LayoutPartitionDraft(
+    val sizeText: String,
+    val role: DiskPartitionRole,
+    val label: String,
+) {
+    fun toPartition(): LayoutPartition =
+        LayoutPartition(
+            sizeMb = sizeText.toLongOrNull() ?: 0L,
+            role = role,
+            label = label.trim().ifBlank { null },
+        )
+}
+
+@Composable
+private fun LayoutPartitionRow(
+    index: Int,
+    draft: LayoutPartitionDraft,
+    installTarget: Boolean,
+    actionsEnabled: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onChange: (LayoutPartitionDraft) -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val moveUpLabel = stringResource(R.string.params_layout_move_up)
+    val moveDownLabel = stringResource(R.string.params_layout_move_down)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.params_layout_partition, index + 1),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = onMoveUp,
+                enabled = actionsEnabled && canMoveUp,
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                modifier = Modifier.semantics { contentDescription = moveUpLabel },
+            ) { Text("↑") }
+            TextButton(
+                onClick = onMoveDown,
+                enabled = actionsEnabled && canMoveDown,
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                modifier = Modifier.semantics { contentDescription = moveDownLabel },
+            ) { Text("↓") }
+            TextButton(
+                onClick = onRemove,
+                enabled = actionsEnabled,
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+            ) { Text(stringResource(R.string.params_remove_partition)) }
+        }
+        if (installTarget) {
+            Text(
+                text = stringResource(R.string.params_layout_install_target, index + 1),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            OutlinedTextField(
+                value = draft.sizeText,
+                onValueChange = { text ->
+                    onChange(draft.copy(sizeText = text.filter { it.isDigit() }))
+                },
+                label = { Text(stringResource(R.string.params_layout_size)) },
+                singleLine = true,
+                isError = draft.sizeText.toLongOrNull()?.let { it > 0 } != true,
+                modifier = Modifier.weight(1f),
+            )
+            LayoutRolePicker(
+                role = draft.role,
+                actionsEnabled = actionsEnabled,
+                onRoleChange = { role -> onChange(draft.copy(role = role)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        OutlinedTextField(
+            value = draft.label,
+            onValueChange = { text -> onChange(draft.copy(label = text)) },
+            label = { Text(stringResource(R.string.params_layout_label)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun LayoutRolePicker(
+    role: DiskPartitionRole,
+    actionsEnabled: Boolean,
+    onRoleChange: (DiskPartitionRole) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        TextButton(
+            onClick = { expanded = true },
+            enabled = actionsEnabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(stringResource(roleText(role))) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DiskPartitionRole.entries.forEach { choice ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(roleText(choice))) },
+                    onClick = {
+                        expanded = false
+                        onRoleChange(choice)
+                    },
+                    enabled = actionsEnabled,
+                )
+            }
+        }
+    }
+}
+
 internal fun unreadableText(problem: UnreadableProblem): Int = when (problem) {
     UnreadableProblem.NotUnattendRoot -> R.string.unattend_not_unattend
     UnreadableProblem.MalformedXml -> R.string.unattend_malformed
     UnreadableProblem.TooLarge -> R.string.unattend_too_large
     UnreadableProblem.IoFailure -> R.string.unattend_io_failure
     UnreadableProblem.Empty -> R.string.unattend_empty_file
-}
-
-private fun problemText(problem: AutounattendProblem): Int = when (problem) {
-    AutounattendProblem.BadLanguageTag -> R.string.unattend_problem_language
-    AutounattendProblem.BadComputerName -> R.string.unattend_problem_computer
-    AutounattendProblem.BadAccountName -> R.string.unattend_problem_account
-    AutounattendProblem.LayoutOverlaps -> R.string.unattend_problem_layout_overlap
-    AutounattendProblem.LayoutTooLarge -> R.string.unattend_problem_layout_size
-    AutounattendProblem.LayoutIncomplete -> R.string.unattend_problem_layout_incomplete
-    AutounattendProblem.LayoutImageInstallNotSupported -> R.string.unattend_problem_image_install
 }
 
 private fun bindProblemText(problem: BindProblem): Int = when (problem) {

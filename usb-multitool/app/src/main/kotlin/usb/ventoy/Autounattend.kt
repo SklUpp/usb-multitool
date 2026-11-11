@@ -22,6 +22,8 @@ import org.w3c.dom.Node
  */
 object Autounattend {
     private const val NS = "urn:schemas-microsoft-com:unattend"
+    private const val MAX_PARTITION_LABEL_LENGTH = 32
+    private const val MAX_LAYOUT_TOTAL_MB = 1L shl 40
 
     private val knownElements =
         setOf(
@@ -98,7 +100,15 @@ object Autounattend {
             note = "Absent fields are not written; Windows Setup/OOBE prompts or derives them.",
         )
 
-    fun validate(params: AutounattendParams): AutounattendValidation {
+    /**
+     * [requireDeclaredDiskSize] makes the editor refuse a layout whose sum cannot be checked.
+     * The backend keeps the default: the declared size is not written to XML, so a caller
+     * that does not need the editor check can still generate a valid Windows layout.
+     */
+    fun validate(
+        params: AutounattendParams,
+        requireDeclaredDiskSize: Boolean = false,
+    ): AutounattendValidation {
         val problems = linkedSetOf<AutounattendProblem>()
         params.languageTag?.let {
             if (!it.matches(Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"))) {
@@ -142,9 +152,33 @@ object Autounattend {
                 if (layout.partitions.firstOrNull()?.role != DiskPartitionRole.Efi) {
                     problems.add(AutounattendProblem.LayoutIncomplete)
                 }
-                val total = layout.partitions.fold(0L) { sum, p -> sum + p.sizeMb }
-                if (total <= 0 || total > 1L shl 40) {
-                    problems.add(AutounattendProblem.LayoutTooLarge)
+                layout.partitions.forEach { partition ->
+                    val label = partition.label
+                    if (label != null &&
+                        (label.isBlank() ||
+                            label.length > MAX_PARTITION_LABEL_LENGTH ||
+                            label.any { it.isISOControl() })
+                    ) {
+                        problems.add(AutounattendProblem.BadPartitionLabel)
+                    }
+                }
+                val total = diskLayoutTotalMb(layout.partitions)
+                if (total == null) {
+                    problems.add(AutounattendProblem.LayoutSizeOverflow)
+                } else {
+                    if (total > MAX_LAYOUT_TOTAL_MB) {
+                        problems.add(AutounattendProblem.LayoutTooLarge)
+                    }
+                    when {
+                        layout.declaredSizeMb == null ->
+                            if (requireDeclaredDiskSize) {
+                                problems.add(AutounattendProblem.LayoutDiskSizeMissing)
+                            }
+                        layout.declaredSizeMb <= 0 ->
+                            problems.add(AutounattendProblem.LayoutIncomplete)
+                        total > layout.declaredSizeMb ->
+                            problems.add(AutounattendProblem.LayoutExceedsDiskSize)
+                    }
                 }
             }
         }

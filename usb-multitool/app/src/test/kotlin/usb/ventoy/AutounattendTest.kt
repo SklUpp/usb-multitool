@@ -454,6 +454,165 @@ class AutounattendTest {
     }
 
     @Test
+    fun reorderChangesCreateOrderModifyIdsAndInstallTarget() {
+        fun layout(partitions: List<LayoutPartition>) =
+            DiskLayout(
+                writeLayout = true,
+                diskId = 0,
+                partitions = partitions,
+                declaredSizeMb = 64_000,
+            )
+        val original =
+            layout(
+                listOf(
+                    LayoutPartition(100, DiskPartitionRole.Efi, "EFI"),
+                    LayoutPartition(16, DiskPartitionRole.Msr),
+                    LayoutPartition(50_000, DiskPartitionRole.Primary, "WindowsA"),
+                    LayoutPartition(10_000, DiskPartitionRole.Primary, "WindowsB"),
+                ),
+            )
+        val reordered =
+            layout(
+                listOf(
+                    LayoutPartition(100, DiskPartitionRole.Efi, "EFI"),
+                    LayoutPartition(10_000, DiskPartitionRole.Primary, "WindowsB"),
+                    LayoutPartition(16, DiskPartitionRole.Msr),
+                    LayoutPartition(50_000, DiskPartitionRole.Primary, "WindowsA"),
+                ),
+            )
+
+        fun xml(layout: DiskLayout) =
+            String(
+                Autounattend.generate(null, AutounattendParams(diskLayout = layout)),
+                Charsets.UTF_8,
+            )
+
+        fun blocks(xml: String, tag: String): List<String> =
+            Regex("<$tag[^>]*>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL)
+                .findAll(xml)
+                .map { it.groupValues[1] }
+                .toList()
+
+        fun field(block: String, name: String): String? =
+            Regex("<$name>(.*?)</$name>").find(block)?.groupValues?.get(1)
+
+        val originalXml = xml(original)
+        val reorderedXml = xml(reordered)
+        assertEquals(
+            listOf("1", "2", "3", "4"),
+            blocks(originalXml, "CreatePartition").map { field(it, "Order") },
+        )
+        assertEquals(
+            listOf("EFI", "MSR", "Primary", "Primary"),
+            blocks(originalXml, "CreatePartition").map { field(it, "Type") },
+        )
+        assertEquals(
+            listOf("1", "3", "4"),
+            blocks(originalXml, "ModifyPartition").map { field(it, "PartitionID") },
+        )
+        assertEquals(
+            "3",
+            blocks(originalXml, "InstallTo").single().let { field(it, "PartitionID") },
+        )
+
+        assertEquals(
+            listOf("1", "2", "3", "4"),
+            blocks(reorderedXml, "CreatePartition").map { field(it, "Order") },
+        )
+        assertEquals(
+            listOf("EFI", "Primary", "MSR", "Primary"),
+            blocks(reorderedXml, "CreatePartition").map { field(it, "Type") },
+        )
+        assertEquals(
+            listOf("1", "2", "4"),
+            blocks(reorderedXml, "ModifyPartition").map { field(it, "PartitionID") },
+        )
+        assertEquals(
+            "2",
+            blocks(reorderedXml, "InstallTo").single().let { field(it, "PartitionID") },
+        )
+    }
+
+    @Test
+    fun declaredSizeIsEditorOnlyAndNeverChangesGeneratedXml() {
+        val withDeclared =
+            DiskLayout(
+                writeLayout = true,
+                diskId = 0,
+                partitions =
+                    listOf(
+                        LayoutPartition(100, DiskPartitionRole.Efi, "EFI"),
+                        LayoutPartition(50_000, DiskPartitionRole.Primary, "Windows"),
+                    ),
+                declaredSizeMb = 64_000,
+            )
+        val withoutDeclared = withDeclared.copy(declaredSizeMb = null)
+        fun xml(layout: DiskLayout) =
+            String(
+                Autounattend.generate(null, AutounattendParams(diskLayout = layout)),
+                Charsets.UTF_8,
+            )
+        assertEquals(xml(withDeclared), xml(withoutDeclared))
+        assertTrue(Autounattend.validate(AutounattendParams(diskLayout = withDeclared)).problems.isEmpty())
+        assertTrue(Autounattend.validate(AutounattendParams(diskLayout = withoutDeclared)).problems.isEmpty())
+        assertTrue(
+            AutounattendProblem.LayoutDiskSizeMissing in
+                Autounattend.validate(
+                    AutounattendParams(diskLayout = withoutDeclared),
+                    requireDeclaredDiskSize = true,
+                ).problems,
+        )
+    }
+
+    @Test
+    fun wipeFalseStillWritesTheExplicitLayout() {
+        val layout =
+            DiskLayout(
+                writeLayout = true,
+                diskId = 0,
+                wipe = false,
+                partitions =
+                    listOf(
+                        LayoutPartition(100, DiskPartitionRole.Efi, "EFI"),
+                        LayoutPartition(50_000, DiskPartitionRole.Primary, "Windows"),
+                    ),
+                declaredSizeMb = 64_000,
+            )
+        val xml =
+            String(
+                Autounattend.generate(null, AutounattendParams(diskLayout = layout)),
+                Charsets.UTF_8,
+            )
+        assertTrue(xml.contains("<WillWipeDisk>false</WillWipeDisk>"))
+        assertFalse(xml.contains("<WillWipeDisk>true</WillWipeDisk>"))
+        assertTrue(xml.contains("<CreatePartition"))
+        assertTrue(xml.contains("<InstallTo>"))
+        assertTrue(xml.contains("<PartitionID>2</PartitionID>"))
+    }
+
+    @Test
+    fun partitionLabelControlCharactersAreRejected() {
+        val layout =
+            DiskLayout(
+                writeLayout = true,
+                diskId = 0,
+                partitions =
+                    listOf(
+                        LayoutPartition(100, DiskPartitionRole.Efi, "EFI"),
+                        LayoutPartition(50_000, DiskPartitionRole.Primary, "bad\u0000label"),
+                    ),
+                declaredSizeMb = 64_000,
+            )
+        assertTrue(
+            AutounattendProblem.BadPartitionLabel in
+                Autounattend.validate(
+                    AutounattendParams(diskLayout = layout),
+                    requireDeclaredDiskSize = true,
+                ).problems,
+        )
+    }
+
+    @Test
     fun unreadableAndMissingAreDistinct() {
         assertTrue(Autounattend.read("/ventoy/a.xml", null) is AutounattendState.Missing)
         assertTrue(Autounattend.read("/ventoy/a.xml", ByteArray(0)) is AutounattendState.Unreadable)
