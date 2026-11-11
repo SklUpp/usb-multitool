@@ -18,6 +18,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +43,55 @@ fun VentoyScreen(
     val latest = state.latestVentoyRelease
     val newerLatest = latest?.takeIf { it != pinned }
     val updateAvailable = newerLatest != null
+    // Remember epoch we already asked catalogs for so actionsEnabled flicker mid-flight
+    // does not triple-mount while caches are still null. Cleared when all three land or
+    // epoch moves (invalidate).
+    var catalogLoadEpoch by remember { mutableStateOf<Long?>(null) }
 
+    LaunchedEffect(
+        state.ventoyGlobalSettings,
+        state.ventoyFolders,
+        state.windowsIsoCandidates,
+        state.ventoyCacheEpoch,
+    ) {
+        if (state.ventoyGlobalSettings != null &&
+            state.ventoyFolders != null &&
+            state.windowsIsoCandidates != null
+        ) {
+            catalogLoadEpoch = null
+        } else if (catalogLoadEpoch != null && catalogLoadEpoch != state.ventoyCacheEpoch) {
+            catalogLoadEpoch = null
+        }
+    }
+
+    // Keys = external readiness only. Do not key on cache==null: fill/empty toggles would
+    // re-enter while catalogLoadEpoch is cleared and remount. Null checks stay in the body.
+    LaunchedEffect(
+        state.presence,
+        state.device?.identity,
+        state.device?.attachGeneration,
+        state.actionsEnabled,
+        state.ventoyCacheEpoch,
+    ) {
+        if (state.presence != DevicePresence.Ready ||
+            state.device == null ||
+            !state.actionsEnabled
+        ) {
+            return@LaunchedEffect
+        }
+        val need =
+            state.ventoyGlobalSettings == null ||
+                state.ventoyFolders == null ||
+                state.windowsIsoCandidates == null
+        if (!need) return@LaunchedEffect
+        if (catalogLoadEpoch == state.ventoyCacheEpoch) {
+            return@LaunchedEffect
+        }
+        catalogLoadEpoch = state.ventoyCacheEpoch
+        if (state.ventoyGlobalSettings == null) onIntent(UiIntent.LoadVentoyGlobalSettings)
+        if (state.ventoyFolders == null) onIntent(UiIntent.LoadVentoyFolders)
+        if (state.windowsIsoCandidates == null) onIntent(UiIntent.LoadWindowsIsoCandidates)
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()

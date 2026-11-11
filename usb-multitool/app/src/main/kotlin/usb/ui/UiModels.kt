@@ -838,8 +838,8 @@ data class AppUiState(
     /** Typed reason the last phone-file inspection failed; null = no failure. */
     val isoImportError: UnreadableProblem? = null,
     val isoImportGeneration: Long = 0L,
-    /** Images ticked in the XML section before one explicit link confirmation. */
-    val windowsSelectedImages: List<RawSourceCandidate> = emptyList(),
+    /** Absolute image paths ticked in the XML section before one explicit bind. */
+    val windowsSelectedImages: List<String> = emptyList(),
     /** Existing auto_install bindings; null = not loaded. */
     val windowsImageLinks: List<WindowsImageLink>? = null,
     val windowsImageLinksGeneration: Long = 0L,
@@ -855,6 +855,11 @@ data class AppUiState(
     val autounattendCandidates: AutounattendImageCandidates? = null,
     /** Monotonic id for XML read/candidate requests; stale posts are dropped. */
     val autounattendRequestGeneration: Long = 0L,
+    /**
+     * True after [UiIntent.LoadAutounattend] / template select-import until
+     * [UiIntent.AutounattendLoaded] for the current generation. Composition skips a second mount.
+     */
+    val autounattendLoadInFlight: Boolean = false,
     /** Separate target-PC disk-layout acknowledgement; no USB identity. */
     val diskLayoutConfirmation: DiskLayoutConfirmation? = null,
     val pendingAutounattendGeneration: PendingAutounattendGeneration? = null,
@@ -863,6 +868,12 @@ data class AppUiState(
     /** Existing directories on the Ventoy data partition, including "/". */
     val ventoyFolders: List<String>? = null,
     val ventoyFoldersError: String? = null,
+    /**
+     * Bumped when stick-scoped Ventoy/XML caches must be considered stale (destructive
+     * mutation, detach, new attachment). Ventoy-tab composition keys on this to re-read
+     * without host mounting off-tab.
+     */
+    val ventoyCacheEpoch: Long = 0L,
     /**
      * Whatever the last raw-range probe found; null until a probe for the current
      * attachment/geometry/range completed. Presence hint only, never a veto.

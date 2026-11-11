@@ -225,12 +225,21 @@ sealed class UiIntent {
     /** Global ventoy.json control entries, raw values included. */
     data object LoadVentoyGlobalSettings : UiIntent()
     data object LoadVentoyFolders : UiIntent()
+    /**
+     * Drop stick-scoped Ventoy/XML catalogs after a disk mutation. Keeps the template path
+     * so the Ventoy tab can re-read; never mounts by itself.
+     */
+    data object InvalidateVentoyStickCaches : UiIntent()
     data class VentoyFoldersLoaded(
         val paths: List<String>,
         val error: String? = null,
+        /** Must match [AppUiState.ventoyCacheEpoch] or the post is stale. */
+        val epoch: Long = 0L,
     ) : UiIntent()
     data class VentoyGlobalSettingsLoaded(
         val settings: VentoyGlobalSettings,
+        /** Must match [AppUiState.ventoyCacheEpoch] or the post is stale. */
+        val epoch: Long = 0L,
     ) : UiIntent()
     /** Only known keys. null value removes the key; "0"/"1" set it. */
     data class RequestSetVentoyGlobalSetting(val key: String, val value: String?) : UiIntent()
@@ -487,21 +496,7 @@ object UiReducer {
                             pendingIsoImport = null,
                             isoImportError = null,
                             isoImportGeneration = state.isoImportGeneration + 1,
-                            windowsSelectedImages = emptyList(),
-                            windowsTemplatePath = null,
-                            windowsImageLinks = null,
-                            windowsImageLinksGeneration = state.windowsImageLinksGeneration + 1,
-                            windowsImageLinksIdentity = null,
-                            pendingWindowsUnlink = null,
-                            autounattendState = AutounattendState.Missing,
-                            autounattendBindings = null,
-                            autounattendCandidates = null,
-                            autounattendRequestGeneration = state.autounattendRequestGeneration + 1,
-                            diskLayoutConfirmation = null,
-                            pendingAutounattendGeneration = null,
-                            ventoyGlobalSettings = null,
-                        ventoyFolders = null,
-                        ventoyFoldersError = null,
+                            // Ventoy/XML catalogs are stick-scoped, not partition-scoped.
                         ),
                         effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
                     )
@@ -590,29 +585,44 @@ object UiReducer {
                     intent.presence == DevicePresence.Ready &&
                         intent.device?.identity == state.linkOverwriteCandidateIdentity &&
                         intent.device?.attachGeneration == state.linkOverwriteCandidateGeneration
-                // The EFI write override belongs to one physical attachment: a partition
-                // refresh keeps it, a new attach generation / other stick / detach drops it.
                 val incoming = intent.device
-                val sameAttachment =
-                    intent.presence == DevicePresence.Ready &&
-                        incoming != null &&
-                        incoming.identity == state.device?.identity &&
-                        incoming.attachGeneration == state.device?.attachGeneration
-                val retainedEfi = state.vtoyEfiWritePartitionId?.takeIf { sameAttachment }?.let { id ->
-                    intent.partitions.firstOrNull {
-                        it.id == id &&
-                            it.readOnly &&
-                            it.startLba == state.vtoyEfiWriteStartLba &&
-                            it.sectorCount == state.vtoyEfiWriteSectorCount
+                // Same physical stick across Busy/Ready/permission: identity + attachGeneration.
+                // Host must stamp attachGeneration on Busy/Permission too, or resume always wipes.
+                val sameStick =
+                    incoming != null &&
+                        state.device != null &&
+                        incoming.identity == state.device.identity &&
+                        incoming.attachGeneration == state.device.attachGeneration
+                // Ventoy/XML is stick-scoped; drop only on detach or a different attachment.
+                val keepVentoy =
+                    sameStick &&
+                        intent.presence != DevicePresence.Disconnected &&
+                        intent.presence != DevicePresence.Absent
+                // EFI override: hold through Busy of the same stick; re-check geometry on Ready.
+                val retainedEfi =
+                    when {
+                        !sameStick -> null
+                        intent.presence != DevicePresence.Ready ->
+                            state.vtoyEfiWritePartitionId?.let { id ->
+                                Triple(id, state.vtoyEfiWriteStartLba, state.vtoyEfiWriteSectorCount)
+                            }
+                        else ->
+                            state.vtoyEfiWritePartitionId?.let { id ->
+                                intent.partitions.firstOrNull {
+                                    it.id == id &&
+                                        it.readOnly &&
+                                        it.startLba == state.vtoyEfiWriteStartLba &&
+                                        it.sectorCount == state.vtoyEfiWriteSectorCount
+                                }?.let { Triple(it.id, it.startLba, it.sectorCount) }
+                            }
                     }
-                }
                 ReduceResult(
                     state.copy(
                         presence = intent.presence,
                         device = intent.device,
-                        vtoyEfiWritePartitionId = retainedEfi?.id,
-                        vtoyEfiWriteStartLba = retainedEfi?.startLba,
-                        vtoyEfiWriteSectorCount = retainedEfi?.sectorCount,
+                        vtoyEfiWritePartitionId = retainedEfi?.first,
+                        vtoyEfiWriteStartLba = retainedEfi?.second,
+                        vtoyEfiWriteSectorCount = retainedEfi?.third,
                         partitions = intent.partitions,
                         freeRegions = intent.freeRegions,
                         diskSectorSize = intent.sectorSize,
@@ -634,35 +644,73 @@ object UiReducer {
                         rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
                         rawSourceCandidatesIdentity = null,
                         rawSourceCandidatesTruncated = false,
-                        windowsIsoCandidates = null,
-                        windowsIsoCandidatesGeneration = state.windowsIsoCandidatesGeneration + 1,
-                        windowsIsoCandidatesIdentity = null,
-                        windowsIsoCandidatesError = null,
+                        windowsIsoCandidates =
+                            if (keepVentoy) state.windowsIsoCandidates else null,
+                        windowsIsoCandidatesGeneration =
+                            if (keepVentoy) {
+                                state.windowsIsoCandidatesGeneration
+                            } else {
+                                state.windowsIsoCandidatesGeneration + 1
+                            },
+                        windowsIsoCandidatesIdentity =
+                            if (keepVentoy) state.windowsIsoCandidatesIdentity else null,
+                        windowsIsoCandidatesError =
+                            if (keepVentoy) state.windowsIsoCandidatesError else null,
                         pendingIsoImport = null,
                         isoImportGeneration = state.isoImportGeneration + 1,
-                        windowsSelectedImages = emptyList(),
-                        windowsTemplatePath = null,
-                        windowsImageLinks = null,
-                        windowsImageLinksGeneration = state.windowsImageLinksGeneration + 1,
-                        windowsImageLinksIdentity = null,
+                        windowsSelectedImages =
+                            if (keepVentoy) state.windowsSelectedImages else emptyList(),
+                        windowsTemplatePath =
+                            if (keepVentoy) state.windowsTemplatePath else null,
+                        windowsImageLinks =
+                            if (keepVentoy) state.windowsImageLinks else null,
+                        windowsImageLinksGeneration =
+                            if (keepVentoy) {
+                                state.windowsImageLinksGeneration
+                            } else {
+                                state.windowsImageLinksGeneration + 1
+                            },
+                        windowsImageLinksIdentity =
+                            if (keepVentoy) state.windowsImageLinksIdentity else null,
                         pendingWindowsUnlink = null,
                         linkOverwriteCandidatePaths = emptyList(),
                         linkOverwriteCandidateTemplatePath = null,
-                        autounattendState = AutounattendState.Missing,
-                        autounattendBindings = null,
-                        autounattendCandidates = null,
-                        autounattendRequestGeneration = state.autounattendRequestGeneration + 1,
+                        autounattendState =
+                            if (keepVentoy) state.autounattendState else AutounattendState.Missing,
+                        autounattendBindings =
+                            if (keepVentoy) state.autounattendBindings else null,
+                        autounattendCandidates =
+                            if (keepVentoy) state.autounattendCandidates else null,
+                        autounattendRequestGeneration =
+                            if (keepVentoy) {
+                                state.autounattendRequestGeneration
+                            } else {
+                                state.autounattendRequestGeneration + 1
+                            },
+                        autounattendLoadInFlight =
+                            if (keepVentoy) state.autounattendLoadInFlight else false,
                         diskLayoutConfirmation = null,
                         pendingAutounattendGeneration = null,
-                        ventoyGlobalSettings = null,
-                        ventoyFolders = null,
-                        ventoyFoldersError = null,
-                        linkOverwriteCandidate = state.linkOverwriteCandidate.takeIf { candidateMatchesDevice },
-                        linkOverwriteCandidateIdentity = state.linkOverwriteCandidateIdentity.takeIf { candidateMatchesDevice },
-                        linkOverwriteCandidateGeneration = state.linkOverwriteCandidateGeneration.takeIf { candidateMatchesDevice },
+                        ventoyGlobalSettings =
+                            if (keepVentoy) state.ventoyGlobalSettings else null,
+                        ventoyFolders =
+                            if (keepVentoy) state.ventoyFolders else null,
+                        ventoyFoldersError =
+                            if (keepVentoy) state.ventoyFoldersError else null,
+                        ventoyCacheEpoch =
+                            if (keepVentoy) state.ventoyCacheEpoch else state.ventoyCacheEpoch + 1,
+                        linkOverwriteCandidate =
+                            state.linkOverwriteCandidate.takeIf { candidateMatchesDevice },
+                        linkOverwriteCandidateIdentity =
+                            state.linkOverwriteCandidateIdentity.takeIf { candidateMatchesDevice },
+                        linkOverwriteCandidateGeneration =
+                            state.linkOverwriteCandidateGeneration.takeIf { candidateMatchesDevice },
                         statusMessage =
                             if (intent.presence == DevicePresence.Ready) {
-                                state.statusMessage
+                                // Probe posts Probing before Ready; keep other statuses (errors).
+                                state.statusMessage.takeUnless {
+                                    it is UiMessage.Key && it.key == UiMessageKey.Probing
+                                }
                             } else {
                                 presenceMessage(intent.presence)
                             },
@@ -670,14 +718,24 @@ object UiReducer {
                 )
             }
 
-            is UiIntent.OperationUpdated ->
-                ReduceResult(
+            is UiIntent.OperationUpdated -> {
+                val progress = intent.progress
+                val terminal =
+                    when (progress?.state) {
+                        OperationState.Completed,
+                        OperationState.Partial,
+                        OperationState.Failed,
+                        OperationState.Cancelled,
+                        -> true
+                        else -> false
+                    }
+                val base =
                     state.copy(
-                        operation = intent.progress,
+                        operation = progress,
                         // A write, format or file mutation can change free space while the
                         // geometry stays identical, so the old number is not current.
                         filesystemUsage =
-                            when (intent.progress?.state) {
+                            when (progress?.state) {
                                 OperationState.Completed,
                                 OperationState.Cancelled,
                                 OperationState.Failed,
@@ -687,7 +745,7 @@ object UiReducer {
                             },
                         presence =
                             when {
-                                intent.progress?.state == OperationState.Running ->
+                                progress?.state == OperationState.Running ->
                                     if (state.presence == DevicePresence.Ready ||
                                         state.presence == DevicePresence.Busy
                                     ) {
@@ -695,10 +753,10 @@ object UiReducer {
                                     } else {
                                         state.presence
                                     }
-                                intent.progress?.state == OperationState.Completed ||
-                                    intent.progress?.state == OperationState.Cancelled ||
-                                    intent.progress?.state == OperationState.Failed ||
-                                    intent.progress?.state == OperationState.Partial ->
+                                progress?.state == OperationState.Completed ||
+                                    progress?.state == OperationState.Cancelled ||
+                                    progress?.state == OperationState.Failed ||
+                                    progress?.state == OperationState.Partial ->
                                     if (state.presence == DevicePresence.Busy) {
                                         DevicePresence.Ready
                                     } else {
@@ -707,31 +765,43 @@ object UiReducer {
                                 else -> state.presence
                             },
                         statusMessage =
-                            when (intent.progress?.state) {
+                            when (progress?.state) {
                                 OperationState.Completed ->
                                     // Keep a more specific status (for example a staged-image
                                     // hint) when the operation has no result message.
-                                    intent.progress.readScanResult?.let(UiMessage::ReadScan)
-                                        ?: intent.progress.resultMessage?.let(UiMessage::Raw)
+                                    progress.readScanResult?.let(UiMessage::ReadScan)
+                                        ?: progress.resultMessage?.let(UiMessage::Raw)
                                         ?: state.statusMessage?.takeIf { !it.isDefaultStateStatus() }
                                         ?: UiMessage.Key(UiMessageKey.Success)
                                 OperationState.Cancelled ->
-                                    intent.progress.readScanResult?.let(UiMessage::ReadScan)
+                                    progress.readScanResult?.let(UiMessage::ReadScan)
                                         ?: UiMessage.Key(UiMessageKey.CancelledStatus)
                                 OperationState.Failed ->
-                                    intent.progress.errorMessage?.let(UiMessage::Raw)
+                                    progress.errorMessage?.let(UiMessage::Raw)
                                         ?: UiMessage.Key(UiMessageKey.FailedStatus)
                                 OperationState.Partial ->
-                                    intent.progress.readScanResult?.let(UiMessage::ReadScan)
-                                        ?: (intent.progress.resultMessage ?: intent.progress.errorMessage)
+                                    progress.readScanResult?.let(UiMessage::ReadScan)
+                                        ?: (progress.resultMessage ?: progress.errorMessage)
                                             ?.let(UiMessage::Raw)
                                         ?: UiMessage.Key(UiMessageKey.PartialStatus)
                                 OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
                                 OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
                                 null -> state.statusMessage
                             },
-                    ),
-                )
+                    )
+                // Disk layout/content mutations leave retained Ventoy/XML caches wrong until
+                // the Ventoy tab re-reads (epoch bump, no mount here).
+                val next =
+                    if (terminal && progress != null && progress.title.invalidatesVentoyStickCaches()) {
+                        dropVentoyStickCaches(base, keepTemplatePath = true)
+                    } else {
+                        base
+                    }
+                ReduceResult(next)
+            }
+
+            UiIntent.InvalidateVentoyStickCaches ->
+                ReduceResult(dropVentoyStickCaches(state, keepTemplatePath = true))
 
             is UiIntent.RequestCreatePartition -> {
                 val device = state.device
@@ -1786,6 +1856,7 @@ object UiReducer {
                         state.copy(
                             windowsIsoCandidates = files,
                             windowsIsoCandidatesError = intent.error,
+                            // Only fires while Ventoy tab open (or manual refresh).
                             statusMessage = intent.error?.let(UiMessage::Raw) ?: state.statusMessage,
                         ),
                     )
@@ -2011,25 +2082,33 @@ object UiReducer {
                 if (!state.actionsEnabled) {
                     ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                 } else {
-                    val candidate =
-                        state.windowsIsoCandidates?.firstOrNull { it.path == intent.path }
-                    if (candidate == null) {
-                        ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
-                                    "Selected image is no longer listed; reload the list",
+                    // Same source the bindings UI renders; windowsIsoCandidates is template picker only.
+                    val image =
+                        state.autounattendCandidates?.images?.firstOrNull {
+                            it.imagePath == intent.path
+                        }
+                    when {
+                        image == null ->
+                            ReduceResult(
+                                state.copy(
+                                    statusMessage = UiMessage.Raw(
+                                        "Selected image is no longer listed; reload the list",
+                                    ),
                                 ),
-                            ),
-                        )
-                    } else {
-                        val already = state.windowsSelectedImages.any { it.path == candidate.path }
-                        val selected =
-                            if (already) {
-                                state.windowsSelectedImages.filterNot { it.path == candidate.path }
-                            } else {
-                                state.windowsSelectedImages + candidate
-                            }
-                        ReduceResult(state.copy(windowsSelectedImages = selected))
+                            )
+                        // Bound rows use Unbind; problem rows stay untoggleable.
+                        image.bound || image.problem != null ->
+                            ReduceResult(state)
+                        else -> {
+                            val already = state.windowsSelectedImages.any { it == image.imagePath }
+                            val selected =
+                                if (already) {
+                                    state.windowsSelectedImages.filterNot { it == image.imagePath }
+                                } else {
+                                    state.windowsSelectedImages + image.imagePath
+                                }
+                            ReduceResult(state.copy(windowsSelectedImages = selected))
+                        }
                     }
                 }
             }
@@ -2062,6 +2141,7 @@ object UiReducer {
                                 autounattendBindings = null,
                                 autounattendCandidates = null,
                                 autounattendRequestGeneration = generation,
+                                autounattendLoadInFlight = true,
                                 diskLayoutConfirmation = null,
                                 pendingAutounattendGeneration = null,
                             ),
@@ -2090,6 +2170,7 @@ object UiReducer {
                         autounattendBindings = null,
                         autounattendCandidates = null,
                         autounattendRequestGeneration = state.autounattendRequestGeneration + 1,
+                        autounattendLoadInFlight = false,
                         diskLayoutConfirmation = null,
                         pendingAutounattendGeneration = null,
                     ),
@@ -2106,6 +2187,7 @@ object UiReducer {
                         autounattendBindings = null,
                         autounattendCandidates = null,
                         autounattendRequestGeneration = generation,
+                        autounattendLoadInFlight = true,
                         diskLayoutConfirmation = null,
                         pendingAutounattendGeneration = null,
                     ),
@@ -2129,8 +2211,10 @@ object UiReducer {
                 val selected = state.windowsSelectedImages
                 val known =
                     selected.isNotEmpty() &&
-                        selected.all { chosen ->
-                            state.windowsIsoCandidates?.any { it.path == chosen.path } == true
+                        selected.all { path ->
+                            state.autounattendCandidates?.images?.any {
+                                it.imagePath == path && !it.bound && it.problem == null
+                            } == true
                         }
                 when {
                     !state.actionsEnabled ->
@@ -2156,7 +2240,7 @@ object UiReducer {
                             ),
                         )
                     else -> {
-                        val paths = selected.map { it.path }
+                        val paths = selected
                         ReduceResult(
                             state.copy(
                                 pendingConfirmation =
@@ -2314,7 +2398,10 @@ object UiReducer {
                     // reads of the same state: they must share one generation, or the later
                     // result is dropped as stale and the tab claims the file does not exist.
                     ReduceResult(
-                        state.copy(autounattendRequestGeneration = generation),
+                        state.copy(
+                            autounattendRequestGeneration = generation,
+                            autounattendLoadInFlight = true,
+                        ),
                         effects = listOf(
                             UiEffect(
                                 UiEffect.Kind.LoadAutounattend,
@@ -2338,6 +2425,7 @@ object UiReducer {
                         state.copy(
                             autounattendState = intent.state,
                             autounattendBindings = intent.bindings,
+                            autounattendLoadInFlight = false,
                         ),
                     )
                 }
@@ -2346,7 +2434,19 @@ object UiReducer {
                 if (intent.generation != state.autounattendRequestGeneration) {
                     ReduceResult(state)
                 } else {
-                    ReduceResult(state.copy(autounattendCandidates = intent.candidates))
+                    val live =
+                        intent.candidates.images
+                            .asSequence()
+                            .filter { !it.bound && it.problem == null }
+                            .map { it.imagePath }
+                            .toSet()
+                    ReduceResult(
+                        state.copy(
+                            autounattendCandidates = intent.candidates,
+                            windowsSelectedImages =
+                                state.windowsSelectedImages.filter { it in live },
+                        ),
+                    )
                 }
 
             is UiIntent.RequestGenerateAutounattend -> {
@@ -2535,21 +2635,30 @@ object UiReducer {
                 )
 
             is UiIntent.VentoyFoldersLoaded ->
-                ReduceResult(
-                    state.copy(
-                        ventoyFolders = intent.paths,
-                        ventoyFoldersError = intent.error,
-                    ),
-                )
+                if (intent.epoch != state.ventoyCacheEpoch) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyFolders = intent.paths,
+                            ventoyFoldersError = intent.error,
+                        ),
+                    )
+                }
 
             is UiIntent.VentoyGlobalSettingsLoaded ->
-                ReduceResult(
-                    state.copy(
-                        ventoyGlobalSettings = intent.settings.entries,
-                        statusMessage =
-                            intent.settings.error?.let(UiMessage::Raw) ?: state.statusMessage,
-                    ),
-                )
+                if (intent.epoch != state.ventoyCacheEpoch) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyGlobalSettings = intent.settings.entries,
+                            // Only fires while Ventoy tab open (or manual refresh); surface mount errors.
+                            statusMessage =
+                                intent.settings.error?.let(UiMessage::Raw) ?: state.statusMessage,
+                        ),
+                    )
+                }
 
             is UiIntent.RequestSetVentoyGlobalSetting -> {
                 val known =
@@ -2977,6 +3086,92 @@ object UiReducer {
             ?: DestructiveConfirmation.fileLabel(state.stagedRawImagePath)
             ?: DestructiveConfirmation.fileLabel(state.imageUri)
 
+    /**
+     * Titles that rewrite the data partition or partition table enough that retained
+     * Ventoy/XML catalogs and the open XML document must not stay on screen.
+     * Read-only probe/list titles never match.
+     */
+    private fun OperationTitle.invalidatesVentoyStickCaches(): Boolean =
+        when (this) {
+            is OperationTitle.Destructive ->
+                when (action) {
+                    DestructiveAction.WIPE,
+                    DestructiveAction.VENTOY_INSTALL,
+                    DestructiveAction.VENTOY_UPDATE,
+                    DestructiveAction.VENTOY_DOWNLOAD_INSTALL,
+                    DestructiveAction.RAW_WRITE,
+                    DestructiveAction.FORMAT_PARTITION,
+                    DestructiveAction.DELETE_PARTITION,
+                    DestructiveAction.CREATE_PARTITION,
+                    DestructiveAction.GPT_REPAIR,
+                    DestructiveAction.GPT_RESTORE,
+                    DestructiveAction.RESCUE_RESTORE,
+                    DestructiveAction.INITIALIZE_PARTITION_TABLE,
+                    DestructiveAction.SET_PARTITION_ROLE,
+                    DestructiveAction.SET_PARTITION_BOOTABLE,
+                    DestructiveAction.RENAME_PARTITION,
+                    DestructiveAction.RENAME_VOLUME_LABEL,
+                    DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+                    DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT,
+                    DestructiveAction.VENTOY_LINK_XML,
+                    -> true
+                }
+            is OperationTitle.ImportTarget,
+            is OperationTitle.FormatTarget,
+            is OperationTitle.DeleteEntry,
+            is OperationTitle.RenameEntry,
+            is OperationTitle.NewFolder,
+            OperationTitle.Upload,
+            OperationTitle.BindImagesToUnattendXml,
+            OperationTitle.UnbindImageFromUnattendXml,
+            OperationTitle.GenerateUnattendXml,
+            OperationTitle.RemoveXmlBindings,
+            OperationTitle.SetVentoyGlobalSetting,
+            OperationTitle.SaveGlobalWindowsControls,
+            -> true
+            else -> false
+        }
+
+    /**
+     * Clear stick-scoped Ventoy/XML catalogs and bump generations/epoch so in-flight
+     * loads cannot land on a post-mutation state. [keepTemplatePath] leaves the chosen
+     * XML path so the Ventoy tab can re-read without another pick; document/candidates
+     * still go to Missing/null. Does not emit mount effects.
+     */
+    private fun dropVentoyStickCaches(
+        state: AppUiState,
+        keepTemplatePath: Boolean,
+    ): AppUiState =
+        state.copy(
+            windowsIsoCandidates = null,
+            windowsIsoCandidatesGeneration = state.windowsIsoCandidatesGeneration + 1,
+            windowsIsoCandidatesIdentity = null,
+            windowsIsoCandidatesError = null,
+            windowsImageLinks = null,
+            windowsImageLinksGeneration = state.windowsImageLinksGeneration + 1,
+            windowsImageLinksIdentity = null,
+            windowsSelectedImages = emptyList(),
+            windowsTemplatePath = if (keepTemplatePath) state.windowsTemplatePath else null,
+            autounattendState = AutounattendState.Missing,
+            autounattendBindings = null,
+            autounattendCandidates = null,
+            autounattendRequestGeneration = state.autounattendRequestGeneration + 1,
+            autounattendLoadInFlight = false,
+            diskLayoutConfirmation = null,
+            pendingAutounattendGeneration = null,
+            ventoyGlobalSettings = null,
+            ventoyFolders = null,
+            ventoyFoldersError = null,
+            ventoyCacheEpoch = state.ventoyCacheEpoch + 1,
+            pendingWindowsUnlink = null,
+            linkOverwriteCandidatePaths = emptyList(),
+            linkOverwriteCandidateTemplatePath = null,
+            // Phone-import inspection is stick-scoped; a mutation must not keep an overwrite
+            // prompt bound to a pre-mutation generation.
+            pendingIsoImport = null,
+            isoImportError = null,
+            isoImportGeneration = state.isoImportGeneration + 1,
+        )
     fun presenceMessage(presence: DevicePresence): UiMessage =
         when (presence) {
             DevicePresence.Absent -> UiMessage.Key(UiMessageKey.NoDevice)

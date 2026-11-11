@@ -36,6 +36,7 @@ for suite in \
   RawRangeUiStateTest \
   AutounattendPathTest \
   AutounattendReloadUiTest \
+  VentoyUiStateTest \
   PhoneImportUiTest
 do
   test -f "$ROOT/app/src/test/kotlin/usb/ui/$suite.kt" || {
@@ -89,6 +90,7 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/FilesystemUsageUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendPathTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendReloadUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/VentoyUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/fs/VolumeLabelTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" \
@@ -112,6 +114,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.FilesystemUsageUiTest \
   usb.ui.AutounattendPathTest \
   usb.ui.AutounattendReloadUiTest \
+  usb.ui.VentoyUiStateTest \
   usb.ui.PhoneImportUiTest \
   usb.fs.VolumeLabelTest \
   usb.ventoy.AutounattendTest \

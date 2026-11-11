@@ -1313,7 +1313,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             usbManager = manager
         }
         val mgr = usbManager
-        val identity = UsbDeviceIdentity.of(device)
+        // Stamp the live attach generation on transitional presence so DeviceChanged can
+        // keep stick-scoped Ventoy/XML state across Busy → Ready on the same stick.
+        val prior = state.device?.takeIf {
+            sameDevice && it.identity == UsbDeviceIdentity.of(device).identity
+        }
+        val identity =
+            UsbDeviceIdentity.of(
+                device,
+                capacityBytes = prior?.capacityBytes ?: 0uL,
+                attachGeneration = gen,
+            )
         if (!hasPermission || mgr == null) {
             onIntent(
                 UiIntent.DeviceChanged(
@@ -1382,6 +1392,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     ),
                             ),
                         )
+
                         tableResult.onSuccess {
                             if (partitions.isEmpty()) {
                                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.NoPartitionsFound)))
@@ -1441,6 +1452,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                             tableValid = false,
                                         ),
                                     )
+
                                 }
                                 val key =
                                     if (isTransport) UiMessageKey.CannotOpenUsb
@@ -1523,6 +1535,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     ),
                             ),
                         )
+
                         tableResult.onFailure { err ->
                             val key = if (isTransport) {
                                 UiMessageKey.CannotReadUsb
@@ -1566,7 +1579,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             onIntent(
                                 UiIntent.DeviceChanged(
                                     presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
-                                    device = state.device ?: UsbDeviceIdentity.of(dev),
+                                    device = state.device
+                                        ?: UsbDeviceIdentity.of(dev, attachGeneration = gen),
                                     partitions = emptyList(),
                                     files = emptyList(),
                                     tableValid = false,
@@ -2140,7 +2154,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             error = message,
                         ),
                     )
-                    post(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
                 activeHandles.remove(handle)
@@ -2466,7 +2479,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }
-                    onIntent(UiIntent.LoadWindowsIsoCandidates)
+                    // ISO catalog already invalidated by OperationUpdated; Ventoy tab reloads.
                     onIntent(UiIntent.LoadWindowsImageLinks)
                 } else if (message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
@@ -2837,7 +2850,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 )
                 if (mappedState == OperationState.Completed) {
-                    onIntent(UiIntent.LoadAutounattend(xmlName))
+                    // OperationUpdated already dropped XML/catalogs (Missing + epoch).
+                    // Ventoy tab reloads when open; avoid a second off-tab mount here.
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
                 } else if (message != null) {
@@ -2849,9 +2863,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+
     private fun loadVentoyGlobalSettings() {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
+        val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
@@ -2861,7 +2877,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val settings = usb.ventoy.VentoySetup.readGlobalSettings(disk)
                     if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
-                        post(UiIntent.VentoyGlobalSettingsLoaded(settings))
+                        post(UiIntent.VentoyGlobalSettingsLoaded(settings, epoch = expectedEpoch))
                     }
                 } finally {
                     disk.close()
@@ -2881,6 +2897,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     post(
                         UiIntent.VentoyGlobalSettingsLoaded(
                             VentoyGlobalSettings(emptyList(), message),
+                            epoch = expectedEpoch,
                         ),
                     )
                 }
@@ -2893,6 +2910,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadVentoyFolders() {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
+        val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ListVentoyFolders.logLabel) {
             override suspend fun run() {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
@@ -2902,7 +2920,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val folders = usb.ventoy.VentoySetup.listDirectories(disk)
                     if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
-                        post(UiIntent.VentoyFoldersLoaded(folders))
+                        post(UiIntent.VentoyFoldersLoaded(folders, epoch = expectedEpoch))
                     }
                 } finally {
                     disk.close()
@@ -2922,6 +2940,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         UiIntent.VentoyFoldersLoaded(
                             emptyList(),
                             outcome.cause.message ?: outcome.cause.javaClass.simpleName,
+                            epoch = expectedEpoch,
                         ),
                     )
                 }
@@ -2977,9 +2996,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ),
                     ),
                 )
-                if (mappedState == OperationState.Completed) {
-                    onIntent(UiIntent.LoadVentoyGlobalSettings)
-                } else if (message != null) {
+                if (mappedState != OperationState.Completed && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -3082,9 +3099,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 )
                 if (mappedState == OperationState.Completed) {
-                    // LoadAutounattend now refreshes the document *and* the candidate list,
-                    // which is the only source of the Bound flag and of the Unbind button.
-                    onIntent(UiIntent.LoadAutounattend(xmlName))
+                    // OperationUpdated dropped document to Missing + bumped epoch; tab reloads.
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
                 } else if (message != null) {

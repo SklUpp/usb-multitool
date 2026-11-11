@@ -68,17 +68,26 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
     var pickerOpen by remember { mutableStateOf(false) }
     var generateOpen by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.device?.identity) {
-        onIntent(UiIntent.LoadVentoyGlobalSettings)
-        onIntent(UiIntent.LoadVentoyFolders)
-        // The template picker lists real files on the stick, so the list must exist before
-        // any file can be chosen.
-        onIntent(UiIntent.LoadWindowsIsoCandidates)
-    }
-    LaunchedEffect(state.device?.identity, template) {
-        // One intent: the reducer asks for the document and the image list under a single
-        // generation, so neither result can be discarded as stale.
-        if (template != null) onIntent(UiIntent.LoadAutounattend(template))
+    // Keys = external readiness only. Missing/inFlight stay in the body guard:
+    // Loaded(Missing) clears inFlight and would re-fire forever if those were keys.
+    // presence/actionsEnabled: Busy→Ready after open-during-scan must retry once.
+    LaunchedEffect(
+        state.device?.identity,
+        state.device?.attachGeneration,
+        state.ventoyCacheEpoch,
+        state.presence,
+        state.actionsEnabled,
+    ) {
+        val path = state.windowsTemplatePath
+        if (path == null ||
+            state.presence != DevicePresence.Ready ||
+            !state.actionsEnabled ||
+            state.autounattendState !is AutounattendState.Missing ||
+            state.autounattendLoadInFlight
+        ) {
+            return@LaunchedEffect
+        }
+        onIntent(UiIntent.LoadAutounattend(path))
     }
 
     SectionCard(
@@ -198,8 +207,19 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                     Text(stringResource(R.string.unattend_generate))
                 }
             }
-            TextButton(onClick = { onIntent(UiIntent.ClearWindowsTemplate) }) {
-                Text(stringResource(R.string.unattend_clear_template))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(
+                    onClick = { onIntent(UiIntent.LoadAutounattend(template)) },
+                    enabled = state.actionsEnabled,
+                ) {
+                    Text(stringResource(R.string.unattend_refresh))
+                }
+                TextButton(onClick = { onIntent(UiIntent.ClearWindowsTemplate) }) {
+                    Text(stringResource(R.string.unattend_clear_template))
+                }
             }
         }
     }
@@ -238,7 +258,7 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                     EmptyHint(stringResource(R.string.unattend_no_candidates))
                 }
                 candidates.images.forEach { image ->
-                    val selected = state.windowsSelectedImages.any { it.path == image.imagePath }
+                    val selected = state.windowsSelectedImages.any { it == image.imagePath }
                     val imageSelectable =
                         state.actionsEnabled && image.problem == null && !image.bound
                     Row(
@@ -297,7 +317,7 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                         }
                     }
                 }
-                val selectedPaths = state.windowsSelectedImages.map { it.path }
+                val selectedPaths = state.windowsSelectedImages
                 val templateMarkers = document?.destructiveMarkers.orEmpty()
                 var bindDestructiveAck by remember(template, document) {
                     mutableStateOf(false)
@@ -393,14 +413,14 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
         GenerateDialog(
             template = template,
             document = document,
-            selectedImages = state.windowsSelectedImages.map { it.path },
+            selectedImages = state.windowsSelectedImages,
             actionsEnabled = state.actionsEnabled,
             onGenerate = { params, allowDestructive, sha ->
                 onIntent(
                     UiIntent.RequestGenerateAutounattend(
                         xmlName = template,
                         params = params,
-                        imagePaths = state.windowsSelectedImages.map { it.path },
+                        imagePaths = state.windowsSelectedImages,
                         overwriteXml = document != null,
                         allowDestructiveTemplate = allowDestructive,
                         expectedTemplateSha256 = sha,
