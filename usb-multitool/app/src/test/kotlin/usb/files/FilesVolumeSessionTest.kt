@@ -1,6 +1,7 @@
 package usb.files
 
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -12,6 +13,7 @@ import org.junit.Test
 import usb.device.BlockGeometry
 import usb.device.FakeBotSession
 import usb.device.UsbDisk
+import usb.device.UsbExclusiveClaim
 import usb.fs.CloseAfterSuccessException
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
@@ -36,7 +38,7 @@ class FilesVolumeSessionTest {
     ): FilesVolumeSession =
         FilesVolumeSession(
             currentAttachment = current,
-            openMounted = { partitionId, writable, _ -> open(partitionId, writable) },
+            openMounted = { partitionId, writable, _, _ -> open(partitionId, writable) },
         )
 
     @Test
@@ -655,7 +657,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, _ ->
+                openMounted = { partitionId, writable, _, _ ->
                     opens++
                     mounted(partitionId, writable, volumeClose = null, diskClose = null)
                 },
@@ -682,7 +684,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, _ ->
+                openMounted = { partitionId, writable, _, _ ->
                     opens++
                     mounted(partitionId, writable, volumeClose = null, diskClose = null)
                 },
@@ -714,7 +716,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, pin ->
+                openMounted = { partitionId, writable, pin, _ ->
                     openedPins += pin
                     live = pinB
                     mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
@@ -738,7 +740,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, _ ->
+                openMounted = { partitionId, writable, _, _ ->
                     opened = true
                     live = pinB
                     mounted(partitionId, writable, volumeClose = closeErr, diskClose = null)
@@ -765,7 +767,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, pin ->
+                openMounted = { partitionId, writable, pin, _ ->
                     openedPins += pin
                     mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
                 },
@@ -793,7 +795,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, _ ->
+                openMounted = { partitionId, writable, _, _ ->
                     opens++
                     mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
                 },
@@ -819,7 +821,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, _ ->
+                openMounted = { partitionId, writable, _, _ ->
                     mounted(partitionId, writable, events, volumeClose = null, diskClose = null)
                 },
             )
@@ -849,7 +851,7 @@ class FilesVolumeSessionTest {
         val session =
             FilesVolumeSession(
                 currentAttachment = { live },
-                openMounted = { partitionId, writable, _ ->
+                openMounted = { partitionId, writable, _, _ ->
                     opens++
                     mounted(partitionId, writable, volumeClose = null, diskClose = null)
                 },
@@ -862,12 +864,271 @@ class FilesVolumeSessionTest {
         assertEquals(1, opens)
     }
 
+    // ------------------------------------------------------------------
+    // Exclusive USB ownership: one claim across close→open→operation→close
+    // ------------------------------------------------------------------
+
+    @Test
+    fun mountedVolumeHoldsClaimUntilSessionClose() {
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+                },
+            )
+        assertFalse("nothing open, nothing claimed", session.claim.isHeld())
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        assertTrue("cache keeps the claim", session.claim.isHeld())
+        assertNull(session.close())
+        assertFalse("close releases the claim", session.claim.isHeld())
+    }
+
+    @Test
+    fun rawOpenClosesMountThenClaimsSoAMountAttemptIsRefused() {
+        // Same-thread ordering of the primitive: the raw open closes the mount, then takes
+        // the claim, and a mount attempted at that point (the probe's code path) is refused.
+        // The concurrent variant with a real probe thread is
+        // probeThreadLosesTheDeviceWhileRawOpenHoldsTheClaim.
+        val events = mutableListOf<String>()
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, events, volumeClose = null, diskClose = null, lease = lease)
+                },
+            )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val rawLease =
+            session.openAfterCloseClaimed { lease ->
+                // Ordering under the old race: the mount is already closed and the claim is
+                // held *before* the raw open starts.
+                assertNull("mount closed before the raw claim", session.mountEpochLocked())
+                assertTrue("claim is held for the raw open", session.claim.isHeld())
+                // A mount attempt at this exact point must lose the claim instead of
+                // opening a second session on the same stick.
+                assertThrows(UsbExclusiveClaim.BusyException::class.java) {
+                    session.volumeForLocked(pinA, "1")
+                }
+                lease
+            }
+
+        assertEquals("mount is closed before the raw claim", listOf("volume", "disk"), events)
+        assertTrue("raw session owns the device", session.claim.isHeld())
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+
+        rawLease.close()
+        assertFalse("raw close releases the claim", session.claim.isHeld())
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        assertTrue(session.claim.isHeld())
+    }
+
+    @Test
+    fun rawOpenRefusesWhenMountCloseWasNotConfirmed() {
+        val closeErr = IOException("umount failed")
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = closeErr, diskClose = null, lease = lease)
+                },
+            )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        var opened = false
+        val thrown =
+            assertThrows(IOException::class.java) {
+                session.openAfterCloseClaimed { lease ->
+                    opened = true
+                    lease.close()
+                }
+            }
+        assertSame("the unconfirmed close error is what aborts the open", closeErr, thrown)
+        assertFalse("no raw open after an unconfirmed close", opened)
+    }
+
+    @Test
+    fun rawOpenFailureReleasesClaim() {
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { _, _, _, _ -> error("must not mount") },
+            )
+        val boom = IOException("usb open failed")
+        assertSame(
+            boom,
+            assertThrows(IOException::class.java) {
+                session.openAfterCloseClaimed { throw boom }
+            },
+        )
+        assertFalse(session.claim.isHeld())
+    }
+
+    @Test
+    fun failedMountOpenReleasesClaim() {
+        var attempts = 0
+        val boom = IOException("partition gone")
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { _, _, _, _ ->
+                    attempts++
+                    throw boom
+                },
+            )
+        assertSame(
+            boom,
+            assertThrows(IOException::class.java) {
+                session.withLock { session.volumeForLocked(pinA, "1") }
+            },
+        )
+        assertEquals(1, attempts)
+        assertFalse("a failed open must not keep the claim", session.claim.isHeld())
+    }
+
+    @Test
+    fun attachmentSwapAfterMountOpenClosesVolumeAndReleasesClaim() {
+        var live: AttachmentPin? = pinA
+        val events = mutableListOf<String>()
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { live },
+                openMounted = { partitionId, writable, _, lease ->
+                    live = pinB
+                    mounted(partitionId, writable, events, volumeClose = null, diskClose = null, lease = lease)
+                },
+            )
+        assertThrows(AttachmentChangedException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+        assertEquals(listOf("volume", "disk"), events)
+        assertFalse("discarded volume must release the claim", session.claim.isHeld())
+    }
+
+    @Test
+    fun rawOpenCallbackRunsAfterMountCloseAndAbortReleasesClaim() {
+        // Primitive ordering only: the mount close commits (including an attachment change
+        // made while closing) before the open callback runs, and throwing there aborts with
+        // the claim released. This does NOT exercise MainViewModel.openRawDisk's revalidate
+        // and post-open fences (Android types, not unit-testable here); it asserts the
+        // session-level ordering those fences rely on.
+        var live: AttachmentPin? = pinA
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { live },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(
+                        partitionId,
+                        writable,
+                        volumeClose = null,
+                        diskClose = null,
+                        lease = lease,
+                        beforeVolumeClose = { live = pinB },
+                    )
+                },
+            )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        var opened = false
+        val thrown =
+            assertThrows(AttachmentChangedException::class.java) {
+                session.openAfterCloseClaimed { lease ->
+                    assertNull("mount close already committed", session.mountEpochLocked())
+                    if (live != pinA) {
+                        lease.close()
+                        throw AttachmentChangedException()
+                    }
+                    opened = true
+                    throw AssertionError("stale attachment must not be opened")
+                }
+            }
+        assertEquals("USB attachment changed", thrown.message)
+        assertFalse("stale attachment must not be opened", opened)
+        assertEquals(pinB, live)
+        assertFalse("aborted open releases the claim", session.claim.isHeld())
+    }
+
+    @Test
+    fun probeThreadLosesTheDeviceWhileRawOpenHoldsTheClaim() {
+        // Real transition, not an inline simulation: a probe on another thread enters the
+        // files lock while the raw open callback runs. The open must not hold the lock (or
+        // this test times out) and the probe must lose the claim, never mount.
+        val session =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+                },
+            )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val rawOpenEntered = CountDownLatch(1)
+        val probeDone = CountDownLatch(1)
+        val probeFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val probe =
+            Thread {
+                rawOpenEntered.await()
+                try {
+                    session.withLock { session.volumeForLocked(pinA, "1") }
+                } catch (t: Throwable) {
+                    probeFailure.set(t)
+                } finally {
+                    probeDone.countDown()
+                }
+            }
+        probe.start()
+        val lease =
+            session.openAfterCloseClaimed { held ->
+                rawOpenEntered.countDown()
+                assertTrue(
+                    "probe must finish during the raw open: the lock must be free",
+                    probeDone.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                )
+                held
+            }
+        probe.join()
+        assertTrue(
+            "probe must be refused the device",
+            probeFailure.get() is UsbExclusiveClaim.BusyException,
+        )
+        assertNull("no mount exists while the raw claim is held", session.mountEpochLocked())
+        lease.close()
+        assertFalse(session.claim.isHeld())
+    }
+
+    @Test
+    fun sessionsSharingTheProcessClaimCannotMountTheSameStickTwice() {
+        // Two sessions = two ViewModels in one process; DiskController hands both the same
+        // claim, so the second cannot open a second BOT session on the same stick.
+        val claim = UsbExclusiveClaim()
+        fun session(): FilesVolumeSession =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+                },
+                claim = claim,
+            )
+        val first = session()
+        val second = session()
+        first.withLock { first.volumeForLocked(pinA, "1") }
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) {
+            second.withLock { second.volumeForLocked(pinA, "1") }
+        }
+        assertNull(first.close())
+        second.withLock { second.volumeForLocked(pinA, "1") }
+        assertTrue(claim.isHeld())
+        assertNull(second.close())
+        assertFalse(claim.isHeld())
+    }
+
     private fun mounted(
         partitionId: String,
         writable: Boolean,
         events: MutableList<String> = mutableListOf(),
         volumeClose: Throwable?,
         diskClose: Throwable?,
+        lease: UsbExclusiveClaim.Lease? = null,
+        beforeVolumeClose: (() -> Unit)? = null,
     ): MountedFilesVolume {
         val bot =
             object : FakeBotSession() {
@@ -877,7 +1138,7 @@ class FilesVolumeSessionTest {
                     super.close()
                 }
             }
-        val disk = UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL))
+        val disk = UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL), lease = lease)
         val volume =
             object : UsbFsVolume {
                 override fun list(path: String) = emptyList<UsbFsDirEntry>()
@@ -897,6 +1158,7 @@ class FilesVolumeSessionTest {
                 override fun sync() = Unit
                 override fun close() {
                     events += "volume"
+                    beforeVolumeClose?.invoke()
                     if (volumeClose != null) throw volumeClose
                 }
             }

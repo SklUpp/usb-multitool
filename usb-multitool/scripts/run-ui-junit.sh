@@ -31,6 +31,7 @@ for suite in \
   SchemeInitUiTest \
   ConfirmationTest \
   BackupFolderUiTest \
+  BackupFolderLaunchTest \
   RestoreInspectionTest \
   OperationProgressMapperTest \
   StringResourceParityTest \
@@ -63,6 +64,17 @@ test -f "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" || {
   echo "run-ui-junit: missing app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" >&2
   exit 1
 }
+# Ownership/pin suites: pure JVM, they compile here without the Android SDK.
+for suite in \
+  "files/AttachmentStateTest.kt" \
+  "device/UsbExclusiveClaimTest.kt" \
+  "service/DiskControllerUsbClaimTest.kt"
+do
+  test -f "$ROOT/app/src/test/kotlin/usb/$suite" || {
+    echo "run-ui-junit: missing app/src/test/kotlin/usb/$suite" >&2
+    exit 1
+  }
+done
 
 # FilesystemUsage.kt is owned by the measurement backend; add it when it exists so the suite
 # does not break the moment it lands or before it does.
@@ -103,11 +115,23 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ui/VentoyTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/WindowsImportLaunchQueue.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/BackupFolderLaunch.kt" \
+  "$ROOT/app/src/main/kotlin/usb/files/AttachmentState.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/UsbExclusiveClaim.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/BlockGeometry.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/BotTransport.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/BotConstants.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/ScsiCommand.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/DiskException.kt" \
+  "$ROOT/app/src/main/kotlin/usb/device/UsbDisk.kt" \
+  "$ROOT/app/src/main/kotlin/usb/service/OperationExecutor.kt" \
+  "$ROOT/app/src/main/kotlin/usb/service/DiskController.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FormatPickerTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRenameUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/SchemeInitUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ConfirmationTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/BackupFolderUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/BackupFolderLaunchTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/RestoreInspectionTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/partition/SyntheticGpt.kt" \
   "$ROOT/app/src/test/kotlin/usb/partition/DiskFixture.kt" \
@@ -129,7 +153,11 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/fs/VolumeLabelTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/FolderPathsTest.kt" \
-  "$ROOT/app/src/test/kotlin/usb/ventoy/XmlPathTest.kt"
+  "$ROOT/app/src/test/kotlin/usb/ventoy/XmlPathTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/device/FakeBotSession.kt" \
+  "$ROOT/app/src/test/kotlin/usb/device/UsbExclusiveClaimTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/files/AttachmentStateTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/service/DiskControllerUsbClaimTest.kt"
 if [ -f "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt" ]; then
   set -- "$@" "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt"
 fi
@@ -155,6 +183,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.SchemeInitUiTest \
   usb.ui.ConfirmationTest \
   usb.ui.BackupFolderUiTest \
+  usb.ui.BackupFolderLaunchTest \
   usb.ui.RestoreInspectionTest \
   usb.ui.OperationProgressMapperTest \
   usb.ui.UiStateMachineTest \
@@ -175,4 +204,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.fs.VolumeLabelTest \
   usb.ventoy.AutounattendTest \
   usb.ventoy.FolderPathsTest \
-  usb.ventoy.XmlPathTest
+  usb.ventoy.XmlPathTest \
+  usb.files.AttachmentStateTest \
+  usb.device.UsbExclusiveClaimTest \
+  usb.service.DiskControllerUsbClaimTest

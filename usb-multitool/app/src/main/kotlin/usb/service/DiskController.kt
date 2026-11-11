@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import usb.device.UsbExclusiveClaim
 import usb.operation.DiskOperation
 
 /**
@@ -19,6 +20,12 @@ class DiskController(
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + dispatcher)
     val executor = OperationExecutor(scope, wakeLock = wakeLock, serviceControl = serviceControl)
+
+    /**
+     * Process-wide exclusive USB claim. Every ViewModel's files session uses this instance,
+     * so two Activity instances in one process cannot claim the stick at the same time.
+     */
+    val usbClaim = UsbExclusiveClaim()
 
     fun submit(operation: DiskOperation): OperationHandle = executor.submit(operation)
 

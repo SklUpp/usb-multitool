@@ -1,9 +1,9 @@
 package usb.multitool
 import usb.files.AttachmentChangedException
 import usb.files.AttachmentPin
+import usb.files.AttachmentState
 import usb.files.FilesVolumeSession
 import usb.files.MountedFilesVolume
-import usb.files.requireFilesVolumeClosed
 import usb.files.FilesOperationPolicy
 
 import android.Manifest
@@ -51,6 +51,7 @@ import kotlinx.coroutines.withContext
 import usb.device.DiskException
 import usb.device.MassStorageDiscovery
 import usb.device.UsbDisk
+import usb.device.UsbPermissionPolicy
 import usb.device.withWriteTracking
 import usb.service.DiskController
 import usb.operation.DiskOperation
@@ -59,7 +60,11 @@ import usb.service.OperationHandle
 import usb.service.DiskService
 import usb.ui.AppShell
 import usb.ui.AppUiState
+import usb.ui.BackupFolderAction
+import usb.ui.BackupFolderLaunch
+import usb.ui.BackupFolderLaunchQueue
 import usb.ui.DeviceIdentity
+import usb.ui.PendingBackupFolderAction
 import usb.ui.DevicePresence
 import usb.ui.FileEntry
 import usb.ui.OperationProgress
@@ -76,6 +81,7 @@ import usb.ui.UiReducer
 import usb.ui.WindowsImportRequestCodes
 import usb.ui.AppLanguage
 import usb.device.UsbDiskSession
+import usb.device.UsbExclusiveClaim
 import usb.diagnostics.Diagnostics
 import usb.diagnostics.Rescue
 import usb.diagnostics.RescueMap
@@ -184,17 +190,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var rawSourceHandle: OperationHandle? = null
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
-    @Volatile
-    private var attachGeneration = 0L
+    /**
+     * Attachment identity, published atomically: device and generation always change
+     * together, so a pin built here can never pair the previous device with a new
+     * generation (or the reverse) while attach/detach is in progress.
+     */
+    private val attachment = AttachmentState<UsbDevice>()
+    private val attachGeneration: Long get() = attachment.snapshot().generation
+    private val attachedDevice: UsbDevice? get() = attachment.snapshot().device
     /** Pick generations make slow SAF inspections lose to the newest selection. */
     private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile
-    var attachedDevice: UsbDevice? = null
-        private set
-    @Volatile
     var usbManager: UsbManager? = null
         private set
+
+    /**
+     * One token per ViewModel (survives rotation, not process death). A backup-folder pick
+     * restored from saved state keeps the old token, so a new process can never consume it.
+     */
+    val backupFolderLaunchToken: String = java.util.UUID.randomUUID().toString()
+
+    /**
+     * Everything the pre-open hook needs, captured together at dispatch: generation/key from
+     * one attachment snapshot and serial from that snapshot's device. [serial] is null only
+     * on the immediate path, where the existing serial-less behavior is preserved.
+     */
+    private data class BackupPin(
+        val generation: Long,
+        val key: String,
+        val serial: String?,
+    )
+
+    /** Attachment the next folder-gated backup was chosen for; consumed before open. */
+    @Volatile
+    private var expectedBackupPin: BackupPin? = null
+
+    /** One-snapshot view used by the picker target check; same source as the dispatch pin. */
+    internal fun attachmentSnapshot(): AttachmentState.Snapshot<UsbDevice> = attachment.snapshot()
 
     private fun deviceKey(device: UsbDevice?): String? =
         device?.let { "${it.deviceId}:${it.deviceName}" }
@@ -202,10 +235,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Immutable pin for a files operation accepted now: attach generation + device key.
      * Captured on the main thread before the operation is queued; null means detached and
-     * the operation must fail before touching any volume.
+     * the operation must fail before touching any volume. Both halves come from one
+     * [AttachmentState] snapshot.
      */
-    private fun currentAttachmentPin(): AttachmentPin? =
-        attachedDevice?.let { device -> AttachmentPin(attachGeneration, deviceKey(device)!!) }
+    private fun currentAttachmentPin(): AttachmentPin? {
+        val live = attachment.snapshot()
+        return live.device?.let { device -> AttachmentPin(live.generation, deviceKey(device)!!) }
+    }
+
+    /**
+     * The live attachment is still the one an operation was accepted for, read from one
+     * snapshot. Never combine a generation read and a device read from different publishes:
+     * a same-key replug (same deviceId/name, new generation) must still fail the check.
+     */
+    private fun attachmentMatches(generation: Long, key: String?): Boolean {
+        val live = attachment.snapshot()
+        return live.generation == generation && deviceKey(live.device) == key
+    }
+
+    /** One-snapshot variant of `attachGeneration == gen && attachedDevice?.deviceId == id`. */
+    private fun attachmentIs(generation: Long, device: UsbDevice?): Boolean {
+        val live = attachment.snapshot()
+        return live.generation == generation && live.device?.deviceId == device?.deviceId
+    }
+
+    /** One-snapshot variant of `attachGeneration == gen && attachedDevice != null`. */
+    private fun attachmentLive(generation: Long): Boolean {
+        val live = attachment.snapshot()
+        return live.generation == generation && live.device != null
+    }
 
     private val languagePrefs =
         application.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
@@ -249,9 +307,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val filesSession =
         FilesVolumeSession(
             currentAttachment = { currentAttachmentPin() },
-            openMounted = { partitionId, writable, pin ->
-                openMountedFilesVolume(partitionId, writable, pin)
+            openMounted = { partitionId, writable, pin, lease ->
+                openMountedFilesVolume(partitionId, writable, pin, lease)
             },
+            claim = DiskController.get().usbClaim,
         )
     /** Key of the newest free-space request; a different key asks again. */
     @Volatile private var lastUsageKey: FilesystemUsageKey? = null
@@ -265,8 +324,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val inspectionOwner = InspectionOwnership()
 
-    private fun inspectionAttachmentStillHere(ticket: InspectionTicket): Boolean =
-        attachGeneration == ticket.attachGeneration && deviceKey(attachedDevice) == ticket.deviceKey
+    private fun inspectionAttachmentStillHere(ticket: InspectionTicket): Boolean {
+        val live = attachment.snapshot()
+        return live.generation == ticket.attachGeneration &&
+            deviceKey(live.device) == ticket.deviceKey
+    }
 
     /**
      * Disown the running inspection. The SAF job is cancelled best-effort (a blocking provider
@@ -351,6 +413,106 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         onIntent(UiIntent.SetBackupFolder(uri.toString(), name, usable))
         return usable
+    }
+
+    /**
+     * Immediate path (folder already chosen): pin the live attachment now. A serial-less
+     * device keeps its existing behavior here — [BackupPin.serial] stays null and the
+     * pre-open hook checks generation/key only; the operation's own serial guard still
+     * applies. Picker-gated dispatches never take this path.
+     */
+    fun requestBackupAction(action: BackupFolderAction) {
+        val live = attachment.snapshot()
+        val device = live.device
+        val key = device?.let { UsbPermissionPolicy.key(it.deviceId, it.deviceName) }
+        if (key == null) {
+            expectedBackupPin = null
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderTargetChanged)))
+            return
+        }
+        expectedBackupPin =
+            BackupPin(
+                generation = live.generation,
+                key = key,
+                serial = device?.let { UsbDeviceIdentity.serialNumber(it) }?.trim()?.takeIf {
+                    it.isNotEmpty()
+                },
+            )
+        dispatchBackupAction(action)
+    }
+
+    /**
+     * Picker path: the user chose the folder for [expected]. Verify that dispatch-time live
+     * attachment is still that exact target, then pin generation/key/serial from this one
+     * snapshot. All three values travel together; the pre-open hook checks the same snapshot
+     * the disk is opened for.
+     */
+    fun requestPinnedBackupAction(
+        action: BackupFolderAction,
+        expected: PendingBackupFolderAction,
+    ) {
+        if (action == BackupFolderAction.ChangeFolder) {
+            expectedBackupPin = null
+            return
+        }
+        val live = attachment.snapshot()
+        val device = live.device
+        val key = device?.let { UsbPermissionPolicy.key(it.deviceId, it.deviceName) }
+        val serial =
+            device?.let { UsbDeviceIdentity.serialNumber(it) }?.trim().orEmpty()
+        val identity = device?.let { UsbDeviceIdentity.identityString(it) }
+        if (key == null ||
+            key != expected.deviceKey ||
+            identity != expected.identity ||
+            serial.isEmpty() ||
+            serial != expected.serialNumber
+        ) {
+            expectedBackupPin = null
+            onIntent(
+                UiIntent.Status(
+                    UiMessage.Key(
+                        if (serial.isEmpty()) {
+                            UiMessageKey.BackupFolderTargetUnverifiable
+                        } else {
+                            UiMessageKey.BackupFolderTargetChanged
+                        },
+                    ),
+                ),
+            )
+            return
+        }
+        expectedBackupPin = BackupPin(live.generation, key, serial)
+        dispatchBackupAction(action)
+    }
+
+    private fun dispatchBackupAction(action: BackupFolderAction) {
+        when (action) {
+            BackupFolderAction.RescueBackup -> onIntent(UiIntent.StartRescueBackup)
+            BackupFolderAction.GptCopy -> onIntent(UiIntent.CaptureGptBackup)
+            BackupFolderAction.ChangeFolder -> Unit
+        }
+    }
+
+    /**
+     * Pre-open hook: [pinned] is the same attachment snapshot `openRawDisk` opens, so the
+     * device checked here is exactly the device that would be opened. Consumes the pin and
+     * fails closed on any mismatch. A null [BackupPin.serial] means the immediate path
+     * deliberately keeps the old serial-less behavior; picker dispatches always pin one.
+     */
+    private fun requirePinnedBackupAttachment(pinned: AttachmentState.Snapshot<UsbDevice>) {
+        val expected = expectedBackupPin
+        expectedBackupPin = null
+        val device = pinned.device ?: throw AttachmentChangedException()
+        val key = UsbPermissionPolicy.key(device.deviceId, device.deviceName)
+        val serial = UsbDeviceIdentity.serialNumber(device)?.trim().orEmpty()
+        if (expected == null ||
+            pinned.generation != expected.generation ||
+            key != expected.key ||
+            (expected.serial != null &&
+                (serial.isEmpty() || serial != expected.serial))
+        ) {
+            throw AttachmentChangedException()
+        }
     }
 
     fun onIntent(intent: UiIntent) {
@@ -441,11 +603,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     @Volatile var result: String? = null
 
                     override suspend fun run() {
-                        // Release the FAT session and its USB claim before raw/partition work.
-                        requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                        val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
-                        val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
-                        val disk = UsbDiskSession.open(mgr, dev)
+                        // Close the FAT session, revalidate the confirmed attachment against
+                        // the live snapshot, and take the exclusive USB claim in one step.
+                        val raw = openRawDisk { live ->
+                            require(live.generation == confirmed.identity.attachGeneration) {
+                                "USB attach generation changed"
+                            }
+                            live.device ?: throw usb.device.DiskException.Disconnected()
+                        } ?: throw AttachmentChangedException()
+                        val dev = raw.device
+                        val disk = raw.disk
                         try {
                             // Confirmation uses DeviceIdentity.identity (label#serial). RESTORE
                             // resume also requires the checkpoint disk identity to match the
@@ -1089,7 +1256,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             UiEffect.RescueBackup ->
-                submitReadOnlyDiskOperation(OperationTitle.RescueBackup) { disk, operation, _ ->
+                submitReadOnlyDiskOperation(
+                    OperationTitle.RescueBackup,
+                    beforeOpen = ::requirePinnedBackupAttachment,
+                ) { disk, operation, _ ->
                     val folder = requireBackupFolder()
                     val stamp = "${timestamp()}-${System.nanoTime()}"
                     val folderName = BackupArchive.folderName(stamp)
@@ -1165,7 +1335,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
             UiEffect.CaptureGptBackup ->
-                submitReadOnlyDiskOperation(OperationTitle.GptCriticalBackup) { disk, operation, _ ->
+                submitReadOnlyDiskOperation(
+                    OperationTitle.GptCriticalBackup,
+                    beforeOpen = ::requirePinnedBackupAttachment,
+                ) { disk, operation, _ ->
                     val folder = requireBackupFolder()
                     val blob = GptBackup.backupCriticalSectors(disk)
                     val info = GptCriticalBackup.inspectCaptured(
@@ -1303,11 +1476,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     @Volatile var result: String? = null
 
                     override suspend fun run() {
-                        requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                        require(attachGeneration == confirmed.identity.attachGeneration) { "USB attach generation changed" }
-                        val dev = attachedDevice ?: throw usb.device.DiskException.Disconnected()
-                        val mgr = usbManager ?: throw usb.device.DiskException.Disconnected()
-                        val disk = UsbDiskSession.open(mgr, dev)
+                        val raw = openRawDisk { live ->
+                            require(live.generation == confirmed.identity.attachGeneration) {
+                                "USB attach generation changed"
+                            }
+                            live.device ?: throw DiskException.Disconnected()
+                        } ?: throw AttachmentChangedException()
+                        val disk = raw.disk
+                        val dev = raw.device
                         try {
                             require(disk.geometry.capacityBytes == confirmed.identity.capacityBytes) { "confirmed capacity does not match live device" }
                             // Trust boundary: serial read must not swallow SecurityException into label-only.
@@ -1365,8 +1541,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             overwriteCause = overwriteCause.cause
                         }
                         if (overwriteCause is usb.ventoy.VentoyOverwriteRequiredException &&
-                            attachGeneration == operationGeneration &&
-                            attachedDevice != null &&
+                            attachmentLive(operationGeneration) &&
                             state.device?.identity == deviceIdentity
                         ) {
                             onIntent(
@@ -1744,14 +1919,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // a different device never reaches this branch.
             return
         }
-        val gen = if (sameDevice) attachGeneration else ++attachGeneration
         if (isNewDevice) {
             cancelActiveInspection(cancelUsb = true)
             usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
             activeHandles.clear()
             activeHandle = null
         }
-        attachedDevice = device
+        // One volatile publish: the device and its generation become visible together, so
+        // no reader can observe the new stick with the previous generation (or the reverse).
+        val gen = attachment.publish(device, bumpGeneration = !sameDevice)
         // Fence after the device switch: any mount still opening for the previous stick was
         // allocated at or below it and is closed below; a mount that can now succeed allocates
         // a larger epoch, so the delayed close never touches this attach's volume.
@@ -1799,8 +1975,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val op = object : DiskOperation(name = OperationTitle.ProbeDevice.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val disk = UsbDiskSession.open(mgr, device)
+                val raw = openRawDisk { live ->
+                    require(live.generation == gen) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == deviceKey(device)) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val capacity = disk.geometry.capacityBytes
                     val tableResult = runCatching { PartitionTable.read(disk) }
@@ -1808,7 +1988,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val isTransport = failure is DiskException || failure?.cause is DiskException
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
                     withContext(Dispatchers.Main.immediate) {
-                        if (attachGeneration != gen || attachedDevice?.deviceId != device.deviceId) {
+                        if (!attachmentIs(gen, device)) {
                             return@withContext
                         }
                         if (this@MainViewModel.state.isRunning) {
@@ -1886,7 +2066,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 when (val outcome = handle.await()) {
                     is usb.operation.OperationState.Failed -> {
                         withContext(Dispatchers.Main.immediate) {
-                            if (attachGeneration == gen && attachedDevice?.deviceId == device.deviceId) {
+                            if (attachmentIs(gen, device)) {
                                 val isTransport =
                                     outcome.cause is DiskException ||
                                         outcome.cause.cause is DiskException
@@ -1919,7 +2099,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     is usb.operation.OperationState.Cancelled -> {
                         withContext(Dispatchers.Main.immediate) {
-                            if (attachGeneration == gen && attachedDevice?.deviceId == device.deviceId) {
+                            if (attachmentIs(gen, device)) {
                                 onIntent(
                                     UiIntent.DeviceChanged(
                                         presence = DevicePresence.Disconnected,
@@ -1942,12 +2122,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshPartitions() {
         val dev = attachedDevice ?: return
-        val mgr = usbManager ?: return
+        if (usbManager == null) return
         val gen = attachGeneration
         val op = object : DiskOperation(name = OperationTitle.RefreshPartitions.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == gen) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == deviceKey(dev)) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val capacity = disk.geometry.capacityBytes
                     val tableResult = runCatching { PartitionTable.read(disk) }
@@ -1955,7 +2139,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val isTransport = failure is DiskException || failure?.cause is DiskException
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
                     withContext(Dispatchers.Main.immediate) {
-                        if (attachGeneration != gen || attachedDevice?.deviceId != dev.deviceId) {
+                        if (!attachmentIs(gen, dev)) {
                             return@withContext
                         }
                         val identity =
@@ -2023,7 +2207,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed) {
                     withContext(Dispatchers.Main.immediate) {
-                        if (attachGeneration == gen && attachedDevice?.deviceId == dev.deviceId) {
+                        if (attachmentIs(gen, dev)) {
                             val isTransport =
                                 outcome.cause is DiskException ||
                                     outcome.cause.cause is DiskException
@@ -2058,8 +2242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
-        ++attachGeneration
-        attachedDevice = null
+        attachment.publish(null, bumpGeneration = true)
         lastUsageKey = null
         usageInFlightKey = null
         cancelActiveInspection(cancelUsb = true)
@@ -2115,12 +2298,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         partitionId: String,
         writable: Boolean,
         pin: AttachmentPin,
+        lease: UsbExclusiveClaim.Lease,
     ): MountedFilesVolume {
         val device = attachedDevice ?: throw DiskException.Disconnected()
         val manager = usbManager ?: throw DiskException.Disconnected()
         // Pin check before the USB claim: a paused operation must not open another stick.
         requireAttachment(pin, device)
-        val disk = UsbDiskSession.open(manager, device)
+        val disk = UsbDiskSession.open(manager, device, lease)
         val volume = try {
             val index = partitionId.toIntOrNull()
                 ?: throw IllegalArgumentException("invalid partition id $partitionId")
@@ -2150,13 +2334,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return MountedFilesVolume(partitionId, disk, volume, writable = writable)
     }
 
+    /** Raw disk that owns the USB claim plus the live device it was opened for. */
+    private class RawUsbSession(val disk: UsbDisk, val device: UsbDevice)
+
+    /**
+     * Close the mounted files volume, revalidate the attachment, and open a raw disk while
+     * the exclusive USB claim is held.
+     *
+     * Close and claim are one files-session critical section, so a usage probe or files
+     * operation cannot mount the stick between them. [revalidate] then runs after the close
+     * (the umount/sync can take seconds) and before the open, against one atomic attachment
+     * snapshot, and returns the device to open or null to abort without opening. The same
+     * snapshot is checked once more right after the open: a detach/replug during the USB
+     * open closes the fresh disk and throws before the caller can mutate anything.
+     *
+     * The returned disk releases the claim when it is closed; null means [revalidate]
+     * aborted (the claim is already released, nothing was opened).
+     */
+    private fun openRawDisk(
+        revalidate: (AttachmentState.Snapshot<UsbDevice>) -> UsbDevice? = { it.device },
+    ): RawUsbSession? =
+        filesSession.openAfterCloseClaimed { lease ->
+            val pinned = attachment.snapshot()
+            val device = revalidate(pinned)
+            if (device == null) {
+                lease.close()
+                return@openAfterCloseClaimed null
+            }
+            val manager = usbManager ?: throw DiskException.Disconnected()
+            val disk =
+                try {
+                    UsbDiskSession.open(manager, device, lease)
+                } catch (failure: Throwable) {
+                    lease.close()
+                    throw failure
+                }
+            // Second fence: the open itself can straddle a detach/replug.
+            val live = attachment.snapshot()
+            if (live.generation != pinned.generation ||
+                deviceKey(live.device) != deviceKey(device)
+            ) {
+                var closeFailure: Throwable? = null
+                try {
+                    disk.close()
+                } catch (t: Throwable) {
+                    closeFailure = t
+                }
+                throw AttachmentChangedException().also { changed ->
+                    closeFailure?.let(changed::addSuppressed)
+                }
+            }
+            RawUsbSession(disk, device)
+        }
+
     /** Fail unless [pin] still describes the live attachment opened for [device]. */
     private fun requireAttachment(pin: AttachmentPin, device: UsbDevice) {
-        val live = attachedDevice
-        if (attachGeneration != pin.attachGeneration ||
+        // One snapshot: never compare the pin against a device/generation pair from
+        // different publishes.
+        val live = attachment.snapshot()
+        if (live.generation != pin.attachGeneration ||
             deviceKey(device) != pin.deviceKey ||
-            live == null ||
-            deviceKey(live) != pin.deviceKey
+            deviceKey(live.device) != pin.deviceKey
         ) {
             throw AttachmentChangedException()
         }
@@ -2228,9 +2466,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         key: FilesystemUsageKey,
         generation: Long,
     ) {
-        val expectedGeneration = attachGeneration
+        val live = attachment.snapshot()
+        val expectedGeneration = live.generation
         val expectedIdentity = state.device?.identity
-        val pin = currentAttachmentPin()
+        val pin = live.device?.let { AttachmentPin(live.generation, deviceKey(it)!!) }
         scope.launch(Dispatchers.IO) {
             val snapshot =
                 filesSession.withLock {
@@ -2588,16 +2827,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadWindowsImageCandidates(generation: Long) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val identity = state.device?.identity
         windowsImageHandle?.cancel()
         val op = object : DiskOperation(OperationTitle.ListDataPartitionFiles.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val listing = usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
                         usb.image.RawSourceChooser.list(
@@ -2608,8 +2850,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isActive = { isActive() },
                         )
                     }
-                    if (attachGeneration == expectedAttach &&
-                        deviceKey(attachedDevice) == expectedKey &&
+                    if (attachmentMatches(expectedAttach, expectedKey) &&
                         this@MainViewModel.state.device?.identity == identity
                     ) {
                         post(
@@ -2642,7 +2883,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachGeneration == expectedAttach &&
+                    attachmentMatches(expectedAttach, expectedKey) &&
                     state.device?.identity == identity
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
@@ -2662,19 +2903,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadWindowsImageLinks(generation: Long) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val identity = state.device?.identity
         val op = object : DiskOperation(OperationTitle.ReadXmlBindings.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val links = usb.ventoy.VentoySetup.readLinks(disk)
-                    if (attachGeneration == expectedAttach &&
-                        deviceKey(attachedDevice) == expectedKey &&
+                    if (attachmentMatches(expectedAttach, expectedKey) &&
                         this@MainViewModel.state.device?.identity == identity
                     ) {
                         post(
@@ -2698,7 +2941,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachGeneration == expectedAttach &&
+                    attachmentMatches(expectedAttach, expectedKey) &&
                     state.device?.identity == identity
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
@@ -2898,16 +3141,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         try {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                // Final check right before the direct open: a cancel/replug during the queue
-                // wait must never open a stale device.
-                if (!inspectionOwner.owned(ticket)) {
-                    if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
-                    return
-                }
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                // Ownership and attachment are revalidated after the mount close (which can
+                // take seconds): a cancel/replug during the queue wait or the close must
+                // never open a stale device.
+                val raw = openRawDisk { live ->
+                    when {
+                        !inspectionOwner.owned(ticket) -> {
+                            if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
+                            null
+                        }
+                        live.device == null ||
+                            live.generation != ticket.attachGeneration ||
+                            deviceKey(live.device) != ticket.deviceKey -> {
+                            reportAttachmentChanged()
+                            null
+                        }
+                        else -> live.device
+                    }
+                } ?: return
+                val disk = raw.disk
                 val exists =
                     try {
                         usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
@@ -3050,8 +3302,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val resolver = getApplication<Application>().contentResolver
         val opTitle = OperationTitle.ImportTarget(proposal.targetName)
         val label = opTitle.logLabel
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val expectedIdentity = proposal.identity
         val expectedPickSession = proposal.pickSessionId
         val op = object : DiskOperation(name = label) {
@@ -3059,24 +3312,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var copiedPath: String? = null
 
             override suspend fun run() {
-                require(attachGeneration == expectedAttach) {
-                    "USB attach generation changed before the copy"
-                }
-                require(deviceKey(attachedDevice) == expectedKey) {
-                    "USB device changed before the copy"
-                }
-                require(this@MainViewModel.state.device?.identity == expectedIdentity) {
-                    "USB identity changed before the copy"
-                }
                 expectedPickSession?.let { session ->
                     require(this@MainViewModel.state.filesPickMode?.sessionId == session) {
                         "Pick session changed before the copy"
                     }
                 }
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) {
+                        "USB attach generation changed before the copy"
+                    }
+                    require(deviceKey(live.device) == expectedKey) {
+                        "USB device changed before the copy"
+                    }
+                    require(this@MainViewModel.state.device?.identity == expectedIdentity) {
+                        "USB identity changed before the copy"
+                    }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val probe = usb.ventoy.VentoyLayout.probe(disk)
                         ?: throw usb.ventoy.IncompatibleVentoyException(
@@ -3102,8 +3355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bytesTotal = proposal.sizeBytes ?: -1L
                     val outcome = usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
                         require(
-                            attachGeneration == expectedAttach &&
-                                deviceKey(attachedDevice) == expectedKey &&
+                            attachmentMatches(expectedAttach, expectedKey) &&
                                 this@MainViewModel.state.device?.identity == expectedIdentity,
                         ) {
                             "USB attachment changed before the copy reached the write"
@@ -3239,10 +3491,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk() ?: throw DiskException.Disconnected()
+                val disk = raw.disk
                 try {
                     val changed = usb.ventoy.VentoySetup.unlinkImages(
                         disk = disk,
@@ -3318,10 +3568,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk() ?: throw DiskException.Disconnected()
+                val disk = raw.disk
                 try {
                     usb.ventoy.VentoySetup.saveControls(
                         disk = disk,
@@ -3371,17 +3619,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadAutounattend(xmlName: String, generation: Long) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val op = object : DiskOperation(OperationTitle.ReadUnattendXml.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val read = usb.ventoy.VentoySetup.readAutounattend(disk, xmlName)
-                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                    if (attachmentMatches(expectedAttach, expectedKey)) {
                         post(
                             UiIntent.AutounattendLoaded(
                                 xmlName = xmlName,
@@ -3407,8 +3658,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachGeneration == expectedAttach &&
-                    deviceKey(attachedDevice) == expectedKey
+                    attachmentMatches(expectedAttach, expectedKey)
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     val problem =
@@ -3438,14 +3688,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadAutounattendCandidates(xmlName: String, generation: Long) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val op = object : DiskOperation(OperationTitle.ListVentoyImages.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val templatePath = usb.ventoy.VentoySetup.xmlPath(xmlName)
                     val links = usb.ventoy.VentoySetup.readLinks(disk)
@@ -3485,7 +3738,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     },
                             )
                         }
-                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                    if (attachmentMatches(expectedAttach, expectedKey)) {
                         post(
                             UiIntent.AutounattendCandidatesLoaded(
                                 xmlName,
@@ -3505,8 +3758,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachGeneration == expectedAttach &&
-                    deviceKey(attachedDevice) == expectedKey
+                    attachmentMatches(expectedAttach, expectedKey)
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
@@ -3533,20 +3785,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val params = effect.autounattendParams
         val imagePaths = effect.imagePaths
         val overwriteXml = effect.overwriteXml
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val opTitle = OperationTitle.GenerateUnattendXml
         val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     usb.ventoy.VentoySetup.generateAutounattend(
                         disk = disk,
@@ -3607,18 +3860,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 
     private fun loadVentoyGlobalSettings(requestToken: Long) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val settings = usb.ventoy.VentoySetup.readGlobalSettings(disk)
-                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                    if (attachmentMatches(expectedAttach, expectedKey)) {
                         post(
                             UiIntent.VentoyGlobalSettingsLoaded(
                                 settings,
@@ -3638,8 +3894,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachGeneration == expectedAttach &&
-                    deviceKey(attachedDevice) == expectedKey
+                    attachmentMatches(expectedAttach, expectedKey)
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
@@ -3663,18 +3918,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadVentoyFolders(requestToken: Long, path: String) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ListVentoyFolders.logLabel) {
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val folders = usb.ventoy.VentoySetup.listSubdirectories(disk, path)
-                    if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
+                    if (attachmentMatches(expectedAttach, expectedKey)) {
                         post(
                             UiIntent.VentoyFoldersLoaded(
                                 folders,
@@ -3695,8 +3953,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachGeneration == expectedAttach &&
-                    deviceKey(attachedDevice) == expectedKey
+                    attachmentMatches(expectedAttach, expectedKey)
                 ) {
                     val problem =
                         (outcome.cause as? usb.ventoy.VentoySetup.FolderUnavailableException)
@@ -3726,19 +3983,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     private fun applyVentoyControls(settings: List<VentoyControlSetting>) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val title = OperationTitle.SetVentoyGlobalSetting
         val op = object : DiskOperation(title.logLabel) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     val changed =
                         usb.ventoy.VentoySetup.applyGlobalControls(
@@ -3803,17 +4061,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         // Pinned like generate and raw write: a different stick between tap and run must fail,
         // not silently edit another disk that happens to hold the same path.
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val bindTitle = OperationTitle.BindImagesToUnattendXml
         val op = object : DiskOperation(bindTitle.logLabel) {
             override suspend fun run() {
-                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     usb.ventoy.VentoySetup.bindImages(
                         disk = disk,
@@ -3833,17 +4092,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun unbindAutounattend(xmlName: String, imagePath: String) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val unbindTitle = OperationTitle.UnbindImageFromUnattendXml
         val op = object : DiskOperation(unbindTitle.logLabel) {
             override suspend fun run() {
-                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val dev = attachedDevice ?: throw DiskException.Disconnected()
-                val mgr = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(mgr, dev)
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
                 try {
                     // false means nothing was written: reporting "Completed" there would claim
                     // a change that never happened.
@@ -4188,6 +4448,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun submitReadOnlyDiskOperation(
         title: OperationTitle,
         cancelable: Boolean = true,
+        /**
+         * Runs after the files mount is closed and before the raw USB open with the **same**
+         * attachment snapshot the open is pinned to: revalidate against this value only, so
+         * the check and the open cannot observe two different publishes. Throw to abort; the
+         * USB claim is released and nothing is opened.
+         */
+        beforeOpen: ((AttachmentState.Snapshot<UsbDevice>) -> Unit)? = null,
         body: (UsbDisk, DiskOperation, ReadOnlySink) -> String,
     ) {
         val sink = ReadOnlySink()
@@ -4196,10 +4463,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
-                val device = attachedDevice ?: throw DiskException.Disconnected()
-                val manager = usbManager ?: throw DiskException.Disconnected()
-                val disk = UsbDiskSession.open(manager, device)
+                val raw =
+                    openRawDisk { live ->
+                        beforeOpen?.invoke(live)
+                        live.device ?: throw DiskException.Disconnected()
+                    } ?: throw DiskException.Disconnected()
+                val disk = raw.disk
                 try {
                     result = body(disk, this, sink)
                 } finally {
@@ -4422,20 +4691,37 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Common SAF tree for image+map folders and GPT copies. */
-    private enum class PendingFolderAction {
-        None,
-        RescueBackup,
-        GptCopy,
+    private val backupFolderLaunches by lazy {
+        BackupFolderLaunchQueue(viewModel.backupFolderLaunchToken)
     }
 
-    private var pendingFolderAction = PendingFolderAction.None
+    /**
+     * A restored pending action was dropped after process death. Kept until the picker's
+     * late result (or a retry) so a folder rebind is not reported as a successful start.
+     */
+    private var lostBackupAction = false
 
     private val backupFolderPicker = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
-        val action = pendingFolderAction
-        pendingFolderAction = PendingFolderAction.None
-        if (uri == null) return@registerForActivityResult
+        // Consumed for every result (including cancel) so a stale context cannot outlive it.
+        val pending = backupFolderLaunches.take()
+        if (uri == null) {
+            lostBackupAction = false
+            return@registerForActivityResult
+        }
+        // Fail closed before touching the grant/folder: the stick may have been swapped
+        // while the system picker was in front.
+        if (pending != null) {
+            val check = checkBackupTarget(pending)
+            if (check != BackupTargetCheck.Attached) {
+                lostBackupAction = false
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(backupTargetMessage(check))),
+                )
+                return@registerForActivityResult
+            }
+        }
         runCatching {
             contentResolver.takePersistableUriPermission(
                 uri,
@@ -4443,15 +4729,75 @@ class MainActivity : ComponentActivity() {
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
         }
-        if (viewModel.onBackupFolderPicked(uri)) {
-            when (action) {
-                PendingFolderAction.RescueBackup ->
-                    viewModel.onIntent(UiIntent.StartRescueBackup)
-                PendingFolderAction.GptCopy ->
-                    viewModel.onIntent(UiIntent.CaptureGptBackup)
-                PendingFolderAction.None -> Unit
-            }
+        if (!viewModel.onBackupFolderPicked(uri)) {
+            return@registerForActivityResult
         }
+        if (pending == null) {
+            // The action died with the old process: keep the folder choice but say so.
+            if (lostBackupAction) {
+                lostBackupAction = false
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderActionLost)),
+                )
+            }
+            return@registerForActivityResult
+        }
+        // Persisting the grant/querying the tree took time; re-check before the write starts.
+        val check = checkBackupTarget(pending)
+        if (check != BackupTargetCheck.Attached) {
+            viewModel.onIntent(
+                UiIntent.Status(UiMessage.Key(backupTargetMessage(check))),
+            )
+            return@registerForActivityResult
+        }
+        viewModel.requestPinnedBackupAction(pending.action, pending)
+    }
+
+    private enum class BackupTargetCheck { Attached, Changed, Unverifiable }
+
+    /**
+     * The receiver is unregistered between onStop/onStart, so state.device may predate the
+     * picker. Enumerate the live device and require the pinned key, identity, serial and the
+     * current state generation before anything is persisted or dispatched. Without a serial
+     * a same-key replug is unobservable, so that target is rejected as unverifiable.
+     */
+    private fun checkBackupTarget(pending: PendingBackupFolderAction): BackupTargetCheck {
+        if (pending.action == BackupFolderAction.ChangeFolder) {
+            return BackupTargetCheck.Attached
+        }
+        val live = liveBackupDevice(pending) ?: return BackupTargetCheck.Changed
+        val liveKey = UsbPermissionPolicy.key(live.deviceId, live.deviceName)
+        val liveIdentity = UsbDeviceIdentity.identityString(live)
+        if (pending.identity != liveIdentity) return BackupTargetCheck.Changed
+        val liveSerial =
+            UsbDeviceIdentity.serialNumber(live)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return BackupTargetCheck.Unverifiable
+        val attachment = viewModel.attachmentSnapshot()
+        if (attachment.device == null) return BackupTargetCheck.Changed
+        return if (pending.accepts(liveIdentity, attachment.generation, liveKey, liveSerial)) {
+            BackupTargetCheck.Attached
+        } else {
+            BackupTargetCheck.Changed
+        }
+    }
+
+    private fun backupTargetMessage(check: BackupTargetCheck): UiMessageKey =
+        if (check == BackupTargetCheck.Unverifiable) {
+            UiMessageKey.BackupFolderTargetUnverifiable
+        } else {
+            UiMessageKey.BackupFolderTargetChanged
+        }
+
+    /** The exact pinned device, enumerated live instead of read from stale attach state. */
+    private fun liveBackupDevice(pending: PendingBackupFolderAction): UsbDevice? {
+        val pinnedKey = pending.deviceKey ?: return null
+        return (getSystemService(Context.USB_SERVICE) as? UsbManager)
+            ?.deviceList
+            ?.values
+            ?.firstOrNull {
+                UsbPermissionPolicy.key(it.deviceId, it.deviceName) == pinnedKey &&
+                    MassStorageDiscovery.findBotInterface(it) != null
+            }
     }
 
     /** Folder containing exactly one image and its map; read-only for the restore. */
@@ -4634,16 +4980,57 @@ class MainActivity : ComponentActivity() {
      * Create actions need the common tree. When it is missing or its grant is gone, show
      * the tree picker first and resume exactly that action after the user chooses.
      */
-    private fun startWithBackupFolder(action: PendingFolderAction) {
+    private fun startWithBackupFolder(action: BackupFolderAction) {
         if (viewModel.hasUsableBackupFolder()) {
-            when (action) {
-                PendingFolderAction.RescueBackup -> viewModel.onIntent(UiIntent.StartRescueBackup)
-                PendingFolderAction.GptCopy -> viewModel.onIntent(UiIntent.CaptureGptBackup)
-                PendingFolderAction.None -> Unit
-            }
+            viewModel.requestBackupAction(action)
         } else {
-            pendingFolderAction = action
-            backupFolderPicker.launch(null)
+            openBackupFolderPicker(action)
+        }
+    }
+
+    /**
+     * Records the pinned action before the picker opens. [BackupFolderAction.ChangeFolder]
+     * first cancels a pending write action: a manual folder change must never resume an
+     * earlier backup against a stick the user was no longer looking at.
+     */
+    private fun openBackupFolderPicker(action: BackupFolderAction) {
+        if (action == BackupFolderAction.ChangeFolder) backupFolderLaunches.cancel()
+        lostBackupAction = false
+        val live = viewModel.attachmentSnapshot()
+        val device = live.device
+        val start =
+            backupFolderLaunches.begin(
+                action = action,
+                identity = device?.let { UsbDeviceIdentity.identityString(it) },
+                attachGeneration = live.generation,
+                deviceKey =
+                    device?.let { UsbPermissionPolicy.key(it.deviceId, it.deviceName) },
+                serialNumber =
+                    device?.let { UsbDeviceIdentity.serialNumber(it) }?.trim(),
+            )
+        when (start) {
+            is BackupFolderLaunch.Starting -> {
+                if (runCatching { backupFolderPicker.launch(null) }.isFailure) {
+                    backupFolderLaunches.cancel()
+                    viewModel.onIntent(
+                        UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)),
+                    )
+                }
+            }
+            BackupFolderLaunch.Busy ->
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerBusy)),
+                )
+            BackupFolderLaunch.NoTarget ->
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderTargetChanged)),
+                )
+            BackupFolderLaunch.Unverifiable ->
+                viewModel.onIntent(
+                    UiIntent.Status(
+                        UiMessage.Key(UiMessageKey.BackupFolderTargetUnverifiable),
+                    ),
+                )
         }
     }
 
@@ -4700,11 +5087,31 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        pendingFolderAction =
-            savedInstanceState?.getString(STATE_PENDING_FOLDER_ACTION)?.let { stored ->
-                runCatching { PendingFolderAction.valueOf(stored) }
-                    .getOrDefault(PendingFolderAction.None)
-            } ?: PendingFolderAction.None
+        val restoredFolderAction =
+            savedState
+                ?.getString(STATE_PENDING_FOLDER_ACTION)
+                ?.let { stored -> runCatching { BackupFolderAction.valueOf(stored) }.getOrNull() }
+        lostBackupAction = savedState?.getBoolean(STATE_PENDING_FOLDER_LOST, false) ?: false
+        if (savedState != null && restoredFolderAction != null) {
+            // restore() drops the context when the token belongs to a dead process.
+            val restored =
+                backupFolderLaunches.restore(
+                    PendingBackupFolderAction(
+                        action = restoredFolderAction,
+                        identity = savedState.getString(STATE_PENDING_FOLDER_IDENTITY),
+                        attachGeneration = savedState.getLong(STATE_PENDING_FOLDER_ATTACH, 0L),
+                        deviceKey = savedState.getString(STATE_PENDING_FOLDER_DEVICE_KEY),
+                        serialNumber = savedState.getString(STATE_PENDING_FOLDER_SERIAL),
+                        sessionToken = savedState.getString(STATE_PENDING_FOLDER_TOKEN).orEmpty(),
+                    ),
+                )
+            if (!restored && restoredFolderAction != BackupFolderAction.ChangeFolder) {
+                lostBackupAction = true
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderActionLost)),
+                )
+            }
+        }
         requestPermissionsIfNeeded()
         setContent {
             AppShell(
@@ -4736,14 +5143,13 @@ class MainActivity : ComponentActivity() {
                     gptBackupPickerLauncher.launch(arrayOf("*/*"))
                 },
                 onPickBackupFolder = {
-                    pendingFolderAction = PendingFolderAction.None
-                    backupFolderPicker.launch(null)
+                    openBackupFolderPicker(BackupFolderAction.ChangeFolder)
                 },
                 onStartRescueBackup = {
-                    startWithBackupFolder(PendingFolderAction.RescueBackup)
+                    startWithBackupFolder(BackupFolderAction.RescueBackup)
                 },
                 onCreateGptCopy = {
-                    startWithBackupFolder(PendingFolderAction.GptCopy)
+                    startWithBackupFolder(BackupFolderAction.GptCopy)
                 },
                 onPickRestoreFolder = {
                     rescueArchiveFolderPicker.launch(null)
@@ -4776,6 +5182,21 @@ class MainActivity : ComponentActivity() {
             // A restored/returned screen must not stay busy forever if the result was lost.
             armWindowsImportTimeout(pending.requestCode)
         }
+        backupFolderLaunches.pending?.let { pending ->
+            if (pending.action == BackupFolderAction.ChangeFolder) {
+                // Nothing to resume: the result itself only rebinds the folder. Retiring the
+                // context here keeps a lost manual picker from blocking the next backup.
+                backupFolderLaunches.cancel()
+                return@let
+            }
+            val check = checkBackupTarget(pending)
+            if (check != BackupTargetCheck.Attached) {
+                backupFolderLaunches.cancel()
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(backupTargetMessage(check))),
+                )
+            }
+        }
     }
 
     override fun onPause() {
@@ -4793,7 +5214,15 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
-        outState.putString(STATE_PENDING_FOLDER_ACTION, pendingFolderAction.name)
+        backupFolderLaunches.pending?.let { pending ->
+            outState.putString(STATE_PENDING_FOLDER_ACTION, pending.action.name)
+            outState.putString(STATE_PENDING_FOLDER_IDENTITY, pending.identity)
+            outState.putLong(STATE_PENDING_FOLDER_ATTACH, pending.attachGeneration)
+            outState.putString(STATE_PENDING_FOLDER_DEVICE_KEY, pending.deviceKey)
+            outState.putString(STATE_PENDING_FOLDER_SERIAL, pending.serialNumber)
+            outState.putString(STATE_PENDING_FOLDER_TOKEN, pending.sessionToken)
+        }
+        outState.putBoolean(STATE_PENDING_FOLDER_LOST, lostBackupAction)
         windowsImportQueue.pending?.let { context ->
             outState.putString(STATE_PENDING_WINDOWS_KIND, context.kind.name)
             context.directory?.let {
@@ -4914,6 +5343,18 @@ class MainActivity : ComponentActivity() {
         private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
         private const val STATE_PENDING_DOWNLOAD = "usb.multitool.PENDING_DOWNLOAD"
         private const val STATE_PENDING_FOLDER_ACTION = "usb.multitool.PENDING_FOLDER_ACTION"
+        private const val STATE_PENDING_FOLDER_IDENTITY =
+            "usb.multitool.PENDING_FOLDER_IDENTITY"
+        private const val STATE_PENDING_FOLDER_ATTACH =
+            "usb.multitool.PENDING_FOLDER_ATTACH"
+        private const val STATE_PENDING_FOLDER_DEVICE_KEY =
+            "usb.multitool.PENDING_FOLDER_DEVICE_KEY"
+        private const val STATE_PENDING_FOLDER_SERIAL =
+            "usb.multitool.PENDING_FOLDER_SERIAL"
+        private const val STATE_PENDING_FOLDER_LOST =
+            "usb.multitool.PENDING_FOLDER_LOST"
+        private const val STATE_PENDING_FOLDER_TOKEN =
+            "usb.multitool.PENDING_FOLDER_TOKEN"
         private const val STATE_PENDING_WINDOWS_KIND = "usb.multitool.PENDING_WINDOWS_KIND"
         private const val STATE_PENDING_WINDOWS_DIRECTORY =
             "usb.multitool.PENDING_WINDOWS_DIRECTORY"

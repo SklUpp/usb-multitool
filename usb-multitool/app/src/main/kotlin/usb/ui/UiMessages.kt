@@ -91,6 +91,12 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_backup_folder_ready, *args.toTypedArray())
             UiMessageKey.BackupFolderPermissionLost ->
                 stringResource(R.string.msg_backup_folder_permission_lost)
+            UiMessageKey.BackupFolderTargetChanged ->
+                stringResource(R.string.msg_backup_folder_target_changed)
+            UiMessageKey.BackupFolderActionLost ->
+                stringResource(R.string.msg_backup_folder_action_lost)
+            UiMessageKey.BackupFolderTargetUnverifiable ->
+                stringResource(R.string.msg_backup_folder_target_unverifiable)
             UiMessageKey.CheckingArchive -> stringResource(R.string.msg_checking_archive)
             UiMessageKey.ArchiveEmpty -> stringResource(R.string.msg_archive_empty)
             UiMessageKey.ArchiveMissingImage -> stringResource(R.string.msg_archive_missing_image)

@@ -6,10 +6,13 @@ import java.nio.ByteOrder
 /**
  * Exclusive BOT/SCSI disk session.
  * Owns one [BotSession]; all reads/writes are serial at the caller (OperationExecutor).
+ * Holds the [UsbExclusiveClaim.Lease] for its whole life and releases it in [close], so no
+ * second session can claim the interface while this one is open.
  */
 open class UsbDisk(
     private val session: BotSession,
     geometry: BlockGeometry? = null,
+    private val lease: UsbExclusiveClaim.Lease? = null,
 ) : BlockDevice {
     private var closed = false
 
@@ -104,7 +107,13 @@ open class UsbDisk(
     fun close() {
         if (closed) return
         closed = true
-        session.close()
+        try {
+            session.close()
+        } finally {
+            // Even an unconfirmed session close must free the process claim: the channel is
+            // gone, and the session latch (not the lease) is what blocks a remount.
+            lease?.close()
+        }
     }
 
     val isClosed: Boolean get() = closed

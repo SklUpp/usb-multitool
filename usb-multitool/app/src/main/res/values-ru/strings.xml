@@ -369,6 +369,9 @@
     <string name="msg_choose_backup_folder">Сначала выберите папку резервных копий.</string>
     <string name="msg_backup_folder_ready">Папка резервных копий: %1$s</string>
     <string name="msg_backup_folder_permission_lost">Доступ к папке резервных копий потерян. Выберите папку заново.</string>
+    <string name="msg_backup_folder_target_changed">USB-устройство сменилось во время выбора папки резервных копий. Подключите его снова и повторите.</string>
+    <string name="msg_backup_folder_action_lost">Ожидавшее резервное копирование потеряно после перезапуска приложения. Выберите папку снова, чтобы запустить его.</string>
+    <string name="msg_backup_folder_target_unverifiable">У этого USB-устройства нет серийного номера, поэтому цель копии нельзя проверить. Используйте USB-устройство, которое сообщает серийный номер.</string>
     <string name="msg_checking_archive">Проверка папки архива…</string>
     <string name="msg_archive_empty">Выбранная папка пуста.</string>
     <string name="msg_archive_missing_image">В выбранной папке нет образа .img.</string>

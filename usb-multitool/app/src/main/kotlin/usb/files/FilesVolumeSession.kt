@@ -1,5 +1,6 @@
 package usb.files
 
+import usb.device.UsbExclusiveClaim
 import usb.fs.CloseAfterSuccessException
 import usb.fs.UsbFsVolume
 import usb.fs.mergeCloseFailure
@@ -54,16 +55,35 @@ sealed class CloseEpochResult {
  * of this session. Second [close] returns the same error (never null-success).
  * [volumeForLocked] / writable ops refuse remount until a new session (process /
  * ViewModel recreate). Fail-closed: no new mount after half-closed EXT/NTFS.
+ *
+ * USB ownership: every mount opens its disk under [claim], and raw/partition sessions take
+ * the same claim through [openAfterCloseClaimed]. That method closes the previous mount and
+ * takes the claim under [withLock], so a concurrent usage probe or files operation cannot
+ * mount the stick between the close and the raw claim; the USB open itself then runs outside
+ * the lock, with the claim (not the lock) keeping other openers out. A loser gets
+ * [UsbExclusiveClaim.BusyException] instead of a second `claimInterface`.
  */
 class FilesVolumeSession(
     /** Immutable identity of the attachment that is currently live, or null when detached. */
     private val currentAttachment: () -> AttachmentPin?,
-    private val openMounted: (partitionId: String, writable: Boolean, pin: AttachmentPin) -> MountedFilesVolume,
+    private val openMounted: (
+        partitionId: String,
+        writable: Boolean,
+        pin: AttachmentPin,
+        lease: UsbExclusiveClaim.Lease,
+    ) -> MountedFilesVolume,
+    /** Exclusive USB device ownership shared by this session's mounts and raw opens. */
+    val claim: UsbExclusiveClaim = UsbExclusiveClaim(),
 ) {
     private val lock = Any()
 
-    /** Immutable (volume, epoch, pin); one volatile read is a consistent snapshot. */
-    private class Mounted(val volume: MountedFilesVolume, val epoch: Long, val pin: AttachmentPin)
+    /** Immutable (volume, epoch, pin, claim lease); one volatile read is a consistent snapshot. */
+    private class Mounted(
+        val volume: MountedFilesVolume,
+        val epoch: Long,
+        val pin: AttachmentPin,
+        val lease: UsbExclusiveClaim.Lease,
+    )
 
     @Volatile private var mounted: Mounted? = null
     private var nextEpoch: Long = 0L
@@ -106,6 +126,33 @@ class FilesVolumeSession(
                 else -> null
             }
         }
+
+    /**
+     * Opens a raw/partition session with the exclusive USB claim held.
+     *
+     * Close and claim happen in **one** critical section: the mounted volume is closed and
+     * [claim] is acquired while [withLock] is held, so a concurrent mount/probe (which takes
+     * the same lock and the same claim) can never open the device between the close and this
+     * claim. A raced opener gets [UsbExclusiveClaim.BusyException].
+     *
+     * [open] then runs **outside** the lock with the claim held, so the slow USB open does
+     * not block a UI-thread close/probe; the claim, not the lock, keeps other openers out.
+     * If [open] throws, the lease is released here and the failure rethrown. An unconfirmed
+     * close throws through [requireFilesVolumeClosed] before anything opens.
+     */
+    fun <T> openAfterCloseClaimed(open: (UsbExclusiveClaim.Lease) -> T): T {
+        val lease =
+            withLock {
+                requireFilesVolumeClosed(close())
+                claim.tryAcquire()
+            }
+        return try {
+            open(lease)
+        } catch (t: Throwable) {
+            lease.close()
+            throw t
+        }
+    }
 
     /**
      * Closes only the mount captured as [epoch]; a newer mount (different epoch) is
@@ -154,6 +201,10 @@ class FilesVolumeSession(
         } catch (t: Throwable) {
             unconfirmedClose = t
             CloseEpochResult.ClosedFailed(t)
+        } finally {
+            // Idempotent with the disk's own release: the session must not keep the device
+            // claimed after the mount is dropped, even if the opener ignored the lease.
+            current.lease.close()
         }
     }
 
@@ -201,9 +252,20 @@ class FilesVolumeSession(
         } catch (closeErr: Throwable) {
             unconfirmedClose = closeErr
             throw refuseRemount(closeErr)
+        } finally {
+            current?.lease?.close()
         }
 
-        val opened = openMounted(partitionId, writable, pinned)
+        // Claim the device only after the previous mount is fully closed under this lock:
+        // no second session can hold the interface while this one opens.
+        val lease = claim.tryAcquire()
+        val opened =
+            try {
+                openMounted(partitionId, writable, pinned, lease)
+            } catch (t: Throwable) {
+                lease.close()
+                throw t
+            }
         // The stick can be swapped while the open runs (USB claim / table read): never
         // publish a volume for an attachment that is no longer the pinned one.
         if (currentAttachment() != pinned) {
@@ -211,10 +273,12 @@ class FilesVolumeSession(
                 opened.close()
             } catch (closeErr: Throwable) {
                 unconfirmedClose = closeErr
+            } finally {
+                lease.close()
             }
             throw AttachmentChangedException()
         }
-        mounted = Mounted(opened, epoch, pinned)
+        mounted = Mounted(opened, epoch, pinned, lease)
         acquireSink?.invoke(epoch)
         return opened.volume
     }

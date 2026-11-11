@@ -184,6 +184,12 @@ enum class UiMessageKey {
     BackupFolderReady,
     /** Persisted tree grant or document is gone; the user must choose it again. */
     BackupFolderPermissionLost,
+    /** The attached stick changed while the folder picker was open; nothing was started. */
+    BackupFolderTargetChanged,
+    /** A restored backup action belonged to a dead process and was dropped. */
+    BackupFolderActionLost,
+    /** GPT picker target has no serial, so same-key replug cannot be ruled out. */
+    BackupFolderTargetUnverifiable,
     /** Folder validation in progress; real bytes are not invented. */
     CheckingArchive,
     /** The picked folder contains no files. */

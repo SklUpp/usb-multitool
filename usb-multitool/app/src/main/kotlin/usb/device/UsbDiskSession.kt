@@ -6,18 +6,31 @@ import android.hardware.usb.UsbManager
 /**
  * Discovers a BOT mass-storage interface, claims it with force=true,
  * probes capacity, and returns an exclusive [UsbDisk].
+ *
+ * [lease] is the caller's [UsbExclusiveClaim.Lease]; it moves to the returned disk and is
+ * released by [UsbDisk.close]. Pass it only after the previous session is closed/claimed
+ * under a single critical section, or two sessions will interleave bulk transfers.
  */
 object UsbDiskSession {
-    fun open(manager: UsbManager, device: UsbDevice, lun: Byte = 0): UsbDisk {
+    fun open(
+        manager: UsbManager,
+        device: UsbDevice,
+        lease: UsbExclusiveClaim.Lease,
+        lun: Byte = 0,
+    ): UsbDisk {
         val target = MassStorageDiscovery.findBotInterface(device)
             ?: throw DiskException.IoFailure("no SCSI BOT mass-storage interface on device")
         val channel = AndroidUsbBulkChannel.open(manager, target)
         val session = BotSessionImpl(channel, lun = lun)
         return try {
             initialize(session)
-            UsbDisk(session)
+            UsbDisk(session, lease = lease)
         } catch (e: Exception) {
-            session.close()
+            try {
+                session.close()
+            } finally {
+                lease.close()
+            }
             throw e
         }
     }

@@ -369,6 +369,9 @@
     <string name="msg_choose_backup_folder">Choose a backup folder first.</string>
     <string name="msg_backup_folder_ready">Backup folder: %1$s</string>
     <string name="msg_backup_folder_permission_lost">Access to the backup folder was lost. Choose the folder again.</string>
+    <string name="msg_backup_folder_target_changed">The USB device changed while choosing the backup folder. Reconnect it and try again.</string>
+    <string name="msg_backup_folder_action_lost">The pending backup was lost after the app restarted. Choose the folder again to start it.</string>
+    <string name="msg_backup_folder_target_unverifiable">This USB device has no serial number, so the backup target cannot be verified. Use a USB device that reports a serial number.</string>
     <string name="msg_checking_archive">Checking the archive folder…</string>
     <string name="msg_archive_empty">The selected folder is empty.</string>
     <string name="msg_archive_missing_image">The selected folder has no .img image.</string>
