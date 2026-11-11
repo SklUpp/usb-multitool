@@ -1,6 +1,7 @@
 package usb.saf
 
 import android.content.ContentResolver
+import android.database.Cursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
@@ -43,18 +44,29 @@ class SafBackupFolder(
 
     fun displayName(): String? = queryDocument(rootDocumentUri)?.name
 
-    /** Provider-reported free space; null when the provider does not report it. */
+    /**
+     * Provider-reported free space for this tree, or null when it cannot be trusted.
+     *
+     * Free space belongs to the provider *root* row, and a tree's root is identified by
+     * [DocumentsContract.Root.COLUMN_DOCUMENT_ID], not by the tree document ID used as a
+     * root ID. All roots are enumerated and the single root whose document ID equals this
+     * tree's document ID is used. A nested tree (no matching root) or an ambiguous mapping
+     * (several roots) is unknown, never a guess.
+     */
     fun availableBytes(): Long? = runCatching {
+        val authority = treeUri.authority ?: return@runCatching null
+        val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
         val cursor = resolver.query(
-            rootDocumentUri,
-            arrayOf(DocumentsContract.Document.COLUMN_AVAILABLE_BYTES),
+            DocumentsContract.buildRootsUri(authority),
+            arrayOf(
+                DocumentsContract.Root.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Root.COLUMN_AVAILABLE_BYTES,
+            ),
             null,
             null,
             null,
         ) ?: return@runCatching null
-        cursor.use {
-            if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else null
-        }
+        cursor.use { availableBytesForTree(it, treeDocumentId) }
     }.getOrNull()
 
     fun listRootFiles(): List<SafDocument> = listChildren(rootDocumentUri)
@@ -190,6 +202,31 @@ class SafBackupFolder(
             )
         }
     }
+}
+
+/**
+ * Scans all provider roots and returns free space of the unique root whose
+ * [DocumentsContract.Root.COLUMN_DOCUMENT_ID] equals [treeDocumentId], else null.
+ *
+ * Unknown covers: absent document-id column, no matching root (nested tree), more than one
+ * matching root (ambiguous mapping), absent/null/negative available-bytes column.
+ */
+internal fun availableBytesForTree(cursor: Cursor, treeDocumentId: String): Long? {
+    val documentIdColumn = cursor.getColumnIndex(DocumentsContract.Root.COLUMN_DOCUMENT_ID)
+    if (documentIdColumn < 0) return null
+    val bytesColumn = cursor.getColumnIndex(DocumentsContract.Root.COLUMN_AVAILABLE_BYTES)
+    var matches = 0
+    var bytes: Long? = null
+    while (cursor.moveToNext()) {
+        if (cursor.isNull(documentIdColumn)) continue
+        if (cursor.getString(documentIdColumn) != treeDocumentId) continue
+        matches++
+        if (matches > 1) return null
+        if (bytesColumn >= 0 && !cursor.isNull(bytesColumn)) {
+            bytes = cursor.getLong(bytesColumn)
+        }
+    }
+    return if (matches == 1) bytes?.takeIf { it >= 0L } else null
 }
 
 /**
