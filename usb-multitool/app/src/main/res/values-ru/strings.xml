@@ -20,6 +20,9 @@
     <string name="log_copy_confirm">Копировать</string>
     <string name="log_clear">Очистить</string>
     <string name="log_clear_hint">Очистка выполняется сразу, без подтверждения. Новые записи могут появиться тут же, в том числе во время операции. Logcat Android не очищается.</string>
+    <string name="log_export_trace">Экспорт трассировки</string>
+    <string name="msg_trace_exported">Трассировка записана в выбранный файл.</string>
+    <string name="msg_trace_export_failed">Не удалось записать файл трассировки.</string>
 
     <string name="files_empty_folder">Папка пуста</string>
     <string name="files_listing">Читаю папку…</string>

@@ -130,6 +130,8 @@ fun AppShell(
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
     onPickRestoreFolder: () -> Unit = {},
+    /** Writes the redacted on-device trace to a user-chosen document (SAF). */
+    onExportTrace: () -> Unit = {},
 ) {
     val isDark = state.darkTheme
     val colors = if (isDark) darkDesignColors() else lightDesignColors()
@@ -311,6 +313,7 @@ fun AppShell(
                             focusRequester = logScreenFocus,
                             onBack = { logScreenOpen = false },
                             onIntent = onIntent,
+                            onExportTrace = onExportTrace,
                         )
                     }
                 }
@@ -882,7 +885,8 @@ internal fun StatusLogPanel(
 
 /**
  * Full log screen: every entry, an explicit "copy all" (warned about paths and serials),
- * and an immediate clear. Back leaves the screen without touching the selected tab.
+ * an export of the redacted on-device trace, and an immediate clear. Back leaves the
+ * screen without touching the selected tab.
  */
 @Composable
 private fun LogScreen(
@@ -890,6 +894,7 @@ private fun LogScreen(
     focusRequester: FocusRequester,
     onBack: () -> Unit,
     onIntent: (UiIntent) -> Unit,
+    onExportTrace: () -> Unit,
 ) {
     val context = LocalContext.current
     var confirmCopy by remember { mutableStateOf(false) }
@@ -943,6 +948,20 @@ private fun LogScreen(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(stringResource(R.string.log_clear))
+            }
+        }
+        // Own row: two text buttons beside the title already fill the header at RU lengths.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(
+                onClick = onExportTrace,
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(stringResource(R.string.log_export_trace))
             }
         }
         if (lines.isEmpty()) {

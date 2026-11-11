@@ -24,6 +24,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -82,7 +83,9 @@ import usb.ui.WindowsImportRequestCodes
 import usb.ui.AppLanguage
 import usb.device.UsbDiskSession
 import usb.device.UsbExclusiveClaim
+import usb.diagnostics.AppTraceLogger
 import usb.diagnostics.Diagnostics
+import usb.diagnostics.redactTrace
 import usb.diagnostics.Rescue
 import usb.diagnostics.RescueMap
 import usb.diagnostics.RescueOperations
@@ -268,6 +271,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val languagePrefs =
         application.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
 
+    /**
+     * Structured, redacted trace in app-private storage (`filesDir/trace`), two 512 KiB
+     * files. The screen journal stays short; this file carries the detail for diagnosis.
+     */
+    private val trace = AppTraceLogger(getApplication<Application>().filesDir)
+
+    /** Same redacted trace file, reachable from Activity-side picker callbacks. */
+    fun traceEvent(event: String, vararg fields: Pair<String, Any?>) {
+        trace.log(event, *fields)
+    }
+
     init {
         val folder = readBackupFolder()
         state = state.copy(
@@ -412,6 +426,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .apply()
         }
         onIntent(UiIntent.SetBackupFolder(uri.toString(), name, usable))
+        trace.log("picker.backup_folder", "uri" to uri.toString(), "usable" to usable)
+        onIntent(UiIntent.AppendLog(logLine("Backup folder: ${name ?: "unnamed"}")))
         return usable
     }
 
@@ -564,6 +580,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // released the SAF guard, so a stuck provider cannot block the next import.
             cancelActiveInspection(cancelUsb = false)
         }
+        if (intent is UiIntent.CancelOperation) {
+            trace.log(
+                "operation.cancel.request",
+                "device" to deviceKey(attachedDevice),
+                "gen" to attachGeneration,
+            )
+        }
         if (intent is UiIntent.OperationUpdated && intent.progress != null) {
             val current = intent.progress
             val previous = state.operation
@@ -573,6 +596,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ?: current.readScanResult?.toLogLine()
                 val message = "${current.label}: ${current.state}" + if (detail.isNullOrBlank()) "" else " — $detail"
                 android.util.Log.i("UsbMultitool", message)
+                // Structured detail for the trace file; the short line above goes to the journal.
+                trace.log(
+                    "operation",
+                    "name" to current.label,
+                    "state" to current.state,
+                    "bytes" to current.bytesTotal,
+                    "device" to deviceKey(attachedDevice),
+                    "gen" to attachGeneration,
+                    "detail" to detail,
+                )
                 state = UiReducer.reduce(state, UiIntent.AppendLog(logLine(message))).state
             }
         }
@@ -1659,8 +1692,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onSafImagePicked(uri: Uri) {
+        trace.log("picker.image", "uri" to uri.toString())
         val resolver = getApplication<Application>().contentResolver
         val (name, size) = contentInfo(resolver, uri)
+        onIntent(UiIntent.AppendLog(logLine("Image picked: ${name ?: "unnamed"}")))
         onIntent(UiIntent.SetImage(uri.toString(), name, size))
     }
 
@@ -1672,6 +1707,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun onGptBackupPicked(uri: Uri) {
         val target = uri.toString()
+        trace.log("picker.gpt_backup", "uri" to target)
         val generation = gptPickGeneration.incrementAndGet()
         val resolver = getApplication<Application>().contentResolver
         val diskSectorSize =
@@ -1700,6 +1736,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             withContext(Dispatchers.Main.immediate) {
                 if (generation == gptPickGeneration.get()) {
+                    onIntent(UiIntent.AppendLog(logLine("GPT backup picked: ${name ?: "unnamed"}")))
                     onIntent(UiIntent.SetBackupFile(target, inspection, generation))
                     if (inspection.error == null &&
                         inspection.summary != null &&
@@ -1741,6 +1778,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * inspection types as the old per-file pickers.
      */
     fun onRescueArchiveFolderPicked(uri: Uri) {
+        trace.log("picker.rescue_folder", "uri" to uri.toString())
+        onIntent(UiIntent.AppendLog(logLine("Restore folder picked")))
         val generation = rescueArchivePickGeneration.incrementAndGet()
         val resolver = getApplication<Application>().contentResolver
         onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
@@ -1928,6 +1967,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // One volatile publish: the device and its generation become visible together, so
         // no reader can observe the new stick with the previous generation (or the reverse).
         val gen = attachment.publish(device, bumpGeneration = !sameDevice)
+        trace.log(
+            "usb.attach",
+            "device" to key,
+            "gen" to gen,
+            "same" to sameDevice,
+            "permission" to hasPermission,
+        )
+        // Same-device re-probes (onStart) repeat the trace line but not the journal line.
+        if (!sameDevice) {
+            onIntent(UiIntent.AppendLog(logLine("USB attached: $key · generation $gen")))
+        }
         // Fence after the device switch: any mount still opening for the previous stick was
         // allocated at or below it and is closed below; a mount that can now succeed allocates
         // a larger epoch, so the delayed close never touches this attach's volume.
@@ -2242,7 +2292,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
-        attachment.publish(null, bumpGeneration = true)
+        val detachedKey = deviceKey(device ?: attachedDevice)
+        val detachedGeneration = attachment.publish(null, bumpGeneration = true)
+        trace.log("usb.detach", "device" to detachedKey, "gen" to detachedGeneration)
+        onIntent(
+            UiIntent.AppendLog(
+                logLine("USB detached: $detachedKey · generation $detachedGeneration"),
+            ),
+        )
         lastUsageKey = null
         usageInFlightKey = null
         cancelActiveInspection(cancelUsb = true)
@@ -2266,7 +2323,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun closeFilesVolumeUpToEpoch(fence: Long) {
         if (fence <= 0L) return
-        filesSession.withLock { filesSession.closeIfEpochAtMostLocked(fence) }
+        val result = filesSession.withLock { filesSession.closeIfEpochAtMostLocked(fence) }
+        trace.log("volume.close.epoch", "fence" to fence, "result" to result)
     }
 
     /** Drop the mounted volume (and its USB claim) without blocking user code. */
@@ -2277,6 +2335,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun closeFilesVolume(reportStatus: Boolean = false): Throwable? {
         val error = filesSession.close()
+        // A close failure is latched inside the session; the trace keeps the first cause.
+        trace.log("volume.close", "error" to error?.message, "latched" to (error != null))
         if (error != null && reportStatus) {
             post(
                 UiIntent.Status(
@@ -2300,6 +2360,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pin: AttachmentPin,
         lease: UsbExclusiveClaim.Lease,
     ): MountedFilesVolume {
+        trace.log(
+            "volume.mount.start",
+            "part" to partitionId,
+            "writable" to writable,
+            "gen" to pin.attachGeneration,
+        )
         val device = attachedDevice ?: throw DiskException.Disconnected()
         val manager = usbManager ?: throw DiskException.Disconnected()
         // Pin check before the USB claim: a paused operation must not open another stick.
@@ -2329,8 +2395,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (closeErr: Throwable) {
                 if (closeErr !== failure) failure.addSuppressed(closeErr)
             }
+            trace.log(
+                "volume.mount.fail",
+                "part" to partitionId,
+                "writable" to writable,
+                "error" to (failure.message ?: failure.javaClass.simpleName),
+            )
             throw failure
         }
+        trace.log("volume.mount.ok", "part" to partitionId, "writable" to writable)
         return MountedFilesVolume(partitionId, disk, volume, writable = writable)
     }
 
@@ -4814,6 +4887,31 @@ class MainActivity : ComponentActivity() {
         viewModel.onRescueArchiveFolderPicked(uri)
     }
 
+    /**
+     * SAF `CreateDocument` target for the redacted trace (`trace.log.1` + `trace.log`).
+     * Falls back to the in-memory journal when no trace file exists yet, so the export is
+     * never an empty file on a fresh install.
+     */
+    private val traceExportLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        val traceText = runCatching { AppTraceLogger(filesDir).snapshot() }.getOrDefault("")
+        val text = traceText.ifBlank {
+            redactTrace(viewModel.state.logLines.joinToString("\n"))
+        }
+        val written = runCatching {
+            contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+            } ?: error("cannot open the export target")
+        }.isSuccess
+        Toast.makeText(
+            this,
+            if (written) R.string.msg_trace_exported else R.string.msg_trace_export_failed,
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     /** One pending SAF context per Activity; codes come from the process-wide allocator. */
     private val windowsImportQueue: usb.ui.WindowsImportLaunchQueue by lazy {
         usb.ui.WindowsImportLaunchQueue(requestCodeAllocator(applicationContext))
@@ -4854,8 +4952,16 @@ class MainActivity : ComponentActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         val context = windowsImportQueue.take(requestCode) ?: return
         disarmWindowsImportTimeout()
-        if (resultCode != android.app.Activity.RESULT_OK) return
+        if (resultCode != android.app.Activity.RESULT_OK) {
+            viewModel.traceEvent("picker.windows_import.cancel", "requestCode" to requestCode)
+            return
+        }
         val uri = data?.data ?: return
+        viewModel.traceEvent(
+            "picker.windows_import",
+            "uri" to uri.toString(),
+            "kind" to context.kind,
+        )
         val liveDevice = viewModel.state.device
         if (context.identity != liveDevice?.identity ||
             context.attachGeneration != (liveDevice?.attachGeneration ?: 0L)
@@ -5153,6 +5259,9 @@ class MainActivity : ComponentActivity() {
                 },
                 onPickRestoreFolder = {
                     rescueArchiveFolderPicker.launch(null)
+                },
+                onExportTrace = {
+                    traceExportLauncher.launch("usb-multitool-trace.log")
                 },
             )
         }

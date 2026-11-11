@@ -20,6 +20,9 @@
     <string name="log_copy_confirm">Copy</string>
     <string name="log_clear">Clear</string>
     <string name="log_clear_hint">Clearing is immediate and needs no confirmation. New entries can appear right away, including during an operation. Android logcat is not cleared.</string>
+    <string name="log_export_trace">Export trace</string>
+    <string name="msg_trace_exported">Trace written to the selected file.</string>
+    <string name="msg_trace_export_failed">Could not write the trace file.</string>
 
     <string name="files_empty_folder">Folder is empty</string>
     <string name="files_listing">Reading the folder…</string>
