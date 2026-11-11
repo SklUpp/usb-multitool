@@ -71,9 +71,18 @@ class FatFsException(message: String) : Exception(message)
 
 class FileTooLargeException(message: String) : Exception(message)
 
+/** Rejects negative offsets and ranges that overflow before any value reaches JNI. */
+internal fun requireValidRange(offset: Long, length: Long) {
+    require(offset >= 0) { "negative offset: $offset" }
+    require(length >= 0) { "negative length: $length" }
+    require(offset <= Long.MAX_VALUE - length) { "offset overflow: $offset + $length" }
+}
+
 /** Pure write-policy helpers (host-testable without JNI). */
-internal fun resolvePlannedTotal(offset: Long, dataSize: Int, plannedTotalSize: Long): Long =
-    maxOf(offset + dataSize.toLong(), plannedTotalSize)
+internal fun resolvePlannedTotal(offset: Long, dataSize: Int, plannedTotalSize: Long): Long {
+    requireValidRange(offset, dataSize.toLong())
+    return maxOf(offset + dataSize.toLong(), plannedTotalSize)
+}
 
 internal fun requireWithinFileLimit(planned: Long, max: Long, kind: FatKind) {
     if (planned > max) {
@@ -217,6 +226,7 @@ class FatVolume internal constructor(
 
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
+        requireValidRange(offset, length.toLong())
         return FatFsNative.nativeRead(volumeHandle, path, offset, length)
     }
 
