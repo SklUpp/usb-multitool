@@ -35,8 +35,8 @@ class SchemeInitUiTest {
 
         val confirmed = UiReducer.reduce(result.state, UiIntent.ConfirmDestructive)
         assertNull(confirmed.state.pendingConfirmation)
-        assertEquals(DestructiveAction.INITIALIZE_PARTITION_TABLE, confirmed.effects.single().action)
-        assertEquals(PartitionScheme.Gpt, confirmed.effects.single().confirmation!!.targetScheme)
+        assertEquals(DestructiveAction.INITIALIZE_PARTITION_TABLE, (confirmed.effects.single() as UiEffect.SubmitDestructive).action)
+        assertEquals(PartitionScheme.Gpt, (confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.targetScheme)
     }
 
     @Test

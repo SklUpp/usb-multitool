@@ -57,8 +57,7 @@ class PhoneImportUiTest {
         )
 
         assertNull(result.state.pendingIsoImport)
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.InspectIsoImport, effect.kind)
+        val effect = result.effects.single() as UiEffect.InspectIsoImport
         assertEquals(URI, effect.uri)
         assertEquals(WindowsImportKind.XmlTemplate, effect.importKind)
         assertEquals("/ventoy", effect.importDirectory)
@@ -83,10 +82,9 @@ class PhoneImportUiTest {
         val result = UiReducer.reduce(requested.state, inspected(exists = false, generation = 1L))
 
         assertNull(result.state.pendingIsoImport)
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.ImportIso, effect.kind)
+        val effect = result.effects.single() as UiEffect.ImportIso
         assertEquals(false, effect.overwrite)
-        assertEquals("/ISO", effect.isoImport?.directory)
+        assertEquals("/ISO", effect.isoImport.directory)
     }
 
     @Test
@@ -106,10 +104,9 @@ class PhoneImportUiTest {
         val result = UiReducer.reduce(pending.state, UiIntent.ConfirmWindowsIsoImport(true))
 
         assertNull(result.state.pendingIsoImport)
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.ImportIso, effect.kind)
+        val effect = result.effects.single() as UiEffect.ImportIso
         assertEquals(true, effect.overwrite)
-        assertEquals("win11.iso", effect.isoImport?.targetName)
+        assertEquals("win11.iso", effect.isoImport.targetName)
     }
 
     @Test
@@ -161,7 +158,7 @@ class PhoneImportUiTest {
     @Test
     fun listingFailureIsKeptForThePickerInsteadOfLookingEmpty() {
         val requested = UiReducer.reduce(ready(), UiIntent.LoadWindowsIsoCandidates)
-        assertEquals(1L, requested.effects.single().requestGeneration)
+        assertEquals(1L, (requested.effects.single() as UiEffect.LoadWindowsIsoCandidates).requestGeneration)
         val failed = UiReducer.reduce(
             requested.state,
             UiIntent.WindowsIsoCandidatesLoaded(
@@ -189,8 +186,7 @@ class PhoneImportUiTest {
             ),
         )
 
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.BindAutounattend, effect.kind)
+        val effect = result.effects.single() as UiEffect.BindAutounattend
         assertEquals(true, effect.allowDestructiveTemplate)
         assertEquals(DIGEST, effect.expectedTemplateSha256)
         assertEquals(listOf("/ISO/win11.iso"), effect.imagePaths)

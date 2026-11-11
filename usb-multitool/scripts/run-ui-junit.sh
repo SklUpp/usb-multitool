@@ -37,7 +37,9 @@ for suite in \
   AutounattendPathTest \
   AutounattendReloadUiTest \
   VentoyUiStateTest \
-  PhoneImportUiTest
+  PhoneImportUiTest \
+  UiEffectTypingTest \
+  ServiceOperationMappingTest
 do
   test -f "$ROOT/app/src/test/kotlin/usb/ui/$suite.kt" || {
     echo "run-ui-junit: missing app/src/test/kotlin/usb/ui/$suite.kt" >&2
@@ -92,6 +94,8 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendReloadUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoyUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/UiEffectTypingTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/ServiceOperationMappingTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/fs/VolumeLabelTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ventoy/XmlPathTest.kt"
@@ -116,6 +120,8 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.AutounattendReloadUiTest \
   usb.ui.VentoyUiStateTest \
   usb.ui.PhoneImportUiTest \
+  usb.ui.UiEffectTypingTest \
+  usb.ui.ServiceOperationMappingTest \
   usb.fs.VolumeLabelTest \
   usb.ventoy.AutounattendTest \
   usb.ventoy.XmlPathTest

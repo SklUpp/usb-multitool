@@ -94,8 +94,8 @@ class FilesListFreshnessTest {
         assertTrue(refreshed.state.filesPending)
         assertNull(refreshed.state.filesError)
         assertEquals(base.filesListGeneration + 1L, refreshed.state.filesListGeneration)
-        assertEquals(UiEffect.Kind.LoadFiles, refreshed.effects.single().kind)
-        assertEquals("/ISO", refreshed.effects.single().path)
+        val refreshedFiles = refreshed.effects.single() as UiEffect.LoadFiles
+        assertEquals("/ISO", refreshedFiles.path)
     }
 
     @Test
@@ -114,8 +114,8 @@ class FilesListFreshnessTest {
         assertEquals(other.id, onlyOther.state.selectedPartitionId)
         assertEquals("/", onlyOther.state.currentPath)
         assertTrue(onlyOther.state.filesPending)
-        assertEquals(UiEffect.Kind.LoadFiles, onlyOther.effects.single().kind)
-        assertEquals("/", onlyOther.effects.single().path)
+        val onlyOtherFiles = onlyOther.effects.single() as UiEffect.LoadFiles
+        assertEquals("/", onlyOtherFiles.path)
     }
 
     @Test
@@ -134,7 +134,7 @@ class FilesListFreshnessTest {
 
         assertNull(empty.state.selectedPartitionId)
         assertFalse(empty.state.filesPending)
-        assertTrue(empty.effects.none { it.kind == UiEffect.Kind.LoadFiles })
+        assertTrue(empty.effects.none { it is UiEffect.LoadFiles })
     }
 
     @Test
@@ -155,8 +155,8 @@ class FilesListFreshnessTest {
         assertTrue(switched.state.files.isEmpty())
         assertTrue(switched.state.filesPending)
         assertEquals(5L, switched.state.filesListGeneration)
-        assertEquals(UiEffect.Kind.LoadFiles, switched.effects.single().kind)
-        assertEquals("/", switched.effects.single().path)
+        val switchedFiles = switched.effects.single() as UiEffect.LoadFiles
+        assertEquals("/", switchedFiles.path)
     }
 
     @Test
@@ -296,7 +296,7 @@ class FilesListFreshnessTest {
         assertTrue(opened.state.files.isEmpty())
         assertTrue(opened.state.filesPending)
         assertEquals(11L, opened.state.filesListGeneration)
-        assertEquals(UiEffect.Kind.LoadFiles, opened.effects.single().kind)
+        assertTrue(opened.effects.single() is UiEffect.LoadFiles)
     }
 
     @Test
@@ -317,7 +317,7 @@ class FilesListFreshnessTest {
         assertEquals(base.files, busy.state.files)
         assertFalse(busy.state.filesPending)
         assertEquals(4L, busy.state.filesListGeneration)
-        assertTrue(busy.effects.none { it.kind == UiEffect.Kind.LoadFiles })
+        assertTrue(busy.effects.none { it is UiEffect.LoadFiles })
 
         val readyAgain =
             UiReducer.reduce(
@@ -332,8 +332,8 @@ class FilesListFreshnessTest {
         assertTrue(readyAgain.state.files.isEmpty())
         assertTrue(readyAgain.state.filesPending)
         assertEquals(5L, readyAgain.state.filesListGeneration)
-        assertEquals(UiEffect.Kind.LoadFiles, readyAgain.effects.single().kind)
-        assertEquals("/ISO", readyAgain.effects.single().path)
+        val readyAgainFiles = readyAgain.effects.single() as UiEffect.LoadFiles
+        assertEquals("/ISO", readyAgainFiles.path)
     }
 
     @Test
@@ -381,8 +381,8 @@ class FilesListFreshnessTest {
         assertTrue(failed.state.filesPending)
         assertNull(failed.state.filesError)
         assertEquals(7L, failed.state.filesListGeneration)
-        assertEquals(UiEffect.Kind.LoadFiles, failed.effects.single().kind)
-        assertEquals("/", failed.effects.single().path)
+        val failedFiles = failed.effects.single() as UiEffect.LoadFiles
+        assertEquals("/", failedFiles.path)
 
         // Root failure sticks as a real error.
         val rootFail =
@@ -454,7 +454,7 @@ class FilesListFreshnessTest {
         assertEquals(data.id, permission.state.selectedPartitionId)
         assertEquals(device.capacityBytes, permission.state.device?.capacityBytes)
         assertFalse(permission.state.filesPending)
-        assertTrue(permission.effects.none { it.kind == UiEffect.Kind.LoadFiles })
+        assertTrue(permission.effects.none { it is UiEffect.LoadFiles })
     }
 
     @Test
@@ -622,7 +622,7 @@ class FilesListFreshnessTest {
         assertEquals("/", failed.state.currentPath)
         assertTrue(failed.state.filesPending)
         assertNull(failed.state.filesError)
-        assertEquals(UiEffect.Kind.LoadFiles, failed.effects.single().kind)
+        assertTrue(failed.effects.single() is UiEffect.LoadFiles)
     }
 
     @Test

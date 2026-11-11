@@ -280,16 +280,13 @@ object UiStateHostCheck {
         ) { "resultMessage must replace the bare Success label" }
 
         require(
-            UiReducer.reduce(ready, UiIntent.StartReadScan).effects.single().kind ==
-                UiEffect.Kind.ReadScan,
+            UiReducer.reduce(ready, UiIntent.StartReadScan).effects.single() is UiEffect.ReadScan,
         ) { "read scan must submit real disk work" }
         require(
-            UiReducer.reduce(ready, UiIntent.StartRescueBackup).effects.single().kind ==
-                UiEffect.Kind.RescueBackup,
+            UiReducer.reduce(ready, UiIntent.StartRescueBackup).effects.single() is UiEffect.RescueBackup,
         ) { "rescue backup must submit real disk work" }
         require(
-            UiReducer.reduce(ready, UiIntent.CaptureGptBackup).effects.single().kind ==
-                UiEffect.Kind.CaptureGptBackup,
+            UiReducer.reduce(ready, UiIntent.CaptureGptBackup).effects.single() is UiEffect.CaptureGptBackup,
         ) { "GPT capture must submit real disk work" }
 
         val noBackup =
@@ -307,8 +304,8 @@ object UiStateHostCheck {
             )
         require(restorePending.state.pendingConfirmation != null)
         require(
-            UiReducer.reduce(restorePending.state, UiIntent.ConfirmDestructive)
-                .effects.single().action == DestructiveAction.GPT_RESTORE,
+            (UiReducer.reduce(restorePending.state, UiIntent.ConfirmDestructive)
+                .effects.single() as UiEffect.SubmitDestructive).action == DestructiveAction.GPT_RESTORE,
         )
         require(DestructiveAction.entries.none { it.name.contains("FAKE") }) {
             "fake-capacity action must stay removed"
@@ -326,8 +323,9 @@ object UiStateHostCheck {
         require(disconnected.state.statusMessage == UiMessage.Key(UiMessageKey.DeviceDisconnected))
 
         val confirmed = UiReducer.reduce(pending.state, UiIntent.ConfirmDestructive)
-        require(confirmed.effects.single().kind == UiEffect.Kind.SubmitDestructive)
-        require(confirmed.effects.single().action == DestructiveAction.RAW_WRITE)
+        require(
+            (confirmed.effects.single() as UiEffect.SubmitDestructive).action == DestructiveAction.RAW_WRITE,
+        )
 
         val linkReq =
             UiReducer.reduce(
@@ -340,9 +338,9 @@ object UiStateHostCheck {
         require(!linkReq.state.pendingConfirmation!!.linkOverwrite)
         val link =
             UiReducer.reduce(linkReq.state, UiIntent.ConfirmDestructive)
-        require(link.effects.single().kind == UiEffect.Kind.LinkXml)
-        require(link.effects.single().isoName == "win11.iso")
-        require(!link.effects.single().linkOverwrite)
+        require(link.effects.single() is UiEffect.LinkXml)
+        require((link.effects.single() as UiEffect.LinkXml).imagePaths.first() == "win11.iso")
+        require(!(link.effects.single() as UiEffect.LinkXml).linkOverwrite)
 
         val efi = ready.copy(selectedPartitionId = "2")
         listOf(
@@ -386,11 +384,11 @@ object UiStateHostCheck {
         }
         require(
             UiReducer.reduce(efiEnabled, UiIntent.UploadFile("content://test/new.iso"))
-                .effects.single().kind == UiEffect.Kind.UploadFile,
+                .effects.single() is UiEffect.UploadFile,
         ) { "enabled VTOYEFI writes must be allowed" }
         require(
             UiReducer.reduce(efi, UiIntent.DownloadFile("win11.iso", "content://test/out"))
-                .effects.single().kind == UiEffect.Kind.DownloadFile,
+                .effects.single() is UiEffect.DownloadFile,
         ) { "download is a read path and must stay allowed" }
 
         val running = ready.copy(
@@ -415,7 +413,7 @@ object UiStateHostCheck {
 
         // RunSelfTest produces effect and updates status
         val selfTest = UiReducer.reduce(ready, UiIntent.RunSelfTest)
-        require(selfTest.effects.single().kind == UiEffect.Kind.RunSelfTest)
+        require(selfTest.effects.single() is UiEffect.RunSelfTest)
         require(selfTest.state.statusMessage == UiMessage.Key(UiMessageKey.SelfTestStarting))
         val blockedSelfTest = UiReducer.reduce(running, UiIntent.RunSelfTest)
         require(blockedSelfTest.effects.isEmpty()) { "self-test while running must be blocked" }
@@ -439,9 +437,9 @@ object UiStateHostCheck {
                 ready,
                 UiIntent.RenameEntry("win11.iso", "win.iso", renameBinding),
             ).effects.single()
-        require(renameEffect.kind == UiEffect.Kind.RenameEntry)
-        require(renameEffect.newName == "win.iso")
-        require(renameEffect.binding == renameBinding)
+        val rename = renameEffect as UiEffect.RenameEntry
+        require(rename.newName == "win.iso")
+        require(rename.binding == renameBinding)
         val staleDevice = ready.copy(device = ready.device!!.copy(attachGeneration = 1L))
         val staleRename =
             UiReducer.reduce(
@@ -505,7 +503,7 @@ object UiStateHostCheck {
         require(UiReducer.reduce(stagedBusy, UiIntent.SetStagedRawImage("/staging/new.img", "new")).state.stagedRawImagePath == "/staging/old.img")
         val stagedConfirmed = staged.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.RAW_WRITE))
         require(UiReducer.reduce(stagedConfirmed, UiIntent.ClearStagedRawImage()).state.stagedRawImagePath == "/staging/old.img")
-        require(cancelEffect.effects.single().kind == UiEffect.Kind.CancelOperation)
+        require(cancelEffect.effects.single() is UiEffect.CancelOperation)
 
         val corrupt = ready.copy(tableValid = false)
         val createBlocked = UiReducer.reduce(corrupt, UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
@@ -559,9 +557,9 @@ object UiStateHostCheck {
         require(fmtReq.state.pendingConfirmation!!.formatId == FilesystemId.EXFAT)
         require(fmtReq.state.pendingConfirmation!!.formatId == FilesystemId.EXFAT)
         val fmtGo = UiReducer.reduce(fmtReq.state, UiIntent.ConfirmDestructive)
-        require(fmtGo.effects.single().formatId == FilesystemId.EXFAT)
-        require(fmtGo.effects.single().confirmation?.partitionId == "1")
-        require(fmtGo.effects.single().confirmation?.partitionStartLba == null) { "missing geometry must remain explicit" }
+        require((fmtGo.effects.single() as UiEffect.SubmitDestructive).confirmation.formatId == FilesystemId.EXFAT)
+        require((fmtGo.effects.single() as UiEffect.SubmitDestructive).confirmation.partitionId == "1")
+        require((fmtGo.effects.single() as UiEffect.SubmitDestructive).confirmation.partitionStartLba == null) { "missing geometry must remain explicit" }
         val blockedSel =
             UiReducer.reduce(fmtReq.state, UiIntent.SelectFormatFilesystem(FilesystemId.EXT))
         require(blockedSel.state.selectedFormatId == FilesystemId.EXFAT)

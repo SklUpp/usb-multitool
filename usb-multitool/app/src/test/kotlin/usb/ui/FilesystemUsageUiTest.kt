@@ -59,8 +59,7 @@ class FilesystemUsageUiTest {
     fun requestBindsTheEffectToTheLiveKeyAndGeneration() {
         val state = ready()
         val result = UiReducer.reduce(state, UiIntent.RequestFilesystemUsage)
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.LoadFilesystemUsage, effect.kind)
+        val effect = result.effects.single() as UiEffect.LoadFilesystemUsage
         assertEquals("1", effect.partitionId)
         assertEquals(1L, effect.usageGeneration)
         assertEquals(keyFor(state, data), effect.usageKey)
@@ -115,7 +114,7 @@ class FilesystemUsageUiTest {
     @Test
     fun matchingAnswerIsPublished() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val key = requireNotNull(requested.effects.single().usageKey)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val published = UiReducer.reduce(
             requested.state,
             UiIntent.FilesystemUsageResulted(1L, key, space(free = 1024uL, total = 4096uL)),
@@ -132,7 +131,7 @@ class FilesystemUsageUiTest {
     @Test
     fun unavailableAnswerIsStoredAsUnknownNotZero() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val key = requireNotNull(requested.effects.single().usageKey)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val published = UiReducer.reduce(
             requested.state,
             UiIntent.FilesystemUsageResulted(
@@ -148,7 +147,7 @@ class FilesystemUsageUiTest {
     @Test
     fun answerForAnOlderRequestIsDropped() {
         val first = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val firstKey = requireNotNull(first.effects.single().usageKey)
+        val firstKey = requireNotNull((first.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val second = UiReducer.reduce(first.state, UiIntent.RequestFilesystemUsage)
         assertEquals(2L, second.state.filesystemUsageGeneration)
         val stale = UiReducer.reduce(
@@ -161,7 +160,7 @@ class FilesystemUsageUiTest {
     @Test
     fun answerForAnotherAttachmentOrGeometryIsDropped() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val key = requireNotNull(requested.effects.single().usageKey)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val otherIdentity = key.copy(identity = "another-stick")
         val otherGeometry = key.copy(partitionSectorCount = key.partitionSectorCount + 1uL)
         val otherSectorSize = key.copy(sectorSize = 4096)
@@ -190,7 +189,7 @@ class FilesystemUsageUiTest {
     @Test
     fun selectionChangeInvalidatesThePublishedValue() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val key = requireNotNull(requested.effects.single().usageKey)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val published = UiReducer.reduce(
             requested.state,
             UiIntent.FilesystemUsageResulted(1L, key, space(1uL, 2uL)),
@@ -201,7 +200,7 @@ class FilesystemUsageUiTest {
     @Test
     fun attachmentRefreshInvalidatesThePublishedValue() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val key = requireNotNull(requested.effects.single().usageKey)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val published = UiReducer.reduce(
             requested.state,
             UiIntent.FilesystemUsageResulted(1L, key, space(1uL, 2uL)),
@@ -221,7 +220,7 @@ class FilesystemUsageUiTest {
     @Test
     fun finishedOperationInvalidatesButRunningDoesNot() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
-        val key = requireNotNull(requested.effects.single().usageKey)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val published = UiReducer.reduce(
             requested.state,
             UiIntent.FilesystemUsageResulted(1L, key, space(1uL, 2uL)),

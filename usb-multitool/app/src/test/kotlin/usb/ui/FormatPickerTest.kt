@@ -104,8 +104,8 @@ class FormatPickerTest {
         val confirmed = UiReducer.reduce(pending, UiIntent.ConfirmDestructive)
         assertNull(confirmed.state.pendingConfirmation)
         assertEquals(1, confirmed.effects.size)
-        assertEquals(UiEffect.Kind.SubmitDestructive, confirmed.effects[0].kind)
-        assertEquals(DestructiveAction.FORMAT_PARTITION, confirmed.effects[0].action)
+        val effect = confirmed.effects[0] as UiEffect.SubmitDestructive
+        assertEquals(DestructiveAction.FORMAT_PARTITION, effect.action)
         assertEquals(FilesystemId.EXFAT, confirmed.state.selectedFormatId)
     }
 
@@ -146,8 +146,8 @@ class FormatPickerTest {
             ).state
         assertEquals(FilesystemId.EXT, pending.pendingConfirmation!!.formatId)
         val confirmed = UiReducer.reduce(pending, UiIntent.ConfirmDestructive)
-        assertEquals(FilesystemId.EXT, confirmed.effects.single().formatId)
-        assertEquals(DestructiveAction.FORMAT_PARTITION, confirmed.effects.single().action)
+        assertEquals(FilesystemId.EXT, (confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.formatId)
+        assertEquals(DestructiveAction.FORMAT_PARTITION, (confirmed.effects.single() as UiEffect.SubmitDestructive).action)
     }
 
     @Test
@@ -156,7 +156,7 @@ class FormatPickerTest {
             UiReducer.reduce(ready(FilesystemId.EXT), UiIntent.RequestDestructive(DestructiveAction.WIPE)).state
         assertNull(pending.pendingConfirmation!!.formatId)
         val confirmed = UiReducer.reduce(pending, UiIntent.ConfirmDestructive)
-        assertNull(confirmed.effects.single().formatId)
+        assertNull((confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.formatId)
     }
 
     @Test
@@ -186,9 +186,9 @@ class FormatPickerTest {
             base.copy(pendingConfirmation = pending),
             UiIntent.ConfirmDestructive,
         )
-        assertEquals(DestructiveAction.CREATE_PARTITION, confirmed.effects.single().action)
-        assertEquals("Data", confirmed.effects.single().confirmation!!.createName)
-        assertEquals(FilesystemId.EXT, confirmed.effects.single().confirmation!!.createFormatId)
+        assertEquals(DestructiveAction.CREATE_PARTITION, (confirmed.effects.single() as UiEffect.SubmitDestructive).action)
+        assertEquals("Data", (confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.createName)
+        assertEquals(FilesystemId.EXT, (confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.createFormatId)
     }
 
     @Test

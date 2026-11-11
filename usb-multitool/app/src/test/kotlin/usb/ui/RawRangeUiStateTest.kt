@@ -78,11 +78,10 @@ class RawRangeUiStateTest {
         assertEquals("ubuntu.iso", pending.rawSourceName)
 
         val confirmed = UiReducer.reduce(result.state, UiIntent.ConfirmDestructive)
-        val effect = confirmed.effects.single()
-        assertEquals(UiEffect.Kind.SubmitDestructive, effect.kind)
-        assertEquals(2048UL, effect.confirmation!!.rawStartLba)
-        assertEquals(4096UL, effect.confirmation!!.rawSectorCount)
-        assertEquals("ubuntu.iso", effect.confirmation!!.rawSourceName)
+        val effect = confirmed.effects.single() as UiEffect.SubmitDestructive
+        assertEquals(2048UL, effect.confirmation.rawStartLba)
+        assertEquals(4096UL, effect.confirmation.rawSectorCount)
+        assertEquals("ubuntu.iso", effect.confirmation.rawSourceName)
     }
 
     @Test
@@ -134,12 +133,10 @@ class RawRangeUiStateTest {
         val result = UiReducer.reduce(stale, UiIntent.RequestRangeProbe(2048UL, 4096UL))
         assertNull(result.state.rangeProbe)
         assertEquals(RawWriteRange(2048UL, 4096UL), result.state.rangeProbeRequestedRange)
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.RangeProbe, effect.kind)
+        val effect = result.effects.single() as UiEffect.RangeProbe
         assertEquals(2048UL, effect.startLba)
         assertEquals(4096UL, effect.sectorCount)
         assertEquals(result.state.rangeProbeRequestId, effect.probeRequestId)
-        assertNotNull(effect.probeRequestId)
     }
 
     @Test

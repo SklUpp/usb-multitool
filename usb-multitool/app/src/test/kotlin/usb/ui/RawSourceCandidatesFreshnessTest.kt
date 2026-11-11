@@ -134,6 +134,6 @@ class RawSourceCandidatesFreshnessTest {
         val dirty = ready().copy(rawSourceCandidatesError = "old")
         val loaded = UiReducer.reduce(dirty, UiIntent.LoadRawSourceCandidates)
         assertNull(loaded.state.rawSourceCandidatesError)
-        assertTrue(loaded.effects.any { it.kind == UiEffect.Kind.LoadRawSources })
+        assertTrue(loaded.effects.any { it is UiEffect.LoadRawSources })
     }
 }

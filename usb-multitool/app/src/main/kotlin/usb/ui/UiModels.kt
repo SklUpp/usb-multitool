@@ -226,6 +226,17 @@ enum class DestructiveAction {
     INITIALIZE_PARTITION_TABLE,
     VENTOY_UNATTEND_XML_WRITE,
     VENTOY_UNATTEND_DISK_LAYOUT,
+    ;
+
+    /**
+     * True when the host may keep an [usb.service.OperationHandle] for cooperative cancel
+     * (progress loops that check isActive). Non-cooperative actions run to completion or fail.
+     */
+    val cooperative: Boolean
+        get() =
+            this == RAW_WRITE ||
+                this == VENTOY_DOWNLOAD_INSTALL ||
+                this == RESCUE_RESTORE
 }
 
 /**

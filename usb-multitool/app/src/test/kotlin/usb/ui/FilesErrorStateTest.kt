@@ -60,8 +60,8 @@ class FilesErrorStateTest {
         assertEquals("/", fallback.state.currentPath)
         assertTrue(fallback.state.filesPending)
         assertNull(fallback.state.filesError)
-        assertEquals(UiEffect.Kind.LoadFiles, fallback.effects.single().kind)
-        assertEquals("/", fallback.effects.single().path)
+        val load = fallback.effects.single() as UiEffect.LoadFiles
+        assertEquals("/", load.path)
     }
 
     @Test

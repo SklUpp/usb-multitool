@@ -260,15 +260,14 @@ class VentoyUiStateTest {
                 imagePaths = selected.windowsSelectedImages,
             ),
         )
-        val effect = result.effects.single()
-        assertEquals(UiEffect.Kind.BindAutounattend, effect.kind)
+        val effect = result.effects.single() as UiEffect.BindAutounattend
         assertEquals(listOf(pathA, pathB), effect.imagePaths)
     }
 
     @Test
     fun loadWindowsIsoCandidatesReadyEmitsBusyWaits() {
         val readyResult = UiReducer.reduce(ready(), UiIntent.LoadWindowsIsoCandidates)
-        assertEquals(UiEffect.Kind.LoadWindowsIsoCandidates, readyResult.effects.single().kind)
+        assertTrue(readyResult.effects.single() is UiEffect.LoadWindowsIsoCandidates)
 
         val busy = ready().copy(
             presence = DevicePresence.Busy,
@@ -443,14 +442,14 @@ class VentoyUiStateTest {
     fun afterDropLoadIsoEmitsNewGeneration() {
         val afterDrop = UiReducer.reduce(withVentoy(), UiIntent.InvalidateVentoyStickCaches).state
         val result = UiReducer.reduce(afterDrop, UiIntent.LoadWindowsIsoCandidates)
-        assertEquals(UiEffect.Kind.LoadWindowsIsoCandidates, result.effects.single().kind)
+        assertTrue(result.effects.single() is UiEffect.LoadWindowsIsoCandidates)
         assertEquals(
             afterDrop.windowsIsoCandidatesGeneration + 1,
             result.state.windowsIsoCandidatesGeneration,
         )
         assertEquals(
             result.state.windowsIsoCandidatesGeneration,
-            result.effects.single().requestGeneration,
+            (result.effects.single() as UiEffect.LoadWindowsIsoCandidates).requestGeneration,
         )
     }
 
@@ -573,7 +572,7 @@ class VentoyUiStateTest {
         )
         val loading = UiReducer.reduce(base, UiIntent.LoadAutounattend(template))
         assertTrue(loading.state.autounattendLoadInFlight)
-        assertEquals(1, loading.effects.count { it.kind == UiEffect.Kind.LoadAutounattend })
+        assertEquals(1, loading.effects.count { it is UiEffect.LoadAutounattend })
 
         val done = UiReducer.reduce(
             loading.state,

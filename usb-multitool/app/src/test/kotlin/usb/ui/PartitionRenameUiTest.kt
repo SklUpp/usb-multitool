@@ -54,8 +54,8 @@ class PartitionRenameUiTest {
             ready().copy(pendingConfirmation = pending),
             UiIntent.ConfirmDestructive,
         )
-        assertEquals(DestructiveAction.RENAME_PARTITION, confirmed.effects.single().action)
-        assertEquals("Media", confirmed.effects.single().confirmation!!.partitionName)
+        assertEquals(DestructiveAction.RENAME_PARTITION, (confirmed.effects.single() as UiEffect.SubmitDestructive).action)
+        assertEquals("Media", (confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.partitionName)
     }
 
     @Test
@@ -104,8 +104,8 @@ class PartitionRenameUiTest {
             ready().copy(pendingConfirmation = pending),
             UiIntent.ConfirmDestructive,
         )
-        assertEquals(DestructiveAction.RENAME_VOLUME_LABEL, confirmed.effects.single().action)
-        assertEquals("MEDIA", confirmed.effects.single().confirmation!!.volumeLabel)
+        assertEquals(DestructiveAction.RENAME_VOLUME_LABEL, (confirmed.effects.single() as UiEffect.SubmitDestructive).action)
+        assertEquals("MEDIA", (confirmed.effects.single() as UiEffect.SubmitDestructive).confirmation.volumeLabel)
     }
 
     @Test

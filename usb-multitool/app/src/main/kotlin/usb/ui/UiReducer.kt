@@ -305,7 +305,7 @@ sealed class UiIntent {
 
     /**
      * Enter the absolute FAT directory [path]. Clears [AppUiState.files] and emits a
-     * [UiEffect.Kind.LoadFiles] effect, so nothing is displayed for an unlisted path.
+     * [UiEffect.LoadFiles] effect, so nothing is displayed for an unlisted path.
      */
     data class OpenDirectory(val path: String) : UiIntent()
 
@@ -390,91 +390,134 @@ sealed class UiIntent {
     ) : UiIntent()
 }
 
-data class UiEffect(
-    val kind: Kind,
-    val action: DestructiveAction? = null,
-    val isoName: String? = null,
-    val isoAction: IsoAction? = null,
-    val path: String? = null,
-    val name: String? = null,
-    /** Target name for [Kind.RenameEntry]. */
-    val newName: String? = null,
-    /** Exact device/partition target captured for this mutation. */
-    val binding: PartitionBinding? = null,
-    val uri: String? = null,
-    val formatId: FilesystemId? = null,
-    val linkOverwrite: Boolean = false,
-    val confirmation: DestructiveConfirmation? = null,
-    /** Partition to measure for [Kind.LoadFilesystemUsage]. */
-    val partitionId: String? = null,
-    /** Exact attachment/geometry the measurement is valid for; the host re-checks it live. */
-    val usageKey: FilesystemUsageKey? = null,
-    /** Request id echoed back in [UiIntent.FilesystemUsageResulted]. */
-    val usageGeneration: Long? = null,
-    /** Absolute range for [Kind.RangeProbe]. */
-    val startLba: ULong? = null,
-    val sectorCount: ULong? = null,
-    /** Echoed back in [usb.image.RangeProbeResult] so stale results can be dropped. */
-    val probeRequestId: Long? = null,
-    /** Logical request id for async listings; stale results are dropped by the reducer. */
-    val requestGeneration: Long? = null,
-    /** Inspected SAF ISO import (uri, target, existence, attachment pin). */
-    val isoImport: IsoImportProposal? = null,
-    /** True only after the user explicitly confirmed replacing an existing ISO. */
-    val overwrite: Boolean = false,
-    /** Multiple image paths for one XML link (empty = use [isoName]). */
-    val imagePaths: List<String> = emptyList(),
-    /** Existing XML template path on the data partition; never rewritten. */
-    val templatePath: String? = null,
-    val allowDestructiveTemplate: Boolean = false,
-    val expectedTemplateSha256: String? = null,
-    val expectedPlanSha256: String? = null,
-    /** Image or XML template destination for phone import. */
-    val importKind: WindowsImportKind = WindowsImportKind.Image,
-    /** User-selected existing destination folder; null = legacy default. */
-    val importDirectory: String? = null,
-    /** Autounattend generation/read/bind payloads. */
-    val xmlName: String? = null,
-    val autounattendParams: AutounattendParams? = null,
-    val overwriteXml: Boolean = false,
-    val settingKey: String? = null,
-    val settingValue: String? = null,
-) {
-    enum class Kind {
-        SubmitDestructive,
-        CancelOperation,
-        LinkXml,
-        LoadFiles,
-        CreateFolder,
-        DeleteEntry,
-        RenameEntry,
-        UploadFile,
-        DownloadFile,
-        StageUsbImageForRawWrite,
-        ReadScan,
-        RescueBackup,
-        CaptureGptBackup,
-        RunSelfTest,
-        LoadFilesystemUsage,
-        RangeProbe,
-        LoadRawSources,
-        CancelRawSources,
-        LoadWindowsIsoCandidates,
-        InspectIsoImport,
-        ImportIso,
-        LoadWindowsLinks,
-        UnlinkXml,
-        SaveWindowsControls,
-        LoadAutounattend,
-        /** Same generation as [LoadAutounattend]: the host reads the image list beside the XML. */
-        LoadAutounattendCandidates,
-        GenerateAutounattend,
-        LoadVentoyGlobalSettings,
-        LoadVentoyFolders,
-        SetVentoyGlobalSetting,
-        BindAutounattend,
-        UnbindAutounattend,
-    }
+sealed interface UiEffect {
+    data class SubmitDestructive(
+        val action: DestructiveAction,
+        val confirmation: DestructiveConfirmation,
+    ) : UiEffect
+
+    data object CancelOperation : UiEffect
+
+    data class LinkXml(
+        val imagePaths: List<String>,
+        val templatePath: String?,
+        val allowDestructiveTemplate: Boolean,
+        val linkOverwrite: Boolean,
+        val confirmation: DestructiveConfirmation,
+    ) : UiEffect
+
+    data class LoadFiles(val path: String) : UiEffect
+
+    data class CreateFolder(val path: String, val name: String) : UiEffect
+
+    data class DeleteEntry(val path: String, val name: String) : UiEffect
+
+    data class RenameEntry(
+        val path: String,
+        val name: String,
+        val newName: String,
+        val binding: PartitionBinding,
+    ) : UiEffect
+
+    data class UploadFile(val path: String, val uri: String) : UiEffect
+
+    data class DownloadFile(val path: String, val name: String, val uri: String) : UiEffect
+
+    data class StageUsbImageForRawWrite(
+        val path: String,
+        val name: String,
+        val binding: PartitionBinding? = null,
+    ) : UiEffect
+
+    data object ReadScan : UiEffect
+
+    data object RescueBackup : UiEffect
+
+    data object CaptureGptBackup : UiEffect
+
+    data object RunSelfTest : UiEffect
+
+    data class LoadFilesystemUsage(
+        val partitionId: String,
+        val usageKey: FilesystemUsageKey,
+        val usageGeneration: Long,
+    ) : UiEffect
+
+    data class RangeProbe(
+        val startLba: ULong,
+        val sectorCount: ULong,
+        val probeRequestId: Long,
+    ) : UiEffect
+
+    data class LoadRawSources(
+        val binding: PartitionBinding,
+        val requestGeneration: Long,
+    ) : UiEffect
+
+    data object CancelRawSources : UiEffect
+
+    data class LoadWindowsIsoCandidates(val requestGeneration: Long) : UiEffect
+
+    data class InspectIsoImport(
+        val uri: String,
+        val requestGeneration: Long,
+        val importKind: WindowsImportKind,
+        val importDirectory: String?,
+    ) : UiEffect
+
+    data class ImportIso(
+        val isoImport: IsoImportProposal,
+        val overwrite: Boolean,
+        val requestGeneration: Long,
+    ) : UiEffect
+
+    data class LoadWindowsLinks(val requestGeneration: Long) : UiEffect
+
+    data class UnlinkXml(val imagePaths: List<String>) : UiEffect
+
+    data object SaveWindowsControls : UiEffect
+
+    data class LoadAutounattend(
+        val xmlName: String,
+        val requestGeneration: Long,
+    ) : UiEffect
+
+    /** Same generation as [LoadAutounattend]: the host reads the image list beside the XML. */
+    data class LoadAutounattendCandidates(
+        val xmlName: String,
+        val requestGeneration: Long,
+    ) : UiEffect
+
+    data class GenerateAutounattend(
+        val xmlName: String,
+        val autounattendParams: AutounattendParams,
+        val imagePaths: List<String>,
+        val overwriteXml: Boolean,
+        val allowDestructiveTemplate: Boolean,
+        val expectedTemplateSha256: String?,
+        val expectedPlanSha256: String?,
+    ) : UiEffect
+
+    data object LoadVentoyGlobalSettings : UiEffect
+
+    data object LoadVentoyFolders : UiEffect
+
+    data class SetVentoyGlobalSetting(
+        val settingKey: String,
+        val settingValue: String?,
+    ) : UiEffect
+
+    data class BindAutounattend(
+        val xmlName: String,
+        val imagePaths: List<String>,
+        val allowDestructiveTemplate: Boolean,
+        val expectedTemplateSha256: String?,
+    ) : UiEffect
+
+    data class UnbindAutounattend(
+        val xmlName: String,
+        val imagePaths: List<String>,
+    ) : UiEffect
 }
 
 data class ReduceResult(
@@ -529,7 +572,7 @@ object UiReducer {
                             isoImportGeneration = state.isoImportGeneration + 1,
                             // Ventoy/XML catalogs are stick-scoped, not partition-scoped.
                         ),
-                        effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
+                        effects = listOf(UiEffect.LoadFiles(path = "/")),
                     )
                 }
 
@@ -846,7 +889,7 @@ object UiReducer {
                     ),
                     effects =
                         if (reloadFiles) {
-                            listOf(UiEffect(UiEffect.Kind.LoadFiles, path = path))
+                            listOf(UiEffect.LoadFiles(path = path))
                         } else {
                             emptyList()
                         },
@@ -1199,8 +1242,7 @@ object UiReducer {
                             rangeProbeRequestedRange = requested,
                         ),
                         effects = listOf(
-                            UiEffect(
-                                UiEffect.Kind.RangeProbe,
+                            UiEffect.RangeProbe(
                                 startLba = intent.startLba,
                                 sectorCount = intent.sectorCount,
                                 probeRequestId = requestId,
@@ -1497,13 +1539,10 @@ object UiReducer {
                                 ),
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.LinkXml,
-                                    isoName = paths.first(),
+                                UiEffect.LinkXml(
                                     imagePaths = paths,
                                     templatePath = pending.templatePath,
                                     allowDestructiveTemplate = pending.allowDestructiveTemplate,
-                                    isoAction = IsoAction.LinkXml,
                                     linkOverwrite = pending.linkOverwrite,
                                     confirmation = pending,
                                 ),
@@ -1560,16 +1599,13 @@ object UiReducer {
                                     statusMessage = UiMessage.Raw("Generating unattend XML"),
                                 ),
                                 effects = listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.GenerateAutounattend,
+                                    UiEffect.GenerateAutounattend(
                                         xmlName = pendingGen.xmlName,
                                         autounattendParams = pendingGen.params,
                                         imagePaths = pendingGen.imagePaths,
                                         overwriteXml = true,
-                                        allowDestructiveTemplate =
-                                            pendingGen.allowDestructiveTemplate,
-                                        expectedTemplateSha256 =
-                                            pendingGen.expectedTemplateSha256,
+                                        allowDestructiveTemplate = pendingGen.allowDestructiveTemplate,
+                                        expectedTemplateSha256 = pendingGen.expectedTemplateSha256,
                                         expectedPlanSha256 = pendingGen.expectedPlanSha256,
                                     ),
                                 ),
@@ -1580,13 +1616,9 @@ object UiReducer {
                     ReduceResult(
                         state.copy(pendingConfirmation = null),
                         effects = listOf(
-                            UiEffect(
-                                UiEffect.Kind.SubmitDestructive,
+                            UiEffect.SubmitDestructive(
                                 action = action,
-                                formatId = pending.formatId,
                                 confirmation = pending,
-                                isoName = pending.isoName,
-                                linkOverwrite = pending.linkOverwrite,
                             ),
                         ),
                     )
@@ -1678,12 +1710,9 @@ object UiReducer {
                         ReduceResult(
                             state.copy(statusMessage = message(UiMessageKey.StagingFile, name)),
                             listOf(
-                                UiEffect(
-                                    UiEffect.Kind.StageUsbImageForRawWrite,
-                                    name = name,
+                                UiEffect.StageUsbImageForRawWrite(
                                     path = state.currentPath,
-                                    isoName = name,
-                                    isoAction = intent.action,
+                                    name = name,
                                 ),
                             ),
                         )
@@ -1806,8 +1835,7 @@ object UiReducer {
                                 rawSourceCandidatesError = null,
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.LoadRawSources,
+                                UiEffect.LoadRawSources(
                                     binding = PartitionBinding(
                                         device = device,
                                         partitionId = partition.id,
@@ -1939,8 +1967,7 @@ object UiReducer {
                             ReduceResult(
                                 state.copy(statusMessage = message(UiMessageKey.StagingFile, name)),
                                 effects = listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.StageUsbImageForRawWrite,
+                                    UiEffect.StageUsbImageForRawWrite(
                                         path = parent,
                                         name = name,
                                         binding = PartitionBinding(
@@ -1966,7 +1993,7 @@ object UiReducer {
                         rawSourceCandidatesTruncated = false,
                         rawSourceCandidatesError = null,
                     ),
-                    effects = listOf(UiEffect(UiEffect.Kind.CancelRawSources)),
+                    effects = listOf(UiEffect.CancelRawSources),
                 )
 
             UiIntent.LoadWindowsIsoCandidates -> {
@@ -1998,8 +2025,7 @@ object UiReducer {
                                 windowsIsoCandidatesError = null,
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.LoadWindowsIsoCandidates,
+                                UiEffect.LoadWindowsIsoCandidates(
                                     requestGeneration = generation,
                                 ),
                             ),
@@ -2101,8 +2127,7 @@ object UiReducer {
                                 isoImportGeneration = generation,
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.InspectIsoImport,
+                                UiEffect.InspectIsoImport(
                                     uri = uri,
                                     requestGeneration = generation,
                                     importKind = intent.kind,
@@ -2170,8 +2195,7 @@ object UiReducer {
                                 ),
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.ImportIso,
+                                UiEffect.ImportIso(
                                     isoImport = proposal,
                                     overwrite = false,
                                     requestGeneration = intent.generation,
@@ -2218,8 +2242,7 @@ object UiReducer {
                                 ),
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.ImportIso,
+                                UiEffect.ImportIso(
                                     isoImport = proposal,
                                     overwrite = overwrite,
                                     requestGeneration = proposal.requestGeneration,
@@ -2245,7 +2268,7 @@ object UiReducer {
                 } else {
                     ReduceResult(
                         state,
-                        effects = listOf(UiEffect(UiEffect.Kind.SaveWindowsControls)),
+                        effects = listOf(UiEffect.SaveWindowsControls),
                     )
                 }
 
@@ -2317,13 +2340,11 @@ object UiReducer {
                                 pendingAutounattendGeneration = null,
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.LoadAutounattend,
+                                UiEffect.LoadAutounattend(
                                     xmlName = template.path,
                                     requestGeneration = generation,
                                 ),
-                                UiEffect(
-                                    UiEffect.Kind.LoadAutounattendCandidates,
+                                UiEffect.LoadAutounattendCandidates(
                                     xmlName = template.path,
                                     requestGeneration = generation,
                                 ),
@@ -2363,13 +2384,11 @@ object UiReducer {
                         pendingAutounattendGeneration = null,
                     ),
                     effects = listOf(
-                        UiEffect(
-                            UiEffect.Kind.LoadAutounattend,
+                        UiEffect.LoadAutounattend(
                             xmlName = intent.path,
                             requestGeneration = generation,
                         ),
-                        UiEffect(
-                            UiEffect.Kind.LoadAutounattendCandidates,
+                        UiEffect.LoadAutounattendCandidates(
                             xmlName = intent.path,
                             requestGeneration = generation,
                         ),
@@ -2459,8 +2478,7 @@ object UiReducer {
                                 windowsImageLinksIdentity = device.identity,
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.LoadWindowsLinks,
+                                UiEffect.LoadWindowsLinks(
                                     requestGeneration = generation,
                                 ),
                             ),
@@ -2548,8 +2566,7 @@ object UiReducer {
                                 ),
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.UnlinkXml,
+                                UiEffect.UnlinkXml(
                                     imagePaths = paths,
                                 ),
                             ),
@@ -2574,13 +2591,11 @@ object UiReducer {
                             autounattendLoadInFlight = true,
                         ),
                         effects = listOf(
-                            UiEffect(
-                                UiEffect.Kind.LoadAutounattend,
+                            UiEffect.LoadAutounattend(
                                 xmlName = intent.xmlName,
                                 requestGeneration = generation,
                             ),
-                            UiEffect(
-                                UiEffect.Kind.LoadAutounattendCandidates,
+                            UiEffect.LoadAutounattendCandidates(
                                 xmlName = intent.xmlName,
                                 requestGeneration = generation,
                             ),
@@ -2721,8 +2736,7 @@ object UiReducer {
                         ReduceResult(
                             state.copy(statusMessage = UiMessage.Raw("Generating unattend XML")),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.GenerateAutounattend,
+                                UiEffect.GenerateAutounattend(
                                     xmlName = intent.xmlName,
                                     autounattendParams = intent.params,
                                     imagePaths = intent.imagePaths,
@@ -2770,8 +2784,7 @@ object UiReducer {
                                 statusMessage = UiMessage.Raw("Generating unattend XML with disk layout"),
                             ),
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.GenerateAutounattend,
+                                UiEffect.GenerateAutounattend(
                                     xmlName = pending.xmlName,
                                     autounattendParams = pending.params,
                                     imagePaths = pending.imagePaths,
@@ -2796,13 +2809,13 @@ object UiReducer {
             UiIntent.LoadVentoyGlobalSettings ->
                 ReduceResult(
                     state,
-                    effects = listOf(UiEffect(UiEffect.Kind.LoadVentoyGlobalSettings)),
+                    effects = listOf(UiEffect.LoadVentoyGlobalSettings),
                 )
 
             UiIntent.LoadVentoyFolders ->
                 ReduceResult(
                     state,
-                    effects = listOf(UiEffect(UiEffect.Kind.LoadVentoyFolders)),
+                    effects = listOf(UiEffect.LoadVentoyFolders),
                 )
 
             is UiIntent.VentoyFoldersLoaded ->
@@ -2858,8 +2871,7 @@ object UiReducer {
                         ReduceResult(
                             state,
                             effects = listOf(
-                                UiEffect(
-                                    UiEffect.Kind.SetVentoyGlobalSetting,
+                                UiEffect.SetVentoyGlobalSetting(
                                     settingKey = intent.key,
                                     settingValue = intent.value,
                                 ),
@@ -2875,8 +2887,7 @@ object UiReducer {
                     ReduceResult(
                         state,
                         effects = listOf(
-                            UiEffect(
-                                UiEffect.Kind.BindAutounattend,
+                            UiEffect.BindAutounattend(
                                 xmlName = intent.xmlName,
                                 imagePaths = intent.imagePaths,
                                 allowDestructiveTemplate = intent.allowDestructiveTemplate,
@@ -2893,8 +2904,7 @@ object UiReducer {
                     ReduceResult(
                         state,
                         effects = listOf(
-                            UiEffect(
-                                UiEffect.Kind.UnbindAutounattend,
+                            UiEffect.UnbindAutounattend(
                                 xmlName = intent.xmlName,
                                 imagePaths = listOf(intent.imagePath),
                             ),
@@ -2932,11 +2942,11 @@ object UiReducer {
                 )
             }
 
-            UiIntent.StartReadScan -> nonDestructiveEffect(state, UiEffect.Kind.ReadScan)
+            UiIntent.StartReadScan -> nonDestructiveEffect(state, UiEffect.ReadScan)
 
-            UiIntent.StartRescueBackup -> nonDestructiveEffect(state, UiEffect.Kind.RescueBackup)
+            UiIntent.StartRescueBackup -> nonDestructiveEffect(state, UiEffect.RescueBackup)
 
-            UiIntent.CaptureGptBackup -> nonDestructiveEffect(state, UiEffect.Kind.CaptureGptBackup)
+            UiIntent.CaptureGptBackup -> nonDestructiveEffect(state, UiEffect.CaptureGptBackup)
 
             is UiIntent.SetLanguage -> ReduceResult(state.copy(language = intent.language))
 
@@ -2955,7 +2965,7 @@ object UiReducer {
                 } else {
                     ReduceResult(
                         state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelfTestStarting)),
-                        effects = listOf(UiEffect(UiEffect.Kind.RunSelfTest)),
+                        effects = listOf(UiEffect.RunSelfTest),
                     )
                 }
 
@@ -3006,7 +3016,7 @@ object UiReducer {
             UiIntent.CancelOperation ->
                 ReduceResult(
                     state,
-                    effects = listOf(UiEffect(UiEffect.Kind.CancelOperation)),
+                    effects = listOf(UiEffect.CancelOperation),
                 )
 
             is UiIntent.OpenDirectory -> {
@@ -3019,7 +3029,7 @@ object UiReducer {
                         filesListGeneration = state.filesListGeneration + 1L,
                         filesPending = true,
                     ),
-                    effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
+                    effects = listOf(UiEffect.LoadFiles(path = target)),
                 )
             }
 
@@ -3036,7 +3046,7 @@ object UiReducer {
                             filesListGeneration = state.filesListGeneration + 1L,
                             filesPending = true,
                         ),
-                        effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = target)),
+                        effects = listOf(UiEffect.LoadFiles(path = target)),
                     )
                 }
             }
@@ -3056,8 +3066,7 @@ object UiReducer {
                             state,
                             effects =
                                 listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.CreateFolder,
+                                    UiEffect.CreateFolder(
                                         path = state.currentPath,
                                         name = name,
                                     ),
@@ -3080,8 +3089,7 @@ object UiReducer {
                             state,
                             effects =
                                 listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.DeleteEntry,
+                                    UiEffect.DeleteEntry(
                                         path = state.currentPath,
                                         name = intent.name,
                                     ),
@@ -3108,8 +3116,7 @@ object UiReducer {
                             state,
                             effects =
                                 listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.RenameEntry,
+                                    UiEffect.RenameEntry(
                                         path = state.currentPath,
                                         name = intent.from,
                                         newName = intent.to,
@@ -3132,8 +3139,7 @@ object UiReducer {
                             state,
                             effects =
                                 listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.UploadFile,
+                                    UiEffect.UploadFile(
                                         path = state.currentPath,
                                         uri = intent.uri,
                                     ),
@@ -3153,8 +3159,7 @@ object UiReducer {
                             state,
                             effects =
                                 listOf(
-                                    UiEffect(
-                                        UiEffect.Kind.DownloadFile,
+                                    UiEffect.DownloadFile(
                                         path = state.currentPath,
                                         name = intent.name,
                                         uri = intent.uri,
@@ -3213,7 +3218,7 @@ object UiReducer {
                             filesPending = true,
                             statusMessage = UiMessage.Raw(intent.message),
                         ),
-                        effects = listOf(UiEffect(UiEffect.Kind.LoadFiles, path = "/")),
+                        effects = listOf(UiEffect.LoadFiles(path = "/")),
                     )
                 } else {
                     ReduceResult(
@@ -3285,8 +3290,7 @@ object UiReducer {
         val partition = state.selectedPartition() ?: return emptyList()
         val key = state.filesystemUsageKey(partition) ?: return emptyList()
         return listOf(
-            UiEffect(
-                kind = UiEffect.Kind.LoadFilesystemUsage,
+            UiEffect.LoadFilesystemUsage(
                 partitionId = partition.id,
                 usageKey = key,
                 usageGeneration = generation,
@@ -3295,11 +3299,11 @@ object UiReducer {
     }
 
     /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */
-    private fun nonDestructiveEffect(state: AppUiState, kind: UiEffect.Kind): ReduceResult =
+    private fun nonDestructiveEffect(state: AppUiState, effect: UiEffect): ReduceResult =
         if (!state.actionsEnabled) {
             ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
         } else {
-            ReduceResult(state, effects = listOf(UiEffect(kind)))
+            ReduceResult(state, effects = listOf(effect))
         }
 
     /**

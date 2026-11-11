@@ -143,7 +143,7 @@ done
 # device: skip Android USB session/policy/channel.
 # service: OperationExecutor only (DiskService is Android Service).
 # files/*: Android ContentResolver — tests do not import.
-# operation: skip UI bridges (OperationCoordination/LifecyclePolicy → usb.ui).
+# operation: LifecyclePolicy is UI-free; skip only if a UI bridge reappears.
 set -- \
   "$APP/src/main/kotlin/usb/EngineMissingException.kt" \
   "$APP/src/main/kotlin/usb/FormatBytes.kt" \

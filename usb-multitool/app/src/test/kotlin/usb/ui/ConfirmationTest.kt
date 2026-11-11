@@ -228,8 +228,8 @@ class UiStateMachineTest {
         val confirmed = UiReducer.reduce(withConfirm.state, UiIntent.ConfirmDestructive)
         assertNull(confirmed.state.pendingConfirmation)
         assertEquals(1, confirmed.effects.size)
-        assertEquals(UiEffect.Kind.SubmitDestructive, confirmed.effects.single().kind)
-        assertEquals(DestructiveAction.WIPE, confirmed.effects.single().action)
+        val wipeEffect = confirmed.effects.single() as UiEffect.SubmitDestructive
+        assertEquals(DestructiveAction.WIPE, wipeEffect.action)
     }
 
     @Test
@@ -238,8 +238,8 @@ class UiStateMachineTest {
         assertTrue(link.effects.isEmpty())
         assertEquals("ubuntu.iso", link.state.pendingConfirmation?.isoName)
         val confirmed = UiReducer.reduce(link.state, UiIntent.ConfirmDestructive)
-        assertEquals(UiEffect.Kind.LinkXml, confirmed.effects.single().kind)
-        assertEquals("ubuntu.iso", confirmed.effects.single().isoName)
+        val linkEffect = confirmed.effects.single() as UiEffect.LinkXml
+        assertEquals("ubuntu.iso", linkEffect.imagePaths.first())
     }
 
     @Test
@@ -276,8 +276,8 @@ class UiStateMachineTest {
         assertEquals("/docs", result.state.currentPath)
         assertTrue(result.state.files.isEmpty())
         assertEquals(1, result.effects.size)
-        assertEquals(UiEffect.Kind.LoadFiles, result.effects.single().kind)
-        assertEquals("/docs", result.effects.single().path)
+        val load = result.effects.single() as UiEffect.LoadFiles
+        assertEquals("/docs", load.path)
     }
 
     @Test
@@ -285,7 +285,7 @@ class UiStateMachineTest {
         val nested = ready().copy(currentPath = "/docs/manuals", files = emptyList())
         val result = UiReducer.reduce(nested, UiIntent.NavigateUp)
         assertEquals("/docs", result.state.currentPath)
-        assertEquals(UiEffect.Kind.LoadFiles, result.effects.single().kind)
+        assertTrue(result.effects.single() is UiEffect.LoadFiles)
 
         val root = UiReducer.reduce(result.state.copy(currentPath = "/"), UiIntent.NavigateUp)
         assertEquals("/", root.state.currentPath)
@@ -321,13 +321,13 @@ class UiStateMachineTest {
     fun createFolderAndDeleteEmitRealDiskEffects() {
         val state = ready().copy(currentPath = "/docs", files = emptyList())
         val mkdir = UiReducer.reduce(state, UiIntent.CreateFolder("reports"))
-        assertEquals(UiEffect.Kind.CreateFolder, mkdir.effects.single().kind)
-        assertEquals("/docs", mkdir.effects.single().path)
-        assertEquals("reports", mkdir.effects.single().name)
+        val mkdirEffect = mkdir.effects.single() as UiEffect.CreateFolder
+        assertEquals("/docs", mkdirEffect.path)
+        assertEquals("reports", mkdirEffect.name)
 
         val delete = UiReducer.reduce(state, UiIntent.DeleteEntry("manual.pdf"))
-        assertEquals(UiEffect.Kind.DeleteEntry, delete.effects.single().kind)
-        assertEquals("manual.pdf", delete.effects.single().name)
+        val deleteEffect = delete.effects.single() as UiEffect.DeleteEntry
+        assertEquals("manual.pdf", deleteEffect.name)
 
         val rejected = UiReducer.reduce(state, UiIntent.CreateFolder("a/b"))
         assertTrue(rejected.effects.isEmpty())
@@ -338,14 +338,13 @@ class UiStateMachineTest {
     fun uploadAndDownloadCarrySafUris() {
         val state = ready().copy(currentPath = "/docs", files = emptyList())
         val upload = UiReducer.reduce(state, UiIntent.UploadFile("content://docs/42"))
-        assertEquals(UiEffect.Kind.UploadFile, upload.effects.single().kind)
-        assertEquals("content://docs/42", upload.effects.single().uri)
-        assertEquals("/docs", upload.effects.single().path)
+        val uploadEffect = upload.effects.single() as UiEffect.UploadFile
+        assertEquals("content://docs/42", uploadEffect.uri)
+        assertEquals("/docs", uploadEffect.path)
 
         val download =
             UiReducer.reduce(state, UiIntent.DownloadFile("manual.pdf", "content://out/7"))
-        val effect = download.effects.single()
-        assertEquals(UiEffect.Kind.DownloadFile, effect.kind)
+        val effect = download.effects.single() as UiEffect.DownloadFile
         assertEquals("manual.pdf", effect.name)
         assertEquals("content://out/7", effect.uri)
     }
@@ -376,9 +375,9 @@ class UiStateMachineTest {
         }
 
         val enabled = UiReducer.reduce(efi, UiIntent.SetVtoyEfiWritable("2", true)).state
-        assertEquals(
-            UiEffect.Kind.UploadFile,
-            UiReducer.reduce(enabled, UiIntent.UploadFile("content://docs/42")).effects.single().kind,
+        assertTrue(
+            UiReducer.reduce(enabled, UiIntent.UploadFile("content://docs/42")).effects.single()
+                is UiEffect.UploadFile,
         )
     }
 
@@ -386,24 +385,23 @@ class UiStateMachineTest {
     fun readOnlyPartitionStillAllowsReads() {
         val efi = ready().copy(selectedPartitionId = "2")
         val download = UiReducer.reduce(efi, UiIntent.DownloadFile("ubuntu.iso", "content://out/1"))
-        assertEquals(UiEffect.Kind.DownloadFile, download.effects.single().kind)
+        assertTrue(download.effects.single() is UiEffect.DownloadFile)
         val listed = UiReducer.reduce(efi, UiIntent.OpenDirectory("/docs"))
-        assertEquals(UiEffect.Kind.LoadFiles, listed.effects.single().kind)
+        assertTrue(listed.effects.single() is UiEffect.LoadFiles)
     }
 
     @Test
     fun readOnlyActionsSubmitRealDiskWork() {
-        assertEquals(
-            UiEffect.Kind.ReadScan,
-            UiReducer.reduce(ready(), UiIntent.StartReadScan).effects.single().kind,
+        assertTrue(
+            UiReducer.reduce(ready(), UiIntent.StartReadScan).effects.single() is UiEffect.ReadScan,
         )
-        assertEquals(
-            UiEffect.Kind.RescueBackup,
-            UiReducer.reduce(ready(), UiIntent.StartRescueBackup).effects.single().kind,
+        assertTrue(
+            UiReducer.reduce(ready(), UiIntent.StartRescueBackup).effects.single()
+                is UiEffect.RescueBackup,
         )
-        assertEquals(
-            UiEffect.Kind.CaptureGptBackup,
-            UiReducer.reduce(ready(), UiIntent.CaptureGptBackup).effects.single().kind,
+        assertTrue(
+            UiReducer.reduce(ready(), UiIntent.CaptureGptBackup).effects.single()
+                is UiEffect.CaptureGptBackup,
         )
 
         val disconnected = ready().copy(presence = DevicePresence.Disconnected)
@@ -438,10 +436,10 @@ class UiStateMachineTest {
         assertEquals("gpt.bin", confirmed.state.pendingConfirmation!!.gptBackupName)
 
         val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
-        assertEquals(DestructiveAction.GPT_RESTORE, submitted.effects.single().action)
+        assertEquals(DestructiveAction.GPT_RESTORE, (submitted.effects.single() as UiEffect.SubmitDestructive).action)
         assertEquals(
             "content://b/gpt.bin",
-            submitted.effects.single().confirmation!!.gptBackupUri,
+            (submitted.effects.single() as UiEffect.SubmitDestructive).confirmation.gptBackupUri,
         )
     }
 
@@ -477,7 +475,7 @@ class UiStateMachineTest {
         assertEquals(uri, pending.gptBackupUri)
         assertNull(pending.gptBackupName)
         val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
-        assertEquals(uri, submitted.effects.single().confirmation!!.gptBackupUri)
+        assertEquals(uri, (submitted.effects.single() as UiEffect.SubmitDestructive).confirmation.gptBackupUri)
     }
 
     @Test
@@ -502,7 +500,7 @@ class UiStateMachineTest {
         val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
         assertEquals(
             "content://docs/stick.img",
-            submitted.effects.single().confirmation!!.rescueImageUri,
+            (submitted.effects.single() as UiEffect.SubmitDestructive).confirmation.rescueImageUri,
         )
 
         val swapped =
@@ -544,8 +542,8 @@ class UiStateMachineTest {
         assertNotNull(asked.state.pendingAutounattendGeneration)
 
         val generated = UiReducer.reduce(asked.state, UiIntent.ConfirmDestructive)
-        assertEquals(UiEffect.Kind.GenerateAutounattend, generated.effects.single().kind)
-        assertTrue(generated.effects.single().overwriteXml)
+        val genEffect = generated.effects.single() as UiEffect.GenerateAutounattend
+        assertTrue(genEffect.overwriteXml)
     }
 
     @Test
@@ -804,8 +802,7 @@ class UiStateMachineTest {
         assertEquals(UiMessage.Key(UiMessageKey.RenameSameName), same.state.statusMessage)
 
         val renamed = UiReducer.reduce(state, UiIntent.RenameEntry("ubuntu.iso", "linux.iso", binding))
-        val effect = renamed.effects.single()
-        assertEquals(UiEffect.Kind.RenameEntry, effect.kind)
+        val effect = renamed.effects.single() as UiEffect.RenameEntry
         assertEquals("ubuntu.iso", effect.name)
         assertEquals("linux.iso", effect.newName)
         assertEquals(binding, effect.binding)
@@ -855,7 +852,7 @@ class UiStateMachineTest {
         assertTrue(pending.partitionSectorCount == 2048uL)
 
         val confirmed = UiReducer.reduce(requested.state, UiIntent.ConfirmDestructive)
-        assertEquals(DestructiveAction.SET_PARTITION_ROLE, confirmed.effects.single().action)
+        assertEquals(DestructiveAction.SET_PARTITION_ROLE, (confirmed.effects.single() as UiEffect.SubmitDestructive).action)
     }
 
     @Test

@@ -276,15 +276,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun handleEffect(effect: UiEffect) {
-        when (effect.kind) {
-            UiEffect.Kind.SubmitDestructive -> {
+        when (effect) {
+            is UiEffect.SubmitDestructive -> {
                 val action = effect.action
-                val opTitle = action?.let { OperationTitle.Destructive(it) }
-                    ?: error("destructive action missing")
+                val opTitle = OperationTitle.Destructive(action)
                 val actionName = opTitle.logLabel
                 val uiState = state
                 val confirmed = effect.confirmation
-                    ?: throw IllegalStateException("destructive confirmation missing")
                 val confirmedFormatId = confirmed.formatId
                 var rawWriteOutcome: usb.image.RawWriteResult? = null
                 val op = object : DiskOperation(name = actionName) {
@@ -776,7 +774,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     throw IllegalStateException(
                                         "Unattend XML write/layout uses dedicated generate flow",
                                     )
-                                null -> throw IllegalArgumentException("no destructive action selected")
                             }
                             syncDestructiveDisk(disk)
                         } finally {
@@ -784,7 +781,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
-                val isCooperative = usb.operation.OperationLifecyclePolicy.isCooperative(action)
+                val isCooperative = action.cooperative
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -819,8 +816,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         val outcome = handle.await()
                         ticker.cancel()
-                        val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                        val errorMsg = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                        val mappedState = usb.ui.serviceOperationUiState(outcome)
+                        val errorMsg = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
@@ -870,7 +867,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
-            UiEffect.Kind.ReadScan ->
+            UiEffect.ReadScan ->
                 submitReadOnlyDiskOperation(OperationTitle.ReadScan) { disk, operation, sink ->
                     val report = Diagnostics.readScan(disk, operation = operation)
                     sink.readScanResult = ReadScanOutcome.from(report, disk.geometry.sectorCount)
@@ -878,31 +875,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ""
                 }
 
-            UiEffect.Kind.RangeProbe -> {
+            is UiEffect.RangeProbe -> {
                 val start = effect.startLba
                 val count = effect.sectorCount
-                if (start != null && count != null) {
-                    val device = state.device
-                    val attachment =
-                        device?.let {
-                            usb.image.RangeProbeAttachment(it.identity, it.attachGeneration)
-                        }
-                    submitReadOnlyDiskOperation(OperationTitle.CheckRawRange) { disk, _, _ ->
-                        val result =
-                            usb.image.RangeProbe.sample(
-                                disk = disk,
-                                range = usb.partition.RawWriteRange(start, count),
-                                attachment = attachment,
-                                requestId = effect.probeRequestId ?: 0L,
-                            )
-                        onIntentDeferred(UiIntent.RangeProbeResulted(result))
-                        "Range probe: ${result.finding}, " +
-                            "${result.sampledSectors.size} sector(s) sampled"
+                val device = state.device
+                val attachment =
+                    device?.let {
+                        usb.image.RangeProbeAttachment(it.identity, it.attachGeneration)
                     }
+                submitReadOnlyDiskOperation(OperationTitle.CheckRawRange) { disk, _, _ ->
+                    val result =
+                        usb.image.RangeProbe.sample(
+                            disk = disk,
+                            range = usb.partition.RawWriteRange(start, count),
+                            attachment = attachment,
+                            requestId = effect.probeRequestId,
+                        )
+                    onIntentDeferred(UiIntent.RangeProbeResulted(result))
+                    "Range probe: ${result.finding}, " +
+                        "${result.sampledSectors.size} sector(s) sampled"
                 }
             }
 
-            UiEffect.Kind.RescueBackup ->
+            UiEffect.RescueBackup ->
                 submitReadOnlyDiskOperation(OperationTitle.RescueBackup) { disk, operation, _ ->
                     val dir = backupDirectory()
                     val stamp = "${timestamp()}-${System.nanoTime()}"
@@ -960,7 +955,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "$copied copied, $unreadable unreadable of ${copyMap.sectorCount} sectors$note"
                 }
 
-            UiEffect.Kind.CaptureGptBackup ->
+            UiEffect.CaptureGptBackup ->
                 submitReadOnlyDiskOperation(OperationTitle.GptCriticalBackup) { disk, operation, _ ->
                     val blob = GptBackup.backupCriticalSectors(disk)
                     val info = GptCriticalBackup.inspectCaptured(
@@ -978,97 +973,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "${info.backup.currentLba})"
                 }
 
-            UiEffect.Kind.CancelOperation -> {
+            UiEffect.CancelOperation -> {
                 activeHandle?.cancel()
             }
-            UiEffect.Kind.LoadFiles -> {
-                listDirectory(effect.path ?: state.currentPath)
+            is UiEffect.LoadFiles -> {
+                listDirectory(effect.path)
             }
-            UiEffect.Kind.LoadFilesystemUsage -> {
-                val partitionId = effect.partitionId
-                val usageKey = effect.usageKey
-                val generation = effect.usageGeneration
-                if (partitionId != null && usageKey != null && generation != null) {
-                    measureFilesystemUsage(partitionId, usageKey, generation)
-                }
+            is UiEffect.LoadFilesystemUsage -> {
+                measureFilesystemUsage(
+                    effect.partitionId,
+                    effect.usageKey,
+                    effect.usageGeneration,
+                )
             }
-            UiEffect.Kind.CreateFolder -> {
-                val name = effect.name
-                val path = effect.path
-                if (name != null && path != null) createFolder(path, name)
+            is UiEffect.CreateFolder -> {
+                createFolder(effect.path, effect.name)
             }
-            UiEffect.Kind.DeleteEntry -> {
-                val name = effect.name
-                val path = effect.path
-                if (name != null && path != null) deleteEntry(path, name)
+            is UiEffect.DeleteEntry -> {
+                deleteEntry(effect.path, effect.name)
             }
-            UiEffect.Kind.RenameEntry -> {
-                val name = effect.name
-                val newName = effect.newName
-                val path = effect.path
+            is UiEffect.RenameEntry -> {
+                renameEntry(effect.path, effect.name, effect.newName, effect.binding)
+            }
+            is UiEffect.UploadFile -> {
+                uploadFile(effect.path, effect.uri)
+            }
+            is UiEffect.DownloadFile -> {
+                downloadFile(effect.path, effect.name, effect.uri)
+            }
+            is UiEffect.StageUsbImageForRawWrite -> {
                 val binding = effect.binding
-                if (name != null && newName != null && path != null && binding != null) {
-                    renameEntry(path, name, newName, binding)
-                }
-            }
-            UiEffect.Kind.UploadFile -> {
-                val uri = effect.uri
-                val path = effect.path
-                if (uri != null && path != null) uploadFile(path, uri)
-            }
-            UiEffect.Kind.DownloadFile -> {
-                val name = effect.name
-                val uri = effect.uri
-                val path = effect.path
-                if (name != null && uri != null && path != null) downloadFile(path, name, uri)
-            }
-            UiEffect.Kind.StageUsbImageForRawWrite -> {
-                val name = effect.name
-                val path = effect.path
-                val binding = effect.binding
-                if (name != null && path != null && binding != null) {
-                    stageUsbImageForRawWrite(path, name, binding)
+                if (binding != null) {
+                    stageUsbImageForRawWrite(effect.path, effect.name, binding)
                 } else {
                     onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CannotStage)))
                 }
             }
 
-            UiEffect.Kind.LoadRawSources -> {
-                val binding = effect.binding
-                val generation = effect.requestGeneration
-                if (binding != null && generation != null) {
-                    loadRawSourceCandidates(binding, generation)
-                }
+            is UiEffect.LoadRawSources -> {
+                loadRawSourceCandidates(effect.binding, effect.requestGeneration)
             }
 
-            UiEffect.Kind.CancelRawSources -> {
+            UiEffect.CancelRawSources -> {
                 rawSourceHandle?.cancel()
                 rawSourceHandle = null
             }
 
-            UiEffect.Kind.LoadWindowsIsoCandidates -> {
-                val generation = effect.requestGeneration
-                if (generation != null) loadWindowsImageCandidates(generation)
+            is UiEffect.LoadWindowsIsoCandidates -> {
+                loadWindowsImageCandidates(effect.requestGeneration)
             }
 
-            UiEffect.Kind.InspectIsoImport -> {
-                val uri = effect.uri
-                val generation = effect.requestGeneration
-                if (uri != null && generation != null) {
-                    inspectImageImport(uri, generation, effect.importKind, effect.importDirectory)
-                }
+            is UiEffect.InspectIsoImport -> {
+                inspectImageImport(
+                    effect.uri,
+                    effect.requestGeneration,
+                    effect.importKind,
+                    effect.importDirectory,
+                )
             }
 
-            UiEffect.Kind.ImportIso -> {
-                val proposal = effect.isoImport
-                if (proposal != null) importImage(proposal, effect.overwrite)
+            is UiEffect.ImportIso -> {
+                importImage(effect.isoImport, effect.overwrite)
             }
 
-            UiEffect.Kind.LinkXml -> {
-                val imagePaths =
-                    effect.imagePaths.takeIf { it.isNotEmpty() }
-                        ?: effect.isoName?.takeIf { it.isNotBlank() }?.let { listOf(it) }
-                        ?: emptyList()
+            is UiEffect.LinkXml -> {
+                val imagePaths = effect.imagePaths
                 if (imagePaths.isEmpty()) {
                     onIntent(
                         UiIntent.OperationUpdated(
@@ -1082,7 +1051,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return
                 }
                 val primaryImage = imagePaths.first()
-                val confirmed = effect.confirmation ?: throw IllegalStateException("Ventoy link confirmation missing")
+                val confirmed = effect.confirmation
                 val operationGeneration = attachGeneration
                 val deviceIdentity = confirmed.identity.identity
                 val linkTitle = OperationTitle.AutounattendXmlLink
@@ -1133,9 +1102,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 scope.launch {
                     try {
                         val outcome = handle.await()
-                        val mappedState = usb.operation.OperationCoordination.uiState(outcome)
+                        val mappedState = usb.ui.serviceOperationUiState(outcome)
                         val failure = (outcome as? usb.operation.OperationState.Failed)?.cause
-                        val errorMsg = usb.operation.OperationCoordination.errorMessage(outcome)
+                        val errorMsg = usb.ui.serviceOperationErrorMessage(outcome)
                         onIntent(
                             UiIntent.OperationUpdated(
                                 OperationProgress(
@@ -1173,41 +1142,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            UiEffect.Kind.LoadWindowsLinks -> {
-                val generation = effect.requestGeneration
-                if (generation != null) loadWindowsImageLinks(generation)
+            is UiEffect.LoadWindowsLinks -> {
+                loadWindowsImageLinks(effect.requestGeneration)
             }
 
-            UiEffect.Kind.UnlinkXml -> {
+            is UiEffect.UnlinkXml -> {
                 if (effect.imagePaths.isNotEmpty()) unlinkWindowsImages(effect.imagePaths)
             }
 
-            UiEffect.Kind.SaveWindowsControls -> saveWindowsControls()
+            UiEffect.SaveWindowsControls -> saveWindowsControls()
 
-            UiEffect.Kind.LoadAutounattend ->
-                effect.xmlName?.let { loadAutounattend(it, effect.requestGeneration ?: 0L) }
+            is UiEffect.LoadAutounattend ->
+                loadAutounattend(effect.xmlName, effect.requestGeneration)
 
-            UiEffect.Kind.LoadAutounattendCandidates ->
-                effect.xmlName?.let {
-                    loadAutounattendCandidates(it, effect.requestGeneration ?: 0L)
-                }
+            is UiEffect.LoadAutounattendCandidates ->
+                loadAutounattendCandidates(effect.xmlName, effect.requestGeneration)
 
-            UiEffect.Kind.GenerateAutounattend -> generateAutounattend(effect)
+            is UiEffect.GenerateAutounattend -> generateAutounattend(effect)
 
-            UiEffect.Kind.LoadVentoyGlobalSettings -> loadVentoyGlobalSettings()
+            UiEffect.LoadVentoyGlobalSettings -> loadVentoyGlobalSettings()
 
-            UiEffect.Kind.LoadVentoyFolders -> loadVentoyFolders()
+            UiEffect.LoadVentoyFolders -> loadVentoyFolders()
 
-            UiEffect.Kind.SetVentoyGlobalSetting -> {
-                val key = effect.settingKey
-                if (key != null) setVentoyGlobalSetting(key, effect.settingValue)
+            is UiEffect.SetVentoyGlobalSetting -> {
+                setVentoyGlobalSetting(effect.settingKey, effect.settingValue)
             }
 
-            UiEffect.Kind.BindAutounattend -> {
-                val name = effect.xmlName
-                if (name != null && effect.imagePaths.isNotEmpty()) {
+            is UiEffect.BindAutounattend -> {
+                if (effect.imagePaths.isNotEmpty()) {
                     bindAutounattend(
-                        name,
+                        effect.xmlName,
                         effect.imagePaths,
                         effect.allowDestructiveTemplate,
                         effect.expectedTemplateSha256,
@@ -1215,13 +1179,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            UiEffect.Kind.UnbindAutounattend -> {
-                val name = effect.xmlName
-                if (name != null && effect.imagePaths.isNotEmpty()) {
-                    unbindAutounattend(name, effect.imagePaths.first())
+            is UiEffect.UnbindAutounattend -> {
+                if (effect.imagePaths.isNotEmpty()) {
+                    unbindAutounattend(effect.xmlName, effect.imagePaths.first())
                 }
             }
-            UiEffect.Kind.RunSelfTest -> {
+            UiEffect.RunSelfTest -> {
                 runSelfTest()
             }
         }
@@ -2485,8 +2448,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 ticker.cancel()
-                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -2565,8 +2528,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -2639,8 +2602,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -2817,9 +2780,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun generateAutounattend(effect: UiEffect) {
-        val xmlName = effect.xmlName ?: return
-        val params = effect.autounattendParams ?: return
+    private fun generateAutounattend(effect: UiEffect.GenerateAutounattend) {
+        val xmlName = effect.xmlName
+        val params = effect.autounattendParams
         val imagePaths = effect.imagePaths
         val overwriteXml = effect.overwriteXml
         val expectedAttach = attachGeneration
@@ -2865,8 +2828,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -3013,8 +2976,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(
@@ -3115,8 +3078,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.operation.OperationCoordination.uiState(outcome)
-                val message = usb.operation.OperationCoordination.errorMessage(outcome, op.failureCause)
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
                 onIntent(
                     UiIntent.OperationUpdated(
                         OperationProgress(

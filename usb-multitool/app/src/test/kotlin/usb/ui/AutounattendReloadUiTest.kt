@@ -57,8 +57,8 @@ class AutounattendReloadUiTest {
         ) { "LoadAutounattend must publish one shared requestGeneration" }
         assertEquals(generation, result.state.autounattendRequestGeneration)
         assertEquals(
-            setOf(UiEffect.Kind.LoadAutounattend, UiEffect.Kind.LoadAutounattendCandidates),
-            result.effects.map { it.kind }.toSet(),
+            setOf(UiEffect.LoadAutounattend::class, UiEffect.LoadAutounattendCandidates::class),
+            result.effects.map { it::class }.toSet(),
         )
 
         // Both answers of that one generation must be accepted, not just the newer one.
@@ -117,10 +117,13 @@ class AutounattendReloadUiTest {
 
         assertEquals(2, result.effects.size)
         assertEquals(
-            setOf(UiEffect.Kind.LoadAutounattend, UiEffect.Kind.LoadAutounattendCandidates),
-            result.effects.map { it.kind }.toSet(),
+            setOf(UiEffect.LoadAutounattend::class, UiEffect.LoadAutounattendCandidates::class),
+            result.effects.map { it::class }.toSet(),
         )
-        assertEquals(template, result.effects.first().xmlName)
+        assertEquals(
+            template,
+            result.effects.filterIsInstance<UiEffect.LoadAutounattend>().single().xmlName,
+        )
     }
 
     @Test

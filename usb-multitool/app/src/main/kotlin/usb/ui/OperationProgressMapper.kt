@@ -62,3 +62,24 @@ fun readOnlyOperationProgress(
         cancelable = cancelable,
     )
 }
+
+/** Maps every service state to its UI state without coordinator-specific branching. */
+fun serviceOperationUiState(state: ServiceOperationState): OperationState = when (state) {
+    is ServiceOperationState.Queued -> OperationState.Queued
+    is ServiceOperationState.Running -> OperationState.Running
+    is ServiceOperationState.Completed -> OperationState.Completed
+    is ServiceOperationState.Cancelled -> OperationState.Cancelled
+    is ServiceOperationState.Partial -> OperationState.Partial
+    is ServiceOperationState.Failed -> OperationState.Failed
+}
+
+/** Prefer terminal failure message, then operation.failureCause, then simple class name. */
+fun serviceOperationErrorMessage(
+    state: ServiceOperationState,
+    operationFailure: Throwable? = null,
+): String? =
+    (state as? ServiceOperationState.Failed)?.cause?.message
+        ?: operationFailure?.message
+        ?: (state as? ServiceOperationState.Failed)?.cause?.javaClass?.simpleName
+        ?: operationFailure?.javaClass?.simpleName
+
