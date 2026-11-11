@@ -38,6 +38,42 @@ sealed class UiIntent {
     data class SelectTab(val tab: ShellTab) : UiIntent()
 
     data class SelectPartition(val partitionId: String) : UiIntent()
+
+    /**
+     * Open the simplified Files picker. [partitionId] null means the Ventoy data partition
+     * for Ventoy purposes, or the current selection for a raw source; an explicit id that
+     * is missing fails closed instead of falling back to another partition.
+     */
+    data class BeginFilesPick(
+        val purpose: FilesPickPurpose,
+        val returnTab: ShellTab,
+        val target: FilesPickTarget = FilesPickTarget.File,
+        val partitionId: String? = null,
+        val initialPath: String = "/",
+    ) : UiIntent()
+
+    /** Leave the picker without a result and return to [FilesPickMode.returnTab]. */
+    data object CancelFilesPick : UiIntent()
+
+    /** Select one regular [name] from the current listing; the reducer builds the path. */
+    data class ConfirmFilesPickFile(val name: String) : UiIntent()
+
+    /** Confirm the currently open folder (root included). */
+    data object ConfirmFilesPickFolder : UiIntent()
+
+    /**
+     * The host finished a phone-to-stick copy of [path]. Posted only after the operation is
+     * Completed and the volume is durably closed; never on Cancelled/Partial/Failed.
+     */
+    data class FilesPickCopySucceeded(
+        val path: String,
+        val sizeBytes: Long? = null,
+        /** Session that started the copy; a newer session never accepts this result. */
+        val pickSessionId: String? = null,
+    ) : UiIntent()
+
+    /** Drop the stored result for one purpose, or every purpose when null. */
+    data class ClearFilesPickSelection(val purpose: FilesPickPurpose? = null) : UiIntent()
     /** Lift or restore write protection for exactly [partitionId] on the current attachment. */
     data class SetVtoyEfiWritable(val partitionId: String, val enabled: Boolean) : UiIntent()
     data class SetVtoyBypassChecks(val enabled: Boolean?) : UiIntent()
@@ -167,6 +203,11 @@ sealed class UiIntent {
         val uri: String,
         val kind: WindowsImportKind = WindowsImportKind.Image,
         val directory: String? = null,
+        /** Immutable pick session that launched the picker; null for a non-picker import. */
+        val pickSessionId: String? = null,
+        /** Attachment the system picker was launched for; stale XML results are rejected. */
+        val expectedIdentity: String? = null,
+        val expectedAttachGeneration: Long? = null,
     ) : UiIntent()
     data class WindowsIsoImportInspected(
         val uri: String,
@@ -178,6 +219,8 @@ sealed class UiIntent {
         val kind: WindowsImportKind = WindowsImportKind.Image,
         val templateMarkers: List<String> = emptyList(),
         val directory: String? = null,
+        /** Echo of the pick session; a result for an older session is dropped. */
+        val pickSessionId: String? = null,
     ) : UiIntent()
     /** Only an explicit true may replace an existing file. */
     data class ConfirmWindowsIsoImport(val overwrite: Boolean) : UiIntent()
@@ -549,6 +592,12 @@ sealed interface UiEffect {
 
     data object CancelRawSources : UiEffect
 
+    /** Disown any running phone-file inspection; the USB guard ends only on host Finished. */
+    data object CancelIsoImportInspection : UiEffect
+
+    /** Drop only a pending system picker owned by [pickSessionId]; newer launches survive. */
+    data class CancelPendingWindowsImport(val pickSessionId: String) : UiEffect
+
     data class LoadWindowsIsoCandidates(val requestGeneration: Long) : UiEffect
 
     data class InspectIsoImport(
@@ -556,6 +605,7 @@ sealed interface UiEffect {
         val requestGeneration: Long,
         val importKind: WindowsImportKind,
         val importDirectory: String?,
+        val pickSessionId: String? = null,
     ) : UiEffect
 
     data class ImportIso(
@@ -638,23 +688,84 @@ object UiReducer {
         when (intent) {
             is UiIntent.SelectTab -> {
                 val enteringFiles = intent.tab == ShellTab.Files && state.tab != ShellTab.Files
-                val switched = state.copy(tab = intent.tab, statusMessage = null)
-                // Entering Files re-reads the open folder: changes may have happened while
-                // another tab owned the screen. One request per entry, none while one is
-                // already outstanding.
-                if (enteringFiles &&
-                    !state.filesPending &&
-                    state.presence == DevicePresence.Ready &&
-                    state.actionsEnabled
+                // Any other tab leaves pick mode, exactly like CancelFilesPick. A running
+                // import or confirmation keeps the screen: the user must see it finish.
+                val pickExitBlock = if (intent.tab != ShellTab.Files &&
+                    state.filesPickMode != null
                 ) {
-                    filesReload(switched)
+                    filesPickExitBlock(state)
                 } else {
-                    ReduceResult(switched)
+                    null
+                }
+                if (pickExitBlock != null) {
+                    ReduceResult(state.copy(statusMessage = pickExitBlock))
+                } else {
+                    val leavingPick = intent.tab != ShellTab.Files && state.filesPickMode != null
+                    val cancelHost =
+                        leavingPick &&
+                            (state.isoImportSafInFlight != null ||
+                                state.isoImportUsbInFlight != null)
+                    val switched =
+                        if (leavingPick) {
+                            state.copy(
+                                tab = intent.tab,
+                                statusMessage =
+                                    if (cancelHost) {
+                                        UiMessage.Key(UiMessageKey.ImportInspectionCancelling)
+                                    } else {
+                                        null
+                                    },
+                                filesPickSession = newFilesPickSession(),
+                                filesPickMode = null,
+                                pendingIsoImport = null,
+                                deferredIsoImport = null,
+                                isoImportError = null,
+                                isoImportSafInFlight = null,
+                                isoImportGeneration = state.isoImportGeneration + 1,
+                            )
+                        } else {
+                            state.copy(tab = intent.tab, statusMessage = null)
+                        }
+                    // Entering Files re-reads the open folder: changes may have happened while
+                    // another tab owned the screen. One request per entry, none while one is
+                    // already outstanding.
+                    val base =
+                        if (enteringFiles &&
+                            !state.filesPending &&
+                            state.presence == DevicePresence.Ready &&
+                            state.actionsEnabled
+                        ) {
+                            filesReload(switched)
+                        } else {
+                            ReduceResult(switched)
+                        }
+                    if (leavingPick) {
+                        base.copy(
+                            effects =
+                                base.effects +
+                                    buildList {
+                                        state.filesPickMode?.sessionId?.let {
+                                            add(UiEffect.CancelPendingWindowsImport(it))
+                                        }
+                                        if (cancelHost) {
+                                            add(UiEffect.CancelIsoImportInspection)
+                                        }
+                                    },
+                        )
+                    } else {
+                        base
+                    }
                 }
             }
 
             is UiIntent.SelectPartition ->
-                if (!state.actionsEnabled) {
+                if (state.filesPickMode != null) {
+                    // The session is pinned to one partition; switching would browse another
+                    // volume while the caller still thinks it is choosing from the pinned one.
+                    ReduceResult(
+                        state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                    )
+                } else if (!state.actionsEnabled) {
                     // Switching mid-operation would post a Running LoadFiles over the live
                     // operation and orphan it from Cancel; report only why nothing changed.
                     ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
@@ -681,6 +792,38 @@ object UiReducer {
                             // Ventoy/XML catalogs are stick-scoped, not partition-scoped.
                         ),
                         effects = listOf(UiEffect.LoadFiles(path = "/")),
+                    )
+                }
+
+            is UiIntent.BeginFilesPick -> beginFilesPick(state, intent)
+
+            UiIntent.CancelFilesPick -> cancelFilesPick(state)
+
+            is UiIntent.ConfirmFilesPickFile -> confirmFilesPickFile(state, intent.name)
+
+            UiIntent.ConfirmFilesPickFolder -> confirmFilesPickFolder(state)
+
+            is UiIntent.FilesPickCopySucceeded ->
+                filesPickCopySucceeded(
+                    state,
+                    intent.path,
+                    intent.sizeBytes,
+                    intent.pickSessionId,
+                )
+
+            is UiIntent.ClearFilesPickSelection ->
+                if (state.filesPickSelections.isEmpty()) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            filesPickSelections =
+                                if (intent.purpose == null) {
+                                    emptyMap()
+                                } else {
+                                    state.filesPickSelections - intent.purpose
+                                },
+                        ),
                     )
                 }
 
@@ -799,6 +942,8 @@ object UiReducer {
                     sameStick &&
                         intent.presence != DevicePresence.Disconnected &&
                         intent.presence != DevicePresence.Absent
+                // Pick sessions/results live only while that exact stick is attached.
+                val keepFilesPick = keepVentoy
                 // The EFI write override belongs to one physical attachment: a partition
                 // refresh keeps it only with a trusted identity match.
                 val sameAttachment = intent.presence == DevicePresence.Ready && sameStick
@@ -852,6 +997,42 @@ object UiReducer {
                         incoming.copy(capacityBytes = previous.capacityBytes)
                     } else {
                         incoming
+                    }
+                val retainedPickMode =
+                    state.filesPickMode?.takeIf { mode ->
+                        keepFilesPick &&
+                            mode.partitionId == selected &&
+                            device != null &&
+                            mode.identity == device.identity &&
+                            mode.attachGeneration == device.attachGeneration &&
+                            partitions.any {
+                                it.id == mode.partitionId &&
+                                    it.startLba == mode.startLba &&
+                                    it.sectorCount == mode.sectorCount
+                            }
+                    }
+                // A geometry/attach/partition change under a live session invalidates the
+                // session token and disowns its host inspection. The USB guard itself is
+                // released only by the host's Finished after the disk close.
+                val pickLost = state.filesPickMode != null && retainedPickMode == null
+                // Any real attach/inspection invalidation disowns the host ticket. XML has
+                // no pick mode, so gating this on pickLost alone could leave a blocking read
+                // owning the inspection slot forever.
+                val cancelPickInspection =
+                    (!keepVentoy || pickLost) &&
+                        (state.isoImportSafInFlight != null ||
+                            state.isoImportUsbInFlight != null)
+                val retainedSelections =
+                    state.filesPickSelections.filterValues { selection ->
+                        keepFilesPick &&
+                            device != null &&
+                            selection.identity == device.identity &&
+                            selection.attachGeneration == device.attachGeneration &&
+                            partitions.any {
+                                it.id == selection.partitionId &&
+                                    it.startLba == selection.startLba &&
+                                    it.sectorCount == selection.sectorCount
+                            }
                     }
                 ReduceResult(
                     state.copy(
@@ -908,6 +1089,14 @@ object UiReducer {
                             if (probingRetain) state.rangeProbeRequestedRange else null,
                         selectedPartitionId = selected,
                         currentPath = path,
+                        filesPickSession =
+                            if (pickLost) {
+                                newFilesPickSession()
+                            } else {
+                                state.filesPickSession
+                            },
+                        filesPickMode = retainedPickMode,
+                        filesPickSelections = retainedSelections,
                         // Probe keeps the last listing; Ready clears until FilesListed lands.
                         files = when {
                             reloadFiles -> emptyList()
@@ -948,26 +1137,39 @@ object UiReducer {
                             if (keepVentoy) state.windowsIsoCandidatesError else null,
                         // Same-stick probes (onStart re-read) must not orphan an inspected
                         // result the host is about to post; only a real attach change drops it.
-                        pendingIsoImport = if (keepVentoy) state.pendingIsoImport else null,
-                        deferredIsoImport = if (keepVentoy) state.deferredIsoImport else null,
+                        pendingIsoImport =
+                            if (keepVentoy && !pickLost) state.pendingIsoImport else null,
+                        deferredIsoImport =
+                            if (keepVentoy && !pickLost) state.deferredIsoImport else null,
+                        isoImportError =
+                            if (keepVentoy && !pickLost) state.isoImportError else null,
                         // Replug disowns the host ticket, and the worker releases its slot when
                         // it ends, so a stale guard cannot block the next stick; on the same
-                        // stick the running inspection keeps its guard.
+                        // stick the running inspection keeps its guard. A lost pin disowns it
+                        // too, but a USB guard is kept until the host reports the closed disk.
                         isoImportSafInFlight =
-                            if (keepVentoy) state.isoImportSafInFlight else null,
-                        isoImportUsbInFlight =
-                            if (keepVentoy) state.isoImportUsbInFlight else null,
+                            if (keepVentoy && !pickLost) state.isoImportSafInFlight else null,
+                        // The SAF ticket is disowned above, but the USB worker may still be
+                        // closing the disk. Its guard stays until WindowsIsoImportFinished
+                        // for this generation; clearing it here would admit a second
+                        // inspection/import before the real close.
+                        isoImportUsbInFlight = state.isoImportUsbInFlight,
                         pendingImportFolderPick =
-                            if (keepVentoy) state.pendingImportFolderPick else null,
+                            if (keepVentoy && !pickLost) state.pendingImportFolderPick else null,
                         pendingImportFolderPickLoad =
-                            if (keepVentoy) state.pendingImportFolderPickLoad else false,
+                            if (keepVentoy && !pickLost) {
+                                state.pendingImportFolderPickLoad
+                            } else {
+                                false
+                            },
                         deferredImportFolderPick =
-                            if (keepVentoy) state.deferredImportFolderPick else null,
+                            if (keepVentoy && !pickLost) state.deferredImportFolderPick else null,
                         // A same-stick probe must not invalidate the live inspection: its
                         // UsbStarted/Inspected posts are gated by this generation. Only a real
-                        // attachment change bumps it (and disowns the host ticket).
+                        // attachment change or a lost pick pin bumps it (and disowns the host
+                        // ticket); a late Inspected then cannot join the next session.
                         isoImportGeneration =
-                            if (keepVentoy) {
+                            if (keepVentoy && !pickLost) {
                                 state.isoImportGeneration
                             } else {
                                 state.isoImportGeneration + 1
@@ -1038,10 +1240,14 @@ object UiReducer {
                             },
                     ),
                     effects =
-                        if (loadFilesNow) {
-                            listOf(UiEffect.LoadFiles(path = path))
-                        } else {
-                            emptyList()
+                        buildList {
+                            if (loadFilesNow) add(UiEffect.LoadFiles(path = path))
+                            if (pickLost) {
+                                state.filesPickMode?.sessionId?.let {
+                                    add(UiEffect.CancelPendingWindowsImport(it))
+                                }
+                            }
+                            if (cancelPickInspection) add(UiEffect.CancelIsoImportInspection)
                         },
                 )
             }
@@ -2318,7 +2524,48 @@ object UiReducer {
 
             is UiIntent.RequestImportWindowsIso -> {
                 val uri = intent.uri.trim()
-                when {
+                val pick = state.filesPickMode
+                val pickProblem =
+                    if (pick == null) {
+                        // Images exist only inside the simplified picker. A late/duplicate
+                        // result after its closure must never fall back to the default
+                        // /ISO folder; XML templates keep their independent flow.
+                        if (intent.kind == WindowsImportKind.Image) {
+                            UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)
+                        } else {
+                            null
+                        }
+                    } else {
+                        val directory = safePickPath(intent.directory ?: state.currentPath)
+                        when {
+                            pick.purpose != FilesPickPurpose.WindowsImage ||
+                                intent.kind != WindowsImportKind.Image ->
+                                UiMessage.Key(UiMessageKey.FilesPickActive)
+                            intent.pickSessionId != pick.sessionId ->
+                                UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)
+                            !pick.matches(state) -> UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)
+                            directory == null || directory != safePickPath(state.currentPath) ->
+                                UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)
+                            else -> null
+                        }
+                    }
+                val staleContext =
+                    intent.expectedAttachGeneration != null &&
+                        (
+                            state.device?.identity != intent.expectedIdentity ||
+                                state.device?.attachGeneration !=
+                                intent.expectedAttachGeneration
+                        )
+                val importDirectory = pick?.let { state.currentPath } ?: intent.directory
+                if (staleContext || pickProblem != null) {
+                    ReduceResult(
+                        state.copy(
+                            statusMessage =
+                                pickProblem
+                                    ?: UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+                        ),
+                    )
+                } else when {
                     !state.actionsEnabled ||
                         state.pendingIsoImport != null ||
                         state.isoImportSafInFlight != null ||
@@ -2357,7 +2604,8 @@ object UiReducer {
                                     uri = uri,
                                     requestGeneration = generation,
                                     importKind = intent.kind,
-                                    importDirectory = intent.directory,
+                                    importDirectory = importDirectory,
+                                    pickSessionId = pick?.sessionId,
                                 ),
                             ),
                         )
@@ -2420,9 +2668,42 @@ object UiReducer {
 
             is UiIntent.WindowsIsoImportInspected -> {
                 val device = state.device
+                val pick = state.filesPickMode
+                val pickMismatch =
+                    if (intent.pickSessionId == null) {
+                        // A non-picker inspection must not land inside a live picker.
+                        pick != null
+                    } else {
+                        pick == null ||
+                            pick.sessionId != intent.pickSessionId ||
+                            pick.purpose != FilesPickPurpose.WindowsImage ||
+                            !pick.matches(state) ||
+                            safePickPath(intent.directory ?: state.currentPath) !=
+                            safePickPath(state.currentPath)
+                    }
                 if (device == null || intent.generation != state.isoImportGeneration) {
                     // Stale result for a cancelled/replaced inspection: keep the live guard.
                     ReduceResult(state)
+                } else if (pickMismatch) {
+                    // The pinned folder or attachment moved while the SAF read was in flight.
+                    // Drop the result and disown its generation; nothing is written.
+                    ReduceResult(
+                        state.copy(
+                            pendingIsoImport = null,
+                            deferredIsoImport = null,
+                            isoImportSafInFlight = null,
+                            isoImportGeneration = state.isoImportGeneration + 1,
+                            statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+                        ),
+                        effects =
+                            if (state.isoImportSafInFlight != null ||
+                                state.isoImportUsbInFlight != null
+                            ) {
+                                listOf(UiEffect.CancelIsoImportInspection)
+                            } else {
+                                emptyList()
+                            },
+                    )
                 } else {
                     val proposal =
                         IsoImportProposal(
@@ -2443,6 +2724,9 @@ object UiReducer {
                                         "/ISO"
                                     },
                             templateMarkers = intent.templateMarkers,
+                            partitionStartLba = pick?.startLba,
+                            partitionSectorCount = pick?.sectorCount,
+                            pickSessionId = pick?.sessionId,
                         )
                     if (intent.exists) {
                         // No write until the user explicitly accepts replacement. Kept even
@@ -2495,9 +2779,30 @@ object UiReducer {
             is UiIntent.ConfirmWindowsIsoImport -> {
                 val proposal = state.pendingIsoImport
                 val device = state.device
+                val pick = state.filesPickMode
+                val proposalSession = proposal?.pickSessionId
+                val pickMoved =
+                    proposal != null &&
+                        when {
+                            proposalSession == null -> pick != null
+                            pick == null -> true
+                            pick.sessionId != proposalSession -> true
+                            pick.purpose != FilesPickPurpose.WindowsImage -> true
+                            !pick.matches(state) -> true
+                            else ->
+                                safePickPath(proposal.directory) !=
+                                    safePickPath(state.currentPath)
+                        }
                 when {
                     proposal == null || device == null ->
                         ReduceResult(state.copy(pendingIsoImport = null))
+                    pickMoved ->
+                        ReduceResult(
+                            state.copy(
+                                pendingIsoImport = null,
+                                statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+                            ),
+                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     proposal.identity != device.identity ||
@@ -2579,30 +2884,53 @@ object UiReducer {
                     val token = state.ventoyFoldersRequest + 1L
                     val path = "/"
                     val loadNow = state.actionsEnabled
-                    ReduceResult(
-                        state.copy(
-                            ventoyFolderPath = path,
-                            ventoyFolders = null,
-                            ventoyFoldersError = null,
-                            ventoyFoldersLoading = loadNow,
-                            ventoyFoldersPending = false,
-                            ventoyFoldersRequest = token,
-                            pendingImportFolderPick = if (loadNow) intent.kind else null,
-                            deferredImportFolderPick = if (loadNow) null else intent.kind,
-                            pendingImportFolderPickLoad = !loadNow,
-                        ),
-                        effects =
-                            if (loadNow) {
-                                listOf(
-                                    UiEffect.LoadVentoyFolders(
-                                        requestToken = token,
-                                        path = path,
-                                    ),
-                                )
-                            } else {
-                                emptyList()
-                            },
-                    )
+                    if (state.filesPickMode != null) {
+                        // The picker's own folder vanished: restart the Files listing from
+                        // root and keep the pin. No Ventoy folder cache is involved.
+                        ReduceResult(
+                            state.copy(
+                                currentPath = path,
+                                files = emptyList(),
+                                filesError = null,
+                                filesListGeneration = state.filesListGeneration + 1L,
+                                filesPending = loadNow,
+                                pendingImportFolderPick = if (loadNow) intent.kind else null,
+                                deferredImportFolderPick = if (loadNow) null else intent.kind,
+                                pendingImportFolderPickLoad = !loadNow,
+                            ),
+                            effects =
+                                if (loadNow) {
+                                    listOf(UiEffect.LoadFiles(path = path))
+                                } else {
+                                    emptyList()
+                                },
+                        )
+                    } else {
+                        ReduceResult(
+                            state.copy(
+                                ventoyFolderPath = path,
+                                ventoyFolders = null,
+                                ventoyFoldersError = null,
+                                ventoyFoldersLoading = loadNow,
+                                ventoyFoldersPending = false,
+                                ventoyFoldersRequest = token,
+                                pendingImportFolderPick = if (loadNow) intent.kind else null,
+                                deferredImportFolderPick = if (loadNow) null else intent.kind,
+                                pendingImportFolderPickLoad = !loadNow,
+                            ),
+                            effects =
+                                if (loadNow) {
+                                    listOf(
+                                        UiEffect.LoadVentoyFolders(
+                                            requestToken = token,
+                                            path = path,
+                                        ),
+                                    )
+                                } else {
+                                    emptyList()
+                                },
+                        )
+                    }
                 }
             }
 
@@ -3546,50 +3874,75 @@ object UiReducer {
                 )
 
             is UiIntent.OpenDirectory -> {
-                val target = normalizeFatPath(intent.path)
-                ReduceResult(
-                    state.copy(
-                        currentPath = target,
-                        files = emptyList(),
-                        filesError = null,
-                        filesListGeneration = state.filesListGeneration + 1L,
-                        filesPending = true,
-                    ),
-                    effects = listOf(UiEffect.LoadFiles(path = target)),
-                )
-            }
-
-            UiIntent.NavigateUp -> {
-                val target = fatParentPath(state.currentPath)
-                if (target == state.currentPath) {
-                    ReduceResult(state)
-                } else {
-                    ReduceResult(
-                        state.copy(
-                            currentPath = target,
-                            files = emptyList(),
-                            filesError = null,
-                            filesListGeneration = state.filesListGeneration + 1L,
-                            filesPending = true,
-                        ),
-                        effects = listOf(UiEffect.LoadFiles(path = target)),
-                    )
+                val target = safePickPath(intent.path)
+                val mode = state.filesPickMode
+                when {
+                    target == null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                        )
+                    mode != null && !mode.matches(state) ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                        )
+                    else ->
+                        ReduceResult(
+                            state.copy(
+                                currentPath = target,
+                                files = emptyList(),
+                                filesError = null,
+                                filesListGeneration = state.filesListGeneration + 1L,
+                                filesPending = true,
+                            ),
+                            effects = listOf(UiEffect.LoadFiles(path = target)),
+                        )
                 }
             }
 
-            UiIntent.RefreshFiles ->
-                if (!state.actionsEnabled) {
+            UiIntent.NavigateUp -> {
+                val mode = state.filesPickMode
+                if (mode != null && !mode.matches(state)) {
+                    abortFilesPickPinLost(state)
+                } else {
+                    val target = fatParentPath(state.currentPath)
+                    if (target == state.currentPath) {
+                        ReduceResult(state)
+                    } else {
+                        ReduceResult(
+                            state.copy(
+                                currentPath = target,
+                                files = emptyList(),
+                                filesError = null,
+                                filesListGeneration = state.filesListGeneration + 1L,
+                                filesPending = true,
+                            ),
+                            effects = listOf(UiEffect.LoadFiles(path = target)),
+                        )
+                    }
+                }
+            }
+
+            UiIntent.RefreshFiles -> {
+                val mode = state.filesPickMode
+                if (mode != null && !mode.matches(state)) {
+                    abortFilesPickPinLost(state)
+                } else if (!state.actionsEnabled) {
                     ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                 } else {
                     // A manual refresh preempts an in-flight list: its older answer is
                     // dropped by the generation bump.
                     filesReload(state)
                 }
+            }
 
             is UiIntent.CreateFolder -> {
                 val name = intent.name.trim()
                 val block = writeBlockMessage(state)
                 when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     block != null ->
@@ -3613,6 +3966,10 @@ object UiReducer {
             is UiIntent.DeleteEntry -> {
                 val block = writeBlockMessage(state)
                 when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     block != null ->
@@ -3636,6 +3993,10 @@ object UiReducer {
             is UiIntent.RenameEntry -> {
                 val block = writeBlockMessage(state)
                 when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     bindingProblem(state, intent.binding) != null ->
@@ -3665,6 +4026,10 @@ object UiReducer {
             is UiIntent.UploadFile -> {
                 val block = writeBlockMessage(state)
                 when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     block != null ->
@@ -3685,6 +4050,10 @@ object UiReducer {
 
             is UiIntent.DownloadFile ->
                 when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                     !validEntryName(intent.name) ->
@@ -4474,6 +4843,373 @@ object UiReducer {
         // discards inherited progress when identity differs, and rewrites all sectors.
         // The confirmation shows the source identity difference instead of blocking.
         return null
+    }
+
+    /**
+     * UUID rather than a process counter: a SAF result can survive process death, while a
+     * new process would restart a counter and accidentally reuse its token.
+     *
+     * Deliberately the only non-deterministic value in a pick state transition: tests must
+     * assert token equality/inequality or pinned fields, never a concrete UUID. Everything
+     * else (path, identity, geometry, selection) stays reproducible.
+     */
+    private fun newFilesPickSession(): String = java.util.UUID.randomUUID().toString()
+
+    /**
+     * A picker may not disappear under a running/queued operation or a destructive
+     * confirmation: the copy progress and its outcome must stay visible.
+     */
+    private fun filesPickExitBlock(state: AppUiState): UiMessage? =
+        when {
+            state.operation?.state == OperationState.Running ||
+                state.operation?.state == OperationState.Queued ->
+                UiMessage.Key(UiMessageKey.WaitForOperation)
+            state.pendingConfirmation != null -> UiMessage.Key(UiMessageKey.WaitForOperation)
+            else -> null
+        }
+
+    /**
+     * Paths are absolute on the pinned partition. `.`/`..` and NUL are refused so a picker
+     * cannot climb out of the listed folder even if an intent is forged.
+     */
+    private fun safePickPath(path: String): String? {
+        if ('\u0000' in path) return null
+        val normalized = normalizeFatPath(path)
+        val segments = normalized.split('/').filter { it.isNotEmpty() }
+        if (segments.any { it == "." || it == ".." }) return null
+        return normalized
+    }
+
+    private fun beginFilesPick(state: AppUiState, intent: UiIntent.BeginFilesPick): ReduceResult {
+        if (state.filesPickMode != null) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+            )
+        }
+        if (!state.actionsEnabled) {
+            return ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+        }
+        if (state.pendingIsoImport != null ||
+            state.isoImportSafInFlight != null ||
+            state.isoImportUsbInFlight != null
+        ) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)),
+            )
+        }
+        val device =
+            state.device
+                ?: return ReduceResult(
+                    state.copy(statusMessage = presenceMessage(state.presence)),
+                )
+        val explicit = intent.partitionId
+        val partition =
+            when {
+                explicit != null -> state.partitions.firstOrNull { it.id == explicit }
+                intent.purpose == FilesPickPurpose.RawSource ->
+                    state.selectedPartitionId?.let { id ->
+                        state.partitions.firstOrNull { it.id == id }
+                    }
+                else -> state.ventoyDataPartition()
+            }
+        val path = safePickPath(intent.initialPath)
+        return when {
+            partition == null ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage =
+                            UiMessage.Key(
+                                if (intent.purpose == FilesPickPurpose.RawSource) {
+                                    UiMessageKey.SelectPartitionFirst
+                                } else {
+                                    UiMessageKey.VentoyDataPartitionMissing
+                                },
+                            ),
+                    ),
+                )
+            partition.startLba == null || partition.sectorCount == null ->
+                ReduceResult(
+                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)),
+                )
+            intent.purpose == FilesPickPurpose.WindowsImage && partition.readOnly ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage =
+                            message(UiMessageKey.ReadOnlyPartition, partition.name),
+                    ),
+                )
+            path == null ->
+                ReduceResult(
+                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                )
+            else -> {
+                val session = newFilesPickSession()
+                val mode =
+                    FilesPickMode(
+                        sessionId = session,
+                        purpose = intent.purpose,
+                        returnTab = intent.returnTab,
+                        target = intent.target,
+                        identity = device.identity,
+                        attachGeneration = device.attachGeneration,
+                        partitionId = partition.id,
+                        startLba = partition.startLba,
+                        sectorCount = partition.sectorCount,
+                    )
+                ReduceResult(
+                    state.copy(
+                        tab = ShellTab.Files,
+                        filesPickSession = session,
+                        filesPickMode = mode,
+                        selectedPartitionId = partition.id,
+                        currentPath = path,
+                        files = emptyList(),
+                        filesError = null,
+                        filesListGeneration = state.filesListGeneration + 1L,
+                        filesPending = true,
+                        pendingIsoImport = null,
+                        deferredIsoImport = null,
+                        isoImportError = null,
+                        isoImportSafInFlight = null,
+                        isoImportGeneration = state.isoImportGeneration + 1,
+                        statusMessage = null,
+                    ),
+                    effects = listOf(UiEffect.LoadFiles(path = path)),
+                )
+            }
+        }
+    }
+
+    private fun cancelFilesPick(state: AppUiState): ReduceResult {
+        val mode =
+            state.filesPickMode
+                ?: return ReduceResult(state)
+        val blocked = filesPickExitBlock(state)
+        if (blocked != null) {
+            return ReduceResult(state.copy(statusMessage = blocked))
+        }
+        val hostInspection =
+            state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
+        return ReduceResult(
+            state.copy(
+                tab = mode.returnTab,
+                filesPickSession = newFilesPickSession(),
+                filesPickMode = null,
+                statusMessage =
+                    if (hostInspection) {
+                        UiMessage.Key(UiMessageKey.ImportInspectionCancelling)
+                    } else {
+                        null
+                    },
+                pendingIsoImport = null,
+                deferredIsoImport = null,
+                isoImportError = null,
+                isoImportSafInFlight = null,
+                // The USB guard ends only when the host reports the closed disk (Finished).
+                isoImportGeneration = state.isoImportGeneration + 1,
+            ),
+            effects =
+                buildList {
+                    if (hostInspection) add(UiEffect.CancelIsoImportInspection)
+                    add(UiEffect.CancelPendingWindowsImport(mode.sessionId))
+                },
+        )
+    }
+
+    /** The pin no longer names the live attachment/partition: close it, write nothing. */
+    private fun abortFilesPickPinLost(state: AppUiState): ReduceResult {
+        val mode =
+            state.filesPickMode
+                ?: return ReduceResult(state)
+        val hostInspection =
+            state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
+        return ReduceResult(
+            state.copy(
+                tab = mode.returnTab,
+                filesPickSession = newFilesPickSession(),
+                filesPickMode = null,
+                statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+                pendingIsoImport = null,
+                deferredIsoImport = null,
+                isoImportError = null,
+                isoImportSafInFlight = null,
+                isoImportGeneration = state.isoImportGeneration + 1,
+            ),
+            effects =
+                buildList {
+                    if (hostInspection) add(UiEffect.CancelIsoImportInspection)
+                    add(UiEffect.CancelPendingWindowsImport(mode.sessionId))
+                },
+        )
+    }
+
+    private fun finishFilesPick(
+        state: AppUiState,
+        mode: FilesPickMode,
+        selection: FilesPickSelection,
+        status: UiMessage? = null,
+        effect: UiEffect? = null,
+    ): ReduceResult {
+        if (!mode.matches(state)) return abortFilesPickPinLost(state)
+        val hostInspection =
+            state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
+        val staleInspection =
+            hostInspection ||
+                state.pendingIsoImport != null ||
+                state.deferredIsoImport != null ||
+                state.isoImportError != null
+        return ReduceResult(
+            state.copy(
+                tab = mode.returnTab,
+                filesPickSession = newFilesPickSession(),
+                filesPickMode = null,
+                filesPickSelections = state.filesPickSelections + (mode.purpose to selection),
+                statusMessage = status,
+                pendingIsoImport = null,
+                deferredIsoImport = null,
+                isoImportError = null,
+                isoImportSafInFlight = null,
+                // The USB guard itself is released only by host Finished after disk close.
+                isoImportGeneration =
+                    if (staleInspection) {
+                        state.isoImportGeneration + 1
+                    } else {
+                        state.isoImportGeneration
+                    },
+            ),
+            effects =
+                buildList {
+                    effect?.let(::add)
+                    if (hostInspection) add(UiEffect.CancelIsoImportInspection)
+                },
+        )
+    }
+
+    private fun confirmFilesPickFile(state: AppUiState, name: String): ReduceResult {
+        val mode =
+            state.filesPickMode
+                ?: return ReduceResult(state)
+        if (mode.target != FilesPickTarget.File) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        if (!mode.matches(state)) return abortFilesPickPinLost(state)
+        if (!state.actionsEnabled) {
+            return ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+        }
+        // A stale row must not be confirmed while the listing is loading or failed.
+        if (state.filesPending || state.filesError != null) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        val entry = state.files.firstOrNull { it.name == name && !it.isDirectory }
+        if (entry == null) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        val path = fatChildPath(state.currentPath, entry.name)
+        val selection = mode.selection(path, entry.name, entry.sizeBytes, isDirectory = false)
+        if (mode.purpose == FilesPickPurpose.RawSource) {
+            val device =
+                state.device
+                    ?: return abortFilesPickPinLost(state)
+            val binding =
+                PartitionBinding(
+                    device = device,
+                    partitionId = mode.partitionId,
+                    startLba = mode.startLba,
+                    sectorCount = mode.sectorCount,
+                )
+            return finishFilesPick(
+                state = state,
+                mode = mode,
+                selection = selection,
+                status = UiMessage.Key(UiMessageKey.StagingFile, listOf(entry.name)),
+                effect =
+                    UiEffect.StageUsbImageForRawWrite(
+                        path = state.currentPath,
+                        name = entry.name,
+                        binding = binding,
+                    ),
+            )
+        }
+        return finishFilesPick(state, mode, selection)
+    }
+
+    private fun confirmFilesPickFolder(state: AppUiState): ReduceResult {
+        val mode =
+            state.filesPickMode
+                ?: return ReduceResult(state)
+        if (mode.target != FilesPickTarget.Folder) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        if (!mode.matches(state)) return abortFilesPickPinLost(state)
+        if (!state.actionsEnabled) {
+            return ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+        }
+        val path = safePickPath(state.currentPath)
+        if (path == null || state.filesPending || state.filesError != null) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        val name = if (path == "/") "/" else path.substringAfterLast('/')
+        return finishFilesPick(
+            state = state,
+            mode = mode,
+            selection = mode.selection(path, name, sizeBytes = 0UL, isDirectory = true),
+        )
+    }
+
+    private fun filesPickCopySucceeded(
+        state: AppUiState,
+        rawPath: String,
+        sizeBytes: Long?,
+        pickSessionId: String?,
+    ): ReduceResult {
+        val mode =
+            state.filesPickMode
+                ?: return ReduceResult(state)
+        if (mode.purpose != FilesPickPurpose.WindowsImage ||
+            mode.target != FilesPickTarget.File
+        ) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+            )
+        }
+        if (pickSessionId != mode.sessionId) {
+            // A copy started by an older session must never select into this one.
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        if (!mode.matches(state)) return abortFilesPickPinLost(state)
+        val path = safePickPath(rawPath)
+        val leaf = path?.substringAfterLast('/').orEmpty()
+        if (path == null ||
+            leaf.isEmpty() ||
+            fatChildPath(state.currentPath, leaf) != path
+        ) {
+            return ReduceResult(
+                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+        }
+        return finishFilesPick(
+            state = state,
+            mode = mode,
+            selection =
+                mode.selection(
+                    path = path,
+                    name = leaf,
+                    sizeBytes = sizeBytes?.takeIf { it >= 0L }?.toULong() ?: 0UL,
+                    isDirectory = false,
+                ),
+        )
     }
 
     /** Live sector count when the attachment exposes it; null keeps the check unavailable. */

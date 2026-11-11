@@ -43,6 +43,7 @@ for suite in \
   VentoyUiStateTest \
   VentoySettingsUiTest \
   PhoneImportUiTest \
+  FilesPickUiTest \
   UiEffectTypingTest \
   ServiceOperationMappingTest \
   TargetDiskLayoutEditorTest
@@ -96,6 +97,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/OperationProgressMapper.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/WindowsImportLaunchQueue.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FormatPickerTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRenameUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/SchemeInitUiTest.kt" \
@@ -115,6 +117,7 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoyUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoySettingsUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/FilesPickUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiEffectTypingTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ServiceOperationMappingTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/TargetDiskLayoutEditorTest.kt" \

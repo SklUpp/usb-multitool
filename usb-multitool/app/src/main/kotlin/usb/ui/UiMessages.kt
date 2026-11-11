@@ -55,6 +55,23 @@ fun UiMessage.localized(): String =
             UiMessageKey.ReadOnlyPartition ->
                 stringResource(R.string.msg_read_only_partition, *args.toTypedArray())
             UiMessageKey.SelectedFileMissing -> stringResource(R.string.msg_selected_file_missing)
+            UiMessageKey.FilesPickActive -> stringResource(R.string.msg_files_pick_active)
+            UiMessageKey.FilesPickTargetInvalid ->
+                stringResource(R.string.msg_files_pick_target_invalid)
+            UiMessageKey.VentoyDataPartitionMissing ->
+                stringResource(R.string.msg_ventoy_data_partition_missing)
+            UiMessageKey.ImportInspectionBusy ->
+                stringResource(R.string.msg_import_inspection_busy)
+            UiMessageKey.ImportPickerBusy ->
+                stringResource(R.string.msg_import_picker_busy)
+            UiMessageKey.ImportInspectionCancelling ->
+                stringResource(R.string.msg_import_inspection_cancelling)
+            UiMessageKey.ImportPickerTimedOut ->
+                stringResource(R.string.msg_import_picker_timed_out)
+            UiMessageKey.ImportPickerExhausted ->
+                stringResource(R.string.msg_import_picker_exhausted)
+            UiMessageKey.ImportPickerUnavailable ->
+                stringResource(R.string.msg_import_picker_unavailable)
             UiMessageKey.ImageCleared -> stringResource(R.string.msg_image_cleared)
             UiMessageKey.ImageReady ->
                 stringResource(R.string.msg_image_ready, *args.toTypedArray())

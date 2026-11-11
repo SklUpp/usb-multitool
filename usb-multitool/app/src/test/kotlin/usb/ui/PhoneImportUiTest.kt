@@ -32,11 +32,35 @@ class PhoneImportUiTest {
         diskSectorSize = 512,
     )
 
+    private fun imagePick(): Pair<AppUiState, String> {
+        val opened = UiReducer.reduce(
+            ready(),
+            UiIntent.BeginFilesPick(
+                purpose = FilesPickPurpose.WindowsImage,
+                returnTab = ShellTab.Ventoy,
+                initialPath = "/ISO",
+            ),
+        ).state.copy(filesPending = false)
+        return opened to requireNotNull(opened.filesPickMode).sessionId
+    }
+
+    private fun requestImage(state: AppUiState, pickSessionId: String): AppUiState =
+        UiReducer.reduce(
+            state,
+            UiIntent.RequestImportWindowsIso(
+                uri = URI,
+                kind = WindowsImportKind.Image,
+                directory = "/ISO",
+                pickSessionId = pickSessionId,
+            ),
+        ).state
+
     private fun inspected(
         exists: Boolean,
         generation: Long,
         kind: WindowsImportKind = WindowsImportKind.Image,
         markers: List<String> = emptyList(),
+        pickSessionId: String? = null,
     ) = UiIntent.WindowsIsoImportInspected(
         uri = URI,
         name = if (kind == WindowsImportKind.XmlTemplate) "autounattend.xml" else "win11.iso",
@@ -47,6 +71,7 @@ class PhoneImportUiTest {
         kind = kind,
         templateMarkers = markers,
         directory = if (kind == WindowsImportKind.XmlTemplate) "/ventoy" else "/ISO",
+        pickSessionId = pickSessionId,
     )
 
     @Test
@@ -66,9 +91,85 @@ class PhoneImportUiTest {
     }
 
     @Test
+    fun staleXmlPickerContextAfterReplugIsRejected() {
+        val base = ready()
+        val result =
+            UiReducer.reduce(
+                base,
+                UiIntent.RequestImportWindowsIso(
+                    uri = URI,
+                    kind = WindowsImportKind.XmlTemplate,
+                    directory = "/ventoy",
+                    expectedIdentity = base.device?.identity,
+                    expectedAttachGeneration =
+                        (base.device?.attachGeneration ?: 0L) + 1L,
+                ),
+            )
+
+        assertTrue(result.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+            result.state.statusMessage,
+        )
+        assertNull(result.state.isoImportSafInFlight)
+    }
+
+    @Test
+    fun xmlInspectionIsDisownedWhenTheAttachmentChanges() {
+        val base =
+            ready().copy(
+                isoImportSafInFlight = 7L,
+                isoImportUsbInFlight = 7L,
+                filesPickMode = null,
+            )
+        val replacement =
+            device.copy(
+                label = "Other Stick",
+                serialNumber = "OTHER-1",
+                attachGeneration = device.attachGeneration + 1L,
+            )
+        val result =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(presence = DevicePresence.Ready, device = replacement),
+            )
+
+        assertTrue(result.effects.contains(UiEffect.CancelIsoImportInspection))
+        assertNull(result.state.isoImportSafInFlight)
+        // The SAF ticket is disowned, but the USB worker may still be closing the disk:
+        // the guard must survive until the matching Finished.
+        assertEquals(7L, result.state.isoImportUsbInFlight)
+
+        val finished =
+            UiReducer.reduce(result.state, UiIntent.WindowsIsoImportFinished(7L))
+        assertNull(finished.state.isoImportUsbInFlight)
+    }
+
+    @Test
+    fun imageImportWithoutActivePickIsRejected() {
+        val result = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
+
+        assertTrue(result.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+            result.state.statusMessage,
+        )
+        assertNull(result.state.isoImportSafInFlight)
+    }
+
+    @Test
     fun existingTargetWaitsForConfirmationAndWritesNothing() {
-        val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
-        val result = UiReducer.reduce(requested.state, inspected(exists = true, generation = 1L))
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val result =
+            UiReducer.reduce(
+                requested,
+                inspected(
+                    exists = true,
+                    generation = requested.isoImportGeneration,
+                    pickSessionId = token,
+                ),
+            )
 
         assertTrue(result.effects.isEmpty())
         val proposal = requireNotNull(result.state.pendingIsoImport)
@@ -78,8 +179,17 @@ class PhoneImportUiTest {
 
     @Test
     fun newTargetImportsWithoutConfirmation() {
-        val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
-        val result = UiReducer.reduce(requested.state, inspected(exists = false, generation = 1L))
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val result =
+            UiReducer.reduce(
+                requested,
+                inspected(
+                    exists = false,
+                    generation = requested.isoImportGeneration,
+                    pickSessionId = token,
+                ),
+            )
 
         assertNull(result.state.pendingIsoImport)
         val effect = result.effects.single() as UiEffect.ImportIso
@@ -88,9 +198,36 @@ class PhoneImportUiTest {
     }
 
     @Test
+    fun staleImageInspectionGenerationIsRejected() {
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val stale =
+            UiReducer.reduce(
+                requested,
+                inspected(
+                    exists = false,
+                    generation = requested.isoImportGeneration - 1L,
+                    pickSessionId = token,
+                ),
+            )
+
+        assertNull(stale.state.pendingIsoImport)
+        assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
     fun unconfirmedOverwriteNeverImports() {
-        val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
-        val pending = UiReducer.reduce(requested.state, inspected(exists = true, generation = 1L))
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val pending =
+            UiReducer.reduce(
+                requested,
+                inspected(
+                    exists = true,
+                    generation = requested.isoImportGeneration,
+                    pickSessionId = token,
+                ),
+            )
         val result = UiReducer.reduce(pending.state, UiIntent.ConfirmWindowsIsoImport(false))
 
         assertTrue(result.effects.isEmpty())
@@ -99,8 +236,17 @@ class PhoneImportUiTest {
 
     @Test
     fun confirmedOverwriteImportsWithOverwriteFlag() {
-        val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
-        val pending = UiReducer.reduce(requested.state, inspected(exists = true, generation = 1L))
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val pending =
+            UiReducer.reduce(
+                requested,
+                inspected(
+                    exists = true,
+                    generation = requested.isoImportGeneration,
+                    pickSessionId = token,
+                ),
+            )
         val result = UiReducer.reduce(pending.state, UiIntent.ConfirmWindowsIsoImport(true))
 
         assertNull(result.state.pendingIsoImport)
@@ -111,8 +257,17 @@ class PhoneImportUiTest {
 
     @Test
     fun attachmentChangeDropsTheProposal() {
-        val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
-        val pending = UiReducer.reduce(requested.state, inspected(exists = true, generation = 1L))
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val pending =
+            UiReducer.reduce(
+                requested,
+                inspected(
+                    exists = true,
+                    generation = requested.isoImportGeneration,
+                    pickSessionId = token,
+                ),
+            )
         val other = DeviceIdentity(label = "Other Stick", capacityBytes = 4_000_000_000uL)
         val swapped = pending.state.copy(device = other)
         val result = UiReducer.reduce(swapped, UiIntent.ConfirmWindowsIsoImport(true))
@@ -144,12 +299,13 @@ class PhoneImportUiTest {
 
     @Test
     fun rejectedDocumentSurfacesTypedProblemAndKeepsNoProposal() {
-        val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
         val result = UiReducer.reduce(
-            requested.state,
+            requested,
             UiIntent.WindowsIsoImportRejected(
                 problem = UnreadableProblem.MalformedXml,
-                generation = requested.state.isoImportGeneration,
+                generation = requested.isoImportGeneration,
             ),
         )
 

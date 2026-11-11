@@ -1171,7 +1171,11 @@ class VentoyUiStateTest {
         val refused =
             UiReducer.reduce(
                 base,
-                UiIntent.RequestImportWindowsIso(uri = "content://example/a.iso"),
+                UiIntent.RequestImportWindowsIso(
+                    uri = "content://example/a.iso",
+                    kind = WindowsImportKind.XmlTemplate,
+                    directory = "/ventoy",
+                ),
             )
 
         assertEquals(7L, refused.state.isoImportGeneration)
@@ -1196,7 +1200,11 @@ class VentoyUiStateTest {
         val next =
             UiReducer.reduce(
                 cancelled.state,
-                UiIntent.RequestImportWindowsIso(uri = "content://example/b.iso"),
+                UiIntent.RequestImportWindowsIso(
+                    uri = "content://example/b.iso",
+                    kind = WindowsImportKind.XmlTemplate,
+                    directory = "/ventoy",
+                ),
             )
 
         assertEquals(9L, next.state.isoImportGeneration)
@@ -1639,7 +1647,9 @@ class VentoyUiStateTest {
         // never publish (provider read ignoring cancellation); a late Finished is gated by
         // its generation and cannot clear the new guard.
         assertNull(swapped.state.isoImportSafInFlight)
-        assertNull(swapped.state.isoImportUsbInFlight)
+        // The SAF ticket is disowned, but the USB worker may still be closing the disk;
+        // its guard survives until the matching Finished for this generation.
+        assertEquals(7L, swapped.state.isoImportUsbInFlight)
         assertNull(swapped.state.deferredImportFolderPick)
         assertFalse(swapped.state.pendingImportFolderPickLoad)
         assertTrue(swapped.effects.none { it is UiEffect.LoadVentoyFolders })

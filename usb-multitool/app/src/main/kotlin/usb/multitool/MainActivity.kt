@@ -12,6 +12,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.app.Application
 import android.content.ContentResolver
@@ -42,7 +43,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import usb.device.DiskException
@@ -70,6 +74,7 @@ import usb.ui.UiIntent
 import usb.ui.UiMessage
 import usb.ui.UiMessageKey
 import usb.ui.UiReducer
+import usb.ui.WindowsImportRequestCodes
 import usb.ui.AppLanguage
 import usb.device.UsbDiskSession
 import usb.diagnostics.Diagnostics
@@ -131,6 +136,23 @@ import java.util.Date
 import java.util.Locale
 import usb.ui.DestructiveAction
 
+private const val WINDOWS_IMPORT_PREFS = "usb.multitool.windows_import"
+private const val WINDOWS_IMPORT_NEXT_CODE_KEY = "next_request_code"
+
+/** Durable high-water storage; allocation itself is serialized in [WindowsImportRequestCodes]. */
+private class SharedPreferencesRequestCodeStorage(
+    private val prefs: SharedPreferences,
+) : WindowsImportRequestCodes.Storage {
+    override fun readNext(): Int =
+        prefs.getInt(
+            WINDOWS_IMPORT_NEXT_CODE_KEY,
+            WindowsImportRequestCodes.FIRST_REQUEST_CODE,
+        )
+
+    override fun writeNext(next: Int): Boolean =
+        prefs.edit().putInt(WINDOWS_IMPORT_NEXT_CODE_KEY, next).commit()
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val LANGUAGE_KEY = "language"
@@ -152,6 +174,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var state by mutableStateOf(AppUiState())
         private set
+
+    /**
+     * Reducer-side cancellation of a pending SAF launch. The queue lives in the Activity,
+     * so the effect crosses this flow; replay covers a recreation before collection starts.
+     * The payload is the pick session, so a late cancel cannot clear a newer launch.
+     */
+    private val _pickerCancellations = Channel<String>(Channel.UNLIMITED)
+    val pickerCancellations: Flow<String> = _pickerCancellations.receiveAsFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeHandle: OperationHandle? = null
@@ -317,6 +347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Detach/clear must not crash the process if umount/sync fails on a yanked stick.
         cancelActiveInspection(cancelUsb = true)
         runCatching { closeFilesVolume(reportStatus = false) }
+        _pickerCancellations.close()
         super.onCleared()
         scope.cancel()
     }
@@ -1299,7 +1330,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     effect.requestGeneration,
                     effect.importKind,
                     effect.importDirectory,
+                    effect.pickSessionId,
                 )
+            }
+
+            UiEffect.CancelIsoImportInspection -> cancelActiveInspection(cancelUsb = false)
+
+            is UiEffect.CancelPendingWindowsImport -> {
+                _pickerCancellations.trySend(effect.pickSessionId)
             }
 
             is UiEffect.ImportIso -> {
@@ -2776,6 +2814,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         generation: Long,
         kind: usb.ui.WindowsImportKind,
         destinationDirectory: String?,
+        pickSessionId: String?,
     ) {
         val ticket =
             InspectionTicket(
@@ -2787,7 +2826,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val resolver = getApplication<Application>().contentResolver
         val document = Uri.parse(uri)
         if (!beginInspection(ticket)) {
-            // The reducer gate normally prevents a second inspection; fail closed anyway.
+            // The reducer gate normally prevents a second inspection; fail closed with a
+            // visible reason instead of leaving only a cleared guard.
+            post(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportInspectionBusy)))
             post(UiIntent.WindowsIsoImportSafFinished(generation))
             return
         }
@@ -2870,6 +2911,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     target = target,
                                     markers = markers,
                                     destinationDirectory = destinationDirectory,
+                                    pickSessionId = pickSessionId,
                                 )
                             } finally {
                                 // The disk is closed here; only now may the USB guard end.
@@ -2917,6 +2959,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         target: String,
         markers: List<String>,
         destinationDirectory: String?,
+        pickSessionId: String?,
     ) {
         fun reportAttachmentChanged() {
             post(
@@ -2969,6 +3012,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             kind = kind,
                             templateMarkers = markers,
                             directory = directory,
+                            pickSessionId = pickSessionId,
                         ),
                     )
                     if (markers.isNotEmpty()) {
@@ -3082,10 +3126,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val resolver = getApplication<Application>().contentResolver
         val opTitle = OperationTitle.ImportTarget(proposal.targetName)
         val label = opTitle.logLabel
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val expectedIdentity = proposal.identity
+        val expectedPickSession = proposal.pickSessionId
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
+            @Volatile var copiedPath: String? = null
 
             override suspend fun run() {
+                require(attachGeneration == expectedAttach) {
+                    "USB attach generation changed before the copy"
+                }
+                require(deviceKey(attachedDevice) == expectedKey) {
+                    "USB device changed before the copy"
+                }
+                require(state.device?.identity == expectedIdentity) {
+                    "USB identity changed before the copy"
+                }
+                expectedPickSession?.let { session ->
+                    require(state.filesPickMode?.sessionId == session) {
+                        "Pick session changed before the copy"
+                    }
+                }
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
                 val mgr = usbManager ?: throw DiskException.Disconnected()
@@ -3095,6 +3158,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ?: throw usb.ventoy.IncompatibleVentoyException(
                             "No Ventoy data partition on this disk",
                         )
+                    proposal.partitionStartLba?.let { expected ->
+                        require(probe.part1StartLba == expected) {
+                            "Ventoy data partition start changed since the file was chosen"
+                        }
+                    }
+                    proposal.partitionSectorCount?.let { expected ->
+                        require(probe.part1SectorCount == expected) {
+                            "Ventoy data partition size changed since the file was chosen"
+                        }
+                    }
                     val sectorSize = disk.sectorSize.toULong()
                     val maxBytes =
                         if (probe.part1SectorCount <= Long.MAX_VALUE.toULong() / sectorSize) {
@@ -3104,6 +3177,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     bytesTotal = proposal.sizeBytes ?: -1L
                     val outcome = usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
+                        require(
+                            attachGeneration == expectedAttach &&
+                                deviceKey(attachedDevice) == expectedKey &&
+                                state.device?.identity == expectedIdentity,
+                        ) {
+                            "USB attachment changed before the copy reached the write"
+                        }
+                        expectedPickSession?.let { session ->
+                            require(state.filesPickMode?.sessionId == session) {
+                                "Pick session changed before the copy reached the write"
+                            }
+                        }
                         val input = resolver.openInputStream(Uri.parse(proposal.uri))
                             ?: throw java.io.FileNotFoundException("cannot open ${proposal.uri}")
                         usb.ventoy.VentoyIsoLibrary.import(
@@ -3121,6 +3206,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             },
                         )
                     }
+                    copiedPath = outcome.targetPath
                     result = "Imported ${outcome.bytes} bytes to ${outcome.targetPath}"
                 } finally {
                     disk.close()
@@ -3182,6 +3268,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 "${proposal.directory.trimEnd('/')}/${proposal.targetName}",
                             ),
                         )
+                    } else {
+                        // The operation is terminal only after the volume/disk closed. Auto
+                        // selection is therefore allowed exactly here, never on Partial.
+                        op.copiedPath?.let { target ->
+                            onIntent(
+                                UiIntent.FilesPickCopySucceeded(
+                                    path = target,
+                                    sizeBytes = proposal.sizeBytes,
+                                    pickSessionId = proposal.pickSessionId,
+                                ),
+                            )
+                        }
                     }
                     // ISO catalog already invalidated by OperationUpdated; Ventoy tab reloads.
                     onIntent(UiIntent.LoadWindowsImageLinks)
@@ -4371,6 +4469,9 @@ class MainActivity : ComponentActivity() {
         ViewModelProvider(this)[MainViewModel::class.java]
     }
 
+    /** Collects reducer picker cancellations while this Activity instance is alive. */
+    private val pickerEventsScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { /* result handled by state */ }
@@ -4443,27 +4544,112 @@ class MainActivity : ComponentActivity() {
         viewModel.onRescueArchiveFolderPicked(uri)
     }
 
-    /** Kind and destination waiting for the SAF file chosen in [windowsImportLauncher]. */
-    private var pendingWindowsImportKind = usb.ui.WindowsImportKind.Image
-    private var pendingWindowsImportDirectory: String? = null
+    /** One pending SAF context per Activity; codes come from the process-wide allocator. */
+    private val windowsImportQueue: usb.ui.WindowsImportLaunchQueue by lazy {
+        usb.ui.WindowsImportLaunchQueue(requestCodeAllocator(applicationContext))
+    }
+
+    private val windowsImportTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var windowsImportTimeoutCode: Int? = null
+    private val windowsImportTimeoutRunnable =
+        Runnable {
+            val code = windowsImportTimeoutCode ?: return@Runnable
+            windowsImportTimeoutCode = null
+            // Old code is retired, so a late result can no longer join a newer launch.
+            windowsImportQueue.resetByRequestCode(code)
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerTimedOut)))
+        }
+
+    private fun armWindowsImportTimeout(requestCode: Int) {
+        windowsImportTimeoutHandler.removeCallbacks(windowsImportTimeoutRunnable)
+        windowsImportTimeoutCode = requestCode
+        windowsImportTimeoutHandler.postDelayed(
+            windowsImportTimeoutRunnable,
+            WINDOWS_IMPORT_TIMEOUT_MS,
+        )
+    }
+
+    private fun disarmWindowsImportTimeout() {
+        windowsImportTimeoutHandler.removeCallbacks(windowsImportTimeoutRunnable)
+        windowsImportTimeoutCode = null
+    }
 
     /**
-     * SAF document picked for a phone-to-stick import. The kind and the chosen existing
-     * folder are captured before the picker opens, because the result arrives later. The
-     * source document is only read: nothing on the phone is moved, renamed or deleted.
+     * SAF document picked for a phone-to-stick import. The legacy request code identifies
+     * the launch, so a duplicate/late result cannot consume a newer pending context. The
+     * ActivityResult lambda API has no per-launch identifier; modern registry keys cannot be
+     * unregistered publicly, so requestCode is the honest discriminator here.
      */
-    private val windowsImportLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri: Uri? ->
-        val kind = pendingWindowsImportKind
-        val directory = pendingWindowsImportDirectory
-        pendingWindowsImportKind = usb.ui.WindowsImportKind.Image
-        pendingWindowsImportDirectory = null
-        if (uri == null) return@registerForActivityResult
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val context = windowsImportQueue.take(requestCode) ?: return
+        disarmWindowsImportTimeout()
+        if (resultCode != android.app.Activity.RESULT_OK) return
+        val uri = data?.data ?: return
+        val liveDevice = viewModel.state.device
+        if (context.identity != liveDevice?.identity ||
+            context.attachGeneration != (liveDevice?.attachGeneration ?: 0L)
+        ) {
+            viewModel.onIntent(
+                UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+            )
+            return
+        }
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        viewModel.onIntent(UiIntent.RequestImportWindowsIso(uri.toString(), kind, directory))
+        viewModel.onIntent(
+            UiIntent.RequestImportWindowsIso(
+                uri = uri.toString(),
+                kind = context.kind,
+                directory = context.directory,
+                pickSessionId = context.pickSessionId,
+                expectedIdentity = context.identity,
+                expectedAttachGeneration = context.attachGeneration,
+            ),
+        )
+    }
+
+    /** Fails closed if a picker is already open; stores the context before launching. */
+    private fun launchWindowsImport(
+        kind: usb.ui.WindowsImportKind,
+        directory: String?,
+        pickSessionId: String?,
+    ) {
+        val start =
+            windowsImportQueue.begin(
+                kind = kind,
+                directory = directory,
+                pickSessionId = pickSessionId,
+                identity = viewModel.state.device?.identity,
+                attachGeneration = viewModel.state.device?.attachGeneration ?: 0L,
+            )
+        if (start == usb.ui.WindowsImportLaunch.Busy) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerBusy)))
+            return
+        }
+        if (start == usb.ui.WindowsImportLaunch.Exhausted) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerExhausted)))
+            return
+        }
+        if (start == usb.ui.WindowsImportLaunch.StorageFailed) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
+            return
+        }
+        val context = (start as usb.ui.WindowsImportLaunch.Starting).context
+        val intent =
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+        val launched = runCatching {
+            startActivityForResult(intent, context.requestCode)
+        }
+        if (launched.isFailure) {
+            disarmWindowsImportTimeout()
+            windowsImportQueue.resetByRequestCode(context.requestCode)
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
+        }
     }
 
     /** Entry name waiting for the SAF destination chosen in [downloadLauncher]. */
@@ -4545,13 +4731,51 @@ class MainActivity : ComponentActivity() {
         // The document picker may recreate the activity; without these two the result would
         // arrive as an image bound for /ISO, so an XML chosen for /ventoy would be misfiled and
         // its marker scan skipped.
-        savedInstanceState?.getString(STATE_PENDING_WINDOWS_KIND)?.let { stored ->
-            pendingWindowsImportKind = runCatching {
-                usb.ui.WindowsImportKind.valueOf(stored)
-            }.getOrDefault(usb.ui.WindowsImportKind.Image)
+        val savedState = savedInstanceState
+        val restoredKind =
+            savedState
+                ?.getString(STATE_PENDING_WINDOWS_KIND)
+                ?.let { stored ->
+                    runCatching { usb.ui.WindowsImportKind.valueOf(stored) }.getOrNull()
+                }
+        val restoredRequestCode =
+            savedState?.getInt(STATE_PENDING_WINDOWS_REQUEST, -1) ?: -1
+        val requestCodeRange =
+            WindowsImportRequestCodes.FIRST_REQUEST_CODE..
+                WindowsImportRequestCodes.LAST_REQUEST_CODE
+        if (savedState != null &&
+            restoredKind != null &&
+            restoredRequestCode in requestCodeRange
+        ) {
+            val restored =
+                windowsImportQueue.restore(
+                    usb.ui.PendingWindowsImport(
+                        kind = restoredKind,
+                        directory = savedState.getString(STATE_PENDING_WINDOWS_DIRECTORY),
+                        pickSessionId =
+                            savedState.getString(STATE_PENDING_WINDOWS_PICK_SESSION),
+                        identity = savedState.getString(STATE_PENDING_WINDOWS_IDENTITY),
+                        attachGeneration =
+                            savedState.getLong(STATE_PENDING_WINDOWS_ATTACH, -1L),
+                        requestCode = restoredRequestCode,
+                    ),
+                )
+            if (!restored) {
+                // The durable mark could not be raised: drop the context instead of
+                // accepting a result for an unsecured code.
+                viewModel.onIntent(
+                    UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)),
+                )
+            }
         }
-        pendingWindowsImportDirectory =
-            savedInstanceState?.getString(STATE_PENDING_WINDOWS_DIRECTORY)
+        pickerEventsScope.launch {
+            viewModel.pickerCancellations.collect { session ->
+                if (windowsImportQueue.resetByPickSession(session)) {
+                    // Only the matching launch was cleared; a newer pending keeps its timeout.
+                    disarmWindowsImportTimeout()
+                }
+            }
+        }
         pendingFolderAction =
             savedInstanceState?.getString(STATE_PENDING_FOLDER_ACTION)?.let { stored ->
                 runCatching { PendingFolderAction.valueOf(stored) }
@@ -4575,9 +4799,14 @@ class MainActivity : ComponentActivity() {
                 onPickWindowsFile = { kind, directory ->
                     // Images and XML templates may have any name or MIME type; filtering hid
                     // real files, and the host validates the content, not the extension.
-                    pendingWindowsImportKind = kind
-                    pendingWindowsImportDirectory = directory
-                    windowsImportLauncher.launch(arrayOf("*/*"))
+                    launchWindowsImport(kind, directory, pickSessionId = null)
+                },
+                onPickWindowsImage = { directory, sessionId ->
+                    launchWindowsImport(
+                        usb.ui.WindowsImportKind.Image,
+                        directory,
+                        sessionId,
+                    )
                 },
                 onPickBackup = {
                     gptBackupPickerLauncher.launch(arrayOf("*/*"))
@@ -4599,13 +4828,61 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Delivery of the reducer cancel event can race destruction/cancellation. The live
+        // pick session is authoritative: a pending launch for a session that no longer
+        // exists is retired before any late result can be considered.
+        windowsImportQueue.pending?.let { pending ->
+            val live = viewModel.state.device
+            if (pending.identity != live?.identity ||
+                pending.attachGeneration != (live?.attachGeneration ?: 0L)
+            ) {
+                // The stick changed while the picker was away: its URI is not ours.
+                windowsImportQueue.resetByRequestCode(pending.requestCode)
+                disarmWindowsImportTimeout()
+                return@let
+            }
+            val session = pending.pickSessionId
+            if (session != null && viewModel.state.filesPickMode?.sessionId != session) {
+                windowsImportQueue.resetByPickSession(session)
+                disarmWindowsImportTimeout()
+                return@let
+            }
+            // A restored/returned screen must not stay busy forever if the result was lost.
+            armWindowsImportTimeout(pending.requestCode)
+        }
+    }
+
+    override fun onPause() {
+        // The picker itself is in front; do not expire a context the user is browsing.
+        disarmWindowsImportTimeout()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        disarmWindowsImportTimeout()
+        pickerEventsScope.cancel()
+        super.onDestroy()
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
         outState.putString(STATE_PENDING_FOLDER_ACTION, pendingFolderAction.name)
-        outState.putString(STATE_PENDING_WINDOWS_KIND, pendingWindowsImportKind.name)
-        pendingWindowsImportDirectory?.let {
-            outState.putString(STATE_PENDING_WINDOWS_DIRECTORY, it)
+        windowsImportQueue.pending?.let { context ->
+            outState.putString(STATE_PENDING_WINDOWS_KIND, context.kind.name)
+            context.directory?.let {
+                outState.putString(STATE_PENDING_WINDOWS_DIRECTORY, it)
+            }
+            context.pickSessionId?.let {
+                outState.putString(STATE_PENDING_WINDOWS_PICK_SESSION, it)
+            }
+            context.identity?.let {
+                outState.putString(STATE_PENDING_WINDOWS_IDENTITY, it)
+            }
+            outState.putLong(STATE_PENDING_WINDOWS_ATTACH, context.attachGeneration)
+            outState.putInt(STATE_PENDING_WINDOWS_REQUEST, context.requestCode)
         }
     }
 
@@ -4716,5 +4993,33 @@ class MainActivity : ComponentActivity() {
         private const val STATE_PENDING_WINDOWS_KIND = "usb.multitool.PENDING_WINDOWS_KIND"
         private const val STATE_PENDING_WINDOWS_DIRECTORY =
             "usb.multitool.PENDING_WINDOWS_DIRECTORY"
+        private const val STATE_PENDING_WINDOWS_PICK_SESSION =
+            "usb.multitool.PENDING_WINDOWS_PICK_SESSION"
+        private const val STATE_PENDING_WINDOWS_IDENTITY =
+            "usb.multitool.PENDING_WINDOWS_IDENTITY"
+        private const val STATE_PENDING_WINDOWS_ATTACH =
+            "usb.multitool.PENDING_WINDOWS_ATTACH"
+        private const val STATE_PENDING_WINDOWS_REQUEST =
+            "usb.multitool.PENDING_WINDOWS_REQUEST"
+        private const val WINDOWS_IMPORT_TIMEOUT_MS = 5 * 60 * 1000L
+
+        @Volatile
+        private var sharedImportCodes: WindowsImportRequestCodes? = null
+
+        /**
+         * One allocator per process, shared by every Activity instance that the USB
+         * attach intent may create. Its lock makes read-advance-write durable and atomic.
+         */
+        private fun requestCodeAllocator(context: Context): WindowsImportRequestCodes =
+            sharedImportCodes ?: synchronized(this) {
+                sharedImportCodes ?: WindowsImportRequestCodes(
+                    SharedPreferencesRequestCodeStorage(
+                        context.applicationContext.getSharedPreferences(
+                            WINDOWS_IMPORT_PREFS,
+                            Context.MODE_PRIVATE,
+                        ),
+                    ),
+                ).also { sharedImportCodes = it }
+            }
     }
 }

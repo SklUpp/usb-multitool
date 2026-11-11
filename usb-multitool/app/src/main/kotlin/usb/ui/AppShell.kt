@@ -119,6 +119,7 @@ fun AppShell(
     onPickImage: () -> Unit = {},
     /** Opens the system file picker for a phone-to-stick import of [WindowsImportKind]. */
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
+    onPickWindowsImage: (String, String) -> Unit = { _, _ -> },
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
@@ -263,6 +264,7 @@ fun AppShell(
                                 onIntent = onIntent,
                                 modifier = Modifier.fillMaxSize(),
                                 onRequestDownload = onRequestDownload,
+                                onRequestDeviceImage = onPickWindowsImage,
                             )
                             ShellTab.Ventoy -> VentoyScreen(
                                 state = state,

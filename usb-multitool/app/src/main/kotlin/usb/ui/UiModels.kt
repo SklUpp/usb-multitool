@@ -149,6 +149,24 @@ enum class UiMessageKey {
     SelectPartitionFirst,
     ReadOnlyPartition,
     SelectedFileMissing,
+    /** A simplified pick session owns the screen; finish or cancel it first. */
+    FilesPickActive,
+    /** The picked entry or pinned attachment/geometry is no longer valid. */
+    FilesPickTargetInvalid,
+    /** No writable Ventoy data partition is attached. */
+    VentoyDataPartitionMissing,
+    /** Another phone-file inspection still holds the host slot; nothing was started. */
+    ImportInspectionBusy,
+    /** A system file picker is already open; the second launch was ignored. */
+    ImportPickerBusy,
+    /** A blocking SAF read was disowned; it ends when the provider returns. */
+    ImportInspectionCancelling,
+    /** A system picker never returned; its context was dropped so a new choice is possible. */
+    ImportPickerTimedOut,
+    /** The finite per-installation picker slot range is exhausted; no code is reused. */
+    ImportPickerExhausted,
+    /** The durable request-code mark could not be secured or the picker could not open. */
+    ImportPickerUnavailable,
     ImageCleared,
     ImageReady,
     WritingXml,
@@ -653,6 +671,77 @@ enum class WindowsImportKind {
 }
 
 /**
+ * Why the simplified Files screen is open. One browser serves every on-stick choice:
+ * the install image, a raw-write source, or a Ventoy config file. Results are kept per
+ * purpose, so choosing one does not erase another.
+ */
+enum class FilesPickPurpose {
+    WindowsImage,
+    RawSource,
+    VentoyConfig,
+}
+
+/** File picks a regular file; Folder picks the folder that is currently open (root allowed). */
+enum class FilesPickTarget {
+    File,
+    Folder,
+}
+
+/**
+ * Attachment-scoped pick session. Every field is pinned when the session starts: a replaced
+ * stick, a new attach generation, another partition or different partition geometry can
+ * never be selected under the old pin. [returnTab] is where a confirmed or cancelled pick
+ * returns; any other tab cancels the session.
+ */
+data class FilesPickMode(
+    /** Unique id of this exact session; an older SAF/copy result can never join it. */
+    val sessionId: String,
+    val purpose: FilesPickPurpose,
+    val returnTab: ShellTab,
+    val target: FilesPickTarget,
+    val identity: String?,
+    val attachGeneration: Long,
+    val partitionId: String,
+    val startLba: ULong?,
+    val sectorCount: ULong?,
+) {
+    /** Result pinned to exactly this session's attachment and partition geometry. */
+    fun selection(
+        path: String,
+        name: String,
+        sizeBytes: ULong,
+        isDirectory: Boolean,
+    ): FilesPickSelection =
+        FilesPickSelection(
+            purpose = purpose,
+            path = path,
+            name = name,
+            sizeBytes = sizeBytes,
+            isDirectory = isDirectory,
+            identity = identity,
+            attachGeneration = attachGeneration,
+            partitionId = partitionId,
+            startLba = startLba,
+            sectorCount = sectorCount,
+        )
+}
+
+/** One confirmed on-stick choice; immutable and bound to the attachment it was read from. */
+data class FilesPickSelection(
+    val purpose: FilesPickPurpose,
+    val path: String,
+    val name: String,
+    /** 0 means the source did not report a size; never treat it as a real empty file. */
+    val sizeBytes: ULong,
+    val isDirectory: Boolean,
+    val identity: String?,
+    val attachGeneration: Long,
+    val partitionId: String,
+    val startLba: ULong?,
+    val sectorCount: ULong?,
+)
+
+/**
  * SAF source inspected against the real Ventoy data partition. [exists] requires an
  * explicit overwrite confirmation; [attachGeneration] pins the USB attachment.
  */
@@ -669,6 +758,11 @@ data class IsoImportProposal(
     val directory: String = "/ISO",
     /** Destructive sections found in a phone XML at inspection time; empty for images. */
     val templateMarkers: List<String> = emptyList(),
+    /** Ventoy data-partition geometry pinned by the picker; null outside a pick session. */
+    val partitionStartLba: ULong? = null,
+    val partitionSectorCount: ULong? = null,
+    /** Pick session that requested this inspection; null for a non-picker import. */
+    val pickSessionId: String? = null,
 )
 
 /** One existing `auto_install` binding shown in the XML section. */
@@ -919,6 +1013,15 @@ data class AppUiState(
      * GPT-only features (partition names) stay unavailable rather than being guessed.
      */
     val partitionScheme: TableScheme? = null,
+    /** Last issued [FilesPickMode.sessionId]; replaced at Begin/exit/attach loss. */
+    val filesPickSession: String = "",
+    /** Active simplified pick session; null on the ordinary Files screen. */
+    val filesPickMode: FilesPickMode? = null,
+    /**
+     * Confirmed choices keyed by purpose. Each entry is pinned to the attachment and
+     * partition geometry it was read from; a different stick never reuses it.
+     */
+    val filesPickSelections: Map<FilesPickPurpose, FilesPickSelection> = emptyMap(),
     /** Absolute FAT path currently displayed; [files] are the entries of this directory. */
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
@@ -1183,6 +1286,23 @@ data class AppUiState(
     fun selectedPartition(): PartitionTab? =
         partitions.firstOrNull { it.id == selectedPartitionId } ?: partitions.firstOrNull()
 
+    /**
+     * Ventoy data partition: fixed part1 of the Ventoy layout, never the EFI part. Geometry
+     * is required, so a pick session cannot pin a partition whose sectors are unknown.
+     */
+    fun ventoyDataPartition(): PartitionTab? =
+        partitions.firstOrNull {
+            it.id == "1" &&
+                !it.readOnly &&
+                !it.isEfiType &&
+                it.startLba != null &&
+                it.sectorCount != null
+        }
+
+    /** Latest confirmed pick for [purpose], or null when nothing was confirmed. */
+    fun filesPickSelection(purpose: FilesPickPurpose): FilesPickSelection? =
+        filesPickSelections[purpose]
+
     /** True while one EFI partition has its write protection lifted for this attachment. */
     val vtoyEfiWriteEnabled: Boolean
         get() = vtoyEfiWritePartitionId != null
@@ -1216,6 +1336,20 @@ data class AppUiState(
     /** Write-protected system partitions (ESP, EFI type, or VTOYEFI name). */
     val efiPartitions: List<PartitionTab>
         get() = partitions.filter { it.readOnly }
+}
+
+/**
+ * True while the pinned attachment, selected partition and exact geometry are still live.
+ * A probe on the same stick keeps identity+generation, so a temporary Busy state does not
+ * drop the session; only a real replace/detach or a changed partition does.
+ */
+fun FilesPickMode.matches(state: AppUiState): Boolean {
+    val device = state.device ?: return false
+    if (device.identity != identity) return false
+    if (device.attachGeneration != attachGeneration) return false
+    if (state.selectedPartitionId != partitionId) return false
+    val live = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    return live.startLba == startLba && live.sectorCount == sectorCount
 }
 
 /** True when [binding] still names the selected device, partition and exact geometry. */

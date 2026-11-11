@@ -246,9 +246,10 @@ fun VentoyScreen(
 
 
 /**
- * Phone-to-stick import. The destination is an existing folder of the Ventoy data partition,
- * picked before the system picker opens; a target that already exists needs an explicit
- * overwrite tick, and a template carrying destructive sections needs a second one.
+ * Phone-to-stick import. The install image is chosen inside the simplified Files picker
+ * (folder navigation + phone copy); the XML keeps its own existing-folder dialog. A target
+ * that already exists needs an explicit overwrite tick, and a template carrying destructive
+ * sections needs a second one.
  */
 @Composable
 private fun ImportFromPhoneCard(
@@ -262,13 +263,9 @@ private fun ImportFromPhoneCard(
         state.device?.identity,
         state.device?.attachGeneration,
     ) { mutableStateOf<WindowsImportKind?>(null) }
-    // Last folder the user actually picked for each kind. Keyed to the attachment, not to
+    // Last folder the user actually picked for the XML. Keyed to the attachment, not to
     // ventoyCacheEpoch: an import bumps the epoch itself, which would erase the destination
     // right after the copy it describes. Attach generation covers replug and detach.
-    var imageDestination by remember(
-        state.device?.identity,
-        state.device?.attachGeneration,
-    ) { mutableStateOf<String?>(null) }
     var xmlDestination by remember(
         state.device?.identity,
         state.device?.attachGeneration,
@@ -282,17 +279,19 @@ private fun ImportFromPhoneCard(
     // appears so it cannot preselect a path that no longer exists while the list is unread.
     LaunchedEffect(state.pendingImportFolderPick) {
         val kind = state.pendingImportFolderPick ?: return@LaunchedEffect
-        when (kind) {
-            WindowsImportKind.XmlTemplate -> xmlDestination = null
-            WindowsImportKind.Image -> imageDestination = null
+        if (kind == WindowsImportKind.Image) {
+            // The simplified Files picker owns image copies and its own vanished-folder
+            // recovery; do not open a second folder dialog over it.
+            onIntent(UiIntent.ImportFolderPickOpened)
+            return@LaunchedEffect
         }
+        xmlDestination = null
         folderKind = kind
         onIntent(UiIntent.ImportFolderPickOpened)
     }
 
     // The listing is one directory level, so a remembered path is normally in another
     // folder: absence from it proves nothing and must not produce a "gone"/"unlisted" hint.
-    val imageDest = imageDestination
     val xmlDest = xmlDestination
 
     // Every open re-reads the current folder: the stick may have changed since the tab was
@@ -313,9 +312,16 @@ private fun ImportFromPhoneCard(
     ) {
         ImportRow(
             label = stringResource(R.string.import_image_label),
-            destination = imageDest,
+            destination = state.filesPickSelections[FilesPickPurpose.WindowsImage]?.path,
             enabled = state.actionsEnabled,
-            onClick = { folderKind = WindowsImportKind.Image },
+            onClick = {
+                onIntent(
+                    UiIntent.BeginFilesPick(
+                        purpose = FilesPickPurpose.WindowsImage,
+                        returnTab = ShellTab.Ventoy,
+                    ),
+                )
+            },
         )
         ImportRow(
             label = stringResource(R.string.import_template_label),
@@ -354,7 +360,7 @@ private fun ImportFromPhoneCard(
         }
     }
 
-    folderKind?.let { kind ->
+    folderKind?.let {
         ImportFolderDialog(
             currentPath = state.ventoyFolderPath,
             folders = state.ventoyFolders,
@@ -366,12 +372,8 @@ private fun ImportFromPhoneCard(
             onRefresh = { onIntent(UiIntent.LoadVentoyFolders) },
             onPick = { directory ->
                 folderKind = null
-                if (kind == WindowsImportKind.XmlTemplate) {
-                    xmlDestination = directory
-                } else {
-                    imageDestination = directory
-                }
-                onPickWindowsFile(kind, directory)
+                xmlDestination = directory
+                onPickWindowsFile(WindowsImportKind.XmlTemplate, directory)
             },
             onDismiss = { folderKind = null },
         )
@@ -590,7 +592,7 @@ private fun ImportFolderDialog(
  * destructive sections needs a second explicit tick. Nothing here deletes the phone copy.
  */
 @Composable
-private fun ImportOverwriteDialog(
+internal fun ImportOverwriteDialog(
     proposal: IsoImportProposal,
     actionsEnabled: Boolean,
     onReplace: () -> Unit,

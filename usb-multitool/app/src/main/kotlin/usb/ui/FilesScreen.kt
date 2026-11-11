@@ -28,6 +28,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -73,7 +75,19 @@ fun FilesScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onRequestDownload: (String) -> Unit = {},
+    onRequestDeviceImage: (String, String) -> Unit = { _, _ -> },
 ) {
+    val pickMode = state.filesPickMode
+    if (pickMode != null) {
+        FilesPickScreen(
+            state = state,
+            mode = pickMode,
+            onIntent = onIntent,
+            onRequestDeviceImage = onRequestDeviceImage,
+            modifier = modifier,
+        )
+        return
+    }
     // Attach generation/identity are keys too: the same partition id and path on another
     // stick must not keep a highlighted entry or a captured rename target.
     var selectedFile by remember(
@@ -359,6 +373,320 @@ fun FilesScreen(
     }
 }
 
+/**
+ * Simplified Files screen: only navigation, one explicit choice, and (for the install
+ * image) the phone copy action. Every destructive or unrelated file action is absent;
+ * the reducer refuses those intents too, so this is not only a visual restriction.
+ *
+ * Deliberately a separate branch from the ordinary browser: the Files visual redesign
+ * (headers, contrast, path row, icons) can change the normal composable without having
+ * to rebuild this session's pin/copy safety.
+ */
+@Composable
+private fun FilesPickScreen(
+    state: AppUiState,
+    mode: FilesPickMode,
+    onIntent: (UiIntent) -> Unit,
+    onRequestDeviceImage: (String, String) -> Unit,
+    modifier: Modifier,
+) {
+    val partition = state.partitions.firstOrNull { it.id == mode.partitionId }
+    val canAct = state.actionsEnabled && partition != null
+    val copying = state.operation?.takeIf { it.title is OperationTitle.ImportTarget }
+    val upDescription = stringResource(R.string.files_up)
+    val hint = stringResource(
+        if (mode.target == FilesPickTarget.Folder) {
+            R.string.import_folder_use
+        } else {
+            R.string.files_pick_hint
+        },
+    )
+    val partitionLine =
+        partition?.let {
+            buildString {
+                append(it.name)
+                if (it.isEfiType) append(" (EFI)")
+                it.filesystemLabel.takeIf { label -> label.isNotEmpty() }?.let { label ->
+                    append(" · ")
+                    append(label)
+                }
+                partitionSizeLabel(state, it)?.let { size ->
+                    append(" · ")
+                    append(size)
+                }
+            }
+        } ?: stringResource(R.string.partitions_none_selected)
+
+    // A vanished import folder resets the listing to root in the reducer; consume the
+    // picker demand here instead of leaving an unanswered prompt.
+    LaunchedEffect(state.pendingImportFolderPick) {
+        if (state.pendingImportFolderPick == WindowsImportKind.Image) {
+            onIntent(UiIntent.NavigateUp)
+            onIntent(UiIntent.ImportFolderPickOpened)
+        }
+    }
+
+    val entries =
+        if (mode.target == FilesPickTarget.Folder) {
+            state.files.filter { it.isDirectory }
+        } else {
+            state.files
+        }
+    // Two-step file choice: a tap only marks the row; the explicit button confirms it.
+    // Path or attachment changes make the old row meaningless, so they reset the mark.
+    val selectsFile = mode.target == FilesPickTarget.File
+    val listingUsable = state.filesError == null && !state.filesPending
+    // Folder mode never owns a selected file row; only file picks allocate this state.
+    // Geometry is a key too: a pin that no longer names this partition cannot keep a row.
+    val selectedPickState =
+        if (selectsFile) {
+            remember(
+                mode.sessionId,
+                mode.partitionId,
+                mode.startLba,
+                mode.sectorCount,
+                state.currentPath,
+                state.device?.identity,
+                state.device?.attachGeneration,
+            ) {
+                mutableStateOf<FileEntry?>(null)
+            }
+        } else {
+            null
+        }
+    // Equality, not name: a replacement entry with the same name but new size is stale.
+    val selectedPickEntry = selectedPickState?.value?.takeIf { selected -> selected in entries }
+    LaunchedEffect(entries, selectedPickState?.value, listingUsable) {
+        val pickerState = selectedPickState
+        if (pickerState != null &&
+            (pickerState.value != null && selectedPickEntry == null || !listingUsable)
+        ) {
+            pickerState.value = null
+        }
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 16.dp),
+    ) {
+        item(key = "pick-partition") {
+            SectionCard(
+                title = stringResource(R.string.files_section_partition),
+                titleColor = MaterialTheme.colorScheme.onSurface,
+            ) {
+                InfoRow(
+                    stringResource(R.string.files_current_partition),
+                    partitionLine,
+                )
+            }
+        }
+
+        item(key = "pick-folder") {
+            SectionCard(
+                title = stringResource(R.string.files_section_folder),
+                subtitle = state.currentPath,
+                titleColor = MaterialTheme.colorScheme.onSurface,
+                trailing = {
+                    IconButton(
+                        onClick = { onIntent(UiIntent.NavigateUp) },
+                        enabled = canAct && state.currentPath != "/",
+                        modifier = Modifier.semantics { contentDescription = upDescription },
+                    ) {
+                        GlyphIcon(Glyph.ArrowUp, size = 22.dp)
+                    }
+                },
+            ) {
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                ) {
+                    if (mode.target == FilesPickTarget.Folder) {
+                        OutlinedButton(
+                            onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
+                            enabled = canAct && !state.filesPending,
+                        ) {
+                            Text(stringResource(R.string.import_folder_use))
+                        }
+                    }
+                    TextButton(
+                        onClick = { onIntent(UiIntent.CancelFilesPick) },
+                        enabled = canAct,
+                    ) {
+                        Text(stringResource(R.string.files_pick_back))
+                    }
+                    if (mode.purpose == FilesPickPurpose.WindowsImage &&
+                        mode.target == FilesPickTarget.File
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onRequestDeviceImage(state.currentPath, mode.sessionId)
+                            },
+                            enabled =
+                                canAct &&
+                                    state.isoImportSafInFlight == null &&
+                                    state.isoImportUsbInFlight == null &&
+                                    state.pendingIsoImport == null,
+                        ) {
+                            Text(stringResource(R.string.files_pick_device))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (copying != null) {
+            item(key = "pick-copy") {
+                SectionCard(
+                    title = stringResource(R.string.import_title),
+                    titleColor = MaterialTheme.colorScheme.onSurface,
+                ) {
+                    val failed =
+                        copying.state == OperationState.Failed ||
+                            copying.state == OperationState.Partial
+                    Text(
+                        text =
+                            "${operationLabel(copying)} · " +
+                                operationStateLabel(copying.state),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color =
+                            if (failed) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                    )
+                    if (copying.bytesTotal > 0L) {
+                        LinearProgressIndicator(
+                            progress = { copying.fraction },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 4.dp),
+                        )
+                        Text(
+                            text =
+                                "${DeviceIdentity.formatCapacity(copying.bytesDone.coerceAtLeast(0L).toULong())}" +
+                                    " / ${DeviceIdentity.formatCapacity(copying.bytesTotal.toULong())}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    (copying.errorMessage ?: copying.resultMessage)?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color =
+                                if (failed) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                        )
+                    }
+                    if (copying.state == OperationState.Running && copying.cancelable) {
+                        TextButton(onClick = { onIntent(UiIntent.CancelOperation) }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (state.isoImportSafInFlight != null) {
+            item(key = "pick-inspecting") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.import_inspecting),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            }
+        }
+        state.isoImportError?.let { problem ->
+            item(key = "pick-import-error") {
+                Text(
+                    text = stringResource(unreadableText(problem)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+
+        when {
+            state.filesError != null -> item(key = "pick-error") {
+                EmptyHint(state.filesError.orEmpty())
+            }
+            state.filesPending -> item(key = "pick-loading") {
+                EmptyHint(stringResource(R.string.files_listing))
+            }
+            entries.isEmpty() -> item(key = "pick-empty") {
+                EmptyHint(stringResource(R.string.files_empty_folder))
+            }
+            else -> items(entries, key = { it.name }) { entry ->
+                Column(modifier = Modifier.animateItem()) {
+                    // Keep the confirmation next to the chosen row, so it cannot be
+                    // scrolled off-screen together with the header.
+                    if (selectedPickEntry == entry) {
+                        OutlinedButton(
+                            onClick = {
+                                // The reducer revalidates the name against live files.
+                                onIntent(UiIntent.ConfirmFilesPickFile(entry.name))
+                            },
+                            enabled = canAct && listingUsable,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                        ) {
+                            Text(stringResource(R.string.files_pick_use_file))
+                        }
+                    }
+                    FileRow(
+                        entry = entry,
+                        isSelected = selectedPickEntry == entry,
+                        actionsEnabled = canAct,
+                        onSelect = {
+                            selectedPickState?.value =
+                                if (selectedPickState?.value == entry) null else entry
+                        },
+                        onNavigate = {
+                            selectedPickState?.value = null
+                            onIntent(
+                                UiIntent.OpenDirectory(
+                                    fatChildPath(state.currentPath, entry.name),
+                                ),
+                            )
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    state.pendingIsoImport?.let { proposal ->
+        ImportOverwriteDialog(
+            proposal = proposal,
+            actionsEnabled = state.actionsEnabled,
+            onReplace = { onIntent(UiIntent.ConfirmWindowsIsoImport(true)) },
+            onCancel = { onIntent(UiIntent.CancelWindowsIsoImport) },
+        )
+    }
+}
+
 /** One block around the whole mounted volume: path/actions sub-block plus the lazy list. */
 @Composable
 private fun FolderCard(
@@ -565,13 +893,13 @@ private fun FolderSubblock(
                     onClick = onNewFolder,
                 )
                 FolderActionButton(
-                    glyph = Glyph.Upload,
+                    glyph = Glyph.Download,
                     description = copyDescription,
                     enabled = canWrite,
                     onClick = onCopyFromPhone,
                 )
                 FolderActionButton(
-                    glyph = Glyph.Download,
+                    glyph = Glyph.Upload,
                     description = saveDescription,
                     enabled = canAct && selection != null,
                     onClick = onSaveToPhone,
@@ -926,6 +1254,7 @@ private fun FileRow(
         },
         modifier = modifier
             .fillMaxWidth()
+            .semantics { selected = isSelected }
             .clickable(
                 enabled = actionsEnabled,
                 onClickLabel = if (entry.isDirectory) {

@@ -186,6 +186,10 @@
     <string name="files_delete_confirm">Удалить %1$s?</string>
     <string name="files_open_folder">Открыть папку</string>
     <string name="files_select_file">Выбрать файл</string>
+    <string name="files_pick_hint">Выберите файл</string>
+    <string name="files_pick_device">Выбрать с устройства</string>
+    <string name="files_pick_use_file">Использовать файл</string>
+    <string name="files_pick_back">Назад</string>
     <string name="type_folder">Папка</string>
     <string name="type_iso">ISO-образ</string>
     <string name="type_file">Файл</string>
@@ -332,6 +336,15 @@
     <string name="msg_select_partition_first">Сначала выберите раздел.</string>
     <string name="msg_read_only_partition">%1$s доступен только для чтения в этом режиме.</string>
     <string name="msg_selected_file_missing">Выбранный файл не найден.</string>
+    <string name="msg_files_pick_active">Сначала завершите или отмените выбор файла.</string>
+    <string name="msg_files_pick_target_invalid">Выбранный файл больше недоступен. Вернитесь и выберите снова.</string>
+    <string name="msg_ventoy_data_partition_missing">Раздел данных Ventoy не найден.</string>
+    <string name="msg_import_inspection_busy">Другая проверка файла ещё выполняется. Повторите через момент.</string>
+    <string name="msg_import_picker_busy">Окно выбора файла уже открыто. Завершите или отмените его.</string>
+    <string name="msg_import_inspection_cancelling">Завершаем проверку файла. USB-диск закроется автоматически.</string>
+    <string name="msg_import_picker_timed_out">Окно выбора файла не вернуло результат. Выберите файл снова.</string>
+    <string name="msg_import_picker_exhausted">Слоты выбора файла исчерпаны. Очистите данные приложения для сброса.</string>
+    <string name="msg_import_picker_unavailable">Не удалось зарезервировать слот выбора файла. Повторите попытку.</string>
     <string name="msg_image_cleared">Выбор образа сброшен.</string>
     <string name="msg_image_ready">Образ готов: %1$s.</string>
     <string name="msg_writing_xml">Запись autounattend.xml для %1$s…</string>
