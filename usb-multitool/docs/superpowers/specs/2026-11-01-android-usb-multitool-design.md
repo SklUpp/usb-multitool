@@ -114,6 +114,7 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
 - Disconnect, cancellation, completion, and process teardown release the interface, connection, and WakeLock.
 - A disconnect ends the operation with its last durable state. The application must not silently continue on a reconnected device.
 - `claimInterface(force = true)` is allowed, but it is not proof that Android has safely unmounted a filesystem. Raw access must still be explicit and confirmed.
+- Target: if filesystem sync or close fails, retain the unconfirmed-close error and block destructive writes until the volume state has been confirmed again. A second close call alone must not turn a previous failure into success. FAT/exFAT unmount failures must propagate through JNI; do not claim this is implemented until verified.
 
 ## 7. Functional behavior
 
