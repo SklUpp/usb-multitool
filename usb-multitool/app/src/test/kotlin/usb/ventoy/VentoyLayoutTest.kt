@@ -1209,6 +1209,53 @@ class VentoyLayoutTest {
         assertFalse("primary GPT table untouched when attr ok", disk.wasRangeWritten(2L, 1L))
     }
 
+    /** Drops one mid-Part2 sector at flush time: neither head nor last payload sector. */
+    private fun corruptPart2OnSync(disk: RecordingDisk, part2Start: ULong) {
+        disk.syncHook = {
+            val lost = part2Start + 20_000UL
+            val sector = checkNotNull(disk.bytes[lost]) { "Part2 sector $lost was never written" }
+            sector[100] = (sector[100].toInt() xor 0xFF).toByte()
+        }
+    }
+
+    private fun assertPart2VerifyFailure(e: VentoyMutationFailedException) {
+        assertNull("verify failure must not be wrapped as a disk error", e.cause)
+        assertTrue("unexpected message: ${e.message}", e.message!!.contains("Part2 read-back mismatch"))
+    }
+
+    @Test
+    fun installVerifiesWholePart2AfterSyncAndReportsPartialOnMismatch() {
+        val reference = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(reference, gpt = true)
+        val part2Start = requireNotNull(VentoyLayout.probe(reference)).part2StartLba
+
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        corruptPart2OnSync(disk, part2Start)
+        try {
+            VentoyInstaller.install(disk, fakeAssets, gpt = true)
+            fail("expected VentoyMutationFailedException")
+        } catch (e: VentoyMutationFailedException) {
+            assertPart2VerifyFailure(e)
+            assertTrue("read-back must happen after sync", disk.syncCount >= 1L)
+        }
+    }
+
+    @Test
+    fun updateVerifiesWholePart2AfterSyncAndReportsPartialOnMismatch() {
+        val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)
+        installLayoutExpectingMissingNativeFormat(disk, gpt = true)
+        val part2Start = requireNotNull(VentoyLayout.probe(disk)).part2StartLba
+        disk.resetStats()
+        corruptPart2OnSync(disk, part2Start)
+        try {
+            updateWithKnownVersion(disk)
+            fail("expected VentoyMutationFailedException")
+        } catch (e: VentoyMutationFailedException) {
+            assertPart2VerifyFailure(e)
+            assertTrue("read-back must happen after sync", disk.syncCount >= 1L)
+        }
+    }
+
     @Test
     fun probeReportsAbsentVersionWithoutError() {
         val disk = RecordingDisk(sectorCount = 2_097_152UL, sectorSize = 512)

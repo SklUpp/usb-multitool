@@ -557,13 +557,15 @@ object VentoyInstaller {
             disk.write(diskSectors - 33L, ByteBuffer.wrap(tbl))
             disk.write(diskSectors - 1L, ByteBuffer.wrap(bHdrArr))
 
+            // Flush before read-back: verifying the page cache proves nothing about the medium.
+            disk.sync()
             requireReadBack(disk, 0L, mbr)
             requireReadBack(disk, 1L, pHdrArr)
             requireReadBack(disk, 2L, tbl)
             requireReadBack(disk, diskSectors - 33L, tbl)
             requireReadBack(disk, diskSectors - 1L, bHdrArr)
             requireReadBack(disk, 34L, coreExpected)
-            requirePart2Ends(disk, part2Start, decompressedEfi)
+            requirePart2Written(disk, part2Start, decompressedEfi)
         } else {
             // Write legacy GRUB stage1 at LBA 1
             val coreBuf = ByteBuffer.allocate(
@@ -601,12 +603,12 @@ object VentoyInstaller {
             mbr[511] = 0xAA.toByte()
 
             disk.write(0L, mbrBuf)
+            // Flush before read-back: verifying the page cache proves nothing about the medium.
+            disk.sync()
             requireReadBack(disk, 0L, mbr)
             requireReadBack(disk, 1L, coreExpected)
-            requirePart2Ends(disk, part2Start, decompressedEfi)
+            requirePart2Written(disk, part2Start, decompressedEfi)
         }
-
-        disk.sync()
 
         // Part1 exFAT only after layout preflight+writes; failure here is Partial.
         formatDataPartitionExfat(
@@ -845,6 +847,7 @@ object VentoyInstaller {
                 disk.write(diskSectors - 33L, ByteBuffer.wrap(tbl))
                 disk.write(diskSectors - 1L, ByteBuffer.wrap(bHdrArr))
 
+                disk.sync()
                 requireReadBack(disk, 2L, tbl)
                 requireReadBack(disk, 1L, pHdrArr)
                 requireReadBack(disk, diskSectors - 33L, tbl)
@@ -852,6 +855,8 @@ object VentoyInstaller {
             }
         }
 
+        // Flush before read-back: the verify must observe the medium, not the page cache.
+        disk.sync()
         requireReadBack(disk, 0L, mbr)
         if (probe.scheme == TableScheme.GPT) {
             // RSV window (2040..2047) is restored separately; core bytes end before it.
@@ -860,9 +865,7 @@ object VentoyInstaller {
             requireReadBack(disk, 1L, coreExpected, VentoyLayout.RSV_LBA - 1L)
         }
         requireReadBack(disk, VentoyLayout.RSV_LBA, probe.rsvData)
-        requirePart2Ends(disk, part2Start, decompressedEfi)
-
-        disk.sync()
+        requirePart2Written(disk, part2Start, decompressedEfi)
 
         return PartitionTable(
             scheme = probe.scheme,
@@ -1150,6 +1153,9 @@ object VentoyInstaller {
     private const val INSTALL_BOOT_BYTES = 446
     private const val UPDATE_BOOT_BYTES = 440
 
+    /** 64 KiB read-back granularity for the 32 MiB Part2 verify. */
+    private const val PART2_VERIFY_CHUNK_SECTORS = 128
+
     private fun copyBootCode(bootImg: ByteArray, mbr: ByteArray, count: Int) {
         require(count in 1..minOf(bootImg.size, 446)) {
             "boot.img copy count $count out of range (boot=${bootImg.size})"
@@ -1199,20 +1205,42 @@ object VentoyInstaller {
     }
 
     /**
-     * Verify Part2 head and last payload sector after install/update.
-     * Full 32 MiB compare skipped (cost); ends catch short/truncated writes.
+     * Read back every Part2 sector that was written — the image plus the zero padding up to
+     * [VentoyLayout.EFI_PART_SECTORS] — in 64 KiB chunks and compare it byte-for-byte.
+     * A mismatch means the medium does not hold what was written, so the caller reports
+     * Partial: the disk was already mutated.
      */
-    private fun requirePart2Ends(disk: BlockDevice, part2Start: Long, efi: ByteArray) {
+    private fun requirePart2Written(disk: BlockDevice, part2Start: Long, efi: ByteArray) {
         if (efi.isEmpty()) return
-        val headExpected = ByteArray(VentoyLayout.SECTOR_SIZE)
-        efi.copyInto(headExpected, 0, 0, minOf(efi.size, VentoyLayout.SECTOR_SIZE))
-        requireReadBack(disk, part2Start, headExpected)
-        val lastOff = ((efi.size - 1) / VentoyLayout.SECTOR_SIZE) * VentoyLayout.SECTOR_SIZE
-        if (lastOff > 0) {
-            val last = ByteArray(VentoyLayout.SECTOR_SIZE)
-            val n = minOf(VentoyLayout.SECTOR_SIZE, efi.size - lastOff)
-            efi.copyInto(last, 0, lastOff, lastOff + n)
-            requireReadBack(disk, part2Start + (lastOff / VentoyLayout.SECTOR_SIZE).toLong(), last)
+        val chunkSectors = PART2_VERIFY_CHUNK_SECTORS
+        val chunkBytes = chunkSectors * VentoyLayout.SECTOR_SIZE
+        val buf = ByteBuffer.allocate(chunkBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val expected = ByteArray(chunkBytes)
+        val totalSectors = VentoyLayout.EFI_PART_SECTORS
+        var sector = 0L
+        while (sector < totalSectors) {
+            val count = minOf(chunkSectors.toLong(), totalSectors - sector).toInt()
+            val bytes = count * VentoyLayout.SECTOR_SIZE
+            // Written range is the image followed by zeros (writeBufferToDisk pads).
+            expected.fill(0, 0, bytes)
+            val from = (sector * VentoyLayout.SECTOR_SIZE).toInt()
+            if (from < efi.size) {
+                val len = minOf(bytes, efi.size - from)
+                efi.copyInto(expected, 0, from, from + len)
+            }
+            buf.clear()
+            disk.read(part2Start + sector, buf)
+            val actual = buf.array()
+            for (i in 0 until bytes) {
+                if (actual[i] != expected[i]) {
+                    val badLba = part2Start + sector + i / VentoyLayout.SECTOR_SIZE
+                    throw VentoyMutationFailedException(
+                        "Ventoy Part2 read-back mismatch at LBA $badLba " +
+                            "(byte ${sector * VentoyLayout.SECTOR_SIZE + i} of $totalSectors sectors)",
+                    )
+                }
+            }
+            sector += count
         }
     }
 }
