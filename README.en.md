@@ -143,6 +143,8 @@ Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-d
 ./gradlew :app:compileDebugKotlin --no-daemon
 ```
 
+`:app:testDebugUnitTest` also runs Robolectric tests: the real `MainActivity` (POST_NOTIFICATIONS request) and the SAF boundary `ImageSource.fromContentUri`. Robolectric downloads the `android-all` jar on first run, so it needs network access; no device or emulator is required.
+
 The separate `fatfs-host` job has no Android SDK. It builds and runs the FatFs host tests:
 
 ```bash
@@ -163,6 +165,14 @@ You can run these static checks locally: `sh -n gradlew`, `git grep` for pinned 
 - `.github/workflows/android-debug.yml` — the exact CI command order. `usb-multitool/CONVENTIONS.md` — where the project allows builds.
 - `usb-multitool/third_party/README.md` — pinned engine versions and licenses.
 - `usb-multitool/docs/superpowers/specs/2026-11-01-android-usb-multitool-design.md` — approved design.
+
+### App versions
+
+`defaultConfig` in `usb-multitool/app/build.gradle.kts` is the only source of the version (currently `versionCode = 1`, `versionName = "0.1.0"`).
+
+- `versionCode` increases by 1 when a new installable version is released, not on every CI run: verification builds keep the version unchanged. Released `versionCode` values never repeat or decrease, otherwise Android cannot compare two installs.
+- `versionName` follows MAJOR.MINOR.PATCH and never decreases; a release tag, once tags exist, is `v<versionName>`.
+- The app header shows the installed `versionName` from `PackageManager`, so after a sideload it displays the version actually on the device.
 
 The project uses Kotlin 2.2.10, Jetpack Compose (BOM 2025.12.01), AGP 8.13.2, Gradle 8.13, NDK 29.0.14206865, CMake 3.22.1, and Java 21 in CI. Tests use JUnit 4, MockK, and kotlinx-coroutines-test. Native host tests build with `make` and `gcc`.
 

@@ -229,17 +229,25 @@ Java_usb_fs_FatFsNative_nativeMount(JNIEnv *env, jclass, jlong blockHandle, jint
 	return static_cast<jlong>(vol);
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_usb_fs_FatFsNative_nativeUmount(JNIEnv *, jclass, jlong volume)
+extern "C" JNIEXPORT jint JNICALL
+Java_usb_fs_FatFsNative_nativeUmount(JNIEnv *env, jclass, jlong volume)
 {
-	fat_engine_umount(static_cast<uint64_t>(volume));
+	int rc = fat_engine_umount(static_cast<uint64_t>(volume));
+	if (rc != 0) {
+		throw_fat(env, "usb/fs/FatFsException",
+			  ("umount failed: " + std::to_string(rc)).c_str());
+	}
+	return static_cast<jint>(rc);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_usb_fs_FatFsNative_nativeSync(JNIEnv *env, jclass, jlong volume)
 {
 	int rc = fat_engine_sync(static_cast<uint64_t>(volume));
-	if (rc != 0) throw_fat(env, "usb/fs/FatFsException", "sync failed");
+	if (rc != 0) {
+		throw_fat(env, "usb/fs/FatFsException",
+			  ("sync failed: " + std::to_string(rc)).c_str());
+	}
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL

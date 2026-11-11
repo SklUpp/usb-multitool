@@ -4,6 +4,12 @@
 
     <string name="info_close">Понятно</string>
 
+    <string name="app_version_label">v%1$s</string>
+    <string name="app_version_unknown">Версия неизвестна</string>
+    <string name="app_version_open">Версия %1$s · открыть страницу проекта на GitHub</string>
+    <string name="app_version_open_unknown">Установленная версия неизвестна · открыть страницу проекта на GitHub</string>
+    <string name="app_version_no_browser">Нет приложения, которое может открыть страницу проекта</string>
+
     <string name="log_title_count">Журнал · %1$d</string>
     <string name="log_collapse">Свернуть журнал</string>
     <string name="log_screen_title">Журнал</string>

@@ -145,6 +145,8 @@ APK подписан debug-ключом и предназначен для те�
 ./gradlew :app:compileDebugKotlin --no-daemon
 ```
 
+`:app:testDebugUnitTest` включает и Robolectric-тесты: реальный `MainActivity` (запрос POST_NOTIFICATIONS) и SAF-границу `ImageSource.fromContentUri`. Robolectric скачивает `android-all` jar при первом запуске, поэтому нужен доступ в сеть; устройство и эмулятор не нужны.
+
 Отдельная джоба `fatfs-host` (без Android SDK) собирает и запускает host-тесты FatFs:
 
 ```bash
@@ -165,6 +167,14 @@ make -C native-tests/fatfs test
 - `.github/workflows/android-debug.yml` — точный порядок команд CI; `usb-multitool/CONVENTIONS.md` — где разрешено выполнять сборки.
 - `usb-multitool/third_party/README.md` — закреплённые версии и лицензии движков.
 - `usb-multitool/docs/superpowers/specs/2026-11-01-android-usb-multitool-design.md` — утверждённый дизайн.
+
+### Версии приложения
+
+Единственный источник версии — `defaultConfig` в `usb-multitool/app/build.gradle.kts` (сейчас `versionCode = 1`, `versionName = "0.1.0"`).
+
+- `versionCode` увеличивается на 1 при выпуске новой устанавливаемой версии, а не на каждом прогоне CI: проверочные сборки версию не меняют. Выпущенные значения `versionCode` не повторяются и не уменьшаются, иначе Android не сможет сравнить две установки.
+- `versionName` следует MAJOR.MINOR.PATCH и не убывает; тег, когда теги появятся, — `v<versionName>`.
+- Заголовок приложения показывает установленную `versionName` из `PackageManager`: после сайдлоада видно версию, реально стоящую на устройстве.
 
 Стек: Kotlin 2.2.10, Jetpack Compose (BOM 2025.12.01), AGP 8.13.2, Gradle 8.13, NDK 29.0.14206865, CMake 3.22.1, Java 21 в CI. Тесты — JUnit 4, MockK, kotlinx-coroutines-test; native host-тесты собираются обычным `make`/`gcc`.
 

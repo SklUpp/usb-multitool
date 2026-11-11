@@ -1120,7 +1120,6 @@ static FRESULT sync_fs (	/* Returns FR_OK or FR_DISK_ERR */
 	res = sync_window(fs);
 	if (res == FR_OK) {
 		if (fs->fsi_flag == 1) {	/* Allocation changed? */
-			fs->fsi_flag = 0;
 			if (fs->fs_type == FS_FAT32) {	/* FAT32: Update FSInfo sector */
 				/* Create FSInfo structure */
 				memset(fs->win, 0, sizeof fs->win);
@@ -1129,26 +1128,53 @@ static FRESULT sync_fs (	/* Returns FR_OK or FR_DISK_ERR */
 				st_32(fs->win + FSI_Free_Count, fs->free_clst);	/* Number of free clusters */
 				st_32(fs->win + FSI_Nxt_Free, fs->last_clst);	/* Last allocated culuster */
 				st_32(fs->win + FSI_TrailSig, 0xAA550000);		/* Trailing signature */
-				disk_write(fs->pdrv, fs->win, fs->winsect = fs->volbase + 1, 1);	/* Write it into the FSInfo sector (Next to VBR) */
+				if (disk_write(fs->pdrv, fs->win, fs->winsect = fs->volbase + 1, 1) == RES_OK) {	/* Write it into the FSInfo sector (Next to VBR) */
+					fs->fsi_flag = 0;	/* Clear only after the sector reached the medium */
+				} else {
+					res = FR_DISK_ERR;	/* Keep fsi_flag so the flush can be retried */
+				}
 			}
 #if FF_FS_EXFAT
 			else if (fs->fs_type == FS_EXFAT) {	/* exFAT: Update PercInUse field in BPB */
-				if (disk_read(fs->pdrv, fs->win, fs->winsect = fs->volbase, 1) == RES_OK) {	/* Load VBR */
+				if (disk_read(fs->pdrv, fs->win, fs->winsect = fs->volbase, 1) != RES_OK) {	/* Load VBR */
+					res = FR_DISK_ERR;	/* Keep fsi_flag so the flush can be retried */
+				} else {
 					BYTE perc_inuse = (fs->free_clst <= fs->n_fatent - 2) ? (BYTE)((QWORD)(fs->n_fatent - 2 - fs->free_clst) * 100 / (fs->n_fatent - 2)) : 0xFF;	/* Precent in use 0-100 or 0xFF(unknown) */
 
 					if (fs->win[BPB_PercInUseEx] != perc_inuse) {	/* Write it back into VBR if needed */
 						fs->win[BPB_PercInUseEx] = perc_inuse;
-						disk_write(fs->pdrv, fs->win, fs->winsect, 1);
+						if (disk_write(fs->pdrv, fs->win, fs->winsect, 1) != RES_OK) {
+							res = FR_DISK_ERR;	/* Keep fsi_flag so the flush can be retried */
+						} else {
+							fs->fsi_flag = 0;
+						}
+					} else {
+						fs->fsi_flag = 0;
 					}
 				}
 			}
 #endif
+			else {
+				fs->fsi_flag = 0;	/* FAT12/16: no on-disk allocation metadata */
+			}
 		}
 		/* Make sure that no pending write process in the lower layer */
 		if (disk_ioctl(fs->pdrv, CTRL_SYNC, 0) != RES_OK) res = FR_DISK_ERR;
 	}
 
 	return res;
+}
+
+/* Project addition (pinned patch, not upstream): flush a mounted volume
+   without an open FIL object. f_mount(NULL, path, 0) drops the volume object
+   without calling sync_fs, so a dirty window/FSInfo would be lost; callers
+   that unregister a volume must flush through this entry point first. */
+FRESULT f_sync_volume (	/* Returns FR_OK or FR_DISK_ERR */
+	FATFS* fs			/* Filesystem object, mounted */
+)
+{
+	if (!fs || fs->fs_type == 0) return FR_INVALID_OBJECT;
+	return sync_fs(fs);
 }
 
 #endif

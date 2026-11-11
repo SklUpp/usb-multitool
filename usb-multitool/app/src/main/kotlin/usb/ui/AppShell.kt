@@ -51,10 +51,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -416,6 +420,69 @@ fun RememberedAppShell(
     )
 }
 
+/** Fixed project page: the header opens exactly this address, never state or user input. */
+private const val PROJECT_URL = "https://github.com/SklUpp/usb-multitool"
+
+/**
+ * Installed `versionName`, read from [android.content.pm.PackageManager] instead of
+ * `BuildConfig`: a sideloaded or repackaged APK then reports the version actually on the
+ * device. The build enables no `buildConfig` field, and the manifest version stays the one
+ * source. A read failure is logged and shows as "version unknown"; it never crashes.
+ */
+@Suppress("DEPRECATION") // versionName does not depend on PackageInfo flags.
+private fun installedVersionName(context: Context): String? = runCatching {
+    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+}.onFailure {
+    android.util.Log.w("UsbMultitool", "installed version unavailable: ${it.message}")
+}.getOrNull()?.takeIf { it.isNotBlank() }
+
+/**
+ * Version label above the language, theme and log buttons; tapping opens [PROJECT_URL].
+ * The intent is implicit and this build declares no package-visibility queries, so the
+ * resolve step is the launch itself: [ActivityNotFoundException] means "no handler" and is
+ * reported in a toast. A pre-flight `resolveActivity` would answer null for a browser the
+ * package filter hides on API 30+.
+ */
+@Composable
+private fun ProjectVersionButton(versionName: String?) {
+    val context = LocalContext.current
+    val label = if (versionName != null) {
+        stringResource(R.string.app_version_label, versionName)
+    } else {
+        stringResource(R.string.app_version_unknown)
+    }
+    val description = if (versionName != null) {
+        stringResource(R.string.app_version_open, versionName)
+    } else {
+        stringResource(R.string.app_version_open_unknown)
+    }
+    val noBrowser = stringResource(R.string.app_version_no_browser)
+    TextButton(
+        onClick = {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+            try {
+                context.startActivity(intent)
+            } catch (error: ActivityNotFoundException) {
+                android.util.Log.w("UsbMultitool", "no activity for $PROJECT_URL: ${error.message}")
+                Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
+            }
+        },
+        contentPadding = PaddingValues(horizontal = 8.dp),
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .semantics { contentDescription = description },
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /**
  * Compact top device status header. The title and subtitle sit in their own surface with a
  * top inset; language, theme and log controls stay outside that surface, so no control is
@@ -431,6 +498,9 @@ private fun DeviceHeader(
 ) {
     val device = state.device
     val partCount = state.partitions.size
+    val context = LocalContext.current
+    // Installed version is stable for the process lifetime; avoid a binder read per frame.
+    val versionName = remember(context) { installedVersionName(context) }
     val subtitle = when (state.presence) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
@@ -484,14 +554,22 @@ private fun DeviceHeader(
         }
 
         // Outside the title surface, beside it: the header block keeps its own edges and
-        // these controls never overlap it.
-        LanguagePicker(language = state.language, onIntent = onIntent)
-        ThemeToggle(darkTheme = state.darkTheme, onIntent = onIntent)
-        LogOpenButton(
-            lineCount = state.logLines.size,
-            focusRequester = logButtonFocus,
-            onOpenLog = onOpenLog,
-        )
+        // these controls never overlap it. The version sits above them and opens the repo.
+        Column(horizontalAlignment = Alignment.End) {
+            ProjectVersionButton(versionName = versionName)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                LanguagePicker(language = state.language, onIntent = onIntent)
+                ThemeToggle(darkTheme = state.darkTheme, onIntent = onIntent)
+                LogOpenButton(
+                    lineCount = state.logLines.size,
+                    focusRequester = logButtonFocus,
+                    onOpenLog = onOpenLog,
+                )
+            }
+        }
     }
 }
 

@@ -12,6 +12,10 @@ android {
         applicationId = "usb.multitool"
         minSdk = 28
         targetSdk = 36
+        // Single source of the app version; the header shows the installed values.
+        // Bump versionCode by 1 when a new installable version is released (not on every
+        // CI build). versionName follows MAJOR.MINOR.PATCH and never decreases.
+        // See README → App versions.
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -74,6 +78,13 @@ android {
             useLegacyPackaging = false
         }
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric reads the merged manifest, themes and resources on the JVM.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -90,6 +101,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -14,6 +14,8 @@ commit recorded in `UPSTREAM.md`.
 - Patches (apply in order after unpack):
   1. https://elm-chan.org/fsw/ff/patches.html — patch-1 (Unicode tables / small-volume; 2025-08-03 / 2025-09-13 notes)
   2. Same page — patch-2 for CVE-2026-6682/6687/6683 (apply to `ff.c` with patch-1)
+  3. Local patch (via `scripts/fetch-third-party.sh`): `third_party/fatfs/patches/ff16p3-sync-volume.diff` — adds `f_sync_volume(FATFS*)`, a public wrapper over the static `sync_fs`, so the engine can flush the cached window, FAT32 FSInfo / exFAT PercInUse and `CTRL_SYNC` before `f_mount(NULL, path, 0)`. Upstream `f_mount(NULL, …)` only drops the volume object and never flushes.
+  4. Local patch: `third_party/fatfs/patches/ff16p4-sync-fs-errors.diff` — `sync_fs` now treats a failed FSInfo sector write or exFAT VBR read/write as `FR_DISK_ERR` and clears `fsi_flag` only after the sector reached the medium. Upstream cleared the flag first and ignored the write result, so a later flush reported success for metadata that never landed and could not retry.
 - Unpack into: `third_party/fatfs/`
 - License: FatFs license (BSD-style; see archive `LICENSE.txt`)
 - Bridge: `disk_read` / `disk_write` / `disk_ioctl` → `usb_partition_*` in `fs_bridge.c`

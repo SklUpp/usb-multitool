@@ -4,6 +4,12 @@
 
     <string name="info_close">Close</string>
 
+    <string name="app_version_label">v%1$s</string>
+    <string name="app_version_unknown">Version unknown</string>
+    <string name="app_version_open">Version %1$s · open the project page on GitHub</string>
+    <string name="app_version_open_unknown">Installed version unknown · open the project page on GitHub</string>
+    <string name="app_version_no_browser">No app can open the project page</string>
+
     <string name="log_title_count">Log · %1$d</string>
     <string name="log_collapse">Collapse log</string>
     <string name="log_screen_title">Log</string>

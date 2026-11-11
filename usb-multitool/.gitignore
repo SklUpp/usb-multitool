@@ -15,5 +15,6 @@ app/build/
 
 # FatFs host tests
 native-tests/fatfs/test_fat_images
+native-tests/fatfs/test_fat_teardown
 native-tests/fatfs/*.img
 

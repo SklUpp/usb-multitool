@@ -45,7 +45,26 @@ uint64_t fat_engine_max_file_size(FatFsKind kind);
 
 int fat_engine_mount(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
 		     FatFsKind *out_kind, uint64_t *out_volume);
+/*
+ * Unregisters the volume and unbinds its drive. Flushes first only when this
+ * mount may hold state that never reached the medium: a dirty FatFs window,
+ * FSInfo/PercInUse flagged after a write-path attempt, or an unconfirmed
+ * CTRL_SYNC from an earlier failed flush. A clean or read-only volume closes
+ * with no I/O at all, which matters after detach when writes and CTRL_SYNC are
+ * already failing. The handle is invalid afterwards (a second call returns
+ * FR_INVALID_OBJECT, never touching a freed or rebound drive). Returns the
+ * first flush/unmount error or FR_OK; later errors are dropped because the
+ * teardown cannot be retried.
+ */
 int fat_engine_umount(uint64_t volume);
+/*
+ * Flushes pending FatFs state (cached window plus FAT32 FSInfo / exFAT
+ * PercInUse) and the transport. Returns FR_OK without any I/O when nothing is
+ * pending — in particular a read-only browse that only set the advisory FSInfo
+ * flag never writes metadata. A CTRL_SYNC failure is remembered even though
+ * sync_fs already cleared wflag/fsi_flag and f_sync clears FA_MODIFIED, so a
+ * later call retries the barrier; FR_OK means the barrier was confirmed.
+ */
 int fat_engine_sync(uint64_t volume);
 
 /*

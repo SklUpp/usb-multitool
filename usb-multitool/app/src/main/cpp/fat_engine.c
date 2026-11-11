@@ -26,6 +26,8 @@ typedef struct FatVolume {
 	uint32_t sector_size;
 	uint64_t sector_count;
 	FatFsKind kind;
+	int mutated; /* a write-path op was attempted; sticky until unmount */
+	int barrier_pending; /* CTRL_SYNC not confirmed since the last flush; sticky */
 } FatVolume;
 
 static FatVolume g_vols[FF_VOLUMES];
@@ -45,6 +47,30 @@ static FatVolume *vol_from(uint64_t volume)
 	if (v < &g_vols[0] || v >= &g_vols[FF_VOLUMES]) return NULL;
 	if (!v->in_use) return NULL;
 	return v;
+}
+
+/*
+ * True only when the medium may hold state that has not reached it yet.
+ * wflag is the FatFs dirty-window bit: a failed mkdir/unlink/write leaves it set
+ * and the sectors must be flushed before unmount. fsi_flag is advisory FSInfo /
+ * exFAT PercInUse: f_getfree sets it on a read-only browse, so it must not cause
+ * a write unless this mount actually attempted a mutation. barrier_pending keeps
+ * an unconfirmed CTRL_SYNC alive: sync_fs writes the window and FSInfo and
+ * clears their flags *before* the transport barrier, and f_sync drops
+ * FA_MODIFIED regardless of the result, so a CTRL_SYNC failure leaves no other
+ * trace. A clean volume needs no I/O at teardown at all (important after
+ * detach, when writes/CTRL_SYNC fail).
+ */
+static int vol_needs_flush(const FatVolume *v)
+{
+	return v->barrier_pending || v->fs.wflag != 0 || (v->mutated && v->fs.fsi_flag == 1);
+}
+
+/* Failed write-path ops may have failed at CTRL_SYNC after wflag/fsi_flag were
+ * already cleared; remember it so a later sync/close still issues the barrier. */
+static void vol_note_fr(FatVolume *v, FRESULT fr)
+{
+	if (fr == FR_DISK_ERR) v->barrier_pending = 1;
 }
 
 /* Build "N:/path". Returns 0, or FR_INVALID_NAME when the result would not fit
@@ -156,30 +182,65 @@ int fat_engine_umount(uint64_t volume)
 	FatVolume *v = vol_from(volume);
 	char path[8];
 	FRESULT fr;
+	uint64_t bh;
+	int rc = 0;
 
 	if (!v) return (int)FR_INVALID_OBJECT;
 	pthread_mutex_lock(&g_fat_mu);
 	pthread_mutex_lock(&g_vols_mu);
+	bh = v->block_handle;
+	/* Flush only when the medium may be missing state: f_mount(NULL,*,0) drops
+	 * the volume object without calling sync_fs, but a clean read-only volume
+	 * must not issue any I/O here (detach closes after the endpoint is gone).
+	 * An unconfirmed CTRL_SYNC keeps the gate closed and is retried here.
+	 * Teardown below always runs; only the first error is kept (later errors
+	 * cannot be retried once the drive is unbound). */
+	if (vol_needs_flush(v)) {
+		rc = (int)f_sync_volume(&v->fs);
+		if (rc != 0) (void)usb_block_sync(bh); /* sync_fs may have aborted before CTRL_SYNC */
+	}
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	fr = f_mount(NULL, path, 0);
+	if (rc == 0) rc = map_fr(fr);
 	fat_diskio_unbind(v->pdrv);
 	memset(v, 0, sizeof(*v));
 	pthread_mutex_unlock(&g_vols_mu);
 	pthread_mutex_unlock(&g_fat_mu);
-	return map_fr(fr);
+	return rc;
 }
 
 int fat_engine_sync(uint64_t volume)
 {
+	FatVolume *v;
+	uint64_t bh;
+	int rc;
+
 	pthread_mutex_lock(&g_fat_mu);
-	FatVolume *v = vol_from(volume);
+	v = vol_from(volume);
 	if (!v) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_OBJECT;
 	}
-	uint64_t bh = v->block_handle;
+	bh = v->block_handle;
+	/* No pending state -> no I/O. A read-only browse may have set the advisory
+	 * FSInfo flag via f_getfree, and a fully synced write leaves the window
+	 * clean; neither may write or fsync the medium here. barrier_pending forces
+	 * the transport barrier when a previous CTRL_SYNC failed after the window
+	 * and FSInfo flags were already cleared. On success the barrier is
+	 * confirmed; on failure it stays pending for the next call. */
+	if (!vol_needs_flush(v)) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return 0;
+	}
+	rc = (int)f_sync_volume(&v->fs);
+	if (rc != 0) {
+		v->barrier_pending = 1;
+		(void)usb_block_sync(bh); /* best effort when sync_fs aborted early */
+	} else {
+		v->barrier_pending = 0;
+	}
 	pthread_mutex_unlock(&g_fat_mu);
-	return usb_block_sync(bh) == 0 ? 0 : (int)FR_DISK_ERR;
+	return rc;
 }
 
 int fat_engine_usage(uint64_t volume, uint64_t *out_total_bytes, uint64_t *out_free_bytes)
@@ -204,8 +265,9 @@ int fat_engine_usage(uint64_t volume, uint64_t *out_total_bytes, uint64_t *out_f
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
-	/* f_getfree only reads FAT/bitmap sectors. It may flag the in-memory FSInfo
-	 * for a later sync, but no sync is issued here, so the media stays untouched. */
+	/* f_getfree reads FAT/bitmap sectors and may flag the in-memory FSInfo for a
+	 * later sync. Teardown only flushes an unfinished mutation (see
+	 * vol_needs_flush), so a read-only browse still leaves the media untouched. */
 	fr = f_getfree(path, &free_clusters, &fs);
 	if (fr == FR_OK) {
 		clusters = (uint64_t)(fs->n_fatent - 2);
@@ -337,7 +399,9 @@ int fat_engine_mkdir(uint64_t volume, const char *path)
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
+	v->mutated = 1;
 	fr = f_mkdir(full);
+	vol_note_fr(v, fr);
 	pthread_mutex_unlock(&g_fat_mu);
 	return map_fr(fr);
 }
@@ -358,7 +422,9 @@ int fat_engine_delete(uint64_t volume, const char *path)
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
+	v->mutated = 1;
 	fr = f_unlink(full);
+	vol_note_fr(v, fr);
 	pthread_mutex_unlock(&g_fat_mu);
 	return map_fr(fr);
 }
@@ -380,7 +446,9 @@ int fat_engine_rename(uint64_t volume, const char *from, const char *to)
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
+	v->mutated = 1;
 	fr = f_rename(a, b);
+	vol_note_fr(v, fr);
 	pthread_mutex_unlock(&g_fat_mu);
 	return map_fr(fr);
 }
@@ -465,8 +533,10 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	} else {
 		mode = FA_WRITE | FA_OPEN_EXISTING;
 	}
+	v->mutated = 1;
 	fr = f_open(&fil, full, mode);
 	if (fr != FR_OK) {
+		vol_note_fr(v, fr);
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
@@ -474,6 +544,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		fr = f_lseek(&fil, (FSIZE_t)offset);
 		if (fr != FR_OK) {
 			f_close(&fil);
+			vol_note_fr(v, fr);
 			pthread_mutex_unlock(&g_fat_mu);
 			return map_fr(fr);
 		}
@@ -484,6 +555,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	if (fr == FR_OK) fr = f_sync(&fil);
 	f_close(&fil);
 	*out_written = (size_t)bw;
+	vol_note_fr(v, fr);
 	pthread_mutex_unlock(&g_fat_mu);
 	if (fr == FR_OK && bw < len) {
 		/* Disk full / truncated write: surface as disk error so callers do not
@@ -572,7 +644,12 @@ int fat_engine_set_label(uint64_t block_handle, uint32_t sector_size, uint64_t s
 	}
 
 	pthread_mutex_lock(&g_fat_mu);
+	{
+		FatVolume *lv = vol_from(vol);
+		if (lv) lv->mutated = 1; /* f_setlabel writes the label directory entry */
+	}
 	fr = f_setlabel(drive_label);
+	if (fr == FR_DISK_ERR) v->barrier_pending = 1;
 	pthread_mutex_unlock(&g_fat_mu);
 
 	int urc = fat_engine_umount(vol);

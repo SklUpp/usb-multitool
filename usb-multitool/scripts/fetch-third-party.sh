@@ -61,6 +61,34 @@ if ! have_marker "$TP/fatfs/source/ff.c"; then
     echo "FatFs patch-2 missing at $TP/fatfs/patches/ff16p2.diff" >&2
     exit 1
   fi
+  # Project patch: f_sync_volume() so FAT teardown can flush the FatFs window
+  # and FSInfo/exFAT VBR before f_mount(NULL) unregisters the volume.
+  FF_SYNC_PATCH="$TP/fatfs/patches/ff16p3-sync-volume.diff"
+  if ! grep -q "f_sync_volume" "$TP/fatfs/source/ff.c" 2>/dev/null; then
+    if [[ ! -f "$FF_SYNC_PATCH" ]]; then
+      echo "FatFs volume-sync patch missing at $FF_SYNC_PATCH" >&2
+      exit 1
+    fi
+    patch -p0 -d "$TP/fatfs/source" --batch < "$FF_SYNC_PATCH"
+    grep -q "f_sync_volume" "$TP/fatfs/source/ff.c" || {
+      echo "FatFs volume-sync patch failed" >&2
+      exit 1
+    }
+  fi
+  # Project patch: report FSInfo/PercInUse write failures from sync_fs and keep
+  # fsi_flag set until the sector is on the medium, so a flush can be retried.
+  FF_SYNC_FS_PATCH="$TP/fatfs/patches/ff16p4-sync-fs-errors.diff"
+  if ! grep -q "Keep fsi_flag so the flush can be retried" "$TP/fatfs/source/ff.c" 2>/dev/null; then
+    if [[ ! -f "$FF_SYNC_FS_PATCH" ]]; then
+      echo "FatFs sync_fs error patch missing at $FF_SYNC_FS_PATCH" >&2
+      exit 1
+    fi
+    patch -p0 -d "$TP/fatfs/source" --batch < "$FF_SYNC_FS_PATCH"
+    grep -q "Keep fsi_flag so the flush can be retried" "$TP/fatfs/source/ff.c" || {
+      echo "FatFs sync_fs error patch failed" >&2
+      exit 1
+    }
+  fi
   have_marker "$TP/fatfs/source/ff.c" || { echo "FatFs fetch failed"; exit 1; }
 fi
 

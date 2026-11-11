@@ -87,6 +87,31 @@ internal fun requireFullWrite(wrote: Int, expected: Int) {
     }
 }
 
+/**
+ * Teardown order for a mounted FAT volume: nativeUmount first flushes only state that
+ * a previous write-path attempt left unsynced (including an unconfirmed transport
+ * barrier), then unregisters the volume (also when it throws); a clean or read-only
+ * volume closes without any I/O. The block backend is always released. Both steps run
+ * even when the first fails; the first failure is thrown and later ones are attached
+ * as suppressed, so a close failure is never hidden and the block is never released
+ * while FatFs still holds it.
+ */
+internal fun closeVolumeResources(umount: () -> Unit, closeBlock: () -> Unit) {
+    var first: Throwable? = null
+    try {
+        umount()
+    } catch (t: Throwable) {
+        first = t
+    }
+    try {
+        closeBlock()
+    } catch (t: Throwable) {
+        val prior = first
+        if (prior == null) first = t else prior.addSuppressed(t)
+    }
+    val failure = first ?: return
+    throw failure
+}
 
 /** JNI block backend: relative LBA sector I/O. Return 0 on success. */
 interface FatBlockCallback {
@@ -107,7 +132,7 @@ object FatFsNative {
     @JvmStatic external fun nativeOpenBlock(callback: FatBlockCallback, sectorSize: Int, sectorCount: Long): Long
     @JvmStatic external fun nativeCloseBlock(handle: Long)
     @JvmStatic external fun nativeMount(blockHandle: Long, sectorSize: Int, sectorCount: Long, outKind: IntArray): Long
-    @JvmStatic external fun nativeUmount(volume: Long)
+    @JvmStatic external fun nativeUmount(volume: Long): Int
     @JvmStatic external fun nativeSync(volume: Long)
     @JvmStatic external fun nativeList(volume: Long, path: String): Array<FatDirEntry>
     @JvmStatic external fun nativeStat(volume: Long, path: String): FatDirEntry
@@ -217,8 +242,10 @@ class FatVolume internal constructor(
     override fun close() {
         if (!open) return
         open = false
-        FatFsNative.nativeUmount(volumeHandle)
-        if (ownsBlock) FatFsNative.nativeCloseBlock(blockHandle)
+        closeVolumeResources(
+            umount = { FatFsNative.nativeUmount(volumeHandle) },
+            closeBlock = { if (ownsBlock) FatFsNative.nativeCloseBlock(blockHandle) },
+        )
     }
 
     private fun ensureOpen() {
