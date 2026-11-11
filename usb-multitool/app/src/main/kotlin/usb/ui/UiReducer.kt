@@ -4593,10 +4593,11 @@ object UiReducer {
         val m = message
         // FatFs R0.16 via fat_jni.cpp throw_fat("list failed: " + rc)
         if (m == "list failed: $FR_NO_FILE" || m == "list failed: $FR_NO_PATH") return true
-        // EXT / NTFS list ENOENT (ext_jni / ntfs_jni throw "Path not found")
-        if (m == "Path not found" || m.startsWith("Path not found:")) return true
-        if (m.contains("No such file")) return true
-        if (m.contains("ENOENT")) return true
+        // EXT / NTFS list ENOENT: ext_jni.cpp / ntfs_jni.cpp throw exactly
+        // "Path not found"; the Kotlin stat wrappers append ": <path>".
+        if (m == "Path not found" || m.startsWith("Path not found: ")) return true
+        // Exact allowlist only: no engine emits "No such file" / "ENOENT" text for a
+        // listing fault, so substring matching stays out (it would hide EIO as absence).
         return false
     }
 
@@ -4658,7 +4659,10 @@ object UiReducer {
         return message(UiMessageKey.ReadOnlyPartition, partition.name)
     }
 
-    /** A single FAT entry name: no separators, no dot entries. */
+    /**
+     * A single FAT entry name: no separators, no dot entries.
+     * Policy twin: [usb.files.FilesOperationPolicy.requireChildName].
+     */
     private fun validEntryName(name: String): Boolean =
         name.isNotBlank() &&
             name != "." &&

@@ -88,9 +88,6 @@ import usb.diagnostics.RescueRestorePrep
 import usb.saf.SafArchiveTarget
 import usb.saf.SafBackupFolder
 import usb.fs.UsbFsDirEntry
-import usb.fs.ExtException
-import usb.fs.NtfsException
-import usb.fs.FatFsException
 import usb.fs.UsbFsVolume
 import usb.fs.FilesystemId
 import usb.fs.Filesystem
@@ -2447,34 +2444,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     operation.commitReached = true
                 }
             }
-        }
-    }
-
-    /**
-     * True when a cleanup/delete failure means the target was already gone.
-     * FAT: FR_NO_FILE via FatFsException. EXT: ExtException "Path not found" / delete failed ENOENT.
-     */
-    private fun isAbsentPathError(error: Throwable): Boolean {
-        when (error) {
-            is FatFsException -> {
-                val msg = error.message.orEmpty()
-                return msg.endsWith("delete failed: ${usb.fs.FR_NO_FILE}") ||
-                    msg.endsWith("stat failed: ${usb.fs.FR_NO_FILE}")
-            }
-            is ExtException -> {
-                val msg = error.message.orEmpty()
-                return msg.startsWith("Path not found") ||
-                    msg.contains("No such file") ||
-                    msg.contains("ENOENT")
-            }
-            is NtfsException -> {
-                val msg = error.message.orEmpty()
-                return msg.startsWith("Path not found") ||
-                    msg.contains("No such file") ||
-                    msg.contains("ENOENT") ||
-                    msg.contains("errno=2")
-            }
-            else -> return false
         }
     }
 

@@ -3,11 +3,31 @@ package usb.files
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.fs.mergeCloseFailure
 
 class FilesOperationPolicyTest {
+    @Test
+    fun requireChildNameAcceptsSingleEntryName() {
+        assertEquals("ubuntu.iso", FilesOperationPolicy.requireChildName("ubuntu.iso", "upload"))
+        assertEquals("ubuntu.iso", FilesOperationPolicy.requireChildName("dir/ubuntu.iso", "upload"))
+        assertEquals("ubuntu.iso", FilesOperationPolicy.requireChildName(" ubuntu.iso ", "upload"))
+    }
+
+    @Test
+    fun requireChildNameRejectsTraversalSeparatorAndNul() {
+        // Same rule set as UiReducer.validEntryName, plus NUL (illegal in FAT names).
+        for (raw in listOf("", "   ", ".", "..", "/", "dir/", "a\\b", "..\\x", "a\u0000b")) {
+            val error =
+                assertThrows(IllegalArgumentException::class.java) {
+                    FilesOperationPolicy.requireChildName(raw, "upload")
+                }
+            assertTrue(error.message!!.contains("invalid file name"))
+        }
+    }
+
     @Test
     fun nonemptyDirectoryMessageIsUserFacing() {
         val message =

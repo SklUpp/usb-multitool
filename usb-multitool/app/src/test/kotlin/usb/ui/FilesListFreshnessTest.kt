@@ -613,6 +613,20 @@ class FilesListFreshnessTest {
     }
 
     @Test
+    fun missingDirectoryHelperRejectsNonexactAbsenceTexts() {
+        // No engine emits these for a listing fault; the old contains() matches hid EIO.
+        assertFalse(UiReducer.isMissingDirectoryListError("No such file or directory"))
+        assertFalse(UiReducer.isMissingDirectoryListError("java.io.IOException: ENOENT"))
+        assertFalse(UiReducer.isMissingDirectoryListError("stat failed: ENOENT"))
+        assertFalse(UiReducer.isMissingDirectoryListError("path not found"))
+        // Exact producer text only: no prefix/suffix drift.
+        assertFalse(UiReducer.isMissingDirectoryListError("list failed: 4 "))
+        assertFalse(UiReducer.isMissingDirectoryListError("prefix list failed: 4"))
+        assertFalse(UiReducer.isMissingDirectoryListError("Path not found:"))
+        assertFalse(UiReducer.isMissingDirectoryListError("Path not found /x"))
+    }
+
+    @Test
     fun extPathNotFoundDeepListFallsBackToRoot() {
         val pending =
             ready(path = "/gone/on/ext", files = emptyList(), pending = true, generation = 6L)

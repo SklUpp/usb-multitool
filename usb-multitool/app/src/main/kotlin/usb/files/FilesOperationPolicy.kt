@@ -12,9 +12,21 @@ package usb.files
  * on read-only cancel. Terminal Cancelled is never rewritten to Failed.
  */
 object FilesOperationPolicy {
+    /**
+     * Last path segment of [rawName], or IllegalArgumentException when it is not a
+     * single FAT entry name: blank, `.`/`..`, a `\` separator, or a NUL byte.
+     * Mirrors UiReducer.validEntryName at the policy boundary (UI gating is not enough
+     * for SAF-reported display names).
+     */
     fun requireChildName(rawName: String, source: String): String {
         val name = rawName.substringAfterLast('/').trim()
-        require(name.isNotEmpty() && name != "." && name != "..") {
+        require(
+            name.isNotEmpty() &&
+                name != "." &&
+                name != ".." &&
+                '\\' !in name &&
+                '\u0000' !in name,
+        ) {
             "invalid file name \"$rawName\" for $source"
         }
         return name

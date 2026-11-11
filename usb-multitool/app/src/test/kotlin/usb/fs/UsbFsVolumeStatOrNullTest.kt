@@ -75,6 +75,27 @@ class UsbFsVolumeStatOrNullTest {
     }
 
     @Test
+    fun fatHostTextMentioningAbsenceIsNotAbsence() {
+        // Absence is the exact FR_ code; host text like "ENOENT" or "No such file" must
+        // never be sniffed for cleanup/stat decisions (that false-positive class was removed).
+        val misleading =
+            listOf(
+                "No such file or directory",
+                "ENOENT",
+                "delete failed: $FR_NO_FILE",
+                "stat failed: $FR_NO_FILE (ENOENT)",
+            )
+        for (msg in misleading) {
+            try {
+                mapFatStatOrNullFailure("/maybe.bin", FatFsException(msg))
+                fail("expected IllegalStateException for \"$msg\"")
+            } catch (e: IllegalStateException) {
+                assertTrue(e.cause is FatFsException)
+            }
+        }
+    }
+
+    @Test
     fun fatNonemptyDeleteMapsToDirectoryNotEmpty() {
         val failure = FatFsException("delete failed: $FR_DENIED")
         try {
