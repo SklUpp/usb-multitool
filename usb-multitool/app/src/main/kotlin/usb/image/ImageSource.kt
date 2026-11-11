@@ -139,6 +139,10 @@ class ImageSource private constructor(
             )
         }
 
+        /** [decodedSize] must be the exact decoded length. Pass null when unsure: a
+         *  compressed stream's footer is not a reliable length (gzip ISIZE is mod 2^32 and
+         *  concatenated members report only the last one), and a wrong hint can reject a
+         *  valid image or end it early, so never guess it here. */
         fun fromBytes(
             bytes: ByteArray,
             format: ImageFormat = detectImageFormatBytes(bytes),
@@ -148,15 +152,6 @@ class ImageSource private constructor(
             initialFormat = format,
             declaredDecodedSize = decodedSize,
         )
-
-        fun fromBytes(gzipOrRaw: ByteArray): ImageSource {
-            val format = detectImageFormatBytes(gzipOrRaw)
-            val decoded = when (format) {
-                ImageFormat.GZIP -> gzipISize(gzipOrRaw)
-                else -> null
-            }
-            return fromBytes(bytes = gzipOrRaw, format = format, decodedSize = decoded)
-        }
 
         private fun openRaw(uri: Uri): InputStream {
             val scheme = uri.scheme?.lowercase()
@@ -237,16 +232,6 @@ class ImageSource private constructor(
                 ImageFormat.ISO, ImageFormat.IMG -> raw
             }
             return CountedInputStream(decoded, decodedSize)
-        }
-
-        /** Gzip ISIZE footer (uncompressed size mod 2^32). */
-        private fun gzipISize(bytes: ByteArray): Long? {
-            if (bytes.size < 8) return null
-            var n = 0L
-            for (i in 0 until 4) {
-                n = n or ((bytes[bytes.size - 4 + i].toLong() and 0xFFL) shl (8 * i))
-            }
-            return n
         }
     }
 }

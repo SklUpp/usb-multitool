@@ -133,22 +133,72 @@ class RawWriterTest {
         assertEquals(emptyList<ULong>(), disk.writes)
     }
 
-    @Test fun compressedKnownDecodedSizeIsRejectedBeforeAnyWrite() {
+    @Test fun gzipDecodedSizeIsUnknownSoOverflowIsDetectedWhileStreaming() {
+        // The gzip footer is not a decoded length (ISIZE is mod 2^32 and only covers the
+        // last member), so the stream is the authority: the range fills, the extra byte is
+        // refused, and the result is Partial rather than a pre-write rejection.
         val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
         val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
-        try {
-            RawWriter.write(
-                source,
-                disk,
-                identity,
-                conf(disk),
-                overwrite = true,
-                range = wholeDisk(disk),
-            )
-            fail("expected ImageTooLargeException")
-        } catch (_: ImageTooLargeException) {
-        }
-        assertEquals(0L, disk.writeCount)
+        val op = DiskOperation("raw-gzip-overflow")
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = wholeDisk(disk),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(4096L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertTrue(result.failure is ImageTooLargeException)
+        assertEquals(1L, disk.syncCount)
+        assertEquals(-1L, op.bytesTotal)
+        assertEquals(OperationState.Partial, op.state)
+    }
+
+    @Test fun gzipFooterIsNeverTakenAsDecodedSize() {
+        // A bogus ISIZE must not reject a valid image before any write.
+        val payload = ByteArray(1024) { 5 }
+        val broken = gzip(payload)
+        // Claim 0xFFFFFFFF decoded bytes in the trailer.
+        for (i in 0 until 4) broken[broken.size - 4 + i] = 0xFF.toByte()
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val op = DiskOperation("raw-gzip-footer")
+        val result = RawWriter.write(
+            ImageSource.fromBytes(broken),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = wholeDisk(disk),
+            operation = op,
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(1024L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(-1L, op.bytesTotal)
+    }
+
+    @Test fun gzipMembersAreCountedTogetherNotFromTheLastFooter() {
+        // GZIPInputStream concatenates members; the final ISIZE only describes the tail.
+        val first = ByteArray(700) { 1 }
+        val second = ByteArray(400) { 2 }
+        val source = ImageSource.fromBytes(gzip(first) + gzip(second))
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = wholeDisk(disk),
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(1100L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(2, disk.bytes()[700].toInt())
     }
 
     @Test fun partialFinalSectorIsPaddedInsideTheRange() {

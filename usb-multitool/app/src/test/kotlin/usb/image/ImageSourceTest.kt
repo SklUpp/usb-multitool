@@ -130,6 +130,22 @@ class ImageSourceTest {
         assertNull(source.declaredDecodedSize)
     }
 
+    @Test
+    fun fromBytesNeverPublishesGzipFooterAsDecodedSize() {
+        // ISIZE is mod 2^32 and repeated members each carry their own trailer, so the
+        // footer is not a full decoded length: keep the size unknown and let the stream
+        // decide when it overflows the selected range.
+        val payload = ByteArray(96) { 4 }
+        val multiMember = gzip(payload) + gzip(payload)
+        val source = ImageSource.fromBytes(multiMember)
+        assertEquals(ImageFormat.GZIP, source.format)
+        assertNull(source.declaredDecodedSize)
+        source.open().use { input ->
+            assertNull(input.decodedSizeHint)
+            assertTrue(input.readBytes().contentEquals(payload + payload))
+        }
+    }
+
     private fun gzip(data: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { it.write(data) }
