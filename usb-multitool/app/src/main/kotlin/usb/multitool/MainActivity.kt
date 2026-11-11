@@ -40,7 +40,6 @@ import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -263,63 +262,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var usageInFlightKey: FilesystemUsageKey? = null
     @Volatile private var stagedConsumedPath: String? = null
 
-    /** Immutable ownership ticket for one phone-import inspection (SAF and USB phases). */
-    private data class InspectionTicket(
-        val generation: Long,
-        val attachGeneration: Long,
-        val deviceKey: String?,
-        val identity: String?,
-    )
-
     /**
-     * The one inspection allowed to open USB. Replaced/cleared atomically; workers compare the
-     * immutable ticket instead of reading mutable state from a background thread.
+     * The one phone-import inspection allowed to open USB. Replaced/cleared atomically; workers
+     * compare the immutable ticket instead of reading mutable state from a background thread.
      */
-    @Volatile private var activeInspection: InspectionTicket? = null
-    private val inspectionLock = Any()
-    private var inspectionSafJob: Job? = null
-    private var inspectionUsbHandle: OperationHandle? = null
-
-    private fun beginInspection(ticket: InspectionTicket): Boolean =
-        synchronized(inspectionLock) {
-            if (activeInspection != null) {
-                false
-            } else {
-                activeInspection = ticket
-                true
-            }
-        }
-
-    /** Ownership check for workers: a disowned/cancelled ticket never proceeds to USB. */
-    private fun inspectionOwned(ticket: InspectionTicket): Boolean =
-        activeInspection === ticket
+    private val inspectionOwner = InspectionOwnership()
 
     private fun inspectionAttachmentStillHere(ticket: InspectionTicket): Boolean =
         attachGeneration == ticket.attachGeneration && deviceKey(attachedDevice) == ticket.deviceKey
-
-    private fun trackInspectionSafJob(job: Job) {
-        synchronized(inspectionLock) {
-            if (activeInspection != null) inspectionSafJob = job
-        }
-    }
-
-    private fun trackInspectionUsbHandle(ticket: InspectionTicket, handle: OperationHandle?) {
-        synchronized(inspectionLock) {
-            if (activeInspection !== ticket) return
-            inspectionUsbHandle = handle
-        }
-    }
-
-    /** Releases the slot once this ticket's work ended, leaving a newer ticket alone. */
-    private fun releaseInspection(ticket: InspectionTicket) {
-        synchronized(inspectionLock) {
-            if (activeInspection === ticket) {
-                activeInspection = null
-                inspectionSafJob = null
-                inspectionUsbHandle = null
-            }
-        }
-    }
 
     /**
      * Disown the running inspection. The SAF job is cancelled best-effort (a blocking provider
@@ -327,20 +277,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * stop only when the device is really going away, otherwise it checks ownership and closes.
      */
     private fun cancelActiveInspection(cancelUsb: Boolean) {
-        val job: Job?
-        val handle: OperationHandle?
-        synchronized(inspectionLock) {
-            if (activeInspection == null && inspectionSafJob == null && inspectionUsbHandle == null) {
-                return
-            }
-            activeInspection = null
-            job = inspectionSafJob
-            handle = inspectionUsbHandle
-            inspectionSafJob = null
-            inspectionUsbHandle = null
-        }
-        job?.cancel()
-        if (cancelUsb) handle?.cancel()
+        val cancelled = inspectionOwner.cancel() ?: return
+        cancelled.safJob?.cancel()
+        if (cancelUsb) cancelled.usbHandle?.cancel()
     }
 
     override fun onCleared() {
@@ -1802,7 +1741,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // onStart re-probe must not wipe the known geometry during a running operation.
             return
         }
-        if (sameDevice && activeInspection?.let(::inspectionAttachmentStillHere) == true) {
+        if (sameDevice && inspectionOwner.active?.let(::inspectionAttachmentStillHere) == true) {
             // A live phone-import inspection owns this attachment; a same-device re-probe
             // would flip presence to Busy and orphan its Inspected result. A real detach or
             // a different device never reaches this branch.
@@ -2825,7 +2764,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         val resolver = getApplication<Application>().contentResolver
         val document = Uri.parse(uri)
-        if (!beginInspection(ticket)) {
+        if (!inspectionOwner.begin(ticket)) {
             // The reducer gate normally prevents a second inspection; fail closed with a
             // visible reason instead of leaving only a cleared guard.
             post(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportInspectionBusy)))
@@ -2838,6 +2777,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     UiMessage.Raw("USB attachment changed; re-select the file to import"),
                 ),
             )
+        }
+        // The disk is closed (or was never opened) before this runs, and the slot is freed
+        // before Finished is posted: the guard that Finished ends can therefore go away only
+        // once the slot is free, so a next import admitted right after it is never reported as
+        // Busy. The reducer generation-gates a late Finished, so it cannot clear a newer guard.
+        fun finishInspection() {
+            inspectionOwner.release(ticket)
+            post(UiIntent.WindowsIsoImportFinished(generation))
+        }
+        // Same ordering for the SAF-only endings: no disk was opened, so freeing the slot first
+        // keeps the gap between this post and the coroutine end from reporting Busy.
+        fun finishSafInspection() {
+            inspectionOwner.release(ticket)
+            post(UiIntent.WindowsIsoImportSafFinished(generation))
         }
         // SAF metadata/template reads are slow and need no USB: run them first, off the
         // single disk worker, so the queue is not blocked on ContentResolver I/O.
@@ -2874,7 +2827,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             emptyList()
                         }
                 } catch (failure: Throwable) {
-                    if (inspectionOwned(ticket)) {
+                    if (inspectionOwner.owned(ticket)) {
                         post(
                             UiIntent.WindowsIsoImportRejected(
                                 problem = importInspectionProblem(failure),
@@ -2885,13 +2838,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else if (!inspectionAttachmentStillHere(ticket)) {
                         reportAttachmentChanged()
                     }
-                    post(UiIntent.WindowsIsoImportSafFinished(generation))
+                    finishSafInspection()
                     return@launch
                 }
-                if (!inspectionOwned(ticket)) {
+                if (!inspectionOwner.owned(ticket)) {
                     // Cancelled or replugged during the read: no USB work at all.
                     if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
-                    post(UiIntent.WindowsIsoImportSafFinished(generation))
+                    finishSafInspection()
                     return@launch
                 }
                 post(UiIntent.WindowsIsoImportUsbStarted(generation))
@@ -2915,7 +2868,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             } finally {
                                 // The disk is closed here; only now may the USB guard end.
-                                post(UiIntent.WindowsIsoImportFinished(generation))
+                                finishInspection()
                             }
                         }
                     }
@@ -2923,26 +2876,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         DiskController.get().submit(op)
                     } catch (failure: Throwable) {
-                        post(UiIntent.WindowsIsoImportFinished(generation))
+                        finishInspection()
                         return@launch
                     }
-                trackInspectionUsbHandle(ticket, handle)
+                inspectionOwner.trackUsbHandle(ticket, handle)
                 try {
                     handle.await()
                 } finally {
-                    trackInspectionUsbHandle(ticket, null)
+                    inspectionOwner.trackUsbHandle(ticket, null)
                     if (!runEntered.get()) {
                         // The op was rejected/cancelled before run() started, so it cannot post
                         // the closing Finished itself; only this fallback may end the guard.
-                        post(UiIntent.WindowsIsoImportFinished(generation))
+                        finishInspection()
                     }
                 }
                 } finally {
-                    // Free the slot for the next import even if this one was cancelled or failed.
-                    releaseInspection(ticket)
+                    // Safe net: free the slot even if this job stopped before any finish path.
+                    inspectionOwner.release(ticket)
                 }
             }
-        trackInspectionSafJob(safJob)
+        // Registers the job for its own ticket; if a cancel or a newer import took the slot
+        // while this job was launching, the owner cancels it instead of storing an orphan.
+        inspectionOwner.trackSafJob(ticket, safJob)
     }
 
     /**
@@ -2968,7 +2923,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ),
             )
         }
-        if (!inspectionOwned(ticket)) {
+        if (!inspectionOwner.owned(ticket)) {
             // Queued while the picker was cancelled or the stick was replaced.
             if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
             return
@@ -2977,7 +2932,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
                 // Final check right before the direct open: a cancel/replug during the queue
                 // wait must never open a stale device.
-                if (!inspectionOwned(ticket)) {
+                if (!inspectionOwner.owned(ticket)) {
                     if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
                     return
                 }
@@ -3000,7 +2955,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } finally {
                         disk.close()
                     }
-                if (inspectionOwned(ticket)) {
+                if (inspectionOwner.owned(ticket)) {
                     post(
                         UiIntent.WindowsIsoImportInspected(
                             uri = uri,
@@ -3032,7 +2987,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Cancelled mid-probe: the result belongs to an obsolete dialog; stay silent.
             } catch (failure: Throwable) {
-                if (!inspectionOwned(ticket)) {
+                if (!inspectionOwner.owned(ticket)) {
                     // Cancel/replug while probing: never publish a result for it.
                     if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
                     return
