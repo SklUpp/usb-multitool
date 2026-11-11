@@ -36,7 +36,8 @@ class ContentUriImageSourceTest {
     @Test
     fun gzipPayloadWinsOverIsoDisplayName() {
         val plain = "raw-image-payload".toByteArray()
-        installProvider(displayName = "ubuntu.iso", size = null, payload = gzipOf(plain))
+        val gzip = gzipOf(plain)
+        installProvider(displayName = "ubuntu.iso", size = gzip.size.toLong(), payload = gzip)
 
         val source = ImageSource.fromContentUri(URI, resolver)
         assertEquals(ImageFormat.ISO, source.format)

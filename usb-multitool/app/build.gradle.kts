@@ -81,6 +81,9 @@ android {
         unitTests {
             // Robolectric reads the merged manifest, themes and resources on the JVM.
             isIncludeAndroidResources = true
+            all {
+                it.maxHeapSize = "2g"
+            }
         }
     }
 }
