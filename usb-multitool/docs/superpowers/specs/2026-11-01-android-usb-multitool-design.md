@@ -203,7 +203,7 @@ The probe reads the current label (FAT/exFAT, NTFS, EXT4) and the screen shows i
 
 Boot and ESP flags are separate operations. GPT tail repair relocates and checksums the backup structures after a smaller image write; it does not resize a filesystem. Hybrid layouts are checked before repair and rejected when ambiguous.
 
-Partition-table writes reject GPT entry sizes other than 128 bytes, invalid or overlapping GPT metadata, and MBR addresses or lengths that cannot be represented in 32 bits before writing. Wipe and GPT restore report partial results if an attempted write is followed by failure, cancellation, or disconnect.
+Partition-table writes reject GPT entry sizes other than 128 bytes, invalid or overlapping GPT metadata, and MBR addresses or lengths that cannot be represented in 32 bits before writing. Both schemes also refuse, before the first write, a table whose recorded disk sector count or sector size no longer matches the live device, and any partition that does not fit inside the live disk; the extent check compares `start <= sectors - count` so it cannot wrap. Wipe and GPT restore report partial results if an attempted write is followed by failure, cancellation, or disconnect.
 
 Raw writing accepts local `.iso`, `.img`, `.gz`, and `.xz` input, decompresses supported streams on the fly, reports byte progress, and checks source and destination sizes before destructive writing. A Windows ISO written raw is not presented as a completed Windows installation disk.
 

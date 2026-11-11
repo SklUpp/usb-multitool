@@ -1,5 +1,6 @@
 package usb.partition
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -191,6 +192,70 @@ class PartitionWriterTest {
         assertEquals(0xFF, encoded[446 + 13].toInt() and 0xFF)
         assertEquals(0xFF, encoded[446 + 14].toInt() and 0xFF)
         assertEquals(0xFF, encoded[446 + 15].toInt() and 0xFF)
+    }
+
+    @Test
+    fun mbrStaleLiveGeometryWritesNothing() {
+        val disk = RecordingBlockDevice(2048UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(1024UL, 512UL, slot = 0)),
+            freeRegions = emptyList(),
+            // The table was read from a 4096-sector disk; the device now reports 2048.
+            diskSectorCount = 4096UL,
+        )
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table) }
+        assertEquals(emptyList<ULong>(), disk.writes)
+        assertEquals(emptyList<ULong>(), disk.reads)
+    }
+
+    @Test
+    fun mbrPartitionPastEndOfLiveGeometryWritesNothing() {
+        val image = ByteArray(512 * 4096)
+        image[510] = 0x55.toByte()
+        image[511] = 0xAA.toByte()
+        val disk = ImageBlockDevice(image, 512, 4096UL)
+        val before = disk.snapshot()
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(4000UL, 200UL, slot = 0)),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table) }
+        assertEquals(emptyList<ULong>(), disk.writes)
+        assertArrayEquals(before, disk.snapshot())
+    }
+
+    @Test
+    fun mbrBoundsCheckDoesNotWrapPastTheAddressSpace() {
+        val disk = RecordingBlockDevice(0x1_0000_0001UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(0xFFFF_FFFFUL, 0xFFFF_FFFFUL, slot = 0)),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        assertThrows(IllegalArgumentException::class.java) { PartitionWriter.commit(disk, table) }
+        assertEquals(emptyList<ULong>(), disk.writes)
+    }
+
+    @Test
+    fun mbrPartitionEndingAtLastSectorIsAccepted() {
+        val image = ByteArray(512 * 4096)
+        image[510] = 0x55.toByte()
+        image[511] = 0xAA.toByte()
+        val disk = ImageBlockDevice(image, 512, 4096UL)
+        val table = PartitionTable(
+            scheme = TableScheme.MBR,
+            partitions = listOf(Partition(2048UL, 2048UL, type = "0x83", slot = 0)),
+            freeRegions = emptyList(),
+            diskSectorCount = disk.sectorCount,
+        )
+        val committed = PartitionWriter.commit(disk, table)
+        val written = committed.partitions.single()
+        assertEquals(2048UL, written.startLba)
+        assertEquals(2048UL, written.sectorCount)
     }
 
     @Test

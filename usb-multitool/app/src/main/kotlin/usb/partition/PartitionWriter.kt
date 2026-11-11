@@ -174,6 +174,14 @@ object PartitionWriter {
     }
 
     private fun commitMbr(disk: BlockDevice, table: PartitionTable) {
+        // The table was read (or built) for one geometry; a shrunken or resized live disk
+        // would turn the same LBAs into writes past the end. Same contract as
+        // [TableInitializer.initialize].
+        require(disk.sectorCount == table.diskSectorCount) {
+            "live disk has ${disk.sectorCount} sectors but the table was built for " +
+                "${table.diskSectorCount}"
+        }
+        require(disk.sectorSize == table.sectorSize) { "live sector size changed" }
         require(table.partitions.size <= 4) {
             "MBR supports at most 4 primary partitions, got ${table.partitions.size}"
         }
@@ -182,6 +190,17 @@ object PartitionWriter {
         }
         require(table.partitions.all { it.startLba <= 0xFFFF_FFFFUL && it.sectorCount <= 0xFFFF_FFFFUL }) {
             "MBR partition geometry exceeds 32-bit LBA fields"
+        }
+        // Checked without `start + count` so the comparison itself cannot wrap.
+        val diskSectors = disk.sectorCount
+        for (partition in table.partitions) {
+            require(
+                partition.sectorCount <= diskSectors &&
+                    partition.startLba <= diskSectors - partition.sectorCount,
+            ) {
+                "MBR partition at LBA ${partition.startLba} for ${partition.sectorCount} sectors " +
+                    "does not fit the disk's $diskSectors sectors"
+            }
         }
         // MBR has no name field: [Partition.name] is a display label ("P1"…). Names are
         // refused by PartitionEditor/reducer before a table reaches this writer.
