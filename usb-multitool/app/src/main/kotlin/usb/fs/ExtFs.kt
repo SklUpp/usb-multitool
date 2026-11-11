@@ -209,6 +209,13 @@ class ExtVolume internal constructor(
         if (ExtFs.nativeSync(handle) != 0) throw ExtException("EXT sync failed")
     }
 
+    /**
+     * Serialized like [NtfsVolume.close]: the open→closed flip and the native teardown
+     * must be one critical section, else two concurrent closes both see `open == true`
+     * and call [ExtFs.nativeClose] on the same handle (native UAF). A second close after
+     * the first returns or throws is a no-op.
+     */
+    @Synchronized
     override fun close() {
         if (!open) return
         open = false
@@ -216,12 +223,15 @@ class ExtVolume internal constructor(
         // mountpoint (even when VALID_FS sb write fails). On-disk ERROR_FS may
         // remain — we do not retry umount or clear the flag; run e2fsck on a PC.
         // FilesVolumeSession latches this failure and refuses remount in-process.
-        val rc = ExtFs.nativeClose(handle)
-        ExtFs.unregisterVolume(device)
-        if (rc != 0) {
-            throw ExtException(
-                "EXT close/sync failed (rc=$rc). If the volume will not remount, run e2fsck on a PC",
-            )
+        try {
+            ExtFs.unregisterVolume(device)
+        } finally {
+            val rc = ExtFs.nativeClose(handle)
+            if (rc != 0) {
+                throw ExtException(
+                    "EXT close/sync failed (rc=$rc). If the volume will not remount, run e2fsck on a PC",
+                )
+            }
         }
     }
 }
