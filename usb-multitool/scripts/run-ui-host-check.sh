@@ -29,7 +29,9 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/partition/RawRangePlan.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawWriteOutcome.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawRangeProbe.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/WindowsTemplate.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/Autounattend.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/FolderPaths.kt" \
