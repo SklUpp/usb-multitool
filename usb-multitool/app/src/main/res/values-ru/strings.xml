@@ -167,6 +167,7 @@
     <string name="action_ventoy_unattend_write">запись сгенерированного unattend XML</string>
     <string name="action_ventoy_unattend_layout">очистка и разметка диска целевого ПК через unattend</string>
     <string name="files_section_partition">Разделы</string>
+    <string name="files_section_folder">Папка</string>
     <string name="files_current_partition">Текущий раздел</string>
     <string name="files_no_partitions_hint">Разделы не найдены — создайте раздел на вкладке «Разделы».</string>
     <string name="files_up">На уровень выше</string>

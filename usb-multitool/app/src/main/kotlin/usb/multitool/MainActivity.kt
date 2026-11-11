@@ -3141,11 +3141,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 require(deviceKey(attachedDevice) == expectedKey) {
                     "USB device changed before the copy"
                 }
-                require(state.device?.identity == expectedIdentity) {
+                require(this@MainViewModel.state.device?.identity == expectedIdentity) {
                     "USB identity changed before the copy"
                 }
                 expectedPickSession?.let { session ->
-                    require(state.filesPickMode?.sessionId == session) {
+                    require(this@MainViewModel.state.filesPickMode?.sessionId == session) {
                         "Pick session changed before the copy"
                     }
                 }
@@ -3180,12 +3180,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         require(
                             attachGeneration == expectedAttach &&
                                 deviceKey(attachedDevice) == expectedKey &&
-                                state.device?.identity == expectedIdentity,
+                                this@MainViewModel.state.device?.identity == expectedIdentity,
                         ) {
                             "USB attachment changed before the copy reached the write"
                         }
                         expectedPickSession?.let { session ->
-                            require(state.filesPickMode?.sessionId == session) {
+                            require(this@MainViewModel.state.filesPickMode?.sessionId == session) {
                                 "Pick session changed before the copy reached the write"
                             }
                         }

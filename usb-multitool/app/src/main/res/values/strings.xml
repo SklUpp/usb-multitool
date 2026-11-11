@@ -167,6 +167,7 @@
     <string name="action_ventoy_unattend_write">writing the generated unattend XML</string>
     <string name="action_ventoy_unattend_layout">wiping and partitioning the target PC disk via unattend</string>
     <string name="files_section_partition">Partitions</string>
+    <string name="files_section_folder">Folder</string>
     <string name="files_current_partition">Current partition</string>
     <string name="files_no_partitions_hint">No partitions found — create one on the Partitions tab.</string>
     <string name="files_up">Up one level</string>
