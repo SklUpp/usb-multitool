@@ -83,7 +83,7 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
 - `ventoy`: adapted upstream install/update flow plus JSON/XML integration.
 - `diagnostics`: read scan, self-test, wipe, and rescue-map backup/restore.
 - `service`: one operation queue, foreground notification, WakeLock, and persisted operation state.
-- `ui`: four screens grouped into real sections (device/partition context, read-only facts, then destructive actions) with dense 8 dp spacing and hairline section dividers instead of container fills; multi-option choices are compact dropdowns that show the current value, destructive confirmations stay explicit, and no direct USB access. A section is a logical group: its heading is separated from its content, related rows and actions follow one another inside it without extra cards or dividers, and nothing is repeated across sections. Short hints stay visible; longer explanations open from a 48 dp info button in the section heading row. The operation log is a compact themed overlay surface that wraps its heading and every visible line, keeps its own input and scroll, and never displaces the tab layout or the navigation bar. Theme-provided vector icons fill the navigation bar. The language and theme controls are icon buttons that live beside the device header rather than inside it: the tinted header block ends before them, each keeps a 48 dp target and a description that names the current value, and they stay reachable on narrow screens because the header text ellipsizes first.
+- `ui`: four primary tabs with related controls grouped in sections. Place each section heading and its contents inside one surface; retain explicit destructive confirmations, accessible 48 dp controls, localizable text, and no direct USB access. Detailed interface decisions below are target requirements, not claims that every change has shipped.
 
 ### Core objects
 
@@ -102,7 +102,7 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
 - Centralize USB identity construction without changing identity format, serial, capacity, or attachment generation. Confirmation and rescue checkpoints must retain their existing identity semantics.
 - Report missing native filesystem engines consistently at the volume-opening boundary, preserving the engine name and original cause.
 - Replace nullable-field `UiEffect` variants with typed effects in stages. Use typed operation titles for localization; preserve technical log messages separately.
-- NTFS and exFAT recovery are requested future features, not implemented by this decision. Verify engine capabilities and limitations and agree on a separately confirmed write workflow before implementation; clearing an NTFS dirty flag is not equivalent to filesystem repair.
+- exFAT check and repair are requested, not yet implemented as a production workflow. Run a read-only check first, then require a separate repair confirmation even when the check found no errors. Discard the check result when the attachment or partition changes or an operation may have modified the medium. Close mounted volumes and revalidate the target before repair. Resetting an NTFS dirty flag is not filesystem repair.
 
 ## 6. Device and service rules
 
@@ -131,15 +131,21 @@ A file larger than the destination filesystem or free space supports is rejected
 - 4Kn installation is refused when unsupported by the selected Ventoy version; it is not emulated with an untested layout.
 - Windows setup writes or updates `/ventoy/ventoy.json` so the selected ISO references an accessible XML template. Existing JSON and user files require an explicit overwrite choice.
 - Windows options are tri-state and preserve existing config by default: null leaves the current `ventoy.json` value untouched, true writes `1`, false writes an explicit `0`. One official `VTOY_WIN11_BYPASS_CHECK` option covers the Windows 11 checks (TPM, RAM, Secure Boot, CPU) together; the UI exposes one control (keep existing / bypass all / require all) and never implies per-check control. The local-account option uses the same tri-state rule. Upstream needs the network unplugged during setup.
+- Target: expose all available global settings before fresh installation and allow manual changes afterwards. Present known options with clear controls and additional keys as key/value entries; validate values and preserve unknown JSON sections. After formatting, write the chosen settings as part of the confirmed install operation. If Ventoy is installed but settings fail to save, report `Partial` with the cause and allow manual retry. Update must retain existing settings unless the user changes them.
+- Distinguish a missing `ventoy.json`, a successfully read configuration with no global settings, and a read/parse failure. Show the error and retry action instead of reporting empty settings on failure.
+- Copy to an existing selected folder on the Ventoy data partition. If the folder disappears before copy, stop and ask the user to choose again; do not create it implicitly. Directory navigation loads children on entry and supports back and manual refresh. Refresh cached listings after a medium-changing operation, on entering Files, and on manual request; clear them when the attachment changes. Additional cache invalidation rules require agreement before implementation.
 
 ### Interface and language
 
-- Sections group related controls: a heading, an optional one-line subtitle, a hairline divider, and content. Only interactive rows keep a surface fill.
+- Target: section headings and related controls share one surface; warnings may use an inset surface. Remove duplicate headings. The main device title has its own surface and top inset, while language, theme, and log controls remain outside it. Add space between the bottom status block and four-tab navigation.
 - The partition map strip and the header usage strip are absent when the disk has no partitions; an empty bar was indistinguishable from a clipped control.
-- The operation log overlays the active tab as one themed surface: the background covers the whole visible block and moves with the lines, so it stays readable over the tab content. It swallows taps on its own bounds, keeps its scroll, caps its height, and retains an accessible collapse action.
+- Target: the log is a separate screen opened from a button beside language and theme, returning to the previous tab on Back. Copy all entries only on explicit user action, with a visible warning that paths and USB serials may be present. Clear the in-app log immediately without confirmation, including during operations; new entries may appear immediately. Clearing does not clear Android logcat.
 - Touch targets stay at least 48 dp; dialogs cap their width and scroll in landscape.
 - All authored UI text comes from string resources (English default, Russian), including statuses, errors that the app authors, hints, and destructive confirmations. The in-app language switch is persisted and applied through a localized context, so the reducer stays Android-free (`UiMessage` keys, resolved in Compose).
 - Engine and OS error text and raw log lines remain unlocalized technical data on purpose. User-facing operation titles are localized; the log keeps the raw label.
+- Target: theme has exactly dark and light states, dark by default. The existing shared bottom operation status shows the operation and, when known, progress; do not duplicate per-card percentages. Opening an expandable operation scrolls its action into view. Replace unambiguous text actions with accessible icon buttons where appropriate.
+- Target labels: GPT tail relocation is “Fix backup GPT”; restoring from a saved file is “Restore GPT from file”. Name the raw operation “Sector-by-sector file write” and the Windows XML section “Windows setup settings (.xml)”. Warnings remain inside their operation section.
+- Before rescue restore show the image name and size plus the selected map's range and state when readable; do not imply that size or map proves image integrity. Before GPT file restore show file name, geometry, partition count and validation result from the small backup. Do not read the entire image merely to populate the summary.
 
 ### Partitions and raw writing
 
