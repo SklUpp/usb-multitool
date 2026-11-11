@@ -60,6 +60,18 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_rescue_map_ready, *args.toTypedArray())
             UiMessageKey.ChooseGptBackup -> stringResource(R.string.msg_choose_gpt_backup)
             UiMessageKey.ChooseRescueFiles -> stringResource(R.string.msg_choose_rescue_files)
+            UiMessageKey.SourceInspectionRejected ->
+                stringResource(R.string.msg_source_inspection_rejected, *args.toTypedArray())
+            UiMessageKey.RescueMapSectorSizeMismatch ->
+                stringResource(R.string.msg_rescue_map_sector_size_mismatch, *args.toTypedArray())
+            UiMessageKey.RescueMapDiskTooSmall ->
+                stringResource(R.string.msg_rescue_map_disk_too_small, *args.toTypedArray())
+            UiMessageKey.RescueMapPartialCopy ->
+                stringResource(R.string.msg_rescue_map_partial_copy, *args.toTypedArray())
+            UiMessageKey.GptBackupSectorSizeMismatch ->
+                stringResource(R.string.msg_gpt_backup_sector_size_mismatch, *args.toTypedArray())
+            UiMessageKey.GptBackupDiskMismatch ->
+                stringResource(R.string.msg_gpt_backup_disk_mismatch, *args.toTypedArray())
             UiMessageKey.SelectImageFirst -> stringResource(R.string.msg_select_image_first)
             UiMessageKey.CorruptTableCreate -> stringResource(R.string.msg_corrupt_table_create)
             UiMessageKey.Probing -> stringResource(R.string.msg_probing)
@@ -123,6 +135,7 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_xml_overwrite_required)
             UiMessageKey.ConfirmXmlOverwrite ->
                 stringResource(R.string.msg_confirm_xml_overwrite)
+            UiMessageKey.LogCopied -> stringResource(R.string.msg_log_copied)
         }
     }
 
@@ -352,6 +365,7 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
         )?.let { name ->
             lines += stringResource(R.string.confirm_gpt_backup_source, name)
         }
+        lines += gptBackupInspectionLines(confirmation.gptBackupInspection)
     }
     if (confirmation.action == DestructiveAction.RESCUE_RESTORE) {
         lines += stringResource(R.string.confirm_rescue_restore, confirmation.identity.identity)
@@ -365,6 +379,8 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
         )?.let { name ->
             lines += stringResource(R.string.confirm_rescue_map_source, name)
         }
+        lines += rescueImageInspectionLines(confirmation.rescueImageInspection)
+        lines += rescueMapInspectionLines(confirmation.rescueMapInspection)
     }
     if (confirmation.action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE) {
         confirmation.xmlTargetName?.takeIf { it.isNotBlank() }?.let { name ->
@@ -383,4 +399,114 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
         )
     }
     return lines
+}
+
+private const val INSPECTION_RANGE_PREVIEW = 3
+
+@Composable
+fun rescueImageInspectionLines(inspection: RescueImageInspection?): List<String> {
+    if (inspection == null) {
+        return listOf(stringResource(R.string.diagnostics_inspection_unavailable))
+    }
+    return listOf(inspectionSizeLine(inspection.sizeBytes))
+}
+
+@Composable
+fun rescueMapInspectionLines(inspection: RescueMapInspection?): List<String> {
+    val unavailable = stringResource(R.string.diagnostics_inspection_unavailable)
+    if (inspection == null) return listOf(unavailable)
+    inspection.error?.let {
+        return listOf(stringResource(R.string.diagnostics_inspection_failed, it))
+    }
+    val summary = inspection.summary ?: return listOf(unavailable)
+    val lines = mutableListOf(
+        inspectionSizeLine(inspection.sizeBytes),
+        stringResource(
+            R.string.diagnostics_map_kind,
+            stringResource(
+                if (summary.kind == usb.diagnostics.MapKind.COPY) {
+                    R.string.diagnostics_map_kind_copy
+                } else {
+                    R.string.diagnostics_map_kind_restore
+                },
+            ),
+        ),
+        stringResource(
+            R.string.diagnostics_map_totals,
+            summary.sectorCount.toString(),
+            summary.sectorSize?.toString() ?: stringResource(R.string.diagnostics_map_sector_size_unknown),
+        ),
+        mapStateLine(R.string.diagnostics_map_copied, summary.copiedRanges),
+        mapStateLine(R.string.diagnostics_map_failed, summary.failedRanges),
+        mapStateLine(R.string.diagnostics_map_non_tried, summary.nonTriedRanges),
+    )
+    return lines
+}
+
+@Composable
+fun gptBackupInspectionLines(inspection: GptBackupInspection?): List<String> {
+    val unavailable = stringResource(R.string.diagnostics_inspection_unavailable)
+    if (inspection == null) return listOf(unavailable)
+    inspection.error?.let {
+        return listOf(stringResource(R.string.diagnostics_inspection_failed, it))
+    }
+    val summary = inspection.summary ?: return listOf(unavailable)
+    val lines = mutableListOf(
+        inspectionSizeLine(inspection.sizeBytes),
+        stringResource(
+            R.string.diagnostics_gpt_blob,
+            summary.blobBytes.toString(),
+            summary.primarySectors.toString(),
+            summary.backupSectors.toString(),
+            summary.sectorSize.toString(),
+        ),
+        stringResource(
+            R.string.diagnostics_gpt_geometry,
+            summary.originalSectorCount.toString(),
+            summary.firstUsable.toString(),
+            summary.lastUsable.toString(),
+        ),
+        stringResource(R.string.diagnostics_gpt_partitions, summary.partitions.toString()),
+        stringResource(R.string.diagnostics_gpt_valid),
+    )
+    return lines
+}
+
+@Composable
+private fun inspectionSizeLine(sizeBytes: Long?): String =
+    if (sizeBytes == null || sizeBytes <= 0L) {
+        stringResource(R.string.diagnostics_file_size_unknown)
+    } else {
+        stringResource(
+            R.string.diagnostics_file_size,
+            DeviceIdentity.formatCapacity(sizeBytes.toULong()),
+        )
+    }
+
+@Composable
+private fun mapStateLine(label: Int, ranges: List<ULongRange>): String {
+    val sectors = ranges.sumOf { it.last - it.first + 1UL }
+    val shown = ranges.take(INSPECTION_RANGE_PREVIEW).map {
+        stringResource(
+            R.string.diagnostics_map_range,
+            it.first.toString(),
+            it.last.toString(),
+        )
+    }.joinToString(", ")
+    val rangesText = when {
+        ranges.isEmpty() -> stringResource(R.string.diagnostics_map_no_ranges)
+        ranges.size > INSPECTION_RANGE_PREVIEW ->
+            shown + " " + stringResource(
+                R.string.diagnostics_map_ranges_more,
+                (ranges.size - INSPECTION_RANGE_PREVIEW).toString(),
+            )
+        else -> shown
+    }
+    return stringResource(
+        R.string.diagnostics_map_state,
+        stringResource(label),
+        sectors.toString(),
+        ranges.size.toString(),
+        rangesText,
+    )
 }

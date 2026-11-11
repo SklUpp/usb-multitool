@@ -179,6 +179,20 @@ fun DiagnosticsScreen(
                     )
                 }
             }
+            if (state.rescueImageUri != null) {
+                InspectionText(
+                    rescueImageInspectionLines(
+                        state.rescueImageInspection?.takeIf { it.uri == state.rescueImageUri },
+                    ),
+                )
+            }
+            if (state.rescueMapUri != null) {
+                InspectionText(
+                    rescueMapInspectionLines(
+                        state.rescueMapInspection?.takeIf { it.uri == state.rescueMapUri },
+                    ),
+                )
+            }
             Button(
                 onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE)) },
                 enabled = state.actionsEnabled &&
@@ -233,6 +247,13 @@ fun DiagnosticsScreen(
                         )
                     }
                 }
+            }
+            if (state.backupUri != null) {
+                InspectionText(
+                    gptBackupInspectionLines(
+                        state.backupInspection?.takeIf { it.uri == state.backupUri },
+                    ),
+                )
             }
             Button(
                 onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE)) },
@@ -384,6 +405,20 @@ private fun DiagTile(
                 },
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Compact bounded-inspection lines; never invents a value when the provider omitted one. */
+@Composable
+private fun InspectionText(lines: List<String>) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        lines.forEach { line ->
+            Text(
+                text = line,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

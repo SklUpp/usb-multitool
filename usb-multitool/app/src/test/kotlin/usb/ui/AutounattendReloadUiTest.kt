@@ -52,9 +52,17 @@ class AutounattendReloadUiTest {
         val result = UiReducer.reduce(readyWithTemplate(), UiIntent.LoadAutounattend(template))
 
         assertEquals(2, result.effects.size)
-        val generation = requireNotNull(
-            result.effects.map { it.requestGeneration }.distinct().single(),
-        ) { "LoadAutounattend must publish one shared requestGeneration" }
+        val reload = result.effects.filterIsInstance<UiEffect.LoadAutounattend>().single()
+        val candidatesReload =
+            result.effects.filterIsInstance<UiEffect.LoadAutounattendCandidates>().single()
+        // Both reads of one state must carry the same generation; only these two effect
+        // types expose requestGeneration, so it is read from them, not from UiEffect.
+        val generation = reload.requestGeneration
+        assertEquals(
+            "LoadAutounattend must publish one shared requestGeneration",
+            generation,
+            candidatesReload.requestGeneration,
+        )
         assertEquals(generation, result.state.autounattendRequestGeneration)
         assertEquals(
             setOf(UiEffect.LoadAutounattend::class, UiEffect.LoadAutounattendCandidates::class),

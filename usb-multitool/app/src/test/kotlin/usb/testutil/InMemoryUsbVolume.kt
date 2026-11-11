@@ -12,7 +12,8 @@ class InMemoryUsbVolume(
     initial: Map<String, ByteArray> = emptyMap(),
 ) : UsbFsVolume {
     private val files = linkedMapOf<String, ByteArray>()
-    private val directories = linkedSetOf<String>("/")
+    // Every real Ventoy data partition carries /ISO; the importer never creates it.
+    private val directories = linkedSetOf("/", "/ISO")
     private val implicitDirectories = linkedSetOf<String>()
 
     var failWriteAtPath: String? = null

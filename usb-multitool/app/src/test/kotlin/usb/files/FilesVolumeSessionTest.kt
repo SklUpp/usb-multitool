@@ -84,8 +84,79 @@ class FilesVolumeSessionTest {
             assertSame(closeErr, thrown.cause)
         }
         assertEquals("second open must not run after refuse", 1, opens)
-        // Slot cleared; explicit close is a no-op.
-        assertNull(session.close())
+        // Latched: second close still reports the same error (never null-success).
+        assertSame(closeErr, session.close())
+        assertSame(closeErr, session.close())
+        // Fresh mount after latch still refused (process-lifetime fail-closed).
+        session.withLock {
+            val again =
+                assertThrows(IllegalStateException::class.java) {
+                    session.volumeForLocked("2", writable = false)
+                }
+            assertSame(closeErr, again.cause)
+        }
+        assertEquals(1, opens)
+    }
+
+    @Test
+    fun explicitCloseFailureLatchedAndBlocksRemount() {
+        val closeErr = IOException("EXT close/sync failed")
+        var opens = 0
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                opens++
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null)
+            }
+        session.withLock { session.volumeForLocked("1") }
+        assertSame(closeErr, session.close())
+        // Gate sees latched error on every subsequent close.
+        assertSame(closeErr, session.close())
+        var continued = false
+        try {
+            requireFilesVolumeClosed(session.close())
+            continued = true
+            fail("gate must throw latched close")
+        } catch (t: Throwable) {
+            assertSame(closeErr, t)
+        }
+        assertFalse(continued)
+        session.withLock {
+            val thrown =
+                assertThrows(IllegalStateException::class.java) {
+                    session.volumeForLocked("1")
+                }
+            assertTrue(thrown.message!!.contains("refusing remount"))
+            assertSame(closeErr, thrown.cause)
+        }
+        assertEquals(1, opens)
+    }
+
+    @Test
+    fun writableCloseFailLatchesAgainstNextWritable() {
+        val closeErr = IOException("umount failed")
+        var opens = 0
+        val session =
+            FilesVolumeSession { partitionId, writable ->
+                opens++
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null)
+            }
+        val op = DiskOperation(name = "mkdir")
+        op.state = OperationState.Running
+        session.withLock {
+            try {
+                session.withWritableVolume("1", op) { /* ok body */ }
+                fail("expected CloseAfterSuccessException")
+            } catch (_: CloseAfterSuccessException) {
+                assertEquals(OperationState.Partial, op.state)
+            }
+            val thrown =
+                assertThrows(IllegalStateException::class.java) {
+                    session.withWritableVolume("1", DiskOperation(name = "retry")) { }
+                }
+            assertSame(closeErr, thrown.cause)
+        }
+        assertEquals(1, opens)
+        assertSame(closeErr, session.close())
     }
 
     @Test
@@ -302,6 +373,12 @@ class FilesVolumeSessionTest {
             assertSame(closeErr, primary.suppressed[0])
             assertEquals("list failed: 5", primary.message)
             assertNull(session.mountEpochLocked())
+            // Latch blocks any later mount in this session.
+            val blocked =
+                assertThrows(IllegalStateException::class.java) {
+                    session.volumeForLocked("1")
+                }
+            assertSame(closeErr, blocked.cause)
         }
         val publish =
             FilesOperationPolicy.planCloseDiagnostic(
@@ -315,6 +392,7 @@ class FilesVolumeSessionTest {
             "list failed: 5",
             FilesOperationPolicy.primaryErrorMessage(primary),
         )
+        assertSame(closeErr, session.close())
     }
 
     @Test

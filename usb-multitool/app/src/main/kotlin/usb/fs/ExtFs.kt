@@ -212,8 +212,10 @@ class ExtVolume internal constructor(
     override fun close() {
         if (!open) return
         open = false
-        // nativeClose always frees the engine slot; a failed umount/sync may leave
-        // on-disk ERROR_FS. We do not retry umount or clear the flag — run e2fsck.
+        // nativeClose always frees the engine slot after tearing down the lwext4
+        // mountpoint (even when VALID_FS sb write fails). On-disk ERROR_FS may
+        // remain — we do not retry umount or clear the flag; run e2fsck on a PC.
+        // FilesVolumeSession latches this failure and refuses remount in-process.
         val rc = ExtFs.nativeClose(handle)
         ExtFs.unregisterVolume(device)
         if (rc != 0) {

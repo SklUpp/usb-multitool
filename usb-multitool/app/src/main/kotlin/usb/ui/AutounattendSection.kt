@@ -51,6 +51,7 @@ import usb.ventoy.LayoutPartition
 import usb.ventoy.LocalAccount
 import usb.ventoy.SettingStatus
 import usb.ventoy.UnreadableProblem
+import usb.ventoy.XmlPath
 
 /**
  * Autounattend subsection of the Ventoy tab: the answer file that already exists, the
@@ -92,8 +93,27 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
 
     SectionCard(
         title = stringResource(R.string.unattend_title),
-        subtitle = stringResource(R.string.unattend_subtitle),
+        trailing = {
+            InfoHelpButton(
+                infoTitle = stringResource(R.string.unattend_help_title),
+                infoText = stringResource(R.string.unattend_help_text),
+            )
+        },
     ) {
+        // The template row is always present: "not selected yet" is a real answer, and a
+        // selected path is shown as resolved even before the file has been read. The path
+        // wraps instead of using InfoRow, which would ellipsize it to one line.
+        Text(
+            text = stringResource(R.string.unattend_template_label),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = template?.let(VentoySetup::resolveXmlPath)
+                ?: stringResource(R.string.selection_not_selected),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
         if (template == null) {
             EmptyHint(stringResource(R.string.unattend_no_template))
             Button(
@@ -104,10 +124,6 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                 Text(stringResource(R.string.unattend_choose_template))
             }
         } else {
-            InfoRow(
-                stringResource(R.string.unattend_template_label),
-                VentoySetup.resolveXmlPath(template),
-            )
             when (val file = state.autounattendState) {
                 AutounattendState.Missing ->
                     EmptyHint(stringResource(R.string.unattend_missing))
@@ -439,11 +455,29 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
 private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     SectionCard(
         title = stringResource(R.string.settings_title),
-        subtitle = stringResource(R.string.settings_subtitle),
+        trailing = {
+            InfoHelpButton(
+                infoTitle = stringResource(R.string.settings_help_title),
+                infoText = stringResource(R.string.settings_help_text),
+            )
+        },
     ) {
+        InfoRow(
+            stringResource(R.string.settings_file_label),
+            XmlPath.CONFIG_PATH,
+        )
         val entries = state.ventoyGlobalSettings
         if (entries == null) {
-            EmptyHint(stringResource(R.string.settings_unreadable))
+            // null = not read yet, or nothing is attached to read from. No in-flight flag
+            // exists for this catalog, so never claim that a read is in progress: report the
+            // presence state when there is no usable stick, otherwise that it is not read.
+            EmptyHint(
+                if (state.presence == DevicePresence.Ready) {
+                    stringResource(R.string.settings_not_loaded)
+                } else {
+                    UiReducer.presenceMessage(state.presence).localized()
+                },
+            )
             TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
                 Text(stringResource(R.string.unattend_refresh))
             }
@@ -464,6 +498,22 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // Only keys this app actually understands get an explanation; unknown keys
+                // stay raw and read-only rather than being described by guesswork.
+                // Two different upgrades: CHECK is the hardware checks, NRO only the
+                // online-account requirement. Sharing one explanation would mislabel NRO.
+                val keyHint = when (setting.key) {
+                    "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_hint
+                    "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
+                    else -> null
+                }
+                keyHint?.let {
+                    Text(
+                        text = stringResource(it),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 when (val status = setting.status) {
                     is SettingStatus.Known -> {
                         Text(
@@ -522,6 +572,19 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
+        }
+        Text(
+            text = stringResource(R.string.settings_applies_note),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // A read/parse failure arrives as an empty list with the reason in the status block,
+        // so retry must be reachable from every loaded state, not just the unread one.
+        TextButton(
+            onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
+            enabled = state.actionsEnabled,
+        ) {
+            Text(stringResource(R.string.unattend_refresh))
         }
     }
 }
@@ -658,6 +721,13 @@ private fun TemplatePickerDialog(
                             }
                         }
                     }
+                }
+                if (candidates != null && candidates.size > 40) {
+                    Text(
+                        text = stringResource(R.string.list_first_40),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         },

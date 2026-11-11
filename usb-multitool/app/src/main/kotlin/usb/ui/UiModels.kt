@@ -150,6 +150,18 @@ enum class UiMessageKey {
     RescueMapReady,
     ChooseGptBackup,
     ChooseRescueFiles,
+    /** A bounded inspection failed; args = source label, exact reason. */
+    SourceInspectionRejected,
+    /** Args = map sector size, disk sector size. */
+    RescueMapSectorSizeMismatch,
+    /** Args = map sector count, live disk sector count. */
+    RescueMapDiskTooSmall,
+    /** Args = never-read sector count. */
+    RescueMapPartialCopy,
+    /** Args = backup sector size, disk sector size. */
+    GptBackupSectorSizeMismatch,
+    /** Args = captured disk sectors, live disk sectors. */
+    GptBackupDiskMismatch,
     SelectImageFirst,
     CorruptTableCreate,
     Probing,
@@ -196,7 +208,16 @@ enum class UiMessageKey {
     XmlOverwriteRequired,
     /** User must confirm replacing the existing unattend XML on the stick. */
     ConfirmXmlOverwrite,
+
+    /** Whole in-app log was copied to the clipboard on an explicit action. */
+    LogCopied,
 }
+
+/**
+ * Clipboard payload of "copy all": one log line per row, order preserved. Pure so the
+ * export shape is testable without Android; the warning about paths and serials is UI text.
+ */
+fun logClipboardText(lines: List<String>): String = lines.joinToString("\n")
 
 enum class DevicePresence {
     Absent,
@@ -300,6 +321,12 @@ data class DestructiveConfirmation(
     /** Full URI snapshotted for RESCUE_RESTORE map. */
     val rescueMapUri: String? = null,
     val rescueMapName: String? = null,
+    /** Pre-confirmation facts actually inspected for this GPT backup file. */
+    val gptBackupInspection: GptBackupInspection? = null,
+    /** Pre-confirmation facts for the selected rescue image (SAF metadata only). */
+    val rescueImageInspection: RescueImageInspection? = null,
+    /** Pre-confirmation facts for the selected rescue map (bounded read + decode). */
+    val rescueMapInspection: RescueMapInspection? = null,
     /**
      * Target XML path/name for VENTOY_UNATTEND_XML_WRITE (overwrite of existing unattend).
      * Generation params live in [AppUiState.pendingAutounattendGeneration].
@@ -350,6 +377,9 @@ data class DestructiveConfirmation(
             rescueImageName: String? = null,
             rescueMapUri: String? = null,
             rescueMapName: String? = null,
+            gptBackupInspection: GptBackupInspection? = null,
+            rescueImageInspection: RescueImageInspection? = null,
+            rescueMapInspection: RescueMapInspection? = null,
             xmlTargetName: String? = null,
             imagePaths: List<String> = emptyList(),
             templatePath: String? = null,
@@ -386,6 +416,12 @@ data class DestructiveConfirmation(
                     if (action == DestructiveAction.RESCUE_RESTORE) rescueMapUri else null,
                 rescueMapName =
                     if (action == DestructiveAction.RESCUE_RESTORE) rescueMapName else null,
+                gptBackupInspection =
+                    if (action == DestructiveAction.GPT_RESTORE) gptBackupInspection else null,
+                rescueImageInspection =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueImageInspection else null,
+                rescueMapInspection =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueMapInspection else null,
                 xmlTargetName =
                     if (action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE) xmlTargetName else null,
                 imagePaths = if (action == DestructiveAction.VENTOY_LINK_XML) imagePaths else emptyList(),
@@ -795,15 +831,17 @@ data class AppUiState(
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
     /**
-     * Id of the newest directory-list request. [UiIntent.FilesListed] /
-     * [UiIntent.FilesListFailed] answers must echo this value together with path,
-     * selected partition, identity and attach generation; anything else is dropped.
+     * Id of the newest directory-list request, bumped when the request is emitted (path
+     * change, tab entry, manual refresh, device change, finished mutation).
+     * [UiIntent.FilesListed] / [UiIntent.FilesListFailed] answers must echo this value
+     * together with path, selected partition, identity and attach generation; anything
+     * else is dropped, so a late answer never overwrites a newer one.
      */
     val filesListGeneration: Long = 0L,
     /**
      * True while a real list for [currentPath] is outstanding. Empty [files] then means
-     * "not loaded yet", never "folder is empty". Cleared by a matching list result,
-     * a path change that does not reload, or a device change that does not reload.
+     * "not loaded yet", never "folder is empty". Cleared by a matching list result or a
+     * refresh/invalidations that defers mounting to the Files tab.
      */
     val filesPending: Boolean = false,
     /**
@@ -862,9 +900,47 @@ data class AppUiState(
     val windowsIsoCandidatesError: String? = null,
     /** Inspected SAF ISO waiting only for an explicit overwrite decision. */
     val pendingIsoImport: IsoImportProposal? = null,
+    /**
+     * Inspected import with no overwrite decision needed (target does not exist) that arrived
+     * while the UI was not actionable (same-stick probe). Emitted as [UiEffect.ImportIso] by
+     * the first quiet, actionable reduce; dropped when the attachment or generation changes.
+     */
+    val deferredIsoImport: IsoImportProposal? = null,
     /** Typed reason the last phone-file inspection failed; null = no failure. */
     val isoImportError: UnreadableProblem? = null,
     val isoImportGeneration: Long = 0L,
+    /**
+     * Generation of the SAF-phase inspection in flight, or null. SAF reads run off the disk
+     * worker and can block in the provider; cancel/attach change disowns them so they never
+     * block a new import. Cleared by [UiIntent.WindowsIsoImportSafFinished].
+     */
+    val isoImportSafInFlight: Long? = null,
+    /**
+     * Generation of the USB-phase inspection that currently holds the disk. Set by
+     * [UiIntent.WindowsIsoImportUsbStarted], cleared only by [UiIntent.WindowsIsoImportFinished]
+     * after the host closed the disk, never by UI cancel.
+     */
+    val isoImportUsbInFlight: Long? = null,
+    /**
+     * Non-null when an import failed because the chosen folder vanished: the Ventoy import
+     * card reopens the folder picker for this kind, then clears it with
+     * [UiIntent.ImportFolderPickOpened]. Cleared by any attach change.
+     */
+    val pendingImportFolderPick: WindowsImportKind? = null,
+    /**
+     * True when the import-folder work was armed while no mount was allowed (operation
+     * running/queued or a confirmation open). The folder re-read and the picker demand are
+     * released by the first intent that makes the UI actionable again (terminal operation,
+     * dismissed confirmation), so no USB work races the operation and no dialog covers a
+     * destructive confirmation. Survives unrelated mutations on the same attachment.
+     */
+    val pendingImportFolderPickLoad: Boolean = false,
+    /**
+     * Import kind whose picker must open once mounting is allowed again. Kept apart from
+     * [pendingImportFolderPick] so the UI consuming (clearing) the picker demand cannot
+     * cancel the deferred folder re-read or the demand itself.
+     */
+    val deferredImportFolderPick: WindowsImportKind? = null,
     /** Absolute image paths ticked in the XML section before one explicit bind. */
     val windowsSelectedImages: List<String> = emptyList(),
     /** Existing auto_install bindings; null = not loaded. */
@@ -896,6 +972,14 @@ data class AppUiState(
     val ventoyFolders: List<String>? = null,
     val ventoyFoldersError: String? = null,
     /**
+     * Id of the newest folder-list request. Bumped when the request is emitted, so two
+     * refreshes in one epoch cannot land out of order; answers must echo it plus
+     * [ventoyCacheEpoch].
+     */
+    val ventoyFoldersRequest: Long = 0L,
+    /** Same ordering contract as [ventoyFoldersRequest] for [ventoyGlobalSettings]. */
+    val ventoyGlobalSettingsRequest: Long = 0L,
+    /**
      * Bumped when stick-scoped Ventoy/XML caches must be considered stale (destructive
      * mutation, detach, new attachment). Ventoy-tab composition keys on this to re-read
      * without host mounting off-tab.
@@ -926,18 +1010,30 @@ data class AppUiState(
     val stagedRawImagePath: String? = null,
     val stagedRawImageLabel: String? = null,
     val backupUri: String? = null,
+    /** Bounded inspection of [backupUri] (file facts only; live geometry is rechecked on request). */
+    val backupInspection: GptBackupInspection? = null,
+    /** Monotonic id of the newest backup pick; older inspection results are dropped. */
+    val backupSelectionGeneration: Long = 0L,
     /** SAF URI of a dense rescue .img chosen for restore. */
     val rescueImageUri: String? = null,
+    /** SAF metadata inspection of [rescueImageUri]; the image is never opened. */
+    val rescueImageInspection: RescueImageInspection? = null,
+    /** Monotonic id of the newest rescue-image pick; older results are dropped. */
+    val rescueImageSelectionGeneration: Long = 0L,
     /** SAF URI of the matching .map (v2 RESTORE or converted from COPY). */
     val rescueMapUri: String? = null,
+    /** Bounded read/decode of [rescueMapUri]. */
+    val rescueMapInspection: RescueMapInspection? = null,
+    /** Monotonic id of the newest rescue-map pick; older results are dropped. */
+    val rescueMapSelectionGeneration: Long = 0L,
     /** User-selected target FS for the next Format action (picker). */
     val selectedFormatId: FilesystemId = FilesystemId.FAT,
-    /** Dark theme preference: null = system default, true = dark, false = light. */
-    val darkTheme: Boolean? = null,
+    /** Theme preference: exactly two states, dark applied by default on first launch. */
+    val darkTheme: Boolean = true,
     /**
      * Bounded operation log. Ring-buffered to [LOG_MAX_LINES]; oldest lines dropped.
-     * Appended by [UiIntent.AppendLog]; never cleared across operations so the user
-     * can scroll back after completion.
+     * Appended by [UiIntent.AppendLog]; kept across operations until the user asks for
+     * [UiIntent.ClearLog], which clears only this list and never Android logcat.
      */
     val logLines: List<String> = emptyList(),
     /**

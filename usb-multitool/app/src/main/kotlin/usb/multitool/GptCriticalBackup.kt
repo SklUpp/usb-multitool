@@ -64,6 +64,58 @@ object GptCriticalBackup {
         validate(blob, disk.sectorSize, disk.sectorCount, primarySectors, backupSectors)
 
     /**
+     * Validate a captured primary + backup blob without a live disk. The recorded disk
+     * size comes from the primary header, so a selected file can be inspected before the
+     * destructive confirmation. The restore path still calls [inspect] against the live
+     * disk; this function never admits a write by itself.
+     */
+    fun inspectBlob(
+        blob: ByteArray,
+        sectorSize: Int,
+        primarySectors: Int,
+        backupSectors: Int,
+    ): RestoreReport {
+        require(sectorSize > 0) { "invalid sector size $sectorSize" }
+        requireBlobSize(blob, sectorSize, primarySectors, backupSectors)
+        val primary = readHeader(blob, sectorSize, sectorSize)
+        require(primary.currentLba == 1UL) {
+            "backup primary header claims current LBA ${primary.currentLba}, expected 1"
+        }
+        require(primary.backupLba != ULong.MAX_VALUE) {
+            "backup primary header claims an impossible disk end ${primary.backupLba}"
+        }
+        val sectorCount = primary.backupLba + 1UL
+        require(sectorCount > (primarySectors + backupSectors).toULong()) {
+            "backup describes a $sectorCount-sector disk, too small for $primarySectors + " +
+                "$backupSectors critical GPT sectors"
+        }
+        val tailStart = sectorCount - backupSectors.toULong()
+        val primaryEntries =
+            entryArray(blob, primary, sectorSize, primarySectors, backupSectors, tailStart)
+        require(crc32(primaryEntries, 0, primaryEntries.size) == primary.entriesCrc) {
+            "primary GPT entry CRC mismatch inside the backup"
+        }
+
+        val backup = readHeader(blob, sectorSize, (primarySectors + backupSectors - 1) * sectorSize)
+        require(backup.currentLba == sectorCount - 1UL) {
+            "backup header claims current LBA ${backup.currentLba}, expected ${sectorCount - 1UL}"
+        }
+        require(backup.backupLba == 1UL) {
+            "backup header points at alternate LBA ${backup.backupLba}, expected 1"
+        }
+        return validatePair(
+            blob = blob,
+            sectorSize = sectorSize,
+            sectorCount = sectorCount,
+            primarySectors = primarySectors,
+            backupSectors = backupSectors,
+            tailStart = tailStart,
+            primary = primary,
+            backup = backup,
+        )
+    }
+
+    /**
      * Capture-side validation: the blob must be a self-consistent primary + backup pair for
      * the disk it was read from. Run before the file is written, so a non-GPT disk or a torn
      * capture never lands on the phone as a "backup".
@@ -92,34 +144,29 @@ object GptCriticalBackup {
         primarySectors: Int,
         backupSectors: Int,
     ): RestoreReport {
-        requireBlobSize(blob, sectorSize, primarySectors, backupSectors)
         require(sectorCount > (primarySectors + backupSectors).toULong()) {
             "device with $sectorCount sectors is too small for $primarySectors + " +
                 "$backupSectors critical GPT sectors"
         }
-
-        val tailStart = sectorCount - backupSectors.toULong()
-        val primary = readHeader(blob, sectorSize, sectorSize)
-        require(primary.currentLba == 1UL) {
-            "backup primary header claims current LBA ${primary.currentLba}, expected 1"
-        }
-        require(primary.backupLba == sectorCount - 1UL) {
-            "backup was captured on a ${primary.backupLba + 1UL}-sector disk; this device has " +
+        val report = inspectBlob(blob, sectorSize, primarySectors, backupSectors)
+        require(report.primary.backupLba + 1UL == sectorCount) {
+            "backup was captured on a ${report.primary.backupLba + 1UL}-sector disk; this device has " +
                 "$sectorCount sectors — restore the matching backup and then relocate it"
         }
-        val primaryEntries =
-            entryArray(blob, primary, sectorSize, primarySectors, backupSectors, tailStart)
-        require(crc32(primaryEntries, 0, primaryEntries.size) == primary.entriesCrc) {
-            "primary GPT entry CRC mismatch inside the backup"
-        }
+        return report
+    }
 
-        val backup = readHeader(blob, sectorSize, (primarySectors + backupSectors - 1) * sectorSize)
-        require(backup.currentLba == sectorCount - 1UL) {
-            "backup header claims current LBA ${backup.currentLba}, expected ${sectorCount - 1UL}"
-        }
-        require(backup.backupLba == 1UL) {
-            "backup header points at alternate LBA ${backup.backupLba}, expected 1"
-        }
+    /** Shared tail of [inspectBlob] and [validate]; both paths run the same checks. */
+    private fun validatePair(
+        blob: ByteArray,
+        sectorSize: Int,
+        sectorCount: ULong,
+        primarySectors: Int,
+        backupSectors: Int,
+        tailStart: ULong,
+        primary: Header,
+        backup: Header,
+    ): RestoreReport {
         require(backup.entryCount == primary.entryCount && backup.entrySize == primary.entrySize) {
             "primary and backup GPT entry geometry disagree"
         }

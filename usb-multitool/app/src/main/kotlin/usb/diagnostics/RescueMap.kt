@@ -146,6 +146,20 @@ class RescueMap private constructor(
     private fun rangesOf(wanted: RescueStatus): List<ULongRange> =
         runs.filter { it.status == wanted }.map { it.start until it.endExclusive }
 
+    /**
+     * Read-only facts for pre-restore inspection. Built from a successfully decoded map;
+     * never used to admit a restore (the restore path still decodes and revalidates).
+     */
+    fun summary(): RescueMapSummary =
+        RescueMapSummary(
+            kind = kind,
+            sectorCount = sectorCount,
+            sectorSize = sectorSize,
+            copiedRanges = copied,
+            failedRanges = failed,
+            nonTriedRanges = nonTried,
+        )
+
     companion object {
         /** Soft cap against OOM from hostile SAF maps (~8 MiB UTF-8). */
         const val MAX_ENCODED_CHARS: Int = 8 * 1024 * 1024
@@ -272,4 +286,21 @@ class RescueMap private constructor(
             }
         }
     }
+}
+
+/**
+ * Pre-restore snapshot of a decoded map. Counts and ranges are copied so a later
+ * checkpoint mutation cannot change what the confirmation showed.
+ */
+data class RescueMapSummary(
+    val kind: MapKind,
+    val sectorCount: ULong,
+    val sectorSize: Int?,
+    val copiedRanges: List<ULongRange>,
+    val failedRanges: List<ULongRange>,
+    val nonTriedRanges: List<ULongRange>,
+) {
+    val copiedSectors: ULong get() = copiedRanges.sumOf { it.last - it.first + 1UL }
+    val failedSectors: ULong get() = failedRanges.sumOf { it.last - it.first + 1UL }
+    val nonTriedSectors: ULong get() = nonTriedRanges.sumOf { it.last - it.first + 1UL }
 }

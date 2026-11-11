@@ -17,6 +17,7 @@ CP="$STDLIB:$JDK7:$JDK8"
 set -- \
   "$ROOT/app/src/main/kotlin/usb/FormatBytes.kt" \
   "$ROOT/app/src/main/kotlin/usb/diagnostics/ScanReport.kt" \
+  "$ROOT/app/src/main/kotlin/usb/diagnostics/RescueMap.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FilesystemId.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FormatCatalog.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/PartitionModels.kt" \
@@ -31,12 +32,25 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/RestoreInspectionModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiStateHostCheck.kt"
 if [ -f "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt" ]; then
   set -- "$@" "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt"
 fi
+# UiReducer names FatFs absence codes (FR_NO_FILE/FR_NO_PATH); they live in usb.fs/FatFs.kt
+# beside the native writers, so the host build needs that file and its collaborators.
+for src in \
+  "$ROOT/app/src/main/kotlin/usb/fs/UsbFsVolume.kt" \
+  "$ROOT/app/src/main/kotlin/usb/fs/FatFs.kt"
+do
+  test -f "$src" || {
+    echo "run-ui-host-check: missing ${src#"$ROOT/"}" >&2
+    exit 1
+  }
+  set -- "$@" "$src"
+done
 kotlinc -cp "$CP" -d "$OUT" "$@"
 
 kotlin -cp "$OUT:$CP" usb.ui.UiStateHostCheck

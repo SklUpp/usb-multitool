@@ -7,6 +7,7 @@ import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -228,8 +229,9 @@ class VentoyImageLibraryTest {
     }
 
     @Test
-    fun templateImportCreatesVentoyDirectoryAndKeepsBytes() {
+    fun templateImportUsesExistingVentoyDirectoryAndKeepsBytes() {
         val volume = InMemoryUsbVolume()
+        volume.mkdir("/ventoy")
         val xml = "<unattend/>".toByteArray()
         val outcome = VentoyIsoLibrary.import(
             volume = volume,
@@ -241,6 +243,28 @@ class VentoyImageLibraryTest {
         )
         assertEquals("/ventoy/my.xml", outcome.targetPath)
         assertArrayEquals(xml, volume.fileBytes("/ventoy/my.xml"))
+    }
+
+    @Test
+    fun missingImportDirectoryFailsClosedWithoutCreatingIt() {
+        val volume = InMemoryUsbVolume()
+        val operation = DiskOperation("import")
+        assertThrows(ImportDirectoryMissingException::class.java) {
+            VentoyIsoLibrary.import(
+                volume = volume,
+                input = ByteArrayInputStream(byteArrayOf(1, 2, 3)),
+                rawName = "win.img",
+                operation = operation,
+                overwrite = false,
+                importDirectory = "/Gone",
+            )
+        }
+        // No folder, no target, and the operation never reached a mutation.
+        assertNull(volume.statOrNull("/Gone"))
+        assertNull(volume.fileBytes("/Gone/win.img"))
+        assertTrue(volume.paths().none { it.contains(".import-") })
+        assertFalse(operation.mutationAttempted)
+        assertFalse(operation.commitReached)
     }
 
     @Test

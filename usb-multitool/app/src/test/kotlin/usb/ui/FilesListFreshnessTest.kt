@@ -640,4 +640,264 @@ class FilesListFreshnessTest {
         assertTrue(failed.effects.isEmpty())
     }
 
+    @Test
+    fun enteringFilesTabReloadsTheOpenFolder() {
+        val base =
+            ready(
+                path = "/ISO",
+                files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)),
+            ).copy(tab = ShellTab.Ventoy)
+
+        val entered = UiReducer.reduce(base, UiIntent.SelectTab(ShellTab.Files))
+
+        assertEquals(ShellTab.Files, entered.state.tab)
+        // The folder is kept; only its listing is re-read.
+        assertEquals("/ISO", entered.state.currentPath)
+        assertTrue(entered.state.files.isEmpty())
+        assertTrue(entered.state.filesPending)
+        assertEquals(base.filesListGeneration + 1L, entered.state.filesListGeneration)
+        assertEquals("/ISO", (entered.effects.single() as UiEffect.LoadFiles).path)
+    }
+
+    @Test
+    fun selectingTheAlreadyOpenFilesTabDoesNotReload() {
+        val pending = ready(path = "/ISO", files = emptyList(), pending = true)
+
+        val again = UiReducer.reduce(pending, UiIntent.SelectTab(ShellTab.Files))
+
+        assertTrue(again.effects.isEmpty())
+        assertEquals(pending.filesListGeneration, again.state.filesListGeneration)
+        assertTrue(again.state.filesPending)
+    }
+
+    @Test
+    fun manualRefreshDropsTheOlderInFlightAnswer() {
+        val staleEntry = FileEntry("stale.bin", isDirectory = false, sizeBytes = 1uL)
+        val freshEntry = FileEntry("fresh.bin", isDirectory = false, sizeBytes = 2uL)
+        val pending = ready(path = "/ISO", files = listOf(staleEntry), pending = true)
+        val staleGeneration = pending.filesListGeneration
+
+        val refreshed = UiReducer.reduce(pending, UiIntent.RefreshFiles)
+
+        assertTrue(refreshed.state.files.isEmpty())
+        assertTrue(refreshed.state.filesPending)
+        assertEquals(staleGeneration + 1L, refreshed.state.filesListGeneration)
+        assertEquals("/ISO", (refreshed.effects.single() as UiEffect.LoadFiles).path)
+
+        val late =
+            UiReducer.reduce(
+                refreshed.state,
+                refreshed.state.listed(files = listOf(staleEntry), generation = staleGeneration),
+            )
+        assertTrue(late.state.files.isEmpty())
+        assertTrue(late.state.filesPending)
+
+        val applied =
+            UiReducer.reduce(
+                late.state,
+                late.state.listed(files = listOf(freshEntry)),
+            )
+        assertEquals(listOf(freshEntry), applied.state.files)
+        assertFalse(applied.state.filesPending)
+    }
+
+    @Test
+    fun refreshWhileBusyKeepsTheCurrentListing() {
+        val keep = FileEntry("keep.iso", isDirectory = false, sizeBytes = 1uL)
+        val busy =
+            ready(path = "/ISO", files = listOf(keep), pending = true).copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+
+        val refused = UiReducer.reduce(busy, UiIntent.RefreshFiles)
+
+        assertEquals(listOf(keep), refused.state.files)
+        assertTrue(refused.state.filesPending)
+        assertTrue(refused.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.DeviceBusy), refused.state.statusMessage)
+    }
+
+    @Test
+    fun deviceChangedReadyOnAnotherTabDefersTheListUntilEntry() {
+        val base =
+            ready(
+                path = "/ISO",
+                files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)),
+            ).copy(tab = ShellTab.Ventoy)
+
+        val changed =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    partitions = listOf(data, other),
+                    files = emptyList(),
+                ),
+            )
+
+        // No off-tab mount, but the listing is already invalid.
+        assertTrue(changed.effects.isEmpty())
+        assertTrue(changed.state.files.isEmpty())
+        assertFalse(changed.state.filesPending)
+        assertEquals(base.filesListGeneration + 1L, changed.state.filesListGeneration)
+
+        val entered = UiReducer.reduce(changed.state, UiIntent.SelectTab(ShellTab.Files))
+        assertEquals("/ISO", (entered.effects.single() as UiEffect.LoadFiles).path)
+        assertTrue(entered.state.filesPending)
+    }
+
+    @Test
+    fun completedMutationReloadsTheVisibleFolderOnce() {
+        val running =
+            ready(
+                path = "/ISO",
+                files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)),
+            ).copy(
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+
+        val done =
+            UiReducer.reduce(
+                running,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Completed,
+                        title = OperationTitle.Upload,
+                    ),
+                ),
+            )
+
+        assertTrue(done.state.files.isEmpty())
+        assertTrue(done.state.filesPending)
+        assertEquals(running.filesListGeneration + 1L, done.state.filesListGeneration)
+        assertEquals("/ISO", (done.effects.single() as UiEffect.LoadFiles).path)
+    }
+
+    @Test
+    fun failedMutationStillInvalidatesTheListing() {
+        val running =
+            ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
+                .copy(
+                    operation =
+                        OperationProgress(
+                            state = OperationState.Running,
+                            title = OperationTitle.DeleteEntry("old.bin"),
+                        ),
+                )
+
+        val failed =
+            UiReducer.reduce(
+                running,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Failed,
+                        title = OperationTitle.DeleteEntry("old.bin"),
+                        errorMessage = "delete failed",
+                    ),
+                ),
+            )
+
+        // A failed delete may still have removed the entry: never keep the old rows.
+        assertTrue(failed.state.files.isEmpty())
+        assertTrue(failed.state.filesPending)
+        assertEquals(running.filesListGeneration + 1L, failed.state.filesListGeneration)
+        assertEquals("/ISO", (failed.effects.single() as UiEffect.LoadFiles).path)
+    }
+
+    @Test
+    fun mutationOnAnotherTabDefersReloadUntilEntry() {
+        val running =
+            ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
+                .copy(
+                    tab = ShellTab.Ventoy,
+                    operation =
+                        OperationProgress(
+                            state = OperationState.Running,
+                            title = OperationTitle.DeleteEntry("old.bin"),
+                        ),
+                )
+
+        val failed =
+            UiReducer.reduce(
+                running,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Partial,
+                        title = OperationTitle.DeleteEntry("old.bin"),
+                        errorMessage = "partial",
+                    ),
+                ),
+            )
+
+        assertTrue(failed.effects.isEmpty())
+        assertTrue(failed.state.files.isEmpty())
+        assertFalse(failed.state.filesPending)
+        assertEquals(running.filesListGeneration + 1L, failed.state.filesListGeneration)
+    }
+
+    @Test
+    fun probeStatesToReadyLoadFilesOnTheDefaultTab() {
+        for (probePresence in listOf(DevicePresence.Busy, DevicePresence.PermissionRequired)) {
+            val probe =
+                ready(
+                    path = "/ISO",
+                    files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)),
+                ).copy(presence = probePresence)
+
+            val readyState =
+                UiReducer.reduce(
+                    probe,
+                    UiIntent.DeviceChanged(
+                        presence = DevicePresence.Ready,
+                        device = device,
+                        partitions = listOf(data, other),
+                        files = emptyList(),
+                    ),
+                )
+
+            // The old state could not act; the state produced by this intent can, so the
+            // list must be requested instead of showing "empty folder" after attach.
+            assertTrue("$probePresence -> Ready must load", readyState.state.filesPending)
+            assertEquals("/ISO", (readyState.effects.single() as UiEffect.LoadFiles).path)
+            assertEquals(probe.filesListGeneration + 1L, readyState.state.filesListGeneration)
+        }
+    }
+
+    @Test
+    fun runningOperationStillBlocksTheReadyLoad() {
+        val probe =
+            ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
+                .copy(
+                    presence = DevicePresence.Busy,
+                    operation =
+                        OperationProgress(
+                            state = OperationState.Running,
+                            title = OperationTitle.Upload,
+                        ),
+                )
+
+        val readyState =
+            UiReducer.reduce(
+                probe,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    partitions = listOf(data, other),
+                    files = emptyList(),
+                ),
+            )
+
+        assertTrue(readyState.effects.isEmpty())
+        assertFalse(readyState.state.filesPending)
+    }
 }

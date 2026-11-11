@@ -37,8 +37,12 @@ int ext_utf16_to_utf8(const uint16_t *in, size_t in_len, char *out, size_t out_c
  * Relative LBAs only — VirtualPartition applies startLba once.
  *
  * Needs-recovery (FINCOM_RECOVER) and other unsupported incompat features
- * refuse a read-write mount. read_only=true still refuses RECOVER so we never
+ * refuse mount (RO and RW). read_only=true still refuses RECOVER so we never
  * expose a dirty journal as a silent success.
+ *
+ * RW mount runs ext4_journal_start after ext4_mount. No-op when the volume has
+ * no HAS_JOURNAL feature. If start fails, mount is torn down and refused —
+ * never return a writable handle without a live journal.
  *
  * Returns opaque volume handle (>0) on success, 0 on failure.
  * On failure *out_errno (if non-NULL) receives a positive errno
@@ -46,6 +50,8 @@ int ext_utf16_to_utf8(const uint16_t *in, size_t in_len, char *out, size_t out_c
  */
 uint64_t ext_engine_mount(uint64_t block_handle, bool read_only, int *out_errno);
 
+/* Always frees the volume. On umount/sync error still tears down the lwext4
+ * mountpoint before free (no stale s_mp / dangling bdev). Returns 0 or negative errno. */
 int ext_engine_close(uint64_t vol_handle);
 int ext_engine_sync(uint64_t vol_handle);
 

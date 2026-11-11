@@ -30,8 +30,10 @@ for suite in \
   PartitionRenameUiTest \
   SchemeInitUiTest \
   ConfirmationTest \
+  RestoreInspectionTest \
   OperationProgressMapperTest \
   StringResourceParityTest \
+  ShellLogBehaviorTest \
   FilesystemUsageUiTest \
   RawRangeUiStateTest \
   AutounattendPathTest \
@@ -62,7 +64,9 @@ test -f "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" || {
 set -- \
   "$ROOT/app/src/main/kotlin/usb/FormatBytes.kt" \
   "$ROOT/app/src/main/kotlin/usb/diagnostics/ScanReport.kt" \
+  "$ROOT/app/src/main/kotlin/usb/diagnostics/RescueMap.kt" \
   "$ROOT/app/src/main/kotlin/usb/operation/DiskOperation.kt" \
+  "$ROOT/app/src/main/kotlin/usb/multitool/GptCriticalBackup.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FilesystemId.kt" \
   "$ROOT/app/src/main/kotlin/usb/fs/FormatCatalog.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/PartitionModels.kt" \
@@ -71,6 +75,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/partition/MbrTable.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/GptTable.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/PartitionTable.kt" \
+  "$ROOT/app/src/main/kotlin/usb/partition/GptBackup.kt" \
   "$ROOT/app/src/main/kotlin/usb/partition/RawRangePlan.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawWriteOutcome.kt" \
   "$ROOT/app/src/main/kotlin/usb/image/RawRangeProbe.kt" \
@@ -79,6 +84,8 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/Autounattend.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/RestoreInspectionModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/RestoreSourceInspector.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/OperationProgressMapper.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
@@ -86,8 +93,12 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRenameUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/SchemeInitUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ConfirmationTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/RestoreInspectionTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/partition/SyntheticGpt.kt" \
+  "$ROOT/app/src/test/kotlin/usb/partition/DiskFixture.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/OperationProgressMapperTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/StringResourceParityTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/ShellLogBehaviorTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/RawRangeUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FilesystemUsageUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendPathTest.kt" \
@@ -102,6 +113,18 @@ set -- \
 if [ -f "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt" ]; then
   set -- "$@" "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt"
 fi
+# UiReducer names FatFs absence codes (FR_NO_FILE/FR_NO_PATH); they live in usb.fs/FatFs.kt
+# beside the native writers, so the host build needs that file and its collaborators.
+for src in \
+  "$ROOT/app/src/main/kotlin/usb/fs/UsbFsVolume.kt" \
+  "$ROOT/app/src/main/kotlin/usb/fs/FatFs.kt"
+do
+  test -f "$src" || {
+    echo "run-ui-junit: missing ${src#"$ROOT/"}" >&2
+    exit 1
+  }
+  set -- "$@" "$src"
+done
 kotlinc -cp "$CP" -d "$OUT" "$@"
 
 # Run from the module root so resource-parsing tests resolve app/src/main/res.
@@ -111,9 +134,11 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.PartitionRenameUiTest \
   usb.ui.SchemeInitUiTest \
   usb.ui.ConfirmationTest \
+  usb.ui.RestoreInspectionTest \
   usb.ui.OperationProgressMapperTest \
   usb.ui.UiStateMachineTest \
   usb.ui.StringResourceParityTest \
+  usb.ui.ShellLogBehaviorTest \
   usb.ui.RawRangeUiStateTest \
   usb.ui.FilesystemUsageUiTest \
   usb.ui.AutounattendPathTest \

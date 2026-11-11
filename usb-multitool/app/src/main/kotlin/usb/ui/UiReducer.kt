@@ -173,8 +173,38 @@ sealed class UiIntent {
     data class WindowsIsoImportRejected(
         val problem: UnreadableProblem,
         val reason: String? = null,
+        /** Inspection generation this result belongs to; stale results are ignored. */
+        val generation: Long = 0L,
     ) : UiIntent()
+    /**
+     * The host closed the disk for inspection [generation]. This is the only signal that ends
+     * the USB guard; UI cancel must not, because direct I/O may still be open.
+     */
+    data class WindowsIsoImportFinished(val generation: Long) : UiIntent()
+    /** SAF-phase inspection [generation] ended (result already posted or stale). */
+    data class WindowsIsoImportSafFinished(val generation: Long) : UiIntent()
+    /** The SAF phase of inspection [generation] handed over to the disk phase. */
+    data class WindowsIsoImportUsbStarted(val generation: Long) : UiIntent()
     data object CancelWindowsIsoImport : UiIntent()
+
+    /**
+     * A phone import failed because the chosen folder no longer exists. Pinned to the
+     * attachment that failed: clears the stale folder list and asks the import card to
+     * reopen the folder picker for [kind]. While the UI is not actionable (operation
+     * running/queued or a confirmation open) both the re-read and the picker demand are
+     * deferred; they are released by the first intent that makes the screen actionable
+     * again, so no USB work races the operation and no dialog covers a confirmation.
+     */
+    data class ReopenImportFolderPick(
+        val kind: WindowsImportKind,
+        val identity: String?,
+        val attachGeneration: Long,
+        /** Inspection generation that proved the folder missing; stale failures are ignored. */
+        val requestGeneration: Long,
+    ) : UiIntent()
+
+    /** The import card consumed [ReopenImportFolderPick] and shows the folder picker. */
+    data object ImportFolderPickOpened : UiIntent()
 
     /** Persist the two global Ventoy Windows flags; they are not per-image. */
     data object SaveWindowsControls : UiIntent()
@@ -249,11 +279,15 @@ sealed class UiIntent {
         val error: String? = null,
         /** Must match [AppUiState.ventoyCacheEpoch] or the post is stale. */
         val epoch: Long = 0L,
+        /** Must match [AppUiState.ventoyFoldersRequest], else an older list arrived late. */
+        val requestToken: Long = 0L,
     ) : UiIntent()
     data class VentoyGlobalSettingsLoaded(
         val settings: VentoyGlobalSettings,
         /** Must match [AppUiState.ventoyCacheEpoch] or the post is stale. */
         val epoch: Long = 0L,
+        /** Must match [AppUiState.ventoyGlobalSettingsRequest], else an older read arrived late. */
+        val requestToken: Long = 0L,
     ) : UiIntent()
     /** Only known keys. null value removes the key; "0"/"1" set it. */
     data class RequestSetVentoyGlobalSetting(val key: String, val value: String?) : UiIntent()
@@ -277,9 +311,22 @@ sealed class UiIntent {
     data class WindowsTemplateImported(val path: String) : UiIntent()
 
     /** SAF [uri] of the GPT critical-sector backup chosen for the next restore. */
-    data class SetBackupFile(val uri: String?) : UiIntent()
-    data class SetRescueImage(val uri: String?) : UiIntent()
-    data class SetRescueMap(val uri: String?) : UiIntent()
+    data class SetBackupFile(
+        val uri: String?,
+        val inspection: GptBackupInspection? = null,
+        /** Monotonic pick id; a result older than the stored id is dropped. */
+        val requestId: Long = 0L,
+    ) : UiIntent()
+    data class SetRescueImage(
+        val uri: String?,
+        val inspection: RescueImageInspection? = null,
+        val requestId: Long = 0L,
+    ) : UiIntent()
+    data class SetRescueMap(
+        val uri: String?,
+        val inspection: RescueMapInspection? = null,
+        val requestId: Long = 0L,
+    ) : UiIntent()
 
     /** Read-only scan of every sector; reports unreadable ranges. */
     data object StartReadScan : UiIntent()
@@ -290,7 +337,7 @@ sealed class UiIntent {
     /** Capture the GPT critical sectors into the app's external files dir. */
     data object CaptureGptBackup : UiIntent()
 
-    /** Cycle dark theme: System (null) -> Dark (true) -> Light (false) -> System (null). */
+    /** Toggle the only two theme states; dark is the default. */
     data object ToggleTheme : UiIntent()
 
     /** Switch the in-app language; persisted by the host. */
@@ -311,6 +358,12 @@ sealed class UiIntent {
 
     /** Go to the parent of [AppUiState.currentPath]; no-op at the root. */
     data object NavigateUp : UiIntent()
+
+    /**
+     * Manual re-list of [AppUiState.currentPath]. Always starts a new request, so an older
+     * in-flight list answer is dropped instead of painting the screen after this one.
+     */
+    data object RefreshFiles : UiIntent()
 
     /** Create a real folder named [name] inside [AppUiState.currentPath]. */
     data class CreateFolder(val name: String) : UiIntent()
@@ -368,6 +421,12 @@ sealed class UiIntent {
 
     /** Append a timestamped line to the bounded operation log. */
     data class AppendLog(val line: String) : UiIntent()
+
+    /**
+     * Drop the in-app log immediately, without confirmation and regardless of a running
+     * operation. New lines may still arrive; Android logcat is not touched.
+     */
+    data object ClearLog : UiIntent()
     /** Store the latest Ventoy release tag fetched from GitHub (null = check failed). */
     data class SetLatestVentoyRelease(val tag: String?) : UiIntent()
 
@@ -498,9 +557,9 @@ sealed interface UiEffect {
         val expectedPlanSha256: String?,
     ) : UiEffect
 
-    data object LoadVentoyGlobalSettings : UiEffect
+    data class LoadVentoyGlobalSettings(val requestToken: Long) : UiEffect
 
-    data object LoadVentoyFolders : UiEffect
+    data class LoadVentoyFolders(val requestToken: Long) : UiEffect
 
     data class SetVentoyGlobalSetting(
         val settingKey: String,
@@ -543,8 +602,22 @@ object UiReducer {
 
     fun reduce(state: AppUiState, intent: UiIntent): ReduceResult =
         when (intent) {
-            is UiIntent.SelectTab ->
-                ReduceResult(state.copy(tab = intent.tab, statusMessage = null))
+            is UiIntent.SelectTab -> {
+                val enteringFiles = intent.tab == ShellTab.Files && state.tab != ShellTab.Files
+                val switched = state.copy(tab = intent.tab, statusMessage = null)
+                // Entering Files re-reads the open folder: changes may have happened while
+                // another tab owned the screen. One request per entry, none while one is
+                // already outstanding.
+                if (enteringFiles &&
+                    !state.filesPending &&
+                    state.presence == DevicePresence.Ready &&
+                    state.actionsEnabled
+                ) {
+                    filesReload(switched)
+                } else {
+                    ReduceResult(switched)
+                }
+            }
 
             is UiIntent.SelectPartition ->
                 if (!state.actionsEnabled) {
@@ -568,6 +641,7 @@ object UiReducer {
                             rawSourceCandidatesTruncated = false,
                             rawSourceCandidatesError = null,
                             pendingIsoImport = null,
+                            deferredIsoImport = null,
                             isoImportError = null,
                             isoImportGeneration = state.isoImportGeneration + 1,
                             // Ventoy/XML catalogs are stick-scoped, not partition-scoped.
@@ -714,6 +788,17 @@ object UiReducer {
                 val path = if (keepPath) state.currentPath else "/"
                 val reloadFiles =
                     intent.presence == DevicePresence.Ready && selected != null
+                // Gate on the state this intent produces, not on the pre-probe one:
+                // Busy/PermissionRequired -> Ready must load on the default Files tab.
+                val confirmationAfter =
+                    if (probingRetain && trustedStick) state.pendingConfirmation else null
+                val actionsAfter =
+                    intent.presence == DevicePresence.Ready &&
+                        state.operation?.state != OperationState.Running &&
+                        state.operation?.state != OperationState.Queued &&
+                        confirmationAfter == null
+                // Only an open Files tab mounts; elsewhere the next tab entry re-lists.
+                val loadFilesNow = reloadFiles && state.tab == ShellTab.Files && actionsAfter
                 // Probe keeps the request id so a late list still binds; Ready/detach bump.
                 val filesGeneration =
                     if (probingRetain) {
@@ -797,11 +882,10 @@ object UiReducer {
                         },
                         filesError = if (probingRetain) state.filesError else null,
                         filesListGeneration = filesGeneration,
-                        filesPending = reloadFiles,
+                        filesPending = loadFilesNow,
                         // A refresh may describe another attachment or geometry.
                         filesystemUsage = if (probingRetain) state.filesystemUsage else null,
-                        pendingConfirmation =
-                            if (probingRetain && trustedStick) state.pendingConfirmation else null,
+                        pendingConfirmation = confirmationAfter,
                         rawSourceCandidates =
                             if (probingRetain) state.rawSourceCandidates else null,
                         rawSourceCandidatesGeneration =
@@ -828,8 +912,32 @@ object UiReducer {
                             if (keepVentoy) state.windowsIsoCandidatesIdentity else null,
                         windowsIsoCandidatesError =
                             if (keepVentoy) state.windowsIsoCandidatesError else null,
-                        pendingIsoImport = null,
-                        isoImportGeneration = state.isoImportGeneration + 1,
+                        // Same-stick probes (onStart re-read) must not orphan an inspected
+                        // result the host is about to post; only a real attach change drops it.
+                        pendingIsoImport = if (keepVentoy) state.pendingIsoImport else null,
+                        deferredIsoImport = if (keepVentoy) state.deferredIsoImport else null,
+                        // Replug disowns the host ticket, and the worker releases its slot when
+                        // it ends, so a stale guard cannot block the next stick; on the same
+                        // stick the running inspection keeps its guard.
+                        isoImportSafInFlight =
+                            if (keepVentoy) state.isoImportSafInFlight else null,
+                        isoImportUsbInFlight =
+                            if (keepVentoy) state.isoImportUsbInFlight else null,
+                        pendingImportFolderPick =
+                            if (keepVentoy) state.pendingImportFolderPick else null,
+                        pendingImportFolderPickLoad =
+                            if (keepVentoy) state.pendingImportFolderPickLoad else false,
+                        deferredImportFolderPick =
+                            if (keepVentoy) state.deferredImportFolderPick else null,
+                        // A same-stick probe must not invalidate the live inspection: its
+                        // UsbStarted/Inspected posts are gated by this generation. Only a real
+                        // attachment change bumps it (and disowns the host ticket).
+                        isoImportGeneration =
+                            if (keepVentoy) {
+                                state.isoImportGeneration
+                            } else {
+                                state.isoImportGeneration + 1
+                            },
                         windowsSelectedImages =
                             if (keepVentoy) state.windowsSelectedImages else emptyList(),
                         windowsTemplatePath =
@@ -888,7 +996,7 @@ object UiReducer {
                             },
                     ),
                     effects =
-                        if (reloadFiles) {
+                        if (loadFilesNow) {
                             listOf(UiEffect.LoadFiles(path = path))
                         } else {
                             emptyList()
@@ -967,15 +1075,17 @@ object UiReducer {
                                 null -> state.statusMessage
                             },
                     )
-                // Disk layout/content mutations leave retained Ventoy/XML caches wrong until
-                // the Ventoy tab re-reads (epoch bump, no mount here).
-                val next =
-                    if (terminal && progress != null && progress.title.invalidatesVentoyStickCaches()) {
-                        dropVentoyStickCaches(base, keepTemplatePath = true)
-                    } else {
-                        base
-                    }
-                ReduceResult(next)
+                // Disk layout/content mutations leave retained Ventoy/XML caches and the open
+                // directory listing wrong. Catalogs are dropped here; the Files list is
+                // cleared and re-read only when the Files tab is the visible one. Deferred
+                // import-folder work is released by the reduce() wrapper below.
+                val invalidates =
+                    terminal && progress != null && progress.title.invalidatesVentoyStickCaches()
+                if (invalidates) {
+                    filesReload(dropVentoyStickCaches(base, keepTemplatePath = true))
+                } else {
+                    ReduceResult(base)
+                }
             }
 
             UiIntent.InvalidateVentoyStickCaches ->
@@ -1308,6 +1418,10 @@ object UiReducer {
                         intent.action == DestructiveAction.RESCUE_RESTORE &&
                             (state.rescueImageUri == null || state.rescueMapUri == null) ->
                             UiMessage.Key(UiMessageKey.ChooseRescueFiles)
+                        intent.action == DestructiveAction.GPT_RESTORE ->
+                            gptRestoreInspectionProblem(state)
+                        intent.action == DestructiveAction.RESCUE_RESTORE ->
+                            rescueRestoreInspectionProblem(state)
                         (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) &&
                             state.selectedPartitionId == null ->
                             UiMessage.Key(UiMessageKey.SelectPartitionFirst)
@@ -1426,6 +1540,27 @@ object UiReducer {
                                         } else {
                                             null
                                         },
+                                    gptBackupInspection =
+                                        if (intent.action == DestructiveAction.GPT_RESTORE) {
+                                            state.backupInspection
+                                                ?.takeIf { it.uri == state.backupUri }
+                                        } else {
+                                            null
+                                        },
+                                    rescueImageInspection =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            state.rescueImageInspection
+                                                ?.takeIf { it.uri == state.rescueImageUri }
+                                        } else {
+                                            null
+                                        },
+                                    rescueMapInspection =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            state.rescueMapInspection
+                                                ?.takeIf { it.uri == state.rescueMapUri }
+                                        } else {
+                                            null
+                                        },
                                 ),
                         ),
                     )
@@ -1508,6 +1643,18 @@ object UiReducer {
                             pending.rescueMapUri.isNullOrBlank() ||
                             pending.rescueImageUri != state.rescueImageUri ||
                             pending.rescueMapUri != state.rescueMapUri) -> true
+                    action == DestructiveAction.GPT_RESTORE &&
+                        pending.gptBackupInspection?.let {
+                            it.error != null || it.uri != pending.gptBackupUri
+                        } == true -> true
+                    action == DestructiveAction.RESCUE_RESTORE &&
+                        // Rescue images are inspected through SAF metadata only: no error state.
+                        (pending.rescueImageInspection?.let {
+                            it.uri != pending.rescueImageUri
+                        } == true ||
+                            pending.rescueMapInspection?.let {
+                                it.error != null || it.uri != pending.rescueMapUri
+                            } == true) -> true
                     action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE &&
                         (pending.xmlTargetName.isNullOrBlank() ||
                             state.pendingAutounattendGeneration == null) -> true
@@ -2100,11 +2247,16 @@ object UiReducer {
             is UiIntent.RequestImportWindowsIso -> {
                 val uri = intent.uri.trim()
                 when {
-                    !state.actionsEnabled || state.pendingIsoImport != null ->
+                    !state.actionsEnabled ||
+                        state.pendingIsoImport != null ||
+                        state.isoImportSafInFlight != null ||
+                        state.isoImportUsbInFlight != null ->
                         ReduceResult(
                             state.copy(
                                 statusMessage =
-                                    if (state.isRunning ||
+                                    if (state.isoImportSafInFlight != null ||
+                                        state.isoImportUsbInFlight != null ||
+                                        state.isRunning ||
                                         state.operation?.state == OperationState.Queued ||
                                         state.pendingConfirmation != null
                                     ) {
@@ -2123,7 +2275,9 @@ object UiReducer {
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
+                                deferredIsoImport = null,
                                 isoImportError = null,
+                                isoImportSafInFlight = generation,
                                 isoImportGeneration = generation,
                             ),
                             effects = listOf(
@@ -2140,19 +2294,62 @@ object UiReducer {
             }
 
             is UiIntent.WindowsIsoImportRejected ->
-                ReduceResult(
-                    state.copy(
-                        pendingIsoImport = null,
-                        isoImportError = intent.problem,
-                    ),
-                )
+                if (intent.generation != state.isoImportGeneration) {
+                    // A cancelled/replaced inspection must not overwrite the live result nor
+                    // release the in-flight guard of the newer one.
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            pendingIsoImport = null,
+                            isoImportError = intent.problem,
+                        ),
+                    )
+                }
+
+            is UiIntent.WindowsIsoImportSafFinished ->
+                if (state.isoImportSafInFlight != intent.generation) {
+                    ReduceResult(state)
+                } else {
+                    // The blocking read ended; a stuck provider no longer blocks new imports.
+                    ReduceResult(state.copy(isoImportSafInFlight = null))
+                }
+
+            is UiIntent.WindowsIsoImportUsbStarted -> {
+                val started = state.isoImportSafInFlight == intent.generation
+                if (!started || intent.generation != state.isoImportGeneration) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            isoImportSafInFlight = null,
+                            isoImportUsbInFlight = intent.generation,
+                        ),
+                    )
+                }
+            }
+
+            is UiIntent.WindowsIsoImportFinished -> {
+                val usbDone = state.isoImportUsbInFlight == intent.generation
+                val safDone = state.isoImportSafInFlight == intent.generation
+                if (!usbDone && !safDone) {
+                    ReduceResult(state)
+                } else {
+                    // Disk is closed now; the deferred folder read may be released by the
+                    // wrapper in this same reduce.
+                    ReduceResult(
+                        state.copy(
+                            isoImportUsbInFlight = if (usbDone) null else state.isoImportUsbInFlight,
+                            isoImportSafInFlight = if (safDone) null else state.isoImportSafInFlight,
+                        ),
+                    )
+                }
+            }
 
             is UiIntent.WindowsIsoImportInspected -> {
                 val device = state.device
-                if (device == null ||
-                    intent.generation != state.isoImportGeneration ||
-                    !state.actionsEnabled
-                ) {
+                if (device == null || intent.generation != state.isoImportGeneration) {
+                    // Stale result for a cancelled/replaced inspection: keep the live guard.
                     ReduceResult(state)
                 } else {
                     val proposal =
@@ -2176,13 +2373,29 @@ object UiReducer {
                             templateMarkers = intent.templateMarkers,
                         )
                     if (intent.exists) {
-                        // No write until the user explicitly accepts replacement.
+                        // No write until the user explicitly accepts replacement. Kept even
+                        // during a same-stick probe: the dialog itself waits for actionsEnabled.
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = proposal,
+                                deferredIsoImport = null,
                                 isoImportError = null,
                                 statusMessage = UiMessage.Raw(
                                     "${importTarget(proposal.directory, intent.targetName)} already exists; confirm overwrite to replace it",
+                                ),
+                            ),
+                        )
+                    } else if (!state.actionsEnabled) {
+                        // A same-stick probe turned the UI non-actionable after the SAF read
+                        // started. Hold the result; the wrapper starts the import on the first
+                        // quiet actionable intent instead of losing the user's pick.
+                        ReduceResult(
+                            state.copy(
+                                pendingIsoImport = null,
+                                deferredIsoImport = proposal,
+                                isoImportError = null,
+                                statusMessage = UiMessage.Raw(
+                                    "Import of ${intent.targetName} waits for the stick to settle",
                                 ),
                             ),
                         )
@@ -2190,6 +2403,7 @@ object UiReducer {
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
+                                deferredIsoImport = null,
                                 statusMessage = UiMessage.Raw(
                                     "Importing ${intent.targetName} into ${proposal.directory}",
                                 ),
@@ -2254,13 +2468,66 @@ object UiReducer {
             }
 
             UiIntent.CancelWindowsIsoImport ->
+                // Cancel invalidates the pending result/dialog and disowns the SAF read, so a
+                // stuck provider cannot block a new import. The USB guard stays until the host
+                // reports the closed disk (WindowsIsoImportFinished).
                 ReduceResult(
                     state.copy(
                         pendingIsoImport = null,
+                        deferredIsoImport = null,
                         isoImportError = null,
+                        isoImportSafInFlight = null,
                         isoImportGeneration = state.isoImportGeneration + 1,
                     ),
                 )
+
+            is UiIntent.ReopenImportFolderPick -> {
+                val device = state.device
+                // Detach/permission probe means no attachment owns the failure; a running
+                // operation still pins the same attachment and only defers the re-read.
+                val attachmentStillShown =
+                    device != null &&
+                        device.identity == intent.identity &&
+                        device.attachGeneration == intent.attachGeneration &&
+                        intent.requestGeneration == state.isoImportGeneration &&
+                        (
+                            state.presence == DevicePresence.Ready ||
+                                (state.presence == DevicePresence.Busy && state.isRunning)
+                        )
+                if (!attachmentStillShown) {
+                    // Another attachment now owns the screen; a stale failure must not
+                    // reopen the picker over it.
+                    ReduceResult(state)
+                } else {
+                    // The cached folder list is proven stale: drop it and invalidate every
+                    // in-flight answer under a new token. A busy/confirming UI only defers
+                    // the re-read and the picker demand; neither may start USB work or open
+                    // a dialog over a destructive confirmation.
+                    val token = state.ventoyFoldersRequest + 1L
+                    val loadNow = state.actionsEnabled
+                    ReduceResult(
+                        state.copy(
+                            ventoyFolders = null,
+                            ventoyFoldersError = null,
+                            ventoyFoldersRequest = token,
+                            pendingImportFolderPick = if (loadNow) intent.kind else null,
+                            deferredImportFolderPick = if (loadNow) null else intent.kind,
+                            pendingImportFolderPickLoad = !loadNow,
+                        ),
+                        effects =
+                            if (loadNow) {
+                                listOf(UiEffect.LoadVentoyFolders(requestToken = token))
+                            } else {
+                                emptyList()
+                            },
+                    )
+                }
+            }
+
+            UiIntent.ImportFolderPickOpened ->
+                // Consume only the UI demand: a deferred folder read keeps its own flag and
+                // kind, so a terminal/confirmation release still fires afterwards.
+                ReduceResult(state.copy(pendingImportFolderPick = null))
 
             UiIntent.SaveWindowsControls ->
                 if (!state.actionsEnabled) {
@@ -2806,20 +3073,27 @@ object UiReducer {
                     ),
                 )
 
-            UiIntent.LoadVentoyGlobalSettings ->
+            UiIntent.LoadVentoyGlobalSettings -> {
+                val token = state.ventoyGlobalSettingsRequest + 1L
                 ReduceResult(
-                    state,
-                    effects = listOf(UiEffect.LoadVentoyGlobalSettings),
+                    state.copy(ventoyGlobalSettingsRequest = token),
+                    effects = listOf(UiEffect.LoadVentoyGlobalSettings(requestToken = token)),
                 )
+            }
 
-            UiIntent.LoadVentoyFolders ->
+            UiIntent.LoadVentoyFolders -> {
+                val token = state.ventoyFoldersRequest + 1L
                 ReduceResult(
-                    state,
-                    effects = listOf(UiEffect.LoadVentoyFolders),
+                    state.copy(ventoyFoldersRequest = token),
+                    effects = listOf(UiEffect.LoadVentoyFolders(requestToken = token)),
                 )
+            }
 
             is UiIntent.VentoyFoldersLoaded ->
-                if (intent.epoch != state.ventoyCacheEpoch) {
+                if (intent.epoch != state.ventoyCacheEpoch ||
+                    intent.requestToken != state.ventoyFoldersRequest
+                ) {
+                    // Invalidation or a newer refresh already owns the answer.
                     ReduceResult(state)
                 } else {
                     ReduceResult(
@@ -2831,7 +3105,9 @@ object UiReducer {
                 }
 
             is UiIntent.VentoyGlobalSettingsLoaded ->
-                if (intent.epoch != state.ventoyCacheEpoch) {
+                if (intent.epoch != state.ventoyCacheEpoch ||
+                    intent.requestToken != state.ventoyGlobalSettingsRequest
+                ) {
                     ReduceResult(state)
                 } else {
                     ReduceResult(
@@ -2922,24 +3198,36 @@ object UiReducer {
                 )
 
             is UiIntent.SetBackupFile -> {
-                val clearConfirm =
-                    state.pendingConfirmation?.action == DestructiveAction.GPT_RESTORE
-                ReduceResult(
-                    state.copy(
-                        backupUri = intent.uri,
-                        pendingConfirmation =
-                            if (clearConfirm) null else state.pendingConfirmation,
-                        statusMessage =
-                            if (intent.uri == null) {
-                                UiMessage.Key(UiMessageKey.BackupCleared)
-                            } else {
-                                message(
-                                    UiMessageKey.BackupReady,
-                                    DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
-                                )
-                            },
-                    ),
-                )
+                if (intent.requestId < state.backupSelectionGeneration) {
+                    ReduceResult(state)
+                } else {
+                    val clearConfirm =
+                        state.pendingConfirmation?.action == DestructiveAction.GPT_RESTORE
+                    val inspection = intent.inspection?.takeIf { it.uri == intent.uri }
+                    val inspectionError = inspection?.error
+                    ReduceResult(
+                        state.copy(
+                            backupUri = intent.uri,
+                            backupInspection = inspection,
+                            backupSelectionGeneration = intent.requestId,
+                            pendingConfirmation =
+                                if (clearConfirm) null else state.pendingConfirmation,
+                            statusMessage =
+                                when {
+                                    intent.uri == null -> UiMessage.Key(UiMessageKey.BackupCleared)
+                                    inspection != null && inspectionError != null -> message(
+                                        UiMessageKey.SourceInspectionRejected,
+                                        inspection.displayName,
+                                        inspectionError,
+                                    )
+                                    else -> message(
+                                        UiMessageKey.BackupReady,
+                                        DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
+                                    )
+                                },
+                        ),
+                    )
+                }
             }
 
             UiIntent.StartReadScan -> nonDestructiveEffect(state, UiEffect.ReadScan)
@@ -2950,14 +3238,8 @@ object UiReducer {
 
             is UiIntent.SetLanguage -> ReduceResult(state.copy(language = intent.language))
 
-            UiIntent.ToggleTheme -> {
-                val next = when (state.darkTheme) {
-                    null -> true
-                    true -> false
-                    false -> null
-                }
-                ReduceResult(state.copy(darkTheme = next))
-            }
+            UiIntent.ToggleTheme ->
+                ReduceResult(state.copy(darkTheme = !state.darkTheme))
 
             UiIntent.RunSelfTest ->
                 if (state.isRunning) {
@@ -2970,45 +3252,64 @@ object UiReducer {
                 }
 
             is UiIntent.SetRescueImage -> {
-                val clearConfirm =
-                    state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
-                ReduceResult(
-                    state.copy(
-                        rescueImageUri = intent.uri,
-                        pendingConfirmation =
-                            if (clearConfirm) null else state.pendingConfirmation,
-                        statusMessage =
-                            if (intent.uri == null) {
-                                UiMessage.Key(UiMessageKey.RescueImageCleared)
-                            } else {
-                                message(
-                                    UiMessageKey.RescueImageReady,
-                                    DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
-                                )
-                            },
-                    ),
-                )
+                if (intent.requestId < state.rescueImageSelectionGeneration) {
+                    ReduceResult(state)
+                } else {
+                    val clearConfirm =
+                        state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
+                    ReduceResult(
+                        state.copy(
+                            rescueImageUri = intent.uri,
+                            rescueImageInspection =
+                                intent.inspection?.takeIf { it.uri == intent.uri },
+                            rescueImageSelectionGeneration = intent.requestId,
+                            pendingConfirmation =
+                                if (clearConfirm) null else state.pendingConfirmation,
+                            statusMessage =
+                                if (intent.uri == null) {
+                                    UiMessage.Key(UiMessageKey.RescueImageCleared)
+                                } else {
+                                    message(
+                                        UiMessageKey.RescueImageReady,
+                                        DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
+                                    )
+                                },
+                        ),
+                    )
+                }
             }
 
             is UiIntent.SetRescueMap -> {
-                val clearConfirm =
-                    state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
-                ReduceResult(
-                    state.copy(
-                        rescueMapUri = intent.uri,
-                        pendingConfirmation =
-                            if (clearConfirm) null else state.pendingConfirmation,
-                        statusMessage =
-                            if (intent.uri == null) {
-                                UiMessage.Key(UiMessageKey.RescueMapCleared)
-                            } else {
-                                message(
-                                    UiMessageKey.RescueMapReady,
-                                    DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
-                                )
-                            },
-                    ),
-                )
+                if (intent.requestId < state.rescueMapSelectionGeneration) {
+                    ReduceResult(state)
+                } else {
+                    val clearConfirm =
+                        state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
+                    val inspection = intent.inspection?.takeIf { it.uri == intent.uri }
+                    val inspectionError = inspection?.error
+                    ReduceResult(
+                        state.copy(
+                            rescueMapUri = intent.uri,
+                            rescueMapInspection = inspection,
+                            rescueMapSelectionGeneration = intent.requestId,
+                            pendingConfirmation =
+                                if (clearConfirm) null else state.pendingConfirmation,
+                            statusMessage =
+                                when {
+                                    intent.uri == null -> UiMessage.Key(UiMessageKey.RescueMapCleared)
+                                    inspection != null && inspectionError != null -> message(
+                                        UiMessageKey.SourceInspectionRejected,
+                                        inspection.displayName,
+                                        inspectionError,
+                                    )
+                                    else -> message(
+                                        UiMessageKey.RescueMapReady,
+                                        DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
+                                    )
+                                },
+                        ),
+                    )
+                }
             }
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
@@ -3050,6 +3351,15 @@ object UiReducer {
                     )
                 }
             }
+
+            UiIntent.RefreshFiles ->
+                if (!state.actionsEnabled) {
+                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                } else {
+                    // A manual refresh preempts an in-flight list: its older answer is
+                    // dropped by the generation bump.
+                    filesReload(state)
+                }
 
             is UiIntent.CreateFolder -> {
                 val name = intent.name.trim()
@@ -3242,6 +3552,10 @@ object UiReducer {
                 ReduceResult(state.copy(logLines = updated))
             }
 
+            // No confirmation, no operation gate: the user asked for an empty log now.
+            // Appends keep working afterwards, and nothing outside logLines is touched.
+            UiIntent.ClearLog -> ReduceResult(state.copy(logLines = emptyList()))
+
             is UiIntent.SetLatestVentoyRelease ->
                 ReduceResult(state.copy(latestVentoyRelease = intent.tag))
 
@@ -3266,7 +3580,98 @@ object UiReducer {
                             ),
                         )
                 }
+        }.let { result -> releaseDeferredImportFolderPick(result) }
+            .let { result -> releaseDeferredIsoImport(result) }
+
+    /**
+     * Runs after every intent: once mounting is allowed again (operation terminal, a
+     * confirmation dismissed, an attach probe finished), a folder re-read that
+     * [UiIntent.ReopenImportFolderPick] had to postpone starts here, and the picker demand
+     * deferred with it is handed to the UI. Keeps the signal independent of the consumed
+     * [AppUiState.pendingImportFolderPick], so a UI open cannot cancel the pending work.
+     */
+    private fun releaseDeferredImportFolderPick(result: ReduceResult): ReduceResult {
+        val next = result.state
+        if (!next.pendingImportFolderPickLoad || !next.actionsEnabled) return result
+        // The USB phase holds the disk; the SAF phase runs off the worker and cannot clash.
+        if (next.isoImportUsbInFlight != null) return result
+        val pickerKind = next.pendingImportFolderPick ?: next.deferredImportFolderPick
+        // Never add a USB mount next to other USB work from the same intent: a refused
+        // confirmation (no effects) releases immediately, an accepted one (SubmitDestructive)
+        // waits for the terminal, and a terminal that also reloads Files waits for the next
+        // quiet intent (status/list result). Host direct inspection emits InspectIsoImport and
+        // is covered by the same rule, because it is an effect too.
+        if (result.effects.any { it !is UiEffect.LoadVentoyFolders }) return result
+        if (next.ventoyFolders != null) {
+            // A fresh list already landed; only the picker demand is still outstanding.
+            return result.copy(
+                state =
+                    next.copy(
+                        pendingImportFolderPick = pickerKind,
+                        pendingImportFolderPickLoad = false,
+                        deferredImportFolderPick = null,
+                    ),
+            )
         }
+        // The intent may itself have asked for the folder list (manual Refresh): reuse it
+        // instead of stacking a second mount on the same token contract.
+        val alreadyLoading = result.effects.any { it is UiEffect.LoadVentoyFolders }
+        val token = next.ventoyFoldersRequest + 1L
+        val released =
+            next.copy(
+                pendingImportFolderPick = pickerKind,
+                pendingImportFolderPickLoad = false,
+                deferredImportFolderPick = null,
+                ventoyFoldersRequest = if (alreadyLoading) next.ventoyFoldersRequest else token,
+            )
+        return result.copy(
+            state = released,
+            effects =
+                if (alreadyLoading) {
+                    result.effects
+                } else {
+                    result.effects + UiEffect.LoadVentoyFolders(requestToken = token)
+                },
+        )
+    }
+
+    /**
+     * Starts an inspected no-overwrite import that arrived while the UI was not actionable
+     * (same-stick probe). Runs on the first quiet actionable intent so it never stacks a USB
+     * write next to another effect; a changed attachment or generation drops it.
+     */
+    private fun releaseDeferredIsoImport(result: ReduceResult): ReduceResult {
+        val state = result.state
+        val proposal = state.deferredIsoImport ?: return result
+        if (!state.actionsEnabled || state.isoImportUsbInFlight != null) return result
+        // Never start the import while the Files listing still holds the mounted volume.
+        if (state.filesPending) return result
+        if (result.effects.isNotEmpty()) return result
+        val device = state.device
+        if (device == null ||
+            proposal.identity != device.identity ||
+            proposal.attachGeneration != device.attachGeneration ||
+            proposal.requestGeneration != state.isoImportGeneration
+        ) {
+            return result.copy(state = state.copy(deferredIsoImport = null))
+        }
+        return ReduceResult(
+            state.copy(
+                deferredIsoImport = null,
+                statusMessage =
+                    UiMessage.Raw(
+                        "Importing ${proposal.targetName} into ${proposal.directory}",
+                    ),
+            ),
+            effects = listOf(
+                UiEffect.ImportIso(
+                    isoImport = proposal,
+                    overwrite = false,
+                    requestGeneration = proposal.requestGeneration,
+                ),
+            ),
+        )
+    }
 
     /** Ring-append one log line without clobbering status or bound fields. */
     private fun appendLogLine(state: AppUiState, line: String): AppUiState {
@@ -3410,8 +3815,11 @@ object UiReducer {
             // Phone-import inspection is stick-scoped; a mutation must not keep an overwrite
             // prompt bound to a pre-mutation generation.
             pendingIsoImport = null,
+            deferredIsoImport = null,
             isoImportError = null,
             isoImportGeneration = state.isoImportGeneration + 1,
+            // The import-folder demand is NOT dropped here: on the same attachment the user
+            // must still be asked to choose again after an unrelated mutation (R6).
         )
     fun presenceMessage(presence: DevicePresence): UiMessage =
         when (presence) {
@@ -3446,6 +3854,29 @@ object UiReducer {
         } else {
             null
         }
+
+    /**
+     * Start one fresh directory-list request for [AppUiState.currentPath], or only mark the
+     * listing stale when the Files tab is not the visible one or nothing may be mounted.
+     * The generation is bumped here, at request time, so a late answer to an older request
+     * (manual refresh, tab entry, finished mutation) can never paint over this one.
+     */
+    private fun filesReload(state: AppUiState): ReduceResult {
+        val loadNow =
+            state.presence == DevicePresence.Ready &&
+                state.actionsEnabled &&
+                state.tab == ShellTab.Files &&
+                state.selectedPartition() != null
+        return ReduceResult(
+            state.copy(
+                files = emptyList(),
+                filesError = null,
+                filesListGeneration = state.filesListGeneration + 1L,
+                filesPending = loadNow,
+            ),
+            effects = if (loadNow) listOf(UiEffect.LoadFiles(path = state.currentPath)) else emptyList(),
+        )
+    }
 
     /**
      * True only when a directory-list answer still names the displayed path, the
@@ -3583,4 +4014,100 @@ object UiReducer {
         } catch (_: IllegalArgumentException) {
             false
         }
+
+    /**
+     * Refuse the destructive GPT confirmation when the selected file failed bounded
+     * validation or no longer matches the live geometry. A missing inspection is treated
+     * as unavailable, not as a pass; the restore path still revalidates against the disk.
+     */
+    private fun gptRestoreInspectionProblem(state: AppUiState): UiMessage? {
+        val uri = state.backupUri ?: return null
+        val inspection = state.backupInspection?.takeIf { it.uri == uri } ?: return null
+        inspection.error?.let {
+            return UiMessage.Key(
+                UiMessageKey.SourceInspectionRejected,
+                listOf(inspection.displayName, it),
+            )
+        }
+        val summary = inspection.summary
+            ?: return UiMessage.Key(
+                UiMessageKey.SourceInspectionRejected,
+                listOf(inspection.displayName, "backup details unavailable"),
+            )
+        if (summary.sectorSize != state.diskSectorSize) {
+            return UiMessage.Key(
+                UiMessageKey.GptBackupSectorSizeMismatch,
+                listOf(summary.sectorSize.toString(), state.diskSectorSize.toString()),
+            )
+        }
+        val liveSectors = liveSectorCount(state) ?: return null
+        if (summary.originalSectorCount != liveSectors) {
+            return UiMessage.Key(
+                UiMessageKey.GptBackupDiskMismatch,
+                listOf(summary.originalSectorCount.toString(), liveSectors.toString()),
+            )
+        }
+        return null
+    }
+
+    /**
+     * Refuse the destructive rescue confirmation when a bounded inspection failed or the
+     * map cannot apply to the live disk. SAF size is never compared with decoded bytes; a
+     * gzip/xz source is validated only by the live stream at restore.
+     */
+    private fun rescueRestoreInspectionProblem(state: AppUiState): UiMessage? {
+        val imageUri = state.rescueImageUri ?: return null
+        val mapUri = state.rescueMapUri ?: return null
+        val image = state.rescueImageInspection?.takeIf { it.uri == imageUri }
+        val map = state.rescueMapInspection?.takeIf { it.uri == mapUri }
+        if (image == null && map == null) return null
+        map?.error?.let {
+            return UiMessage.Key(
+                UiMessageKey.SourceInspectionRejected,
+                listOf(map.displayName, it),
+            )
+        }
+        val summary = map?.summary
+            ?: return map?.let {
+                UiMessage.Key(
+                    UiMessageKey.SourceInspectionRejected,
+                    listOf(it.displayName, "map details unavailable"),
+                )
+            }
+        if (summary.kind == usb.diagnostics.MapKind.COPY && summary.nonTriedSectors > 0UL) {
+            return UiMessage.Key(
+                UiMessageKey.RescueMapPartialCopy,
+                listOf(summary.nonTriedSectors.toString()),
+            )
+        }
+        summary.sectorSize?.let { mapSectorSize ->
+            if (mapSectorSize != state.diskSectorSize) {
+                return UiMessage.Key(
+                    UiMessageKey.RescueMapSectorSizeMismatch,
+                    listOf(mapSectorSize.toString(), state.diskSectorSize.toString()),
+                )
+            }
+        }
+        liveSectorCount(state)?.let { live ->
+            if (summary.sectorCount > live) {
+                return UiMessage.Key(
+                    UiMessageKey.RescueMapDiskTooSmall,
+                    listOf(summary.sectorCount.toString(), live.toString()),
+                )
+            }
+        }
+        // SAF SIZE is the encoded source length; a gzip/xz rescue image is smaller than the
+        // decoded stream and cannot be compared with the map's decoded byte requirement.
+        // Only the live stream read validates the decoded image.
+        return null
+    }
+
+    /** Live sector count when the attachment exposes it; null keeps the check unavailable. */
+    private fun liveSectorCount(state: AppUiState): ULong? {
+        state.rawGeometry?.diskSectorCount?.let { return it }
+        val capacity = state.device?.capacityBytes ?: return null
+        val sectorSize = state.diskSectorSize
+        if (capacity == 0UL || sectorSize <= 0) return null
+        return capacity / sectorSize.toULong()
+    }
 }

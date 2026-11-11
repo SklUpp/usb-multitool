@@ -147,7 +147,10 @@ class PhoneImportUiTest {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestImportWindowsIso(URI))
         val result = UiReducer.reduce(
             requested.state,
-            UiIntent.WindowsIsoImportRejected(UnreadableProblem.MalformedXml),
+            UiIntent.WindowsIsoImportRejected(
+                problem = UnreadableProblem.MalformedXml,
+                generation = requested.state.isoImportGeneration,
+            ),
         )
 
         assertEquals(UnreadableProblem.MalformedXml, result.state.isoImportError)

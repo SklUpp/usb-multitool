@@ -15,6 +15,9 @@ object UiStateHostCheck {
             DeviceIdentity(
                 label = "SanDisk Ultra USB 3.0 (USB 1234:5678)",
                 capacityBytes = 31_457_280_000uL,
+                // Privileged retention (EFI override, destructive confirmation) requires a
+                // stable serial on both sides; serial-less sticks are fail-closed.
+                serialNumber = "SN-HOSTCHECK-0001",
             )
 
         val wipe = DestructiveConfirmation.request(device, DestructiveAction.WIPE)
@@ -402,14 +405,28 @@ object UiStateHostCheck {
             "unexpected status: ${switched.state.statusMessage}"
         }
 
-        // Theme toggle: null -> true -> false -> null
-        val autoTheme = AppUiState()
-        val darkTheme = UiReducer.reduce(autoTheme, UiIntent.ToggleTheme).state
-        require(darkTheme.darkTheme == true) { "expected dark theme true" }
-        val lightTheme = UiReducer.reduce(darkTheme, UiIntent.ToggleTheme).state
+        // Theme has exactly two states; dark is the default.
+        val defaultTheme = AppUiState()
+        require(defaultTheme.darkTheme) { "expected dark theme by default" }
+        val lightTheme = UiReducer.reduce(defaultTheme, UiIntent.ToggleTheme).state
         require(lightTheme.darkTheme == false) { "expected light theme false" }
-        val backToAuto = UiReducer.reduce(lightTheme, UiIntent.ToggleTheme).state
-        require(backToAuto.darkTheme == null) { "expected auto theme null" }
+        val backToDark = UiReducer.reduce(lightTheme, UiIntent.ToggleTheme).state
+        require(backToDark.darkTheme == true) { "expected dark theme true again" }
+
+        // Log: clearing is immediate even while an operation runs, keeps the operation and
+        // the selected tab, and new entries are accepted right after.
+        val logged = running.copy(tab = ShellTab.Partitions, logLines = listOf("first", "second"))
+        val clearedLog = UiReducer.reduce(logged, UiIntent.ClearLog).state
+        require(clearedLog.logLines.isEmpty()) { "clear must drop log lines" }
+        require(clearedLog.operation == logged.operation) { "clear must not stop the operation" }
+        require(clearedLog.tab == ShellTab.Partitions) { "clear must not switch tabs" }
+        require(
+            UiReducer.reduce(clearedLog, UiIntent.AppendLog("after clear")).state.logLines ==
+                listOf("after clear"),
+        ) { "log must accept new entries after clear" }
+        require(logClipboardText(listOf("a", "b")) == "a\nb") {
+            "copy-all text must keep lines in order"
+        }
 
         // RunSelfTest produces effect and updates status
         val selfTest = UiReducer.reduce(ready, UiIntent.RunSelfTest)
@@ -437,9 +454,9 @@ object UiStateHostCheck {
                 ready,
                 UiIntent.RenameEntry("win11.iso", "win.iso", renameBinding),
             ).effects.single()
-        val rename = renameEffect as UiEffect.RenameEntry
-        require(rename.newName == "win.iso")
-        require(rename.binding == renameBinding)
+        val renameEntry = renameEffect as UiEffect.RenameEntry
+        require(renameEntry.newName == "win.iso")
+        require(renameEntry.binding == renameBinding)
         val staleDevice = ready.copy(device = ready.device!!.copy(attachGeneration = 1L))
         val staleRename =
             UiReducer.reduce(

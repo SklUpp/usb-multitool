@@ -79,10 +79,23 @@ if ! grep -q "mkntfs_format_device" "$TP/ntfs-3g/ntfsprogs/mkntfs.c"; then
 fi
 
 echo "Fetching lwext4..."
+LWEXT4_UMOUNT_PATCH="$ROOT/scripts/patches/lwext4-umount-teardown-on-fini-fail.patch"
 if ! have_marker "$TP/lwext4/include/ext4.h"; then
   curl -fsSL https://github.com/gkostka/lwext4/archive/58bcf89a121b72d4fb66334f1693d3b30e4cb9c5.tar.gz \
     | tar -xz --strip-components=1 -C "$TP/lwext4"
   have_marker "$TP/lwext4/include/ext4.h" || { echo "lwext4 fetch failed"; exit 1; }
+fi
+# Idempotent: skip when already applied (teardown_r marker in umount).
+if ! grep -q "teardown_r = EOK" "$TP/lwext4/src/ext4.c" 2>/dev/null; then
+  if [[ ! -f "$LWEXT4_UMOUNT_PATCH" ]]; then
+    echo "lwext4 umount patch missing at $LWEXT4_UMOUNT_PATCH" >&2
+    exit 1
+  fi
+  patch -p1 -d "$TP/lwext4" --batch < "$LWEXT4_UMOUNT_PATCH"
+  grep -q "teardown_r = EOK" "$TP/lwext4/src/ext4.c" || {
+    echo "lwext4 umount teardown patch failed" >&2
+    exit 1
+  }
 fi
 
 echo "Fetching F3 v10.0..."

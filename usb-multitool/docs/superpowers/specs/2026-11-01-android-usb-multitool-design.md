@@ -27,8 +27,8 @@ The original functional plan remains the source of required behavior. This speci
 | FAT12/16/32 and exFAT | [FatFs R0.16](https://elm-chan.org/fsw/ff/) plus official patch-1 and patch-2 | Use formatting, multipartition, LFN/Unicode, exFAT, and 64-bit LBA support |
 | NTFS | [libntfs-3g](https://github.com/tuxera/ntfs-3g), GPL-2.0-or-later | Use the library through a custom device backend; do not use FUSE or system mounting |
 | EXT2/3/4 | [lwext4](https://github.com/gkostka/lwext4), GPL-2.0-or-later | Mandatory engine for EXT support; use the full extent-capable source and a block callback |
-| Ventoy | [Ventoy native installer and utilities](https://github.com/ventoy/Ventoy), GPL-3.0-or-later | Adapt its install/update logic; do not reimplement it from shell constants |
-| Damaged-media copy | [GNU ddrescue](https://www.gnu.org/software/ddrescue/), GPL-2.0-or-later | Adapt its mapfile-based rescue behavior to the sector backend |
+| Ventoy | [Ventoy upstream assets and install/update behavior](https://github.com/ventoy/Ventoy), GPL-3.0-or-later | Keep the Kotlin installer and compare its behavior and written structures with the selected upstream release; do not claim native upstream installer integration |
+| Damaged-media copy | [SectorForge sf-core](https://github.com/terraseraph/sectorforge), MIT | Target: adapt its imaging engine to the USB sector backend; preserve attachment identity, checkpoints, durable results and restore verification. The existing Kotlin rescue remains in use until integration is verified; GNU ddrescue is not currently linked. |
 | Compression | Android `GZIPInputStream` and an existing XZ library | Stream decompression; do not require a temporary uncompressed copy |
 
 `java-fs` is not the write engine. Its exFAT write path throws `UnsupportedOperationException`, and its NTFS write path is a stub.
@@ -51,7 +51,7 @@ The original functional plan remains the source of required behavior. This speci
 - Root, custom kernels, loop devices, FUSE mounts, and SAF-based USB access.
 - USB Attached SCSI (UAS) and every non-BOT transport.
 - Moving, shrinking, or expanding occupied partitions and their filesystems.
-- A new NTFS, exFAT, EXT, Ventoy, or ddrescue implementation.
+- A new NTFS, exFAT, EXT, or Ventoy filesystem implementation.
 - Fake-capacity testing, write benchmarks, and HTTPS image URLs.
 - Guaranteed BIOS/UEFI boot, Windows installation success, or bypass success on every Windows release.
 - Automatic resumption after USB disconnection.
@@ -67,7 +67,7 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
                     |
      UsbDisk + PartitionTable + VirtualPartition
                     |
-    FatFs | libntfs-3g | lwext4 | raw image | ddrescue
+    FatFs | libntfs-3g | lwext4 | raw image | rescue engine
                     |
       BOT/SCSI(10/16), 64 KiB transfers, STALL recovery
                     |
@@ -80,7 +80,7 @@ Compose UI: Files | Ventoy | Partitions/Raw | Diagnostics
 - `partition`: MBR/GPT decode and modification, alignment, flags, free regions, protective/hybrid handling, and GPT backup relocation.
 - `fs`: JNI facades. Filesystem metadata and allocation remain inside upstream engines.
 - `image`: local image sources, gzip/XZ decoding, progress, and cancellation.
-- `ventoy`: adapted upstream install/update flow plus JSON/XML integration.
+- `ventoy`: Kotlin install/update flow using upstream release assets and compatibility checks, plus JSON/XML integration.
 - `diagnostics`: read scan, self-test, wipe, and rescue-map backup/restore.
 - `service`: one operation queue, foreground notification, WakeLock, and persisted operation state.
 - `ui`: four primary tabs with related controls grouped in sections. Place each section heading and its contents inside one surface; retain explicit destructive confirmations, accessible 48 dp controls, localizable text, and no direct USB access. Detailed interface decisions below are target requirements, not claims that every change has shipped.
@@ -126,7 +126,7 @@ A file larger than the destination filesystem or free space supports is rejected
 
 ### Ventoy
 
-- Install is destructive. It requires the selected upstream release's matching assets and creates the partition layout through the adapted native flow.
+- Install is destructive. It requires the selected upstream release's matching assets and creates the partition layout through the Kotlin flow. Target: validate compatibility against upstream fixtures and read back critical writes; current implementation is not yet proven upstream-compatible.
 - Update runs only when the existing layout is recognized as compatible. It must not format or recreate the ISO partition.
 - MBR and GPT have different boot gaps. GPT backup placement and reserved space must follow the upstream implementation and selected options.
 - 4Kn installation is refused when unsupported by the selected Ventoy version; it is not emulated with an untested layout.
@@ -140,7 +140,7 @@ A file larger than the destination filesystem or free space supports is rejected
 
 - Target: section headings and related controls share one surface; warnings may use an inset surface. Remove duplicate headings. The main device title has its own surface and top inset, while language, theme, and log controls remain outside it. Add space between the bottom status block and four-tab navigation.
 - The partition map strip and the header usage strip are absent when the disk has no partitions; an empty bar was indistinguishable from a clipped control.
-- Target: the log is a separate screen opened from a button beside language and theme, returning to the previous tab on Back. Copy all entries only on explicit user action, with a visible warning that paths and USB serials may be present. Clear the in-app log immediately without confirmation, including during operations; new entries may appear immediately. Clearing does not clear Android logcat.
+- Target: the bottom status expands to show the log within the same continuous surface; also provide a separate full log screen opened from a button beside language and theme, returning to the previous tab on Back. Copy all entries only on explicit user action, with a visible warning that paths and USB serials may be present. Clear the in-app log immediately without confirmation, including during operations; new entries may appear immediately. Clearing does not clear Android logcat.
 - Touch targets stay at least 48 dp; dialogs cap their width and scroll in landscape.
 - All authored UI text comes from string resources (English default, Russian), including statuses, errors that the app authors, hints, and destructive confirmations. The in-app language switch is persisted and applied through a localized context, so the reducer stays Android-free (`UiMessage` keys, resolved in Compose).
 - Engine and OS error text and raw log lines remain unlocalized technical data on purpose. User-facing operation titles are localized; the log keeps the raw label.
@@ -193,6 +193,8 @@ Raw writing accepts local `.iso`, `.img`, `.gz`, and `.xz` input, decompresses s
 Read scans do not write. Wipe is separately confirmed with device identity and capacity. Fake-capacity testing and write benchmarks are out of plan and have no UI entry points.
 
 Backup and restore use the image pipeline plus a rescue map. Unreadable ranges remain visible, and a partial image is never described as a verified full copy.
+
+The current rescue uses an application-specific map, not a GNU ddrescue mapfile. SectorForge integration is a target, not a claim of current availability or mapfile interoperability. Preserve the existing restore admission, identity, sync and verification guarantees during any migration; handle unreadable image ranges explicitly.
 
 A RESTORE map records the target disk identity and geometry. Restore writes only the map's sector ranges; the disk outside them is not changed. Resume requires the same disk identity (a stick without a stable serial never resumes), an equal sector size, and a map that fits the disk; full disk geometry need not match. After that admission gate, every COPIED range is read back from the disk and compared with the bytes the selected image currently provides in the same pass; it is skipped only on an exact match, otherwise it is rewritten. COPY is refused while any range is NON_TRIED; FAILED ranges are restored from image bytes, and a backup usually writes zeros there. `COPIED` is recorded only after a successful write, and checkpoints are published only after sync, so an interrupted run reports partial and never claims completed over unverified sectors. A write command that lands bytes before failing is reported as partial, not as a clean failure.
 

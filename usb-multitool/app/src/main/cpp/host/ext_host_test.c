@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Host behavioral test for ext_engine over usb_block + lwext4.
- * mkfs → mount → CRUD → root sizes → nonempty delete → dirty refuse (no write).
+ * mkfs → mount → CRUD → dirty refuse → failed-umount mountpoint teardown (no UAF).
  */
 #include <assert.h>
 #include <errno.h>
@@ -24,6 +24,8 @@ typedef struct FileBlockCtx {
 	/* Read-failure injection over an LBA range (fail_lba_to == 0 disables). */
 	uint64_t fail_lba_from;
 	uint64_t fail_lba_to;
+	/* When non-zero, every write fails with EIO (umount VALID_FS path). */
+	int fail_writes;
 } FileBlockCtx;
 
 static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
@@ -42,6 +44,10 @@ static int file_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 static int file_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors)
 {
 	FileBlockCtx *f = (FileBlockCtx *)ctx;
+	if (f->fail_writes) {
+		errno = EIO;
+		return -1;
+	}
 	f->write_count++;
 	off_t off = (off_t)(lba * f->sector_size);
 	size_t bytes = (size_t)sectors * f->sector_size;
@@ -113,6 +119,20 @@ static void set_error_fs_state(FileBlockCtx *ctx)
 {
 	/* s_state at 0x3A within SB. */
 	patch_sb_u16(ctx, 0x3A, 0x0002); /* EXT4_SUPERBLOCK_STATE_ERROR_FS */
+}
+
+static void clear_error_fs_state(FileBlockCtx *ctx)
+{
+	/* e2fsck stand-in: clear ERROR_FS so precheck allows remount. */
+	uint8_t sector[4096];
+	uint32_t ss = ctx->sector_size;
+	uint64_t lba = 1024 / ss;
+	uint32_t off = 1024 % ss;
+	assert(pread(ctx->fd, sector, ss, (off_t)lba * ss) == (ssize_t)ss);
+	uint16_t *field = (uint16_t *)(sector + off + 0x3A);
+	*field = (uint16_t)(*field & ~(uint16_t)0x0002);
+	assert(pwrite(ctx->fd, sector, ss, (off_t)lba * ss) == (ssize_t)ss);
+	fsync(ctx->fd);
 }
 
 static int file_sync_fail(void *ctx)
@@ -441,6 +461,69 @@ int main(void)
 	close(ctx.fd);
 	unlink(img);
 	printf("PASS: unreadable directory block reports -EIO, not a short listing\n");
+
+	/* Failed umount (sb write EIO) must tear down lwext4 mountpoint before free.
+	 * After e2fsck-like clear of ERROR_FS, remount of the same /mpN/ must fully
+	 * re-init — not early-EOK on a stale s_mp with a freed bdev (UAF). */
+	block = open_image(img, ss, sc, &ctx);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
+	err = 0;
+	vol = ext_engine_mount(block, false, &err);
+	assert(vol != 0 && err == 0);
+	assert(ext_engine_mkdir(vol, "/before") == 0);
+	assert(ext_engine_sync(vol) == 0);
+	ctx.fail_writes = 1;
+	assert(ext_engine_close(vol) != 0);
+	ctx.fail_writes = 0;
+	clear_error_fs_state(&ctx);
+	err = 0;
+	vol = ext_engine_mount(block, false, &err);
+	assert(vol != 0 && err == 0);
+	assert(ext_engine_mkdir(vol, "/after-uaf-guard") == 0);
+	size_t uw = 0;
+	assert(ext_engine_write(vol, "/after-uaf-guard/x.txt", 0, "ok", 2, true, &uw) == 0);
+	assert(uw == 2);
+	assert(ext_engine_sync(vol) == 0);
+	assert(ext_engine_close(vol) == 0);
+	usb_block_unregister(block);
+	close(ctx.fd);
+	unlink(img);
+	printf("PASS: failed umount tears down mountpoint; remount after clear is live\n");
+
+	/* HAS_JOURNAL without a real journal inode: journal_start fails. RW mount
+	 * must refuse (not return a handle that writes with jbd_journal=NULL).
+	 * Teardown must leave no stale mountpoint. */
+	block = open_image(img, ss, sc, &ctx);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
+	/* features_compatible at 0x5C; EXT4_FCOM_HAS_JOURNAL = 0x0004. */
+	patch_sb_u32(&ctx, 0x5C, 0x0004u);
+	err = 0;
+	vol = ext_engine_mount(block, false, &err);
+	assert(vol == 0);
+	assert(err != 0);
+	/* Slot free: RO path still subject to ERROR_FS from the aborted RW
+	 * fs_init; clear like e2fsck then remount must fully init. */
+	clear_error_fs_state(&ctx);
+	err = 0;
+	vol = ext_engine_mount(block, true, &err);
+	assert(vol != 0 && err == 0);
+	assert(ext_engine_usage(vol, &total_bytes, &free_bytes) == 0);
+	assert(ext_engine_close(vol) == 0);
+	/* Journal-less image (no HAS_JOURNAL) still accepts RW — start is no-op. */
+	usb_block_unregister(block);
+	close(ctx.fd);
+	unlink(img);
+	block = open_image(img, ss, sc, &ctx);
+	assert(ext_engine_mkfs(block, "HOSTEXT") == 0);
+	err = 0;
+	vol = ext_engine_mount(block, false, &err);
+	assert(vol != 0 && err == 0);
+	assert(ext_engine_mkdir(vol, "/noj") == 0);
+	assert(ext_engine_close(vol) == 0);
+	usb_block_unregister(block);
+	close(ctx.fd);
+	unlink(img);
+	printf("PASS: journal_start failure refuses RW mount; journal-less RW ok\n");
 
 	/* Different sector sizes: mkfs must select a compatible ext4 block size,
 	 * and the result must mount and round-trip data. */

@@ -29,6 +29,11 @@ sealed class CloseEpochResult {
  *
  * Success leaves the RO cache open for the next browse.
  * [withWritableVolume] Partial/close semantics are unchanged.
+ *
+ * Unconfirmed close (umount/sync threw): error is latched for the process lifetime
+ * of this session. Second [close] returns the same error (never null-success).
+ * [volumeForLocked] / writable ops refuse remount until a new session (process /
+ * ViewModel recreate). Fail-closed: no new mount after half-closed EXT/NTFS.
  */
 class FilesVolumeSession(
     private val openMounted: (partitionId: String, writable: Boolean) -> MountedFilesVolume,
@@ -37,6 +42,8 @@ class FilesVolumeSession(
     private var filesVolume: MountedFilesVolume? = null
     private var mountEpoch: Long = 0L
     private var acquireSink: ((Long) -> Unit)? = null
+    /** First close/sync failure; retained so retry cannot clear or remount. */
+    private var unconfirmedClose: Throwable? = null
 
     fun <T> withLock(body: () -> T): T = synchronized(lock, body)
 
@@ -84,17 +91,22 @@ class FilesVolumeSession(
     }
 
     private fun closeLockedResult(): CloseEpochResult {
+        unconfirmedClose?.let { return CloseEpochResult.ClosedFailed(it) }
         val current = filesVolume ?: return CloseEpochResult.NotOwned
         filesVolume = null
         return try {
             current.close()
             CloseEpochResult.ClosedOk
         } catch (t: Throwable) {
+            unconfirmedClose = t
             CloseEpochResult.ClosedFailed(t)
         }
     }
 
     fun volumeForLocked(partitionId: String, writable: Boolean = false): UsbFsVolume {
+        unconfirmedClose?.let { closeErr ->
+            throw refuseRemount(closeErr)
+        }
         val current = filesVolume
         if (current != null && current.partitionId == partitionId && current.writable == writable) {
             acquireSink?.invoke(mountEpoch)
@@ -104,12 +116,8 @@ class FilesVolumeSession(
         try {
             current?.close()
         } catch (closeErr: Throwable) {
-            throw IllegalStateException(
-                "Volume close/sync was not confirmed; refusing remount: " +
-                    (closeErr.message ?: closeErr.javaClass.simpleName) +
-                    ". If the stick will not remount, run e2fsck on a PC",
-                closeErr,
-            )
+            unconfirmedClose = closeErr
+            throw refuseRemount(closeErr)
         }
 
         val mounted = openMounted(partitionId, writable)
@@ -118,6 +126,14 @@ class FilesVolumeSession(
         acquireSink?.invoke(mountEpoch)
         return mounted.volume
     }
+
+    private fun refuseRemount(closeErr: Throwable): IllegalStateException =
+        IllegalStateException(
+            "Volume close/sync was not confirmed; refusing remount: " +
+                (closeErr.message ?: closeErr.javaClass.simpleName) +
+                ". If the stick will not remount, run e2fsck on a PC",
+            closeErr,
+        )
 
     fun <T> withWritableVolume(
         partitionId: String,

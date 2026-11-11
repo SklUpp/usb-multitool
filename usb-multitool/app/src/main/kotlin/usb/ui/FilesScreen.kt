@@ -64,16 +64,40 @@ fun FilesScreen(
     modifier: Modifier = Modifier,
     onRequestDownload: (String) -> Unit = {},
 ) {
-    var selectedFile by remember(state.selectedPartitionId, state.currentPath) {
+    // Attach generation/identity are keys too: the same partition id and path on another
+    // stick must not keep a highlighted entry or a captured rename target.
+    var selectedFile by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) {
         mutableStateOf<FileEntry?>(null)
     }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
-    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
-    var renameTarget by remember(state.selectedPartitionId, state.currentPath) {
+    var showDeleteConfirmDialog by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) {
+        mutableStateOf(false)
+    }
+    var renameTarget by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) {
         mutableStateOf<FileEntry?>(null)
     }
-    var renameBinding by remember(state.selectedPartitionId, state.currentPath) {
+    var renameBinding by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) {
         mutableStateOf<PartitionBinding?>(null)
     }
     var renameName by remember { mutableStateOf("") }
@@ -178,6 +202,13 @@ fun FilesScreen(
                             modifier = Modifier.weight(1f),
                         )
                         // Named actions: an up-chevron and a plus alone were ambiguous.
+                        TextButton(
+                            onClick = { onIntent(UiIntent.RefreshFiles) },
+                            enabled = canAct,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(stringResource(R.string.unattend_refresh))
+                        }
                         TextButton(
                             onClick = { onIntent(UiIntent.NavigateUp) },
                             enabled = canAct && state.currentPath != "/",

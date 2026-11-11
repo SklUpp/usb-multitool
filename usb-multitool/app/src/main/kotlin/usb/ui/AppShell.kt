@@ -1,18 +1,14 @@
 package usb.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,6 +33,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,6 +51,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import androidx.compose.runtime.Composable
@@ -72,13 +72,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -100,9 +104,12 @@ import java.util.Locale
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
  *
  * Layout contract:
- * - top: one compact, height-unbounded device header (no max-height clipping);
- * - middle: the active tab (weight 1, own scroll);
- * - bottom: one non-interrupting status/log surface plus the navigation bar.
+ * - top: one compact device header whose title/subtitle surface is separate from the
+ *   language, theme and log controls (no max-height clipping);
+ * - middle: the active tab (weight 1, own scroll), always composed; the full log screen
+ *   is an opaque layer above it and the system bottom inset is guarded while it shows;
+ *   the covered tab is marked invisible to accessibility but keeps its state;
+ * - bottom: one continuous status/log surface plus the navigation bar.
  */
 @Composable
 fun AppShell(
@@ -117,11 +124,7 @@ fun AppShell(
     onPickRescueImage: () -> Unit = {},
     onPickRescueMap: () -> Unit = {},
 ) {
-    val isDark = when (state.darkTheme) {
-        true -> true
-        false -> false
-        null -> isSystemInDarkTheme()
-    }
+    val isDark = state.darkTheme
     val colors = if (isDark) darkDesignColors() else lightDesignColors()
     val baseContext = LocalContext.current
     val localizedContext = remember(baseContext, state.language) {
@@ -133,43 +136,73 @@ fun AppShell(
     ) {
     MaterialTheme(colorScheme = colors, shapes = AppShapes) {
         var logExpanded by remember { mutableStateOf(false) }
+        // The full log is a layer above the tabs: Back closes the layer, the tab stays in
+        // composition with its drafts, and [AppUiState.tab] is never changed.
+        var logScreenOpen by remember { mutableStateOf(false) }
+        BackHandler(enabled = logScreenOpen) { logScreenOpen = false }
+        val logButtonFocus = remember { FocusRequester() }
+        val logScreenFocus = remember { FocusRequester() }
+        var restoreLogFocus by remember { mutableStateOf(false) }
+        LaunchedEffect(logScreenOpen) {
+            if (logScreenOpen) {
+                // Enter the layer on its Back control: the covered tab is now invisible
+                // to accessibility, so focus must not be left on a hidden node.
+                logScreenFocus.requestFocusIfAttached("log screen")
+            } else if (restoreLogFocus) {
+                restoreLogFocus = false
+                // The layer that held accessibility focus is gone; send focus back to
+                // the control that opened it instead of letting the framework pick an
+                // arbitrary node. Guarded because a detached requester would throw.
+                logButtonFocus.requestFocusIfAttached("log open button")
+            }
+        }
         LaunchedEffect(state.logLines.isEmpty()) {
             if (state.logLines.isEmpty()) logExpanded = false
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
             bottomBar = {
-                Column {
+                Column(
+                    // The navigation bar normally supplies the system bottom inset. While
+                    // the log screen covers it, the guard adds that inset here so neither
+                    // the status block nor the log content touches the system nav bar —
+                    // and it still applies when the status block has nothing to show.
+                    modifier = if (logScreenOpen) Modifier.navigationBarsPadding() else Modifier,
+                ) {
+                    // The operation status stays reachable on the log screen too: a running
+                    // operation must keep its progress and cancel action visible.
                     StatusLogPanel(
                         state = state,
                         onIntent = onIntent,
                         logExpanded = logExpanded,
                         onToggleLog = { logExpanded = !logExpanded },
                     )
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        tonalElevation = 0.dp,
-                    ) {
-                        ShellTab.entries.forEach { tab ->
-                            NavigationBarItem(
-                                selected = state.tab == tab,
-                                onClick = { onIntent(UiIntent.SelectTab(tab)) },
-                                icon = { TabIcon(tab) },
-                                label = {
-                                    Text(
-                                        text = tab.title(),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    indicatorColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                    selectedIconColor = MaterialTheme.colorScheme.onSurface,
-                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                ),
-                            )
+                    if (!logScreenOpen) {
+                        NavigationBar(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            tonalElevation = 0.dp,
+                        ) {
+                            ShellTab.entries.forEach { tab ->
+                                NavigationBarItem(
+                                    selected = state.tab == tab,
+                                    onClick = { onIntent(UiIntent.SelectTab(tab)) },
+                                    icon = { TabIcon(tab) },
+                                    label = {
+                                        Text(
+                                            text = tab.title(),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        indicatorColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
@@ -180,13 +213,40 @@ fun AppShell(
                     .padding(padding)
                     .fillMaxSize(),
             ) {
+                // Tabs stay composed while the log screen is open: form drafts held in
+                // `remember` survive the round trip, and Back only removes the layer.
+                // While the opaque journal covers them they are removed from the
+                // accessibility tree (composition and state untouched); the journal and
+                // the status block outside this column stay reachable. Hardware keyboard:
+                // no public Compose API deactivates focus for a whole subtree, so Tab can
+                // still reach these controls; input focus is moved into the layer on open
+                // and this remains the documented limitation of this version.
                 Column(
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
-                        .fillMaxSize(),
+                        .fillMaxSize()
+                        .then(
+                            if (logScreenOpen) {
+                                // Merging node: the whole covered tab is removed from the
+                                // accessibility tree in one step, including every child.
+                                Modifier.semantics(mergeDescendants = true) {
+                                    hideFromAccessibility()
+                                }
+                            } else {
+                                Modifier
+                            },
+                        ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    DeviceHeader(state, onIntent)
+                    DeviceHeader(
+                        state = state,
+                        onIntent = onIntent,
+                        logButtonFocus = logButtonFocus,
+                        onOpenLog = {
+                            restoreLogFocus = true
+                            logScreenOpen = true
+                        },
+                    )
                     AnimatedContent(
                         targetState = state.tab,
                         modifier = Modifier.weight(1f),
@@ -225,17 +285,24 @@ fun AppShell(
                         }
                     }
                 }
-                AnimatedVisibility(
-                    visible = logExpanded && state.logLines.isNotEmpty(),
-                    enter = fadeIn(tween(140)) + slideInVertically(tween(180)) { it / 4 },
-                    exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 4 },
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                ) {
-                    LogOverlay(
-                        lines = state.logLines,
-                        onClose = { logExpanded = false },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+
+                if (logScreenOpen) {
+                    // Opaque layer, not a replacement: it covers the tab, swallows taps
+                    // that miss its own controls so nothing underneath reacts, and Back
+                    // closes it. Compose keeps the tab (and its drafts) alive below.
+                    Surface(
+                        color = MaterialTheme.colorScheme.background,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) { detectTapGestures { } },
+                    ) {
+                        LogScreen(
+                            lines = state.logLines,
+                            focusRequester = logScreenFocus,
+                            onBack = { logScreenOpen = false },
+                            onIntent = onIntent,
+                        )
+                    }
                 }
             }
         }
@@ -344,11 +411,18 @@ fun RememberedAppShell(
 }
 
 /**
- * Compact top device status header. Height is content-driven — no `heightIn(max)` that
- * could clip a wrapped subtitle or the progress strip on small/landscape screens.
+ * Compact top device status header. The title and subtitle sit in their own surface with a
+ * top inset; language, theme and log controls stay outside that surface, so no control is
+ * painted on top of the block it does not belong to. Height is content-driven — no
+ * `heightIn(max)` that could clip a wrapped subtitle on small/landscape screens.
  */
 @Composable
-private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
+private fun DeviceHeader(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    logButtonFocus: FocusRequester,
+    onOpenLog: () -> Unit,
+) {
     val device = state.device
     val partCount = state.partitions.size
     val subtitle = when (state.presence) {
@@ -364,42 +438,98 @@ private fun DeviceHeader(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = device?.label ?: stringResource(R.string.app_name),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.semantics { heading() },
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (state.presence == DevicePresence.PermissionRequired) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.weight(1f),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = device?.label ?: stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.presence == DevicePresence.PermissionRequired) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
-        // Beside the title block, never inside it: the header carries no background of its
-        // own (the boards use a flat header), so nothing behind these controls has to end.
+        // Outside the title surface, beside it: the header block keeps its own edges and
+        // these controls never overlap it.
         LanguagePicker(language = state.language, onIntent = onIntent)
         ThemeToggle(darkTheme = state.darkTheme, onIntent = onIntent)
+        LogOpenButton(
+            lineCount = state.logLines.size,
+            focusRequester = logButtonFocus,
+            onOpenLog = onOpenLog,
+        )
     }
 }
 
 /**
- * Collapsed status/operation line above the navigation bar. The operation log itself is
- * an overlay ([LogOverlay]) so expanding it never squeezes the active tab layout.
+ * Requests focus, tolerating a target detached in the same frame.
+ * [FocusRequester] has no public `isAttached` check, so only the documented
+ * IllegalStateException is handled — and logged, not silently dropped, so unrelated
+ * failures remain visible.
+ */
+private fun FocusRequester.requestFocusIfAttached(target: String) {
+    try {
+        requestFocus()
+    } catch (error: IllegalStateException) {
+        android.util.Log.d("UsbMultitool", "focus request for $target skipped: ${error.message}")
+    }
+}
+
+/** 48 dp entry to the full log screen, beside the language and theme controls. */
+@Composable
+private fun LogOpenButton(
+    lineCount: Int,
+    focusRequester: FocusRequester,
+    onOpenLog: () -> Unit,
+) {
+    val label = stringResource(R.string.log_screen_title)
+    IconButton(
+        onClick = onOpenLog,
+        modifier = Modifier
+            .size(48.dp)
+            .focusRequester(focusRequester)
+            .semantics { contentDescription = "$label · $lineCount" },
+    ) {
+        GlyphIcon(
+            glyph = Glyph.Log,
+            size = 20.dp,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Collapsed status/operation line above the navigation bar. Expanding it adds the log
+ * lines inside the same surface — one continuous block, no floating overlay — and the
+ * whole list is capped so the active tab keeps usable height.
  */
 @Composable
 internal fun StatusLogPanel(
@@ -412,6 +542,12 @@ internal fun StatusLogPanel(
     val overwrite = state.linkOverwriteCandidate
     val hasLog = state.logLines.isNotEmpty()
     if (op == null && state.statusMessage == null && !hasLog && overwrite == null) return
+    val logList = rememberLazyListState()
+    LaunchedEffect(logExpanded, state.logLines.size) {
+        if (logExpanded && state.logLines.isNotEmpty()) {
+            logList.animateScrollToItem(state.logLines.lastIndex)
+        }
+    }
 
     val failed = op?.state == OperationState.Failed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
@@ -489,7 +625,9 @@ internal fun StatusLogPanel(
         color = container,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
+            // Bottom inset keeps the status block off the navigation bar; the top one
+            // only separates it from the tab content.
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp)
             .heightIn(min = 48.dp),
     ) {
         Column(
@@ -550,6 +688,7 @@ internal fun StatusLogPanel(
                     if (op != null && op.state == OperationState.Running && op.cancelable) {
                         TextButton(
                             onClick = { onIntent(UiIntent.CancelOperation) },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
@@ -563,6 +702,7 @@ internal fun StatusLogPanel(
                     if (hasLog) {
                         TextButton(
                             onClick = onToggleLog,
+                            modifier = Modifier.heightIn(min = 48.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
@@ -577,6 +717,7 @@ internal fun StatusLogPanel(
                     if (op != null && !running) {
                         TextButton(
                             onClick = { onIntent(UiIntent.OperationUpdated(null)) },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
@@ -589,6 +730,7 @@ internal fun StatusLogPanel(
                     } else if (op == null && state.statusMessage != null) {
                         TextButton(
                             onClick = { onIntent(UiIntent.Status(null)) },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
@@ -602,6 +744,7 @@ internal fun StatusLogPanel(
                     if (overwrite != null) {
                         TextButton(
                             onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                         ) {
                             Text(
@@ -626,74 +769,105 @@ internal fun StatusLogPanel(
                     trackColor = content.copy(alpha = 0.2f),
                 )
             }
+
+            // Expanded: the same surface continues into the log. No second card appears
+            // behind or above it, so the block reads as one piece.
+            if (logExpanded && hasLog) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = content.copy(alpha = 0.25f),
+                )
+                LazyColumn(
+                    state = logList,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 180.dp),
+                ) {
+                    items(state.logLines.size) { index ->
+                        Text(
+                            text = state.logLines[index],
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content,
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 /**
- * Operation log shown over the active tab as a single overlay surface: the themed
- * background wraps the heading and every visible line, so the whole block grows and
- * scrolls together and stays readable over the tab content. The bottom navigation and
- * the tab layout are not displaced. Height is capped, the list keeps its own scroll,
- * and taps that land on the surface never reach the controls underneath.
+ * Full log screen: every entry, an explicit "copy all" (warned about paths and serials),
+ * and an immediate clear. Back leaves the screen without touching the selected tab.
  */
 @Composable
-private fun LogOverlay(
+private fun LogScreen(
     lines: List<String>,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester,
+    onBack: () -> Unit,
+    onIntent: (UiIntent) -> Unit,
 ) {
-    val logList = rememberLazyListState()
-    LaunchedEffect(lines.size) {
-        if (lines.isNotEmpty()) logList.animateScrollToItem(lines.lastIndex)
-    }
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
-        shadowElevation = 6.dp,
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(max = 240.dp)
-            // Swallow taps that land on the overlay surface itself so they cannot reach
-            // buttons underneath; the log scroll and its own buttons still work.
-            .pointerInput(Unit) { detectTapGestures { } },
+    val context = LocalContext.current
+    var confirmCopy by remember { mutableStateOf(false) }
+    val backText = stringResource(R.string.log_back)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+                .padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .size(48.dp)
+                    .focusRequester(focusRequester)
+                    .semantics { contentDescription = backText },
             ) {
-                Text(
-                    text = stringResource(R.string.log_title_count, lines.size),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics { heading() },
+                GlyphIcon(
+                    glyph = Glyph.ChevronLeft,
+                    size = 20.dp,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(
-                    onClick = onClose,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.log_collapse),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
             }
+            Text(
+                text = stringResource(R.string.log_title_count, lines.size),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { heading() },
+            )
+            TextButton(
+                onClick = { confirmCopy = true },
+                enabled = lines.isNotEmpty(),
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(stringResource(R.string.log_copy_all))
+            }
+            TextButton(
+                onClick = { onIntent(UiIntent.ClearLog) },
+                enabled = lines.isNotEmpty(),
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(stringResource(R.string.log_clear))
+            }
+        }
+        if (lines.isEmpty()) {
+            EmptyHint(stringResource(R.string.log_empty))
+        } else {
             LazyColumn(
-                state = logList,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
             ) {
                 items(lines.size) { index ->
                     Text(
@@ -704,6 +878,48 @@ private fun LogOverlay(
                 }
             }
         }
+        Text(
+            text = stringResource(R.string.log_clear_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+    }
+
+    if (confirmCopy) {
+        AlertDialog(
+            onDismissRequest = { confirmCopy = false },
+            title = { Text(stringResource(R.string.log_copy_all)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(stringResource(R.string.log_copy_warning))
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmCopy = false
+                        val clipboard =
+                            context.getSystemService(ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(
+                            ClipData.newPlainText("log", logClipboardText(lines)),
+                        )
+                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.LogCopied)))
+                    },
+                ) {
+                    Text(stringResource(R.string.log_copy_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmCopy = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -762,9 +978,9 @@ private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) 
     }
 }
 
-/** Cycles System → dark → light; the icon and its description follow the current value. */
+/** Toggles dark and light only; the icon and its description follow the current value. */
 @Composable
-private fun ThemeToggle(darkTheme: Boolean?, onIntent: (UiIntent) -> Unit) {
+private fun ThemeToggle(darkTheme: Boolean, onIntent: (UiIntent) -> Unit) {
     val name = themeLabel(darkTheme)
     val description = stringResource(R.string.theme_label) + ": " + name
     IconButton(
@@ -790,12 +1006,8 @@ private fun languageName(language: AppLanguage): String =
     }
 
 @Composable
-private fun themeLabel(darkTheme: Boolean?): String =
-    when (darkTheme) {
-        null -> stringResource(R.string.theme_auto)
-        true -> stringResource(R.string.theme_dark)
-        false -> stringResource(R.string.theme_light)
-    }
+private fun themeLabel(darkTheme: Boolean): String =
+    if (darkTheme) stringResource(R.string.theme_dark) else stringResource(R.string.theme_light)
 
 /** Design tokens of the target boards: flat background, card and row surfaces, one accent. */
 private fun darkDesignColors() = darkColorScheme(
@@ -865,9 +1077,11 @@ internal fun rawSourceName(uri: String?): String? = uri
     ?.takeIf { it.isNotBlank() }
 
 /**
- * Section block: bold heading, optional one-line subtitle, hairline divider, then content.
- * No container fill — hierarchy comes from typography, spacing and the divider, so nested
- * row surfaces stay the only backgrounds and no vertical space is wasted on padding.
+ * Section block: one surface carrying the uppercase heading, an optional one-line
+ * subtitle, the optional trailing control and the content. The heading shares the
+ * surface with what it names, so no label floats above an unrelated background.
+ * The trailing control (help, badge) is centred on the heading line only — the
+ * subtitle sits below that row, so a 48 dp help button cannot drift downward.
  */
 @Composable
 internal fun SectionCard(
@@ -878,24 +1092,30 @@ internal fun SectionCard(
     trailing: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(
+    // Uppercase must follow the in-app language, not the system one: a Turkish device
+    // with the English UI would otherwise render "EFİ". LocalResources is the localized
+    // context provided by AppShell, so its configuration carries the chosen language.
+    val locale = LocalResources.current.configuration.locales[0]
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = if (danger) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
+        } else {
+            null
+        },
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // Uppercase must follow the in-app language, not the system one: a Turkish device
-        // with the English UI would otherwise render "EFİ". LocalResources is the localized
-        // context provided by AppShell, so its configuration carries the chosen language.
-        val locale = LocalResources.current.configuration.locales[0]
-        // Heading lives outside the card, like the target boards: an uppercase label above
-        // its surface, separated from the content it names.
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 4.dp, end = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = title.uppercase(locale),
                     style = MaterialTheme.typography.labelMedium,
@@ -906,32 +1126,24 @@ internal fun SectionCard(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    modifier = Modifier.semantics { heading() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { heading() },
                 )
-                subtitle?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                trailing?.invoke()
             }
-            trailing?.invoke()
-        }
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = if (danger) {
-                BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
-            } else {
-                null
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+            subtitle?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 content()
@@ -1204,6 +1416,8 @@ internal enum class Glyph {
     ChevronDown,
     ChevronUp,
     ChevronLeft,
+    /** Three stacked lines: the in-app operation log. */
+    Log,
 }
 
 @Composable
@@ -1338,6 +1552,11 @@ internal fun GlyphIcon(
                     tint,
                     style = stroke,
                 )
+                Glyph.Log -> {
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 7f), androidx.compose.ui.geometry.Offset(19f, 7f), 1.8f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 12f), androidx.compose.ui.geometry.Offset(19f, 12f), 1.8f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 17f), androidx.compose.ui.geometry.Offset(13f, 17f), 1.8f)
+                }
             }
         }
     }

@@ -36,6 +36,7 @@ import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyGlobalSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -58,6 +59,7 @@ import usb.ui.FileEntry
 import usb.ui.OperationProgress
 import usb.ui.OperationTitle
 import usb.ui.ReadScanOutcome
+import usb.ui.RestoreSourceInspector
 import usb.ui.readOnlyOperationProgress
 import usb.ui.OperationState
 import usb.ui.UiEffect
@@ -126,6 +128,8 @@ import usb.ui.DestructiveAction
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val LANGUAGE_KEY = "language"
+        /** Persisted two-state theme; absent means the dark default. */
+        const val THEME_KEY = "dark_theme"
         /**
          * One 1 MiB chunk per filesystem call. The FAT engine opens, seeks, writes and
          * syncs per call, so a larger chunk cuts that overhead 16×. The buffer is
@@ -145,7 +149,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var rawSourceHandle: OperationHandle? = null
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
+    @Volatile
     private var attachGeneration = 0L
+    /** Pick generations make slow SAF inspections lose to the newest selection. */
+    private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    private val rescueImagePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    private val rescueMapPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile
     var attachedDevice: UsbDevice? = null
         private set
@@ -160,7 +169,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         application.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
 
     init {
-        state = state.copy(language = readLanguage())
+        state = state.copy(language = readLanguage(), darkTheme = readDarkTheme())
         DiskService.initialize(application)
         // Fail closed: never auto-delete staging after restart (name ≠ proof of ownership).
         // Leftovers stay on disk; user must re-stage in this process. Notify only.
@@ -196,9 +205,89 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var usageInFlightKey: FilesystemUsageKey? = null
     @Volatile private var stagedConsumedPath: String? = null
 
+    /** Immutable ownership ticket for one phone-import inspection (SAF and USB phases). */
+    private data class InspectionTicket(
+        val generation: Long,
+        val attachGeneration: Long,
+        val deviceKey: String?,
+        val identity: String?,
+    )
+
+    /**
+     * The one inspection allowed to open USB. Replaced/cleared atomically; workers compare the
+     * immutable ticket instead of reading mutable state from a background thread.
+     */
+    @Volatile private var activeInspection: InspectionTicket? = null
+    private val inspectionLock = Any()
+    private var inspectionSafJob: Job? = null
+    private var inspectionUsbHandle: OperationHandle? = null
+
+    private fun beginInspection(ticket: InspectionTicket): Boolean =
+        synchronized(inspectionLock) {
+            if (activeInspection != null) {
+                false
+            } else {
+                activeInspection = ticket
+                true
+            }
+        }
+
+    /** Ownership check for workers: a disowned/cancelled ticket never proceeds to USB. */
+    private fun inspectionOwned(ticket: InspectionTicket): Boolean =
+        activeInspection === ticket
+
+    private fun inspectionAttachmentStillHere(ticket: InspectionTicket): Boolean =
+        attachGeneration == ticket.attachGeneration && deviceKey(attachedDevice) == ticket.deviceKey
+
+    private fun trackInspectionSafJob(job: Job) {
+        synchronized(inspectionLock) {
+            if (activeInspection != null) inspectionSafJob = job
+        }
+    }
+
+    private fun trackInspectionUsbHandle(ticket: InspectionTicket, handle: OperationHandle?) {
+        synchronized(inspectionLock) {
+            if (activeInspection !== ticket) return
+            inspectionUsbHandle = handle
+        }
+    }
+
+    /** Releases the slot once this ticket's work ended, leaving a newer ticket alone. */
+    private fun releaseInspection(ticket: InspectionTicket) {
+        synchronized(inspectionLock) {
+            if (activeInspection === ticket) {
+                activeInspection = null
+                inspectionSafJob = null
+                inspectionUsbHandle = null
+            }
+        }
+    }
+
+    /**
+     * Disown the running inspection. The SAF job is cancelled best-effort (a blocking provider
+     * may ignore it) so a stuck read cannot block a new import; the USB operation is asked to
+     * stop only when the device is really going away, otherwise it checks ownership and closes.
+     */
+    private fun cancelActiveInspection(cancelUsb: Boolean) {
+        val job: Job?
+        val handle: OperationHandle?
+        synchronized(inspectionLock) {
+            if (activeInspection == null && inspectionSafJob == null && inspectionUsbHandle == null) {
+                return
+            }
+            activeInspection = null
+            job = inspectionSafJob
+            handle = inspectionUsbHandle
+            inspectionSafJob = null
+            inspectionUsbHandle = null
+        }
+        job?.cancel()
+        if (cancelUsb) handle?.cancel()
+    }
 
     override fun onCleared() {
         // Detach/clear must not crash the process if umount/sync fails on a yanked stick.
+        cancelActiveInspection(cancelUsb = true)
         runCatching { closeFilesVolume(reportStatus = false) }
         super.onCleared()
         scope.cancel()
@@ -212,9 +301,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }.getOrDefault(AppLanguage.System)
 
+    private fun readDarkTheme(): Boolean =
+        runCatching { languagePrefs.getBoolean(THEME_KEY, true) }.getOrDefault(true)
+
     fun onIntent(intent: UiIntent) {
         if (intent is UiIntent.SetLanguage) {
             languagePrefs.edit().putString(LANGUAGE_KEY, intent.language.name).apply()
+        }
+        if (intent is UiIntent.ToggleTheme) {
+            // The reducer flips the same value; persisting the next state keeps a restart
+            // on the theme the user just chose.
+            languagePrefs.edit().putBoolean(THEME_KEY, !state.darkTheme).apply()
         }
         val filesDir = getApplication<Application>().filesDir
         // Surviving UI staged path after process death is not session-owned — clear label only.
@@ -251,6 +348,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (stagingMutationFailed) return
         val result = UiReducer.reduce(state, intent)
+        if (intent is UiIntent.CancelWindowsIsoImport) {
+            // Best-effort cancel the SAF read and disown its ticket; the reducer already
+            // released the SAF guard, so a stuck provider cannot block the next import.
+            cancelActiveInspection(cancelUsb = false)
+        }
         if (intent is UiIntent.OperationUpdated && intent.progress != null) {
             val current = intent.progress
             val previous = state.operation
@@ -1160,9 +1262,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             is UiEffect.GenerateAutounattend -> generateAutounattend(effect)
 
-            UiEffect.LoadVentoyGlobalSettings -> loadVentoyGlobalSettings()
+            is UiEffect.LoadVentoyGlobalSettings ->
+                loadVentoyGlobalSettings(effect.requestToken)
 
-            UiEffect.LoadVentoyFolders -> loadVentoyFolders()
+            is UiEffect.LoadVentoyFolders -> loadVentoyFolders(effect.requestToken)
 
             is UiEffect.SetVentoyGlobalSetting -> {
                 setVentoyGlobalSetting(effect.settingKey, effect.settingValue)
@@ -1245,6 +1348,95 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onIntent(UiIntent.SetImage(uri.toString(), name, size))
     }
 
+    /**
+     * Read-only inspection of the picked GPT backup, then one Set intent carrying the
+     * result. The selected document is never modified; the stream is bounded before any
+     * byte reaches validation. A newer pick bumps the generation, so a slow older result
+     * cannot replace the current selection or its summary.
+     */
+    fun onGptBackupPicked(uri: Uri) {
+        val target = uri.toString()
+        val generation = gptPickGeneration.incrementAndGet()
+        val resolver = getApplication<Application>().contentResolver
+        val diskSectorSize =
+            state.diskSectorSize.takeIf { state.presence == DevicePresence.Ready && state.device != null }
+        scope.launch(Dispatchers.IO) {
+            val (name, size) = contentInfo(resolver, uri)
+            val inspection =
+                try {
+                    val input = resolver.openInputStream(uri)
+                        ?: throw IllegalStateException("cannot open $target for reading")
+                    val blob = input.use { RestoreSourceInspector.readBounded(it) }
+                    RestoreSourceInspector.inspectGpt(
+                        uri = target,
+                        name = name,
+                        sizeBytes = size,
+                        blob = blob,
+                        diskSectorSize = diskSectorSize,
+                    )
+                } catch (failure: Exception) {
+                    usb.ui.GptBackupInspection(
+                        uri = target,
+                        name = name,
+                        sizeBytes = size,
+                        error = failure.message ?: failure.javaClass.simpleName,
+                    )
+                }
+            withContext(Dispatchers.Main.immediate) {
+                if (generation == gptPickGeneration.get()) {
+                    onIntent(UiIntent.SetBackupFile(target, inspection, generation))
+                }
+            }
+        }
+    }
+
+    /** SAF metadata only; the rescue image itself is never opened or read. */
+    fun onRescueImagePicked(uri: Uri) {
+        val target = uri.toString()
+        val generation = rescueImagePickGeneration.incrementAndGet()
+        val resolver = getApplication<Application>().contentResolver
+        scope.launch(Dispatchers.IO) {
+            val (name, size) = contentInfo(resolver, uri)
+            val inspection = RestoreSourceInspector.inspectImage(target, name, size)
+            withContext(Dispatchers.Main.immediate) {
+                if (generation == rescueImagePickGeneration.get()) {
+                    onIntent(UiIntent.SetRescueImage(target, inspection, generation))
+                }
+            }
+        }
+    }
+
+    /** Bounded UTF-8 read through the same cap/decoder the restore path uses. */
+    fun onRescueMapPicked(uri: Uri) {
+        val target = uri.toString()
+        val generation = rescueMapPickGeneration.incrementAndGet()
+        val resolver = getApplication<Application>().contentResolver
+        scope.launch(Dispatchers.IO) {
+            val (name, size) = contentInfo(resolver, uri)
+            val inspection =
+                try {
+                    RestoreSourceInspector.inspectMap(
+                        uri = target,
+                        name = name,
+                        sizeBytes = size,
+                        text = readTextDocument(target),
+                    )
+                } catch (failure: Exception) {
+                    usb.ui.RescueMapInspection(
+                        uri = target,
+                        name = name,
+                        sizeBytes = size,
+                        error = failure.message ?: failure.javaClass.simpleName,
+                    )
+                }
+            withContext(Dispatchers.Main.immediate) {
+                if (generation == rescueMapPickGeneration.get()) {
+                    onIntent(UiIntent.SetRescueMap(target, inspection, generation))
+                }
+            }
+        }
+    }
+
     fun onUsbDeviceAttached(
         device: UsbDevice?,
         hasPermission: Boolean,
@@ -1259,8 +1451,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // onStart re-probe must not wipe the known geometry during a running operation.
             return
         }
+        if (sameDevice && activeInspection?.let(::inspectionAttachmentStillHere) == true) {
+            // A live phone-import inspection owns this attachment; a same-device re-probe
+            // would flip presence to Busy and orphan its Inspected result. A real detach or
+            // a different device never reaches this branch.
+            return
+        }
         val gen = if (sameDevice) attachGeneration else ++attachGeneration
         if (isNewDevice) {
+            cancelActiveInspection(cancelUsb = true)
             usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
             activeHandles.clear()
             activeHandle = null
@@ -1574,6 +1773,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         attachedDevice = null
         lastUsageKey = null
         usageInFlightKey = null
+        cancelActiveInspection(cancelUsb = true)
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         activeHandles.clear()
         activeHandle = null
@@ -1737,7 +1937,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Re-list the displayed directory from the real volume. */
-    fun listDirectory(path: String, status: UiMessage? = null) = withPartitionId { partitionId ->
+    fun listDirectory(path: String) = withPartitionId { partitionId ->
         val generation = state.filesListGeneration
         val identity = state.device?.identity
         val attachGen = state.device?.attachGeneration ?: 0L
@@ -1753,7 +1953,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     attachGeneration = attachGen,
                 )
             },
-            onSuccess = { status?.let { onIntent(UiIntent.Status(it)) } },
         ) {
             val entries = usb.files.FilesOperations.list(filesSession.volumeForLocked(partitionId), path)
             post(
@@ -1775,7 +1974,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         withWritablePartitionId { partitionId ->
             submitFilesOperation(
                 title = OperationTitle.NewFolder(name),
-                onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.CreatedFolder, listOf(target))) },
+                onSuccess = {
+                    // The terminal mutation already bumped the list generation and asked the
+                    // Files tab for one re-list; only the concrete result line is added here.
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(UiMessageKey.CreatedFolder, listOf(target)),
+                        ),
+                    )
+                },
             ) { operation ->
                 filesSession.withWritableVolume(partitionId, operation) { volume ->
                     operation.mutationAttempted = true
@@ -1792,7 +1999,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         withWritablePartitionId { partitionId ->
             submitFilesOperation(
                 title = OperationTitle.DeleteEntry(name),
-                onSuccess = { listDirectory(path, status = UiMessage.Key(UiMessageKey.DeletedPath, listOf(target))) },
+                onSuccess = {
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(UiMessageKey.DeletedPath, listOf(target)),
+                        ),
+                    )
+                },
             ) { operation ->
                 filesSession.withWritableVolume(partitionId, operation) { volume ->
                     try {
@@ -1817,11 +2030,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             submitFilesOperation(
                 title = OperationTitle.RenameEntry(from),
                 onSuccess = {
-                    listDirectory(
-                        path,
-                        status = UiMessage.Key(
-                            UiMessageKey.RenamedPath,
-                            listOf(from, to),
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(
+                                UiMessageKey.RenamedPath,
+                                listOf(from, to),
+                            ),
                         ),
                     )
                 },
@@ -1857,12 +2071,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 title = OperationTitle.Upload,
                 onSuccess = {
                     val name = uploaded
-                    listDirectory(
-                        path,
-                        status = name?.let {
-                            UiMessage.Key(UiMessageKey.UploadedFile, listOf(it, path))
-                        },
-                    )
+                    if (name != null) {
+                        onIntent(
+                            UiIntent.Status(
+                                UiMessage.Key(UiMessageKey.UploadedFile, listOf(name, path)),
+                            ),
+                        )
+                    }
                 },
             ) { operation ->
                 val document = Uri.parse(uri)
@@ -2215,36 +2430,167 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         kind: usb.ui.WindowsImportKind,
         destinationDirectory: String?,
     ) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
-        val identity = state.device?.identity
+        val ticket =
+            InspectionTicket(
+                generation = generation,
+                attachGeneration = attachGeneration,
+                deviceKey = deviceKey(attachedDevice),
+                identity = state.device?.identity,
+            )
         val resolver = getApplication<Application>().contentResolver
         val document = Uri.parse(uri)
-        scope.launch(Dispatchers.IO) {
-            try {
-                val (reportedName, reportedSize) = contentInfo(resolver, document)
-                val rawName = reportedName ?: document.lastPathSegment
-                    ?: throw IllegalArgumentException("picker returned no file name")
-                val name = usb.ventoy.VentoyIsoLibrary.requireImportName(rawName)
-                val directory =
-                    destinationDirectory?.let {
-                        usb.ventoy.VentoyIsoLibrary.normalizeDirectory(it)
-                    } ?: if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
-                        "/ventoy"
-                    } else {
-                        "/ISO"
+        if (!beginInspection(ticket)) {
+            // The reducer gate normally prevents a second inspection; fail closed anyway.
+            post(UiIntent.WindowsIsoImportSafFinished(generation))
+            return
+        }
+        fun reportAttachmentChanged() {
+            post(
+                UiIntent.Status(
+                    UiMessage.Raw("USB attachment changed; re-select the file to import"),
+                ),
+            )
+        }
+        // SAF metadata/template reads are slow and need no USB: run them first, off the
+        // single disk worker, so the queue is not blocked on ContentResolver I/O.
+        val safJob =
+            scope.launch(Dispatchers.IO) {
+                try {
+                val name: String
+                val sizeBytes: Long?
+                val directory: String
+                val target: String
+                val markers: List<String>
+                try {
+                    val (reportedName, reportedSize) = contentInfo(resolver, document)
+                    sizeBytes = reportedSize
+                    val rawName = reportedName ?: document.lastPathSegment
+                        ?: throw IllegalArgumentException("picker returned no file name")
+                    name = usb.ventoy.VentoyIsoLibrary.requireImportName(rawName)
+                    directory =
+                        destinationDirectory?.let {
+                            usb.ventoy.VentoyIsoLibrary.normalizeDirectory(it)
+                        } ?: if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                            "/ventoy"
+                        } else {
+                            "/ISO"
+                        }
+                    target = if (directory == "/") "/$name" else "$directory/$name"
+                    require(
+                        !target.equals("/ventoy/ventoy.json", ignoreCase = true),
+                    ) { "refusing to overwrite the Ventoy config with a template" }
+                    markers =
+                        if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                            inspectPhoneTemplate(resolver, document)
+                        } else {
+                            emptyList()
+                        }
+                } catch (failure: Throwable) {
+                    if (inspectionOwned(ticket)) {
+                        post(
+                            UiIntent.WindowsIsoImportRejected(
+                                problem = importInspectionProblem(failure),
+                                reason = failure.message ?: failure.javaClass.simpleName,
+                                generation = generation,
+                            ),
+                        )
+                    } else if (!inspectionAttachmentStillHere(ticket)) {
+                        reportAttachmentChanged()
                     }
-                val target = if (directory == "/") "/$name" else "$directory/$name"
-                require(
-                    !target.equals("/ventoy/ventoy.json", ignoreCase = true),
-                ) { "refusing to overwrite the Ventoy config with a template" }
-                val markers =
-                    if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
-                        inspectPhoneTemplate(resolver, document)
-                    } else {
-                        emptyList()
+                    post(UiIntent.WindowsIsoImportSafFinished(generation))
+                    return@launch
+                }
+                if (!inspectionOwned(ticket)) {
+                    // Cancelled or replugged during the read: no USB work at all.
+                    if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
+                    post(UiIntent.WindowsIsoImportSafFinished(generation))
+                    return@launch
+                }
+                post(UiIntent.WindowsIsoImportUsbStarted(generation))
+                val runEntered = java.util.concurrent.atomic.AtomicBoolean(false)
+                val op =
+                    object : DiskOperation(name = "Inspect phone import") {
+                        override suspend fun run() {
+                            runEntered.set(true)
+                            try {
+                                inspectImageImportOnDisk(
+                                    ticket = ticket,
+                                    uri = uri,
+                                    kind = kind,
+                                    name = name,
+                                    sizeBytes = sizeBytes,
+                                    directory = directory,
+                                    target = target,
+                                    markers = markers,
+                                    destinationDirectory = destinationDirectory,
+                                )
+                            } finally {
+                                // The disk is closed here; only now may the USB guard end.
+                                post(UiIntent.WindowsIsoImportFinished(generation))
+                            }
+                        }
                     }
+                val handle =
+                    try {
+                        DiskController.get().submit(op)
+                    } catch (failure: Throwable) {
+                        post(UiIntent.WindowsIsoImportFinished(generation))
+                        return@launch
+                    }
+                trackInspectionUsbHandle(ticket, handle)
+                try {
+                    handle.await()
+                } finally {
+                    trackInspectionUsbHandle(ticket, null)
+                    if (!runEntered.get()) {
+                        // The op was rejected/cancelled before run() started, so it cannot post
+                        // the closing Finished itself; only this fallback may end the guard.
+                        post(UiIntent.WindowsIsoImportFinished(generation))
+                    }
+                }
+                } finally {
+                    // Free the slot for the next import even if this one was cancelled or failed.
+                    releaseInspection(ticket)
+                }
+            }
+        trackInspectionSafJob(safJob)
+    }
+
+    /**
+     * One phone-file inspection body, executed on the disk controller queue so no list or
+     * import mount can interleave with the direct session it opens.
+     */
+    private fun inspectImageImportOnDisk(
+        ticket: InspectionTicket,
+        uri: String,
+        kind: usb.ui.WindowsImportKind,
+        name: String,
+        sizeBytes: Long?,
+        directory: String,
+        target: String,
+        markers: List<String>,
+        destinationDirectory: String?,
+    ) {
+        fun reportAttachmentChanged() {
+            post(
+                UiIntent.Status(
+                    UiMessage.Raw("USB attachment changed; re-select the file to import"),
+                ),
+            )
+        }
+        if (!inspectionOwned(ticket)) {
+            // Queued while the picker was cancelled or the stick was replaced.
+            if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
+            return
+        }
+        try {
                 requireFilesVolumeClosed(closeFilesVolume(reportStatus = false))
+                // Final check right before the direct open: a cancel/replug during the queue
+                // wait must never open a stale device.
+                if (!inspectionOwned(ticket)) {
+                    if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
+                    return
+                }
                 val dev = attachedDevice ?: throw DiskException.Disconnected()
                 val mgr = usbManager ?: throw DiskException.Disconnected()
                 val disk = UsbDiskSession.open(mgr, dev)
@@ -2253,8 +2599,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
                             if (destinationDirectory != null && directory != "/") {
                                 val chosen = volume.statOrNull(directory)
-                                require(chosen != null && chosen.isDirectory) {
-                                    "import folder \"$directory\" does not exist on the Ventoy partition"
+                                if (chosen == null || !chosen.isDirectory) {
+                                    throw usb.ventoy.ImportDirectoryMissingException(
+                                        "import folder \"$directory\" does not exist on the Ventoy partition",
+                                    )
                                 }
                             }
                             volume.statOrNull(target) != null
@@ -2262,18 +2610,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } finally {
                         disk.close()
                     }
-                if (attachGeneration == expectedAttach &&
-                    deviceKey(attachedDevice) == expectedKey &&
-                    state.device?.identity == identity
-                ) {
+                if (inspectionOwned(ticket)) {
                     post(
                         UiIntent.WindowsIsoImportInspected(
                             uri = uri,
                             name = name,
-                            sizeBytes = reportedSize,
+                            sizeBytes = sizeBytes,
                             targetName = name,
                             exists = exists,
-                            generation = generation,
+                            generation = ticket.generation,
                             kind = kind,
                             templateMarkers = markers,
                             directory = directory,
@@ -2290,38 +2635,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }
-                } else {
-                    // The stick changed under the picker: say so instead of dropping the result
-                    // and leaving the user with no dialog and no message.
-                    post(
-                        UiIntent.Status(
-                            UiMessage.Raw("USB attachment changed; re-select the file to import"),
-                        ),
-                    )
+                } else if (!inspectionAttachmentStillHere(ticket)) {
+                    // The stick changed under the picker: say so instead of dropping the result.
+                    reportAttachmentChanged()
                 }
+                // Cancelled mid-probe: the result belongs to an obsolete dialog; stay silent.
             } catch (failure: Throwable) {
-                val problem =
-                    when (failure) {
-                        is usb.ventoy.NotUnattendRootException ->
-                            UnreadableProblem.NotUnattendRoot
-                        is usb.ventoy.TemplateTooLargeException ->
-                            UnreadableProblem.TooLarge
-                        is usb.ventoy.EmptyTemplateException ->
-                            UnreadableProblem.Empty
-                        is usb.ventoy.InvalidTemplateException ->
-                            UnreadableProblem.MalformedXml
-                        is java.io.IOException -> UnreadableProblem.IoFailure
-                        else -> UnreadableProblem.MalformedXml
-                    }
+                if (!inspectionOwned(ticket)) {
+                    // Cancel/replug while probing: never publish a result for it.
+                    if (!inspectionAttachmentStillHere(ticket)) reportAttachmentChanged()
+                    return
+                }
+                val folderMissing = failure is usb.ventoy.ImportDirectoryMissingException
+                val problem = importInspectionProblem(failure)
                 post(
                     UiIntent.WindowsIsoImportRejected(
                         problem = problem,
                         reason = failure.message ?: failure.javaClass.simpleName,
+                        generation = ticket.generation,
                     ),
                 )
+                if (folderMissing) {
+                    // The chosen folder vanished between listing and inspection: say why and
+                    // reopen the folder picker instead of leaving only a generic I/O error.
+                    post(
+                        UiIntent.Status(
+                            UiMessage.Raw(
+                                failure.message ?: "import folder is gone; pick it again",
+                            ),
+                        ),
+                    )
+                    post(
+                        UiIntent.ReopenImportFolderPick(
+                            kind = kind,
+                            identity = ticket.identity,
+                            attachGeneration = ticket.attachGeneration,
+                            requestGeneration = ticket.generation,
+                        ),
+                    )
+                }
             }
-        }
     }
+
+    private fun importInspectionProblem(failure: Throwable): UnreadableProblem =
+        when (failure) {
+            is usb.ventoy.NotUnattendRootException -> UnreadableProblem.NotUnattendRoot
+            is usb.ventoy.TemplateTooLargeException -> UnreadableProblem.TooLarge
+            is usb.ventoy.EmptyTemplateException -> UnreadableProblem.Empty
+            is usb.ventoy.InvalidTemplateException -> UnreadableProblem.MalformedXml
+            is usb.ventoy.ImportDirectoryMissingException -> UnreadableProblem.IoFailure
+            is java.io.IOException -> UnreadableProblem.IoFailure
+            else -> UnreadableProblem.MalformedXml
+        }
 
     private fun inspectPhoneTemplate(
         resolver: android.content.ContentResolver,
@@ -2475,6 +2840,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
                 } else if (message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                    if (op.failureCause is usb.ventoy.ImportDirectoryMissingException) {
+                        // The cached folder list just proved stale: re-read it and reopen the
+                        // picker for the same import kind on this exact attachment.
+                        onIntent(
+                            UiIntent.ReopenImportFolderPick(
+                                kind = proposal.kind,
+                                identity = proposal.identity,
+                                attachGeneration = proposal.attachGeneration,
+                                // The failed terminal already bumped the inspection generation
+                                // (catalog invalidation); capture the live one, not the pre-import id.
+                                requestGeneration = state.isoImportGeneration,
+                            ),
+                        )
+                    }
                 }
             } finally {
                 ticker.cancel()
@@ -2856,7 +3235,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
-    private fun loadVentoyGlobalSettings() {
+    private fun loadVentoyGlobalSettings(requestToken: Long) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
         val expectedEpoch = state.ventoyCacheEpoch
@@ -2869,7 +3248,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val settings = usb.ventoy.VentoySetup.readGlobalSettings(disk)
                     if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
-                        post(UiIntent.VentoyGlobalSettingsLoaded(settings, epoch = expectedEpoch))
+                        post(
+                            UiIntent.VentoyGlobalSettingsLoaded(
+                                settings,
+                                epoch = expectedEpoch,
+                                requestToken = requestToken,
+                            ),
+                        )
                     }
                 } finally {
                     disk.close()
@@ -2890,6 +3275,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         UiIntent.VentoyGlobalSettingsLoaded(
                             VentoyGlobalSettings(emptyList(), message),
                             epoch = expectedEpoch,
+                            requestToken = requestToken,
                         ),
                     )
                 }
@@ -2899,7 +3285,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun loadVentoyFolders() {
+    private fun loadVentoyFolders(requestToken: Long) {
         val expectedAttach = attachGeneration
         val expectedKey = deviceKey(attachedDevice)
         val expectedEpoch = state.ventoyCacheEpoch
@@ -2912,7 +3298,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     val folders = usb.ventoy.VentoySetup.listDirectories(disk)
                     if (attachGeneration == expectedAttach && deviceKey(attachedDevice) == expectedKey) {
-                        post(UiIntent.VentoyFoldersLoaded(folders, epoch = expectedEpoch))
+                        post(
+                            UiIntent.VentoyFoldersLoaded(
+                                folders,
+                                epoch = expectedEpoch,
+                                requestToken = requestToken,
+                            ),
+                        )
                     }
                 } finally {
                     disk.close()
@@ -2933,6 +3325,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             emptyList(),
                             outcome.cause.message ?: outcome.cause.javaClass.simpleName,
                             epoch = expectedEpoch,
+                            requestToken = requestToken,
                         ),
                     )
                 }
@@ -3604,7 +3997,7 @@ class MainActivity : ComponentActivity() {
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        viewModel.onIntent(UiIntent.SetBackupFile(uri.toString()))
+        viewModel.onGptBackupPicked(uri)
     }
 
     private val rescueImagePicker = registerForActivityResult(
@@ -3614,7 +4007,7 @@ class MainActivity : ComponentActivity() {
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        viewModel.onIntent(UiIntent.SetRescueImage(uri.toString()))
+        viewModel.onRescueImagePicked(uri)
     }
 
     private val rescueMapPicker = registerForActivityResult(
@@ -3624,7 +4017,7 @@ class MainActivity : ComponentActivity() {
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        viewModel.onIntent(UiIntent.SetRescueMap(uri.toString()))
+        viewModel.onRescueMapPicked(uri)
     }
 
     /** Kind and destination waiting for the SAF file chosen in [windowsImportLauncher]. */

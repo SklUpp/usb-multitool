@@ -10,6 +10,7 @@ import usb.fs.FilesystemId
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendState
 import usb.ventoy.BindProblem
+import usb.ventoy.UnreadableProblem
 
 /**
  * Ventoy UI state: same-stick retain (identity+attachGeneration), Probing clear, SelectPartition
@@ -596,5 +597,1197 @@ class VentoyUiStateTest {
         assertFalse(after.autounattendLoadInFlight)
         assertEquals(AutounattendState.Missing, after.autounattendState)
         assertEquals(template, after.windowsTemplatePath)
+    }
+
+    @Test
+    fun folderRefreshKeepsOnlyTheNewestAnswer() {
+        val base = withVentoy().copy(ventoyCacheEpoch = 1L)
+        val first = UiReducer.reduce(base, UiIntent.LoadVentoyFolders)
+        val firstToken = first.state.ventoyFoldersRequest
+        assertEquals(1L, firstToken)
+        assertEquals(
+            firstToken,
+            (first.effects.single() as UiEffect.LoadVentoyFolders).requestToken,
+        )
+
+        val second = UiReducer.reduce(first.state, UiIntent.LoadVentoyFolders)
+        val secondToken = second.state.ventoyFoldersRequest
+        assertTrue(secondToken > firstToken)
+
+        // The older manual refresh lands last: it must not replace the newer list.
+        val late =
+            UiReducer.reduce(
+                second.state,
+                UiIntent.VentoyFoldersLoaded(
+                    listOf("/late"),
+                    epoch = 1L,
+                    requestToken = firstToken,
+                ),
+            )
+        assertEquals(listOf("/", "/ISO"), late.state.ventoyFolders)
+        assertNull(late.state.ventoyFoldersError)
+
+        val applied =
+            UiReducer.reduce(
+                late.state,
+                UiIntent.VentoyFoldersLoaded(
+                    listOf("/", "/NEW"),
+                    epoch = 1L,
+                    requestToken = secondToken,
+                ),
+            )
+        assertEquals(listOf("/", "/NEW"), applied.state.ventoyFolders)
+    }
+
+    @Test
+    fun settingsRefreshDropsLateErrorAndKeepsNewSuccess() {
+        val base = withVentoy().copy(ventoyCacheEpoch = 1L, statusMessage = null)
+        val first = UiReducer.reduce(base, UiIntent.LoadVentoyGlobalSettings)
+        val firstToken = first.state.ventoyGlobalSettingsRequest
+        val second = UiReducer.reduce(first.state, UiIntent.LoadVentoyGlobalSettings)
+        val secondToken = second.state.ventoyGlobalSettingsRequest
+        assertTrue(secondToken > firstToken)
+
+        val late =
+            UiReducer.reduce(
+                second.state,
+                UiIntent.VentoyGlobalSettingsLoaded(
+                    usb.ventoy.VentoyGlobalSettings(emptyList(), error = "late mount failure"),
+                    epoch = 1L,
+                    requestToken = firstToken,
+                ),
+            )
+        assertNotNull(late.state.ventoyGlobalSettings)
+        assertNull(late.state.statusMessage)
+
+        val applied =
+            UiReducer.reduce(
+                late.state,
+                UiIntent.VentoyGlobalSettingsLoaded(
+                    usb.ventoy.VentoyGlobalSettings(emptyList(), error = "fresh mount failure"),
+                    epoch = 1L,
+                    requestToken = secondToken,
+                ),
+            )
+        assertEquals(UiMessage.Raw("fresh mount failure"), applied.state.statusMessage)
+    }
+
+    @Test
+    fun reopenImportFolderPickDropsFoldersAndAsksAgain() {
+        val base = withVentoy()
+        val device = requireNotNull(base.device)
+
+        val next =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            )
+
+        assertEquals(WindowsImportKind.Image, next.state.pendingImportFolderPick)
+        assertNull(next.state.ventoyFolders)
+        assertNull(next.state.ventoyFoldersError)
+        assertEquals(base.ventoyFoldersRequest + 1L, next.state.ventoyFoldersRequest)
+        val effect = next.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(next.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun reopenImportFolderPickIgnoresAnotherAttachment() {
+        val base = withVentoy()
+        val device = requireNotNull(base.device)
+
+        val next =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.XmlTemplate,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration + 1L,
+                    requestGeneration = 0L,
+                ),
+            )
+
+        assertNull(next.state.pendingImportFolderPick)
+        assertEquals(listOf("/", "/ISO"), next.state.ventoyFolders)
+        assertEquals(base.ventoyFoldersRequest, next.state.ventoyFoldersRequest)
+        assertTrue(next.effects.isEmpty())
+    }
+
+    @Test
+    fun importFolderPickOpenedConsumesTheSignal() {
+        val base = withVentoy().copy(pendingImportFolderPick = WindowsImportKind.XmlTemplate)
+
+        val next = UiReducer.reduce(base, UiIntent.ImportFolderPickOpened).state
+
+        assertNull(next.pendingImportFolderPick)
+        assertNotNull(next.ventoyFolders)
+    }
+
+    @Test
+    fun pickerOpenAfterDeferralReleasesTheDeferredLoad() {
+        val deferred =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+            )
+
+        val next = UiReducer.reduce(deferred, UiIntent.ImportFolderPickOpened)
+
+        // The demand comes back for the UI (the picker was not really open yet) and the
+        // deferred read starts now that mounting is allowed.
+        assertEquals(WindowsImportKind.Image, next.state.pendingImportFolderPick)
+        assertNull(next.state.deferredImportFolderPick)
+        assertFalse(next.state.pendingImportFolderPickLoad)
+        assertEquals(deferred.ventoyFoldersRequest + 1L, next.state.ventoyFoldersRequest)
+        val effect = next.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(next.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun pickerOpenWhileBusyKeepsTheDeferredLoad() {
+        val deferred =
+            withVentoy().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+            )
+
+        val next = UiReducer.reduce(deferred, UiIntent.ImportFolderPickOpened)
+
+        assertNull(next.state.pendingImportFolderPick)
+        assertEquals(WindowsImportKind.Image, next.state.deferredImportFolderPick)
+        assertTrue(next.state.pendingImportFolderPickLoad)
+        assertEquals(deferred.ventoyFoldersRequest, next.state.ventoyFoldersRequest)
+        assertTrue(next.effects.isEmpty())
+    }
+
+    @Test
+    fun attachChangeClearsPendingImportFolderPick() {
+        val base = withVentoy().copy(pendingImportFolderPick = WindowsImportKind.Image)
+
+        val next =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 2L),
+                    partitions = listOf(partition()),
+                ),
+            ).state
+
+        assertNull(next.pendingImportFolderPick)
+    }
+
+    @Test
+    fun reopenImportFolderPickDefersTheLoadWhileTheDiskIsBusy() {
+        val base =
+            withVentoy().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+        val device = requireNotNull(base.device)
+
+        val next =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            )
+
+        // No USB mount beside the operation and no picker over the busy screen; the demand
+        // and the kind survive for the release step.
+        assertNull(next.state.pendingImportFolderPick)
+        assertEquals(WindowsImportKind.Image, next.state.deferredImportFolderPick)
+        assertTrue(next.state.pendingImportFolderPickLoad)
+        assertNull(next.state.ventoyFolders)
+        assertEquals(base.ventoyFoldersRequest + 1L, next.state.ventoyFoldersRequest)
+        assertTrue(next.effects.isEmpty())
+    }
+
+    @Test
+    fun reopenWhileRunningConsumeThenTerminalLoadsAndReopens() {
+        val base =
+            withVentoy().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+        val device = requireNotNull(base.device)
+        val deferred =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            ).state
+
+        // The UI consumes its (absent) picker signal while the read is still deferred.
+        val consumed = UiReducer.reduce(deferred, UiIntent.ImportFolderPickOpened)
+        assertNull(consumed.state.pendingImportFolderPick)
+        assertTrue(consumed.state.pendingImportFolderPickLoad)
+        assertTrue(consumed.effects.isEmpty())
+
+        val released =
+            UiReducer.reduce(
+                consumed.state,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Completed,
+                        title = OperationTitle.ProbeDevice,
+                    ),
+                ),
+            )
+
+        assertFalse(released.state.pendingImportFolderPickLoad)
+        assertNull(released.state.deferredImportFolderPick)
+        assertEquals(WindowsImportKind.Image, released.state.pendingImportFolderPick)
+        assertEquals(
+            consumed.state.ventoyFoldersRequest + 1L,
+            released.state.ventoyFoldersRequest,
+        )
+        val effect = released.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(released.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun confirmationDismissReleasesDeferredReopen() {
+        val prompt =
+            UiReducer.reduce(
+                withVentoy(),
+                UiIntent.RequestDestructive(DestructiveAction.WIPE),
+            ).state
+        assertNotNull(prompt.pendingConfirmation)
+        val device = requireNotNull(prompt.device)
+
+        val deferred =
+            UiReducer.reduce(
+                prompt,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.XmlTemplate,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            )
+
+        // Never open the picker over a destructive confirmation; defer both demand and read.
+        assertNull(deferred.state.pendingImportFolderPick)
+        assertEquals(WindowsImportKind.XmlTemplate, deferred.state.deferredImportFolderPick)
+        assertTrue(deferred.state.pendingImportFolderPickLoad)
+        assertTrue(deferred.effects.isEmpty())
+
+        val dismissed = UiReducer.reduce(deferred.state, UiIntent.DismissConfirmation)
+
+        assertNull(dismissed.state.pendingConfirmation)
+        assertFalse(dismissed.state.pendingImportFolderPickLoad)
+        assertNull(dismissed.state.deferredImportFolderPick)
+        assertEquals(WindowsImportKind.XmlTemplate, dismissed.state.pendingImportFolderPick)
+        assertEquals(
+            deferred.state.ventoyFoldersRequest + 1L,
+            dismissed.state.ventoyFoldersRequest,
+        )
+        val effect = dismissed.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(dismissed.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun confirmDestructiveKeepsDeferredReopenForLaterRelease() {
+        val prompt =
+            UiReducer.reduce(
+                withVentoy(),
+                UiIntent.RequestDestructive(DestructiveAction.WIPE),
+            ).state
+        val device = requireNotNull(prompt.device)
+        val deferred =
+            UiReducer.reduce(
+                prompt,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            ).state
+
+        val confirmed = UiReducer.reduce(deferred, UiIntent.ConfirmDestructive)
+
+        // Confirming starts the destructive operation: no folder mount and no picker yet.
+        assertNull(confirmed.state.pendingConfirmation)
+        assertNull(confirmed.state.pendingImportFolderPick)
+        assertEquals(WindowsImportKind.Image, confirmed.state.deferredImportFolderPick)
+        assertTrue(confirmed.state.pendingImportFolderPickLoad)
+        assertTrue(confirmed.effects.none { it is UiEffect.LoadVentoyFolders })
+        assertEquals(1, confirmed.effects.count { it is UiEffect.SubmitDestructive })
+    }
+
+    @Test
+    fun terminalMutationKeepsDeferredPickUntilQuietIntent() {
+        val base =
+            withVentoy().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+        val device = requireNotNull(base.device)
+        val deferred =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            ).state
+
+        val mutated =
+            UiReducer.reduce(
+                deferred,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Partial,
+                        title = OperationTitle.DeleteEntry("gone.bin"),
+                        errorMessage = "partial",
+                    ),
+                ),
+            )
+
+        // The same intent already mounts Files; the folder read must not run beside it, but
+        // an unrelated mutation on the same attachment must not drop the demand either.
+        assertNull(mutated.state.ventoyFolders)
+        assertEquals(WindowsImportKind.Image, mutated.state.deferredImportFolderPick)
+        assertNull(mutated.state.pendingImportFolderPick)
+        assertTrue(mutated.state.pendingImportFolderPickLoad)
+        assertEquals(1, mutated.effects.count { it is UiEffect.LoadFiles })
+        assertTrue(mutated.effects.none { it is UiEffect.LoadVentoyFolders })
+
+        val quiet =
+            UiReducer.reduce(
+                mutated.state,
+                UiIntent.Status(UiMessage.Raw("settled")),
+            )
+
+        assertEquals(WindowsImportKind.Image, quiet.state.pendingImportFolderPick)
+        assertNull(quiet.state.deferredImportFolderPick)
+        assertFalse(quiet.state.pendingImportFolderPickLoad)
+        assertEquals(
+            mutated.state.ventoyFoldersRequest + 1L,
+            quiet.state.ventoyFoldersRequest,
+        )
+        val folderLoad =
+            quiet.effects.filterIsInstance<UiEffect.LoadVentoyFolders>().single()
+        assertEquals(quiet.state.ventoyFoldersRequest, folderLoad.requestToken)
+    }
+
+    @Test
+    fun refusedConfirmDoesNotSuppressRelease() {
+        val deferred =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+            )
+
+        val refused = UiReducer.reduce(deferred, UiIntent.ConfirmDestructive)
+
+        // No pending action, so no operation starts and no other USB effect exists: the
+        // deferred read may be released right away.
+        assertNull(refused.state.pendingConfirmation)
+        assertEquals(WindowsImportKind.Image, refused.state.pendingImportFolderPick)
+        assertNull(refused.state.deferredImportFolderPick)
+        assertFalse(refused.state.pendingImportFolderPickLoad)
+        val effect = refused.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(refused.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun manualFolderLoadDeduplicatesTheDeferredRelease() {
+        val deferred =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+            )
+
+        val loaded = UiReducer.reduce(deferred, UiIntent.LoadVentoyFolders)
+
+        // The manual refresh is the only USB work; the release must not add a second mount.
+        assertEquals(1, loaded.effects.size)
+        val effect = loaded.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(loaded.state.ventoyFoldersRequest, effect.requestToken)
+        assertEquals(WindowsImportKind.Image, loaded.state.pendingImportFolderPick)
+        assertNull(loaded.state.deferredImportFolderPick)
+        assertFalse(loaded.state.pendingImportFolderPickLoad)
+    }
+
+    @Test
+    fun directInspectionBlocksDeferredReleaseUntilFinished() {
+        val deferred =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+                isoImportGeneration = 5L,
+                isoImportUsbInFlight = 5L,
+            )
+
+        val quiet =
+            UiReducer.reduce(
+                deferred,
+                UiIntent.Status(UiMessage.Raw("still inspecting")),
+            )
+        assertNull(quiet.state.pendingImportFolderPick)
+        assertTrue(quiet.state.pendingImportFolderPickLoad)
+        assertTrue(quiet.effects.isEmpty())
+
+        val finished =
+            UiReducer.reduce(quiet.state, UiIntent.WindowsIsoImportFinished(5L))
+
+        assertNull(finished.state.isoImportUsbInFlight)
+        assertEquals(WindowsImportKind.Image, finished.state.pendingImportFolderPick)
+        assertFalse(finished.state.pendingImportFolderPickLoad)
+        val effect = finished.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(finished.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun staleInspectionResultDoesNotClearLiveGuard() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+
+        val stale =
+            UiReducer.reduce(
+                base,
+                UiIntent.WindowsIsoImportRejected(
+                    problem = UnreadableProblem.IoFailure,
+                    reason = "old failure",
+                    generation = 6L,
+                ),
+            )
+
+        // A result from the cancelled generation must neither overwrite the live error nor
+        // end the guard of the inspection that still holds the disk.
+        assertEquals(7L, stale.state.isoImportUsbInFlight)
+        assertNull(stale.state.isoImportError)
+        assertEquals(base.ventoyFolders, stale.state.ventoyFolders)
+        assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
+    fun cancelKeepsGuardUntilDiskCloses() {
+        val inspecting =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+
+        val cancelled = UiReducer.reduce(inspecting, UiIntent.CancelWindowsIsoImport)
+
+        // UI cancel invalidates the pending dialog/result only; direct I/O may still be open.
+        assertNull(cancelled.state.isoImportSafInFlight)
+        assertEquals(7L, cancelled.state.isoImportUsbInFlight)
+        assertEquals(8L, cancelled.state.isoImportGeneration)
+        assertTrue(cancelled.state.pendingImportFolderPickLoad)
+        assertNull(cancelled.state.pendingImportFolderPick)
+        assertTrue(cancelled.effects.isEmpty())
+
+        val lateRejection =
+            UiReducer.reduce(
+                cancelled.state,
+                UiIntent.WindowsIsoImportRejected(
+                    problem = UnreadableProblem.IoFailure,
+                    reason = "late",
+                    generation = 7L,
+                ),
+            )
+        assertNull(lateRejection.state.isoImportError)
+        assertEquals(7L, lateRejection.state.isoImportUsbInFlight)
+
+        val finished =
+            UiReducer.reduce(
+                lateRejection.state,
+                UiIntent.WindowsIsoImportFinished(7L),
+            )
+        assertNull(finished.state.isoImportUsbInFlight)
+        assertFalse(finished.state.pendingImportFolderPickLoad)
+        assertEquals(WindowsImportKind.Image, finished.state.pendingImportFolderPick)
+        val effect = finished.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(finished.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun secondInspectionRequestIsRefusedWhileOneRuns() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+            )
+
+        val refused =
+            UiReducer.reduce(
+                base,
+                UiIntent.RequestImportWindowsIso(uri = "content://example/a.iso"),
+            )
+
+        assertEquals(7L, refused.state.isoImportGeneration)
+        assertEquals(7L, refused.state.isoImportSafInFlight)
+        assertEquals(UiMessage.Key(UiMessageKey.WaitForOperation), refused.state.statusMessage)
+        assertTrue(refused.effects.isEmpty())
+    }
+
+    @Test
+    fun cancelThenNewImportStartsWhileOldSafJobMayBeStuck() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+            )
+
+        val cancelled = UiReducer.reduce(base, UiIntent.CancelWindowsIsoImport)
+        assertNull(cancelled.state.isoImportSafInFlight)
+        assertEquals(8L, cancelled.state.isoImportGeneration)
+
+        // A provider read that ignores cancellation must not block a fresh import.
+        val next =
+            UiReducer.reduce(
+                cancelled.state,
+                UiIntent.RequestImportWindowsIso(uri = "content://example/b.iso"),
+            )
+
+        assertEquals(9L, next.state.isoImportGeneration)
+        assertEquals(9L, next.state.isoImportSafInFlight)
+        val effect = next.effects.single() as UiEffect.InspectIsoImport
+        assertEquals(9L, effect.requestGeneration)
+    }
+
+    @Test
+    fun safPhaseDoesNotBlockDeferredFolderMount() {
+        val base =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+            )
+
+        val released =
+            UiReducer.reduce(
+                base,
+                UiIntent.Status(UiMessage.Raw("saf still reading")),
+            )
+
+        // SAF runs off the disk worker; only the USB phase owns the disk.
+        assertEquals(WindowsImportKind.Image, released.state.pendingImportFolderPick)
+        assertFalse(released.state.pendingImportFolderPickLoad)
+        val effect = released.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(released.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun usbStartedMovesOwnershipFromSaf() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+            )
+
+        val started = UiReducer.reduce(base, UiIntent.WindowsIsoImportUsbStarted(7L))
+
+        assertNull(started.state.isoImportSafInFlight)
+        assertEquals(7L, started.state.isoImportUsbInFlight)
+
+        val lateSaf = UiReducer.reduce(started.state, UiIntent.WindowsIsoImportSafFinished(7L))
+        assertEquals(7L, lateSaf.state.isoImportUsbInFlight)
+
+        val done = UiReducer.reduce(lateSaf.state, UiIntent.WindowsIsoImportFinished(7L))
+        assertNull(done.state.isoImportUsbInFlight)
+    }
+
+    @Test
+    fun staleSafFinishedKeepsNewOwnership() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 8L,
+                isoImportSafInFlight = 8L,
+            )
+
+        val stale =
+            UiReducer.reduce(base, UiIntent.WindowsIsoImportSafFinished(7L))
+
+        assertEquals(8L, stale.state.isoImportSafInFlight)
+    }
+
+    @Test
+    fun sameStickProbeKeepsInFlightInspectionAndDeferredPick() {
+        val base =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+                isoImportGeneration = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+        val device = requireNotNull(base.device)
+
+        val probed =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+
+        assertEquals(7L, probed.state.isoImportUsbInFlight)
+        assertEquals(7L, probed.state.isoImportGeneration)
+        assertEquals(WindowsImportKind.Image, probed.state.deferredImportFolderPick)
+        assertTrue(probed.state.pendingImportFolderPickLoad)
+        assertTrue(probed.effects.isEmpty())
+    }
+
+    @Test
+    fun sameStickProbeKeepsGenerationSoUsbStartedOwnsDisk() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+            )
+        val device = requireNotNull(base.device)
+
+        val probed =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+        assertEquals(7L, probed.state.isoImportGeneration)
+        assertEquals(7L, probed.state.isoImportSafInFlight)
+
+        val started =
+            UiReducer.reduce(probed.state, UiIntent.WindowsIsoImportUsbStarted(7L))
+
+        assertNull(started.state.isoImportSafInFlight)
+        assertEquals(7L, started.state.isoImportUsbInFlight)
+    }
+
+    @Test
+    fun sameStickProbeKeepsGenerationSoInspectedIsAccepted() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+        val device = requireNotNull(base.device)
+
+        val probed =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+        assertEquals(7L, probed.state.isoImportGeneration)
+
+        val inspected =
+            UiReducer.reduce(
+                probed.state,
+                UiIntent.WindowsIsoImportInspected(
+                    uri = "content://example/win.iso",
+                    name = "win.iso",
+                    sizeBytes = 1L,
+                    targetName = "win.iso",
+                    exists = true,
+                    generation = 7L,
+                    directory = "/ISO",
+                ),
+            )
+
+        assertNotNull(inspected.state.pendingIsoImport)
+        assertEquals(7L, inspected.state.isoImportUsbInFlight)
+    }
+
+    @Test
+    fun sameStickProbeSequenceBusyInspectedReadyKeepsOverwriteProposal() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+        val device = requireNotNull(base.device)
+
+        val busy =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            ).state
+        assertEquals(7L, busy.isoImportGeneration)
+        assertFalse(busy.actionsEnabled)
+
+        // The host posts the inspection result while the probe still shows Busy.
+        val inspected =
+            UiReducer.reduce(
+                busy,
+                UiIntent.WindowsIsoImportInspected(
+                    uri = "content://example/win.iso",
+                    name = "win.iso",
+                    sizeBytes = 1L,
+                    targetName = "win.iso",
+                    exists = true,
+                    generation = 7L,
+                    directory = "/ISO",
+                ),
+            ).state
+        assertNotNull(inspected.pendingIsoImport)
+
+        val ready =
+            UiReducer.reduce(
+                inspected,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            ).state
+        assertNotNull(ready.pendingIsoImport)
+        assertEquals(7L, ready.isoImportGeneration)
+    }
+
+    @Test
+    fun nonOverwritingInspectionIsDeferredAcrossProbeAndStartsAfterDiskCloses() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+        val device = requireNotNull(base.device)
+
+        val busy =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            ).state
+
+        val inspected =
+            UiReducer.reduce(
+                busy,
+                UiIntent.WindowsIsoImportInspected(
+                    uri = "content://example/win.iso",
+                    name = "win.iso",
+                    sizeBytes = 1L,
+                    targetName = "win.iso",
+                    exists = false,
+                    generation = 7L,
+                    directory = "/ISO",
+                ),
+            )
+        assertNotNull(inspected.state.deferredIsoImport)
+        assertNull(inspected.state.pendingIsoImport)
+        assertTrue(inspected.effects.isEmpty())
+
+        val ready =
+            UiReducer.reduce(
+                inspected.state,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+        // Same stick: the held import survives; it waits for the disk to close.
+        assertNotNull(ready.state.deferredIsoImport)
+        assertEquals(7L, ready.state.isoImportGeneration)
+
+        // The Ready probe also re-lists Files; the import must not race that mount.
+        val listed =
+            UiReducer.reduce(
+                ready.state,
+                UiIntent.FilesListed(
+                    path = ready.state.currentPath,
+                    files = emptyList(),
+                    generation = ready.state.filesListGeneration,
+                    identity = requireNotNull(ready.state.device).identity,
+                    partitionId = requireNotNull(ready.state.selectedPartitionId),
+                    attachGeneration = requireNotNull(ready.state.device).attachGeneration,
+                ),
+            )
+        assertFalse(listed.state.filesPending)
+        assertNotNull(listed.state.deferredIsoImport)
+        assertTrue(listed.effects.none { it is UiEffect.ImportIso })
+
+        val finished =
+            UiReducer.reduce(listed.state, UiIntent.WindowsIsoImportFinished(7L))
+
+        assertNull(finished.state.deferredIsoImport)
+        val effect = finished.effects.single() as UiEffect.ImportIso
+        assertEquals(false, effect.overwrite)
+        assertEquals("win.iso", effect.isoImport.targetName)
+        assertEquals(7L, effect.requestGeneration)
+    }
+
+    @Test
+    fun deferredImportIsDroppedOnAttachChange() {
+        val base =
+            withVentoy().copy(
+                isoImportGeneration = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+        val device = requireNotNull(base.device)
+
+        val busy =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            ).state
+        val inspected =
+            UiReducer.reduce(
+                busy,
+                UiIntent.WindowsIsoImportInspected(
+                    uri = "content://example/win.iso",
+                    name = "win.iso",
+                    sizeBytes = 1L,
+                    targetName = "win.iso",
+                    exists = false,
+                    generation = 7L,
+                    directory = "/ISO",
+                ),
+            ).state
+        assertNotNull(inspected.deferredIsoImport)
+
+        val swapped =
+            UiReducer.reduce(
+                inspected,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 2L),
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+
+        assertNull(swapped.state.deferredIsoImport)
+        assertTrue(swapped.effects.none { it is UiEffect.ImportIso })
+    }
+
+    @Test
+    fun terminalImportFailureReopenUsesCapturedGeneration() {
+        val base = withVentoy()
+        val running =
+            UiReducer.reduce(
+                base,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.ImportTarget("win.iso"),
+                    ),
+                ),
+            ).state
+        val failed =
+            UiReducer.reduce(
+                running,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Failed,
+                        title = OperationTitle.ImportTarget("win.iso"),
+                        errorMessage = "import folder is gone",
+                    ),
+                ),
+            ).state
+        assertTrue(failed.isoImportGeneration > base.isoImportGeneration)
+        val device = requireNotNull(failed.device)
+
+        // The host reads the live generation after the terminal, then pins the reopen to it.
+        val reopened =
+            UiReducer.reduce(
+                failed,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = failed.isoImportGeneration,
+                ),
+            )
+
+        assertEquals(WindowsImportKind.Image, reopened.state.pendingImportFolderPick)
+        assertNull(reopened.state.ventoyFolders)
+        assertEquals(
+            failed.ventoyFoldersRequest + 1L,
+            reopened.state.ventoyFoldersRequest,
+        )
+        assertTrue(reopened.effects.single() is UiEffect.LoadVentoyFolders)
+    }
+
+    @Test
+    fun reopenWithPreCancelGenerationIsStale() {
+        val base = withVentoy().copy(isoImportGeneration = 7L)
+        val cancelled = UiReducer.reduce(base, UiIntent.CancelWindowsIsoImport).state
+        assertEquals(8L, cancelled.isoImportGeneration)
+        val device = requireNotNull(cancelled.device)
+
+        val stale =
+            UiReducer.reduce(
+                cancelled,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 7L,
+                ),
+            )
+
+        assertEquals(base.ventoyFolders, stale.state.ventoyFolders)
+        assertEquals(base.ventoyFoldersRequest, stale.state.ventoyFoldersRequest)
+        assertNull(stale.state.pendingImportFolderPick)
+        assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
+    fun attachChangeDropsInspectionGuardsAndDeferredDemand() {
+        val base =
+            withVentoy().copy(
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                ventoyFolders = null,
+                isoImportGeneration = 7L,
+                isoImportSafInFlight = 7L,
+                isoImportUsbInFlight = 7L,
+            )
+
+        val swapped =
+            UiReducer.reduce(
+                base,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 2L),
+                    partitions = listOf(partition()),
+                ),
+            )
+
+        // The host ticket is disowned on replug, so no old worker can reach the new stick.
+        // Dropping the guard lets a fresh import run without waiting on a worker that may
+        // never publish (provider read ignoring cancellation); a late Finished is gated by
+        // its generation and cannot clear the new guard.
+        assertNull(swapped.state.isoImportSafInFlight)
+        assertNull(swapped.state.isoImportUsbInFlight)
+        assertNull(swapped.state.deferredImportFolderPick)
+        assertFalse(swapped.state.pendingImportFolderPickLoad)
+        assertTrue(swapped.effects.none { it is UiEffect.LoadVentoyFolders })
+
+        val late = UiReducer.reduce(swapped.state, UiIntent.WindowsIsoImportFinished(7L))
+        assertNull(late.state.isoImportUsbInFlight)
+        assertNull(late.state.isoImportSafInFlight)
+    }
+
+    @Test
+    fun staleReopenIsDroppedByGeneration() {
+        val base = withVentoy().copy(isoImportGeneration = 8L)
+        val device = requireNotNull(base.device)
+
+        val stale =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 7L,
+                ),
+            )
+
+        assertEquals(base.ventoyFolders, stale.state.ventoyFolders)
+        assertEquals(base.ventoyFoldersRequest, stale.state.ventoyFoldersRequest)
+        assertNull(stale.state.pendingImportFolderPick)
+        assertNull(stale.state.deferredImportFolderPick)
+        assertFalse(stale.state.pendingImportFolderPickLoad)
+        assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
+    fun sameStickBusyKeepsTheDeferredPick() {
+        val base =
+            withVentoy().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+        val device = requireNotNull(base.device)
+        val deferred =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            ).state
+
+        val busy =
+            UiReducer.reduce(
+                deferred,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Busy,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+
+        assertNull(busy.state.pendingImportFolderPick)
+        assertEquals(WindowsImportKind.Image, busy.state.deferredImportFolderPick)
+        assertTrue(busy.state.pendingImportFolderPickLoad)
+        assertTrue(busy.effects.isEmpty())
+    }
+
+    @Test
+    fun sameStickReadyKeepsDeferredPickAndReleasesOnQuietIntent() {
+        val prompt =
+            UiReducer.reduce(
+                withVentoy(),
+                UiIntent.RequestDestructive(DestructiveAction.WIPE),
+            ).state
+        val device = requireNotNull(prompt.device)
+        val deferred =
+            UiReducer.reduce(
+                prompt,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.Image,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            ).state
+
+        val ready =
+            UiReducer.reduce(
+                deferred,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    partitions = listOf(partition()),
+                    files = emptyList(),
+                ),
+            )
+
+        // Same attachment: the demand survives, but this intent already mounts Files.
+        assertEquals(WindowsImportKind.Image, ready.state.deferredImportFolderPick)
+        assertTrue(ready.state.pendingImportFolderPickLoad)
+        assertTrue(ready.effects.any { it is UiEffect.LoadFiles })
+        assertTrue(ready.effects.none { it is UiEffect.LoadVentoyFolders })
+
+        val quiet =
+            UiReducer.reduce(
+                ready.state,
+                UiIntent.Status(UiMessage.Raw("settled")),
+            )
+
+        assertEquals(WindowsImportKind.Image, quiet.state.pendingImportFolderPick)
+        assertNull(quiet.state.deferredImportFolderPick)
+        assertFalse(quiet.state.pendingImportFolderPickLoad)
+        val effect = quiet.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(quiet.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
+    @Test
+    fun attachChangeDropsDeferredImportFolderLoad() {
+        val base =
+            withVentoy().copy(
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.Upload,
+                    ),
+            )
+        val device = requireNotNull(base.device)
+        val deferred =
+            UiReducer.reduce(
+                base,
+                UiIntent.ReopenImportFolderPick(
+                    kind = WindowsImportKind.XmlTemplate,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    requestGeneration = 0L,
+                ),
+            ).state
+
+        val replugged =
+            UiReducer.reduce(
+                deferred,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device(gen = 2L),
+                    partitions = listOf(partition()),
+                ),
+            ).state
+
+        assertNull(replugged.pendingImportFolderPick)
+        assertNull(replugged.deferredImportFolderPick)
+        assertFalse(replugged.pendingImportFolderPickLoad)
     }
 }

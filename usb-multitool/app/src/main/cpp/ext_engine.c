@@ -341,13 +341,28 @@ uint64_t ext_engine_mount(uint64_t block_handle, bool read_only, int *out_errno)
 	}
 	v->mounted = true;
 
-	/* Journal start only when clean; never call recover. Do not fail the
-	 * mount on a journal-start error: ext4_umount() can itself fail, which
-	 * would leave lwext4's mountpoint pointing at this context after we
-	 * free it. Upstream's best-effort start is kept here until a teardown
-	 * that cannot leave a live lwext4 reference exists. */
+	/* RW: start journal when FS advertises HAS_JOURNAL. No-op EOK when the
+	 * feature is absent (our journal-less mkfs). Fail-closed on start error:
+	 * continuing would allow metadata writes with jbd_journal=NULL and no
+	 * transaction protection. Umount tears down s_mp before free (patched). */
 	if (!read_only) {
-		(void)ext4_journal_start(v->mount_point);
+		rc = ext4_journal_start(v->mount_point);
+		if (rc != EOK) {
+			int jerr = rc > 0 ? rc : -rc;
+			(void)ext4_umount(v->mount_point);
+			v->mounted = false;
+			/* Best-effort VALID_FS push after the aborted RW mount. */
+			(void)usb_block_sync(v->block_handle);
+			if (v->registered) {
+				(void)ext4_device_unregister(v->dev_name);
+				v->registered = false;
+			}
+			drop_slot(v);
+			pthread_mutex_unlock(&g_ext_mu);
+			free_volume(v);
+			if (out_errno) *out_errno = jerr;
+			return 0;
+		}
 	}
 
 	pthread_mutex_unlock(&g_ext_mu);
@@ -368,11 +383,13 @@ int ext_engine_close(uint64_t vol_handle)
 			rc = ext4_journal_stop(v->mount_point);
 			if (rc != EOK && first_err == 0) first_err = map_lw(rc);
 		}
+		/* umount must clear s_mp even when sb write fails (patched
+		 * lwext4). Freeing with a live mountpoint is UAF on remount. */
 		int rc = ext4_umount(v->mount_point);
 		if (rc != EOK && first_err == 0) first_err = map_lw(rc);
 		v->mounted = false;
 	}
-	/* Push umount sb write (VALID_FS) through to media. */
+	/* Push umount sb write (VALID_FS) through to media when it landed. */
 	if (usb_block_sync(v->block_handle) != 0 && first_err == 0) {
 		first_err = -EIO;
 	}

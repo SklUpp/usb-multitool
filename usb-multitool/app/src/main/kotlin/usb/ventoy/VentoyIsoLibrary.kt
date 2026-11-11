@@ -16,6 +16,13 @@ class ImageEmptyException(message: String) : IOException(message)
 
 class ImageSizeMismatchException(message: String) : IOException(message)
 
+/**
+ * Chosen import folder is gone (or is not a directory). Raised before any write is
+ * attempted: the library never creates the destination itself, so a stale picker choice
+ * cannot resurrect a folder that was deleted on another host.
+ */
+class ImportDirectoryMissingException(message: String) : IOException(message)
+
 data class ImageImportOutcome(
     val targetPath: String,
     val bytes: Long,
@@ -94,13 +101,16 @@ object VentoyIsoLibrary {
             throw ImageAlreadyExistsException("$target already exists; overwrite was not confirmed")
         }
 
-        operation.mutationAttempted = true
-        val dir = volume.statOrNull(directory)
-        if (dir == null) {
-            volume.mkdir(directory)
-        } else if (!dir.isDirectory) {
-            throw IOException("$directory is not a directory")
+        // Fail closed before mutation: the destination folder must already exist (root
+        // always does). It is never created here — a concurrent delete must not be undone.
+        val directoryEntry = volume.statOrNull(directory)
+        if (directory != "/" && (directoryEntry == null || !directoryEntry.isDirectory)) {
+            throw ImportDirectoryMissingException(
+                "import folder \"$directory\" does not exist on the Ventoy partition; pick it again",
+            )
         }
+
+        operation.mutationAttempted = true
 
         val nonce = "${System.currentTimeMillis()}-${System.nanoTime()}"
         val temp = uniqueChild(volume, directory, ".$name.import-$nonce")

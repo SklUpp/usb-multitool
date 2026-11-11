@@ -36,6 +36,7 @@ commit recorded in `UPSTREAM.md`.
 - Unpack into: `third_party/lwext4/`
 - License: GPL-2.0-or-later
 - Bridge: `ext4_blockdev` callbacks → `usb_partition_read` / `usb_partition_write`
+- Local patch (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
 
 ## exfatprogs (exFAT fsck only)
 
