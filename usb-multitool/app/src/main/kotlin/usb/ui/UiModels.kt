@@ -192,6 +192,10 @@ enum class UiMessageKey {
     PartialStatus,
     RunningStatus,
     QueuedStatus,
+    /** Existing unattend XML cannot be replaced without overwrite flag. */
+    XmlOverwriteRequired,
+    /** User must confirm replacing the existing unattend XML on the stick. */
+    ConfirmXmlOverwrite,
 }
 
 enum class DevicePresence {
@@ -270,6 +274,26 @@ data class DestructiveConfirmation(
     /** Geometry the raw range was drafted against; refuses a re-plug with other geometry. */
     val diskSectorCount: ULong? = null,
     val diskSectorSize: Int? = null,
+    /**
+     * Display name of the raw image source (SAF name or staged label). Shown on RAW_WRITE
+     * confirmation; never an opaque document id alone when a real name is known.
+     */
+    val rawSourceName: String? = null,
+    /** Full SAF/content URI snapshotted for GPT_RESTORE — not only a display label. */
+    val gptBackupUri: String? = null,
+    /** Display label for GPT backup when a basename exists; optional for opaque URIs. */
+    val gptBackupName: String? = null,
+    /** Full URI snapshotted for RESCUE_RESTORE image. */
+    val rescueImageUri: String? = null,
+    val rescueImageName: String? = null,
+    /** Full URI snapshotted for RESCUE_RESTORE map. */
+    val rescueMapUri: String? = null,
+    val rescueMapName: String? = null,
+    /**
+     * Target XML path/name for VENTOY_UNATTEND_XML_WRITE (overwrite of existing unattend).
+     * Generation params live in [AppUiState.pendingAutounattendGeneration].
+     */
+    val xmlTargetName: String? = null,
     val partitionRole: PartitionRole? = null,
     val partitionBootable: Boolean? = null,
     /** Normalized GPT name for CREATE_PARTITION (null = no name). */
@@ -308,6 +332,14 @@ data class DestructiveConfirmation(
             rawSectorCount: ULong? = null,
             diskSectorCount: ULong? = null,
             diskSectorSize: Int? = null,
+            rawSourceName: String? = null,
+            gptBackupUri: String? = null,
+            gptBackupName: String? = null,
+            rescueImageUri: String? = null,
+            rescueImageName: String? = null,
+            rescueMapUri: String? = null,
+            rescueMapName: String? = null,
+            xmlTargetName: String? = null,
             imagePaths: List<String> = emptyList(),
             templatePath: String? = null,
             allowDestructiveTemplate: Boolean = false,
@@ -329,6 +361,22 @@ data class DestructiveConfirmation(
                     if (action == DestructiveAction.RAW_WRITE) diskSectorCount else null,
                 diskSectorSize =
                     if (action == DestructiveAction.RAW_WRITE) diskSectorSize else null,
+                rawSourceName =
+                    if (action == DestructiveAction.RAW_WRITE) rawSourceName else null,
+                gptBackupUri =
+                    if (action == DestructiveAction.GPT_RESTORE) gptBackupUri else null,
+                gptBackupName =
+                    if (action == DestructiveAction.GPT_RESTORE) gptBackupName else null,
+                rescueImageUri =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueImageUri else null,
+                rescueImageName =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueImageName else null,
+                rescueMapUri =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueMapUri else null,
+                rescueMapName =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueMapName else null,
+                xmlTargetName =
+                    if (action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE) xmlTargetName else null,
                 imagePaths = if (action == DestructiveAction.VENTOY_LINK_XML) imagePaths else emptyList(),
                 templatePath = if (action == DestructiveAction.VENTOY_LINK_XML) templatePath else null,
                 allowDestructiveTemplate =
@@ -336,6 +384,22 @@ data class DestructiveConfirmation(
                 templateSha256 =
                     if (action == DestructiveAction.VENTOY_LINK_XML) templateSha256 else null,
             )
+
+        /**
+         * Optional display basename only. Trailing `/` or blank → null (no invented name).
+         */
+        fun fileLabel(uriOrPath: String?): String? {
+            if (uriOrPath.isNullOrBlank()) return null
+            if (uriOrPath.endsWith('/')) return null
+            return uriOrPath.substringAfterLast('/').takeIf { it.isNotBlank() }
+        }
+
+        /**
+         * Basename when present, else full URI/path so opaque SAF still shows a label
+         * without blocking the operation.
+         */
+        fun displayLabel(uriOrPath: String?): String? =
+            fileLabel(uriOrPath) ?: uriOrPath?.takeIf { it.isNotBlank() }
     }
 }
 fun DestructiveAction.displayName(): String =

@@ -30,6 +30,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/image/RawRangeProbe.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiStateHostCheck.kt"

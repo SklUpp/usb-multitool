@@ -2,9 +2,18 @@ package usb.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -25,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -162,13 +172,17 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                 }
             }
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(
                     onClick = { pickerOpen = true },
                     enabled = state.actionsEnabled,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
                 ) {
                     Text(stringResource(R.string.unattend_choose_template))
                 }
@@ -177,7 +191,9 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                     enabled = state.actionsEnabled &&
                         state.autounattendState !is AutounattendState.Unreadable &&
                         document?.layoutProblems.isNullOrEmpty(),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
                 ) {
                     Text(stringResource(R.string.unattend_generate))
                 }
@@ -223,15 +239,26 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                 }
                 candidates.images.forEach { image ->
                     val selected = state.windowsSelectedImages.any { it.path == image.imagePath }
+                    val imageSelectable =
+                        state.actionsEnabled && image.problem == null && !image.bound
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = selected || image.bound,
+                                enabled = imageSelectable,
+                                role = Role.Checkbox,
+                                onValueChange = {
+                                    onIntent(UiIntent.ToggleWindowsImage(image.imagePath))
+                                },
+                            ),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Checkbox(
                             checked = selected || image.bound,
-                            onCheckedChange = { onIntent(UiIntent.ToggleWindowsImage(image.imagePath)) },
-                            enabled = state.actionsEnabled && image.problem == null && !image.bound,
+                            onCheckedChange = null,
+                            enabled = imageSelectable,
                         )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -278,15 +305,27 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
                 if (templateMarkers.isNotEmpty()) {
                     // The backend refuses a destructive template without an explicit opt-in and
                     // the exact inspected digest; the same numbers travel with the request.
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = bindDestructiveAck,
+                                enabled = state.actionsEnabled,
+                                role = Role.Checkbox,
+                                onValueChange = { bindDestructiveAck = it },
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         Checkbox(
                             checked = bindDestructiveAck,
-                            onCheckedChange = { bindDestructiveAck = it },
+                            onCheckedChange = null,
                             enabled = state.actionsEnabled,
                         )
                         Text(
                             text = stringResource(R.string.unattend_ack_destructive),
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -375,6 +414,7 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
 }
 
 /** Global `control` entries: raw value verbatim, no normalisation, unknown keys read-only. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     SectionCard(
@@ -419,7 +459,7 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
                                 MaterialTheme.colorScheme.error
                             },
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             TextButton(
                                 onClick = {
                                     onIntent(
@@ -482,7 +522,12 @@ private fun LayoutConfirmDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.layout_confirm_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
                     text = stringResource(R.string.layout_confirm_body),
                     style = MaterialTheme.typography.bodySmall,
@@ -505,15 +550,27 @@ private fun LayoutConfirmDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = acknowledged,
+                            enabled = actionsEnabled,
+                            role = Role.Checkbox,
+                            onValueChange = { acknowledged = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Checkbox(
                         checked = acknowledged,
-                        onCheckedChange = { acknowledged = it },
+                        onCheckedChange = null,
                         enabled = actionsEnabled,
                     )
                     Text(
                         text = stringResource(R.string.layout_confirm_ack),
                         style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -561,7 +618,11 @@ private fun TemplatePickerDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
 
-                    else ->
+                    else -> Column(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
                         candidates.take(40).forEach { path ->
                             TextButton(
                                 onClick = { onPick(path) },
@@ -576,6 +637,7 @@ private fun TemplatePickerDialog(
                                 )
                             }
                         }
+                    }
                 }
             }
         },
@@ -589,6 +651,7 @@ private fun TemplatePickerDialog(
 }
 
 /** Parameter editor: every block is opt-in and off by default; off means "not written". */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GenerateDialog(
     template: String,
@@ -626,7 +689,15 @@ private fun GenerateDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.params_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Up to ten fields plus an unbounded layout list: the form scrolls instead of
+            // being clipped by the M3 dialog text slot, so the acknowledgement and the last
+            // fields stay reachable on short screens.
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
                     text = VentoySetup.resolveXmlPath(template),
                     style = MaterialTheme.typography.labelSmall,
@@ -740,7 +811,7 @@ private fun GenerateDialog(
                             ) { Text(stringResource(R.string.params_remove_partition)) }
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         DiskPartitionRole.entries.forEach { role ->
                             TextButton(
                                 onClick = {
@@ -776,15 +847,27 @@ private fun GenerateDialog(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = destructiveAck,
+                                enabled = actionsEnabled,
+                                role = Role.Checkbox,
+                                onValueChange = { destructiveAck = it },
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         Checkbox(
                             checked = destructiveAck,
-                            onCheckedChange = { destructiveAck = it },
+                            onCheckedChange = null,
                             enabled = actionsEnabled,
                         )
                         Text(
                             text = stringResource(R.string.unattend_ack_destructive),
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -830,10 +913,14 @@ private fun GenerateDialog(
                     )
                 },
                 enabled = canGenerate,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
+                colors = if (markers.isNotEmpty()) {
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    )
+                } else {
+                    ButtonDefaults.buttonColors()
+                },
             ) { Text(stringResource(R.string.unattend_generate)) }
         },
         dismissButton = {

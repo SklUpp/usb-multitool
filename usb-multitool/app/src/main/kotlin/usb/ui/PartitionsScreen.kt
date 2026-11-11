@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -496,7 +497,7 @@ fun PartitionsScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SectionCard(
             title = stringResource(R.string.partitions_layout_title),
@@ -817,13 +818,9 @@ fun PartitionsScreen(
                     ?: stringResource(R.string.partitions_scheme_unknown),
             )
             var schemeChoice by remember(currentScheme) {
-                mutableStateOf(
-                    if (currentScheme == PartitionScheme.Gpt) {
-                        PartitionScheme.Mbr
-                    } else {
-                        PartitionScheme.Gpt
-                    },
-                )
+                // Start on the current scheme so the destructive init button stays disabled
+                // until the user deliberately picks the other table.
+                mutableStateOf(currentScheme ?: PartitionScheme.Gpt)
             }
             CompactChoice(
                 options = listOf(
@@ -1304,17 +1301,20 @@ private fun DiskMapBar(state: AppUiState) {
                         if (partition.id == state.selectedPartitionId) {
                             MaterialTheme.colorScheme.primary
                         } else {
-                            MaterialTheme.colorScheme.secondary
+                            // Muted band over the track: secondaryContainer equals the track
+                            // token in both themes, which erased every unselected segment.
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
                         },
                     ),
             )
         }
         if (total > 0.0 && free > 0.0) {
+            // Free space is the track itself, so the partition band and the free span are
+            // always two different tones; only the width has to be reserved here.
             Box(
                 Modifier
                     .weight((free / total).toFloat().coerceAtLeast(0.02f))
-                    .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.tertiaryContainer),
+                    .fillMaxHeight(),
             )
         }
     }
@@ -1408,20 +1408,26 @@ private fun PickerButtons(
     onOpenStick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         OutlinedButton(
             onClick = onOpenStick,
             enabled = state.actionsEnabled,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
         ) {
             Text(stringResource(R.string.raw_choose_stick))
         }
         OutlinedButton(
             onClick = onPickImage,
             enabled = state.actionsEnabled,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
         ) {
             Text(stringResource(R.string.raw_choose_phone))
         }
@@ -1458,25 +1464,34 @@ private fun RawSourceDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
-                    candidates.take(40).forEach { candidate ->
-                        TextButton(
-                            onClick = { onPick(candidate) },
-                            enabled = enabled,
-                            modifier = Modifier.fillMaxWidth(),
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                        ) {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                Text(
-                                    text = candidate.path,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = DeviceIdentity.formatCapacity(candidate.sizeBytes.toULong()),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                    Column(
+                        // Weighted with fill = false: the truncated note below is measured
+                        // first and stays visible; the file list scrolls in the remainder.
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        candidates.take(40).forEach { candidate ->
+                            TextButton(
+                                onClick = { onPick(candidate) },
+                                enabled = enabled,
+                                modifier = Modifier.fillMaxWidth(),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = candidate.path,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = DeviceIdentity.formatCapacity(candidate.sizeBytes.toULong()),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }

@@ -629,27 +629,12 @@ object VentoySetup {
     }
 
     /** Public resolver: bare name keeps legacy `/ventoy/<name>`; a path stays where it is. */
-    fun xmlPath(xmlName: String): String = xmlTarget(xmlName)
+    fun xmlPath(xmlName: String): String = XmlPath.resolve(xmlName)
 
     /** Same resolver under an explicit name for UI display before writing. */
-    fun resolveXmlPath(xmlName: String): String = xmlTarget(xmlName)
+    fun resolveXmlPath(xmlName: String): String = XmlPath.resolve(xmlName)
 
-    private fun xmlTarget(input: String): String {
-        val cleaned = input.trim().replace('\\', '/')
-        require(cleaned.isNotEmpty()) { "invalid XML path \"$input\"" }
-        val withLeading = if (cleaned.startsWith("/")) cleaned else "/$cleaned"
-        val segments = withLeading.split('/').filter { it.isNotEmpty() }
-        require(segments.isNotEmpty() && segments.none { it == "." || it == ".." }) {
-            "invalid XML path \"$input\""
-        }
-        val path = "/" + segments.joinToString("/")
-        val resolved =
-            if (cleaned.contains('/')) path else "/$VENTOY_DIR/${path.drop(1)}"
-        require(!resolved.equals(CONFIG_PATH, ignoreCase = true)) {
-            "XML target must not be the Ventoy config file $CONFIG_PATH"
-        }
-        return resolved
-    }
+    private fun xmlTarget(input: String): String = XmlPath.resolve(input)
 
     private fun uniqueBackupName(volume: UsbFsVolume, path: String): String {
         val nonce = "${System.currentTimeMillis()}-${System.nanoTime()}"
@@ -662,7 +647,7 @@ object VentoySetup {
         return candidate
     }
 
-    private fun requireXmlName(name: String): String = xmlTarget(name)
+    private fun requireXmlName(name: String): String = XmlPath.resolve(name)
 
     private fun findEntry(volume: UsbFsVolume, path: String): usb.fs.UsbFsDirEntry? {
         val name = path.substringAfterLast('/')

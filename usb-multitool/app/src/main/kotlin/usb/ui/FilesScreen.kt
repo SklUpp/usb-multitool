@@ -112,120 +112,129 @@ fun FilesScreen(
         return
     }
 
+    val upDescription = stringResource(R.string.files_up)
+    val createFolderLabel = stringResource(R.string.files_create_folder)
+
     Box(modifier = modifier.fillMaxSize()) {
-        Column(
+        // One scroll container: the header cards scroll with the folder contents, so the
+        // folder actions and the selected-entry card stay reachable in landscape and on
+        // short screens, where three fixed cards alone could fill the viewport.
+        LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 76.dp),
         ) {
-            SectionCard(
-                title = stringResource(R.string.files_section_partition),
-                subtitle = selected?.let {
-                    "${it.name} · ${it.filesystemLabel.ifEmpty { "—" }} · " +
-                        (partitionSizeLabel(state, it) ?: "—")
-                } ?: stringResource(R.string.partitions_none_selected),
-            ) {
-                CompactChoice(
-                    options = state.partitions.map {
-                        it.id to partitionOptionLabel(state, it)
-                    },
-                    selected = selected?.id ?: state.partitions.first().id,
-                    onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
-                    label = stringResource(R.string.files_current_partition),
-                    enabled = state.actionsEnabled,
-                )
-                val space = selected?.let(state::filesystemSpace)
-                InfoRow(
-                    stringResource(R.string.filesystem_usage_label),
-                    if (space != null) {
-                        stringResource(
-                            R.string.filesystem_usage_known,
-                            DeviceIdentity.formatCapacity(space.freeBytes),
-                            DeviceIdentity.formatCapacity(space.totalBytes),
-                        )
-                    } else {
-                        stringResource(R.string.filesystem_usage_unavailable)
-                    },
-                )
+            item(key = "partition") {
+                SectionCard(
+                    title = stringResource(R.string.files_section_partition),
+                    subtitle = selected?.let {
+                        "${it.name} · ${it.filesystemLabel.ifEmpty { "—" }} · " +
+                            (partitionSizeLabel(state, it) ?: "—")
+                    } ?: stringResource(R.string.partitions_none_selected),
+                ) {
+                    CompactChoice(
+                        options = state.partitions.map {
+                            it.id to partitionOptionLabel(state, it)
+                        },
+                        selected = selected?.id ?: state.partitions.first().id,
+                        onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
+                        label = stringResource(R.string.files_current_partition),
+                        enabled = state.actionsEnabled,
+                    )
+                    val space = selected?.let(state::filesystemSpace)
+                    InfoRow(
+                        stringResource(R.string.filesystem_usage_label),
+                        if (space != null) {
+                            stringResource(
+                                R.string.filesystem_usage_known,
+                                DeviceIdentity.formatCapacity(space.freeBytes),
+                                DeviceIdentity.formatCapacity(space.totalBytes),
+                            )
+                        } else {
+                            stringResource(R.string.filesystem_usage_unavailable)
+                        },
+                    )
+                }
             }
 
-            val upDescription = stringResource(R.string.files_up)
-            val createFolderLabel = stringResource(R.string.files_create_folder)
-            SectionCard(
-                title = stringResource(R.string.files_section_folder),
-                subtitle = breadcrumbLabel(state.currentPath),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+            item(key = "folder") {
+                SectionCard(
+                    title = stringResource(R.string.files_section_folder),
+                    subtitle = breadcrumbLabel(state.currentPath),
                 ) {
-                    Text(
-                        text = pluralStringResource(
-                            R.plurals.elements_count,
-                            state.files.size,
-                            state.files.size,
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // Named actions: an up-chevron and a plus alone were ambiguous.
-                    TextButton(
-                        onClick = { onIntent(UiIntent.NavigateUp) },
-                        enabled = canAct && state.currentPath != "/",
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        modifier = Modifier.semantics { contentDescription = upDescription },
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(stringResource(R.string.files_up_action))
+                        Text(
+                            text = pluralStringResource(
+                                R.plurals.elements_count,
+                                state.files.size,
+                                state.files.size,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Named actions: an up-chevron and a plus alone were ambiguous.
+                        TextButton(
+                            onClick = { onIntent(UiIntent.NavigateUp) },
+                            enabled = canAct && state.currentPath != "/",
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.semantics { contentDescription = upDescription },
+                        ) {
+                            Text(stringResource(R.string.files_up_action))
+                        }
+                        TextButton(
+                            onClick = { showNewFolderDialog = true },
+                            enabled = canWrite,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.semantics { contentDescription = createFolderLabel },
+                        ) {
+                            Text(stringResource(R.string.files_new_folder_action))
+                        }
                     }
-                    TextButton(
-                        onClick = { showNewFolderDialog = true },
-                        enabled = canWrite,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        modifier = Modifier.semantics { contentDescription = createFolderLabel },
-                    ) {
-                        Text(stringResource(R.string.files_new_folder_action))
+                    if (selected == null && state.partitions.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.msg_select_partition_first),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (efiBlocked) {
+                        Text(
+                            text = stringResource(R.string.files_efi_blocked, selected?.name.orEmpty()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
-                }
-                if (selected == null && state.partitions.isNotEmpty()) {
-                    Text(
-                        text = stringResource(R.string.msg_select_partition_first),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else if (efiBlocked) {
-                    Text(
-                        text = stringResource(R.string.files_efi_blocked, selected?.name.orEmpty()),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
                 }
             }
 
             if (selection != null) {
-                SectionCard(
-                    title = stringResource(R.string.files_section_selection),
-                    subtitle = selection.name,
-                    trailing = {
-                        TextButton(
-                            onClick = { selectedFile = null },
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                stringResource(R.string.files_clear_selection),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    },
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                item(key = "selection") {
+                    SectionCard(
+                        title = stringResource(R.string.files_section_selection),
+                        subtitle = selection.name,
+                        trailing = {
+                            TextButton(
+                                onClick = { selectedFile = null },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.files_clear_selection),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        },
                     ) {
-                        if (!selection.isDirectory) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             TextButton(
                                 onClick = { onRequestDownload(selection.name) },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -236,55 +245,54 @@ fun FilesScreen(
                                 )
                             }
                             TextButton(
-                            onClick = {
-                                val device = state.device
-                                val partition = state.selectedPartition()
-                                if (device != null && partition != null) {
-                                    renameTarget = selection
-                                    renameName = selection.name
-                                    renameBinding = PartitionBinding(
-                                        device = device,
-                                        partitionId = partition.id,
-                                        startLba = partition.startLba,
-                                        sectorCount = partition.sectorCount,
-                                    )
-                                }
-                            },
-                            enabled = canWrite,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                stringResource(R.string.files_rename),
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        }
-                        TextButton(
-                            onClick = { showDeleteConfirmDialog = true },
-                            enabled = canWrite,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                stringResource(R.string.action_delete),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
+                                onClick = {
+                                    val device = state.device
+                                    val partition = state.selectedPartition()
+                                    if (device != null && partition != null) {
+                                        renameTarget = selection
+                                        renameName = selection.name
+                                        renameBinding = PartitionBinding(
+                                            device = device,
+                                            partitionId = partition.id,
+                                            startLba = partition.startLba,
+                                            sectorCount = partition.sectorCount,
+                                        )
+                                    }
+                                },
+                                enabled = canWrite,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.files_rename),
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
+                            TextButton(
+                                onClick = { showDeleteConfirmDialog = true },
+                                enabled = canWrite,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.action_delete),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                         }
                     }
-                }
                 }
             }
 
             when {
-                !state.actionsEnabled -> EmptyHint(UiReducer.presenceMessage(state.presence).localized())
-                state.files.isEmpty() -> Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                !state.actionsEnabled -> item(key = "presence") {
+                    EmptyHint(UiReducer.presenceMessage(state.presence).localized())
+                }
+                state.files.isEmpty() -> item(key = "empty") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
                         val readError = state.filesError
                         Text(
@@ -298,33 +306,25 @@ fun FilesScreen(
                         )
                     }
                 }
-                else -> LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding = PaddingValues(bottom = 76.dp),
-                ) {
-                    items(state.files, key = { it.name }) { entry ->
-                        // Reorders/inserts animate in place instead of jumping.
-                        val rowModifier = Modifier.animateItem()
-                        FileRow(
-                            modifier = rowModifier,
-                            entry = entry,
-                            isSelected = entry == selectedFile,
-                            actionsEnabled = canAct,
-                            onSelect = {
-                                selectedFile = if (selectedFile == entry) null else entry
-                            },
-                            onNavigate = {
-                                onIntent(
-                                    UiIntent.OpenDirectory(
-                                        fatChildPath(state.currentPath, entry.name),
-                                    ),
-                                )
-                            },
-                        )
-                    }
+                else -> items(state.files, key = { it.name }) { entry ->
+                    // Reorders/inserts animate in place instead of jumping.
+                    val rowModifier = Modifier.animateItem()
+                    FileRow(
+                        modifier = rowModifier,
+                        entry = entry,
+                        isSelected = entry == selectedFile,
+                        actionsEnabled = canAct,
+                        onSelect = {
+                            selectedFile = if (selectedFile == entry) null else entry
+                        },
+                        onNavigate = {
+                            onIntent(
+                                UiIntent.OpenDirectory(
+                                    fatChildPath(state.currentPath, entry.name),
+                                ),
+                            )
+                        },
+                    )
                 }
             }
         }
@@ -332,7 +332,7 @@ fun FilesScreen(
         if (canWrite) {
             ExtendedFloatingActionButton(
                 text = { Text(stringResource(R.string.files_upload)) },
-                icon = { Text("+", style = MaterialTheme.typography.titleLarge) },
+                icon = { GlyphIcon(Glyph.Plus, size = 20.dp) },
                 onClick = { uploadLauncher.launch("*/*") },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -368,6 +368,7 @@ fun FilesScreen(
                         showNewFolderDialog = false
                         newFolderName = ""
                     },
+                    enabled = newFolderName.isNotBlank(),
                 ) {
                     Text(stringResource(R.string.action_create))
                 }

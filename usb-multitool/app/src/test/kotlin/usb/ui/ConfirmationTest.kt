@@ -420,9 +420,201 @@ class UiStateMachineTest {
                 UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE),
             )
         assertNotNull(confirmed.state.pendingConfirmation)
+        assertEquals("content://b/gpt.bin", confirmed.state.pendingConfirmation!!.gptBackupUri)
+        assertEquals("gpt.bin", confirmed.state.pendingConfirmation!!.gptBackupName)
 
         val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
         assertEquals(DestructiveAction.GPT_RESTORE, submitted.effects.single().action)
+        assertEquals(
+            "content://b/gpt.bin",
+            submitted.effects.single().confirmation!!.gptBackupUri,
+        )
+    }
+
+    @Test
+    fun gptRestoreClearsPendingWhenBackupUriChangesAtoB() {
+        val withA =
+            UiReducer.reduce(ready(), UiIntent.SetBackupFile("content://docs/A.bin")).state
+        val pending =
+            UiReducer.reduce(
+                withA,
+                UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE),
+            ).state
+        assertNotNull(pending.pendingConfirmation)
+        assertEquals("content://docs/A.bin", pending.pendingConfirmation!!.gptBackupUri)
+
+        val afterB =
+            UiReducer.reduce(pending, UiIntent.SetBackupFile("content://docs/B.bin")).state
+        assertNull("pending must clear when backup URI changes", afterB.pendingConfirmation)
+        assertEquals("content://docs/B.bin", afterB.backupUri)
+    }
+
+    @Test
+    fun gptRestoreOpaqueUriConfirmsWithoutBasename() {
+        // Trailing slash → no display label, but full URI still binds.
+        val uri = "content://com.android.providers.media.documents/document/"
+        val picked = UiReducer.reduce(ready(), UiIntent.SetBackupFile(uri)).state
+        val confirmed =
+            UiReducer.reduce(
+                picked,
+                UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE),
+            )
+        val pending = confirmed.state.pendingConfirmation!!
+        assertEquals(uri, pending.gptBackupUri)
+        assertNull(pending.gptBackupName)
+        val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
+        assertEquals(uri, submitted.effects.single().confirmation!!.gptBackupUri)
+    }
+
+    @Test
+    fun rescueRestoreConfirmationCarriesImageAndMapUris() {
+        val withFiles =
+            ready().copy(
+                rescueImageUri = "content://docs/stick.img",
+                rescueMapUri = "content://docs/stick.map",
+            )
+        val confirmed =
+            UiReducer.reduce(
+                withFiles,
+                UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE),
+            )
+        val pending = confirmed.state.pendingConfirmation!!
+        assertEquals(DestructiveAction.RESCUE_RESTORE, pending.action)
+        assertEquals("content://docs/stick.img", pending.rescueImageUri)
+        assertEquals("content://docs/stick.map", pending.rescueMapUri)
+        assertEquals("stick.img", pending.rescueImageName)
+        assertEquals("stick.map", pending.rescueMapName)
+
+        val submitted = UiReducer.reduce(confirmed.state, UiIntent.ConfirmDestructive)
+        assertEquals(
+            "content://docs/stick.img",
+            submitted.effects.single().confirmation!!.rescueImageUri,
+        )
+
+        val swapped =
+            UiReducer.reduce(
+                confirmed.state,
+                UiIntent.SetRescueImage("content://docs/other.img"),
+            ).state
+        assertNull(swapped.pendingConfirmation)
+    }
+
+    @Test
+    fun existingXmlOverwriteRequiresDestructiveConfirmBeforeGenerate() {
+        val doc =
+            usb.ventoy.AutounattendDocument(
+                existing = null,
+                unknownElements = emptyList(),
+                boundImages = emptyList(),
+                sourcePath = "/ventoy/autounattend.xml",
+            )
+        val state =
+            ready().copy(
+                autounattendState = usb.ventoy.AutounattendState.Parsed(doc),
+            )
+        val params = usb.ventoy.AutounattendParams(languageTag = "en-US")
+        val asked =
+            UiReducer.reduce(
+                state,
+                UiIntent.RequestGenerateAutounattend(
+                    xmlName = "autounattend.xml",
+                    params = params,
+                    imagePaths = listOf("/ubuntu.iso"),
+                    overwriteXml = true,
+                ),
+            )
+        assertTrue(asked.effects.isEmpty())
+        val pending = asked.state.pendingConfirmation!!
+        assertEquals(DestructiveAction.VENTOY_UNATTEND_XML_WRITE, pending.action)
+        assertEquals("autounattend.xml", pending.xmlTargetName)
+        assertNotNull(asked.state.pendingAutounattendGeneration)
+
+        val generated = UiReducer.reduce(asked.state, UiIntent.ConfirmDestructive)
+        assertEquals(UiEffect.Kind.GenerateAutounattend, generated.effects.single().kind)
+        assertTrue(generated.effects.single().overwriteXml)
+    }
+
+    @Test
+    fun xmlOverwriteGateUsesCanonicalPathEqualityIncludingDoubleSlash() {
+        // Writer collapses //; gate must match so overwrite confirm is not bypassed.
+        val doc =
+            usb.ventoy.AutounattendDocument(
+                existing = null,
+                unknownElements = emptyList(),
+                boundImages = emptyList(),
+                sourcePath = "/ventoy/autounattend.xml",
+            )
+        val state =
+            ready().copy(autounattendState = usb.ventoy.AutounattendState.Parsed(doc))
+        assertTrue(
+            UiReducer.sameXmlTarget("/ventoy/autounattend.xml", "/ventoy//autounattend.xml"),
+        )
+        assertTrue(
+            UiReducer.sameXmlTarget("/ventoy/autounattend.xml", "autounattend.xml"),
+        )
+        val asked =
+            UiReducer.reduce(
+                state,
+                UiIntent.RequestGenerateAutounattend(
+                    xmlName = "/ventoy//autounattend.xml",
+                    params = usb.ventoy.AutounattendParams(),
+                    imagePaths = emptyList(),
+                    overwriteXml = true,
+                ),
+            )
+        assertTrue(asked.effects.isEmpty())
+        assertEquals(
+            DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+            asked.state.pendingConfirmation!!.action,
+        )
+        assertEquals("/ventoy//autounattend.xml", asked.state.pendingConfirmation!!.xmlTargetName)
+    }
+
+    @Test
+    fun existingXmlWithoutOverwriteFlagIsRefused() {
+        val doc =
+            usb.ventoy.AutounattendDocument(
+                existing = null,
+                unknownElements = emptyList(),
+                boundImages = emptyList(),
+                sourcePath = "/ventoy/autounattend.xml",
+            )
+        val refused =
+            UiReducer.reduce(
+                ready().copy(autounattendState = usb.ventoy.AutounattendState.Parsed(doc)),
+                UiIntent.RequestGenerateAutounattend(
+                    xmlName = "autounattend.xml",
+                    params = usb.ventoy.AutounattendParams(),
+                    imagePaths = emptyList(),
+                    overwriteXml = false,
+                ),
+            )
+        assertNull(refused.state.pendingConfirmation)
+        assertTrue(refused.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.XmlOverwriteRequired), refused.state.statusMessage)
+    }
+
+    @Test
+    fun fileLabelAndDisplayLabelUriFallback() {
+        assertEquals("gpt.bin", DestructiveConfirmation.fileLabel("content://b/gpt.bin"))
+        assertEquals("map", DestructiveConfirmation.fileLabel("/a/b/map"))
+        assertNull(DestructiveConfirmation.fileLabel(null))
+        assertNull(DestructiveConfirmation.fileLabel("   "))
+        val opaque = "content://com.android.providers.media.documents/document/"
+        assertNull(DestructiveConfirmation.fileLabel(opaque))
+        assertEquals(opaque, DestructiveConfirmation.displayLabel(opaque))
+        assertEquals(
+            "gpt.bin",
+            DestructiveConfirmation.displayLabel("content://b/gpt.bin"),
+        )
+        assertNull(DestructiveConfirmation.displayLabel(null))
+
+        // Reducer gate uses XmlPath — same canonical equality as writer.
+        assertTrue(UiReducer.sameXmlTarget("/ventoy/a.xml", "a.xml"))
+        assertTrue(UiReducer.sameXmlTarget("/ventoy/a.xml", "/ventoy//a.xml"))
+        assertTrue(UiReducer.sameXmlTarget("\\ventoy\\a.xml", "/ventoy/a.xml"))
+        assertFalse(UiReducer.sameXmlTarget("/ventoy/a.xml", "b.xml"))
+        assertFalse(UiReducer.sameXmlTarget("/ventoy/a.xml", "../b.xml"))
     }
 
     @Test

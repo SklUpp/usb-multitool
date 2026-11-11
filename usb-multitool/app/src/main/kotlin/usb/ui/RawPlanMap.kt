@@ -74,9 +74,11 @@ internal fun RawPlanMap(
     val currentOnChange by rememberUpdatedState(onRangeChange)
 
     val rangeColor = MaterialTheme.colorScheme.primary
-    val partitionColor = MaterialTheme.colorScheme.secondaryContainer
-    val bootColor = MaterialTheme.colorScheme.tertiaryContainer
-    val tableColor = MaterialTheme.colorScheme.outlineVariant
+    // Three tones of one muted hue over the track: secondaryContainer and tertiaryContainer
+    // resolve to the track colour itself in both themes, so every existing object vanished.
+    val partitionColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    val bootColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+    val tableColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
 
     val partitionLabels = remember(geometry) {

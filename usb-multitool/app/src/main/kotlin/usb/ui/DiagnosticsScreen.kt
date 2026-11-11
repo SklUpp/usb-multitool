@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
@@ -56,7 +57,7 @@ fun DiagnosticsScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SectionCard(
             title = stringResource(R.string.diagnostics_checks_title),
@@ -143,7 +144,7 @@ fun DiagnosticsScreen(
                             stringResource(R.string.diagnostics_image_named, it)
                         } ?: stringResource(R.string.diagnostics_pick_image),
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -157,7 +158,7 @@ fun DiagnosticsScreen(
                             stringResource(R.string.diagnostics_map_named, it)
                         } ?: stringResource(R.string.diagnostics_pick_map),
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -240,6 +241,7 @@ fun DiagnosticsScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clickable(
                             role = Role.Button,
                             onClickLabel = dangerActionLabel,
@@ -296,15 +298,18 @@ private fun DiagTile(
     highlighted: Boolean = false,
 ) {
     val container = if (highlighted) {
-        MaterialTheme.colorScheme.primaryContainer
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (enabled) 1f else 0.6f)
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.35f else 0.18f)
     }
     val content = if (highlighted) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
         MaterialTheme.colorScheme.onSurface
     }
+    // A disabled tile must not look tappable: the container is muted and the glyph and both
+    // labels are faded together, matching the board's .dis rule.
+    val contentAlpha = if (enabled) 1f else 0.45f
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = container,
@@ -320,7 +325,8 @@ private fun DiagTile(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp),
+                .padding(10.dp)
+                .alpha(contentAlpha),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             GlyphIcon(

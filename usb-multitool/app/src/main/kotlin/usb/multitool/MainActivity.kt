@@ -577,8 +577,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.GPT_RESTORE -> {
-                                    val uri = uiState.backupUri
-                                        ?: throw IllegalStateException("no GPT backup file selected")
+                                    // Snapshot on confirmation — never a later uiState.backupUri.
+                                    val uri = confirmed.gptBackupUri
+                                        ?: throw IllegalStateException("no GPT backup URI in confirmation")
+                                    require(uiState.backupUri == null || uiState.backupUri == uri) {
+                                        "GPT backup URI changed after confirmation"
+                                    }
                                     val pSectors = GptBackup.primarySectors(disk.sectorSize)
                                     val bSectors = GptBackup.backupSectors(disk.sectorSize)
                                     val blob = readBackupBlob(uri, GptCriticalBackup.blobSize(
@@ -601,10 +605,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         "${restored.backup.currentLba} verified"
                                 }
                                 DestructiveAction.RESCUE_RESTORE -> {
-                                    val imageUri = uiState.rescueImageUri
-                                        ?: throw IllegalStateException("no rescue image selected")
-                                    val mapUri = uiState.rescueMapUri
-                                        ?: throw IllegalStateException("no rescue map selected")
+                                    val imageUri = confirmed.rescueImageUri
+                                        ?: throw IllegalStateException("no rescue image URI in confirmation")
+                                    val mapUri = confirmed.rescueMapUri
+                                        ?: throw IllegalStateException("no rescue map URI in confirmation")
+                                    require(
+                                        (uiState.rescueImageUri == null || uiState.rescueImageUri == imageUri) &&
+                                            (uiState.rescueMapUri == null || uiState.rescueMapUri == mapUri),
+                                    ) {
+                                        "rescue source URI changed after confirmation"
+                                    }
                                     val mapText = readTextDocument(
                                         mapUri,
                                         maxChars = RescueMap.MAX_ENCODED_CHARS,

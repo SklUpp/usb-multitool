@@ -75,6 +75,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/Autounattend.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/OperationProgressMapper.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
@@ -90,7 +91,8 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendReloadUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/fs/VolumeLabelTest.kt" \
-  "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt"
+  "$ROOT/app/src/test/kotlin/usb/ventoy/AutounattendTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ventoy/XmlPathTest.kt"
 if [ -f "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt" ]; then
   set -- "$@" "$ROOT/app/src/main/kotlin/usb/fs/FilesystemUsage.kt"
 fi
@@ -112,4 +114,5 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.AutounattendReloadUiTest \
   usb.ui.PhoneImportUiTest \
   usb.fs.VolumeLabelTest \
-  usb.ventoy.AutounattendTest
+  usb.ventoy.AutounattendTest \
+  usb.ventoy.XmlPathTest

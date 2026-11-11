@@ -119,6 +119,10 @@ fun UiMessage.localized(): String =
             UiMessageKey.PartialStatus -> stringResource(R.string.msg_partial)
             UiMessageKey.RunningStatus -> stringResource(R.string.msg_running)
             UiMessageKey.QueuedStatus -> stringResource(R.string.msg_queued)
+            UiMessageKey.XmlOverwriteRequired ->
+                stringResource(R.string.msg_xml_overwrite_required)
+            UiMessageKey.ConfirmXmlOverwrite ->
+                stringResource(R.string.msg_confirm_xml_overwrite)
         }
     }
 
@@ -325,8 +329,47 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             )
         }
     }
+    if (confirmation.action == DestructiveAction.RAW_WRITE) {
+        val start = confirmation.rawStartLba
+        val count = confirmation.rawSectorCount
+        if (start != null && count != null && count > 0UL) {
+            lines += stringResource(
+                R.string.confirm_raw_range,
+                start.toLong(),
+                (start + count - 1UL).toLong(),
+                count.toLong(),
+            )
+        }
+        val rawLabel =
+            confirmation.rawSourceName?.takeIf { it.isNotBlank() }
+        rawLabel?.let { name ->
+            lines += stringResource(R.string.confirm_raw_source, name)
+        }
+    }
+    if (confirmation.action == DestructiveAction.GPT_RESTORE) {
+        DestructiveConfirmation.displayLabel(
+            confirmation.gptBackupName ?: confirmation.gptBackupUri,
+        )?.let { name ->
+            lines += stringResource(R.string.confirm_gpt_backup_source, name)
+        }
+    }
     if (confirmation.action == DestructiveAction.RESCUE_RESTORE) {
         lines += stringResource(R.string.confirm_rescue_restore, confirmation.identity.identity)
+        DestructiveConfirmation.displayLabel(
+            confirmation.rescueImageName ?: confirmation.rescueImageUri,
+        )?.let { name ->
+            lines += stringResource(R.string.confirm_rescue_image_source, name)
+        }
+        DestructiveConfirmation.displayLabel(
+            confirmation.rescueMapName ?: confirmation.rescueMapUri,
+        )?.let { name ->
+            lines += stringResource(R.string.confirm_rescue_map_source, name)
+        }
+    }
+    if (confirmation.action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE) {
+        confirmation.xmlTargetName?.takeIf { it.isNotBlank() }?.let { name ->
+            lines += stringResource(R.string.confirm_xml_overwrite, name)
+        }
     }
     if (confirmation.action == DestructiveAction.VENTOY_LINK_XML) {
         val iso = confirmation.isoName?.substringAfterLast('/') ?: "ISO"

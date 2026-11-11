@@ -13,6 +13,7 @@ import usb.ventoy.AutounattendParams
 import usb.ventoy.AutounattendState
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.XmlPath
 import usb.ventoy.autounattendPlanSha256
 
 /**
@@ -955,6 +956,7 @@ object UiReducer {
                                             rawSectorCount = intent.sectorCount,
                                             diskSectorCount = geometry.diskSectorCount,
                                             diskSectorSize = geometry.sectorSize,
+                                            rawSourceName = rawImageSourceName(state),
                                         ),
                                     rangeProbe =
                                         state.rangeProbe?.takeIf {
@@ -1135,6 +1137,48 @@ object UiReducer {
                                         } else {
                                             null
                                         },
+                                    rawSourceName =
+                                        if (intent.action == DestructiveAction.RAW_WRITE) {
+                                            rawImageSourceName(state)
+                                        } else {
+                                            null
+                                        },
+                                    gptBackupUri =
+                                        if (intent.action == DestructiveAction.GPT_RESTORE) {
+                                            state.backupUri
+                                        } else {
+                                            null
+                                        },
+                                    gptBackupName =
+                                        if (intent.action == DestructiveAction.GPT_RESTORE) {
+                                            DestructiveConfirmation.fileLabel(state.backupUri)
+                                        } else {
+                                            null
+                                        },
+                                    rescueImageUri =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            state.rescueImageUri
+                                        } else {
+                                            null
+                                        },
+                                    rescueImageName =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            DestructiveConfirmation.fileLabel(state.rescueImageUri)
+                                        } else {
+                                            null
+                                        },
+                                    rescueMapUri =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            state.rescueMapUri
+                                        } else {
+                                            null
+                                        },
+                                    rescueMapName =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            DestructiveConfirmation.fileLabel(state.rescueMapUri)
+                                        } else {
+                                            null
+                                        },
                                 ),
                         ),
                     )
@@ -1176,30 +1220,54 @@ object UiReducer {
                             DestructiveAction.RENAME_PARTITION,
                             DestructiveAction.INITIALIZE_PARTITION_TABLE,
                         ) -> true
+                    // Partition-targeted actions need a live selection (and matching id when snapshotted).
+                    action in setOf(
+                        DestructiveAction.DELETE_PARTITION,
+                        DestructiveAction.FORMAT_PARTITION,
+                        DestructiveAction.SET_PARTITION_ROLE,
+                        DestructiveAction.SET_PARTITION_BOOTABLE,
+                        DestructiveAction.RENAME_PARTITION,
+                        DestructiveAction.RENAME_VOLUME_LABEL,
+                    ) && state.selectedPartitionId == null -> true
+                    pending.partitionId != null &&
+                        (state.selectedPartitionId != pending.partitionId ||
+                            state.partitions.none { it.id == pending.partitionId }) -> true
                     action == DestructiveAction.INITIALIZE_PARTITION_TABLE &&
-                        (pending?.targetScheme == null ||
+                        (pending.targetScheme == null ||
                             pending.initialScheme == null ||
                             pending.targetScheme == pending.initialScheme ||
                             state.partitionScheme?.toPartitionScheme() != pending.initialScheme ||
                             !state.tableValid) -> true
                     action == DestructiveAction.RENAME_PARTITION &&
-                        (pending?.partitionName.isNullOrBlank() ||
+                        (pending.partitionName.isNullOrBlank() ||
                             state.partitionScheme != TableScheme.GPT ||
                             !state.tableValid) -> true
                     action == DestructiveAction.RENAME_VOLUME_LABEL &&
-                        (pending?.volumeLabel.isNullOrBlank() ||
+                        (pending.volumeLabel.isNullOrBlank() ||
                             state.selectedPartitionId == null) -> true
                     action == DestructiveAction.SET_PARTITION_ROLE &&
-                        (pending?.partitionRole == null || !state.tableValid) -> true
+                        (pending.partitionRole == null || !state.tableValid) -> true
                     action == DestructiveAction.SET_PARTITION_BOOTABLE &&
-                        (pending?.partitionBootable == null || !state.tableValid) -> true
+                        (pending.partitionBootable == null || !state.tableValid) -> true
+                    // RAW: range required; source name optional (opaque SAF still valid via state).
                     action == DestructiveAction.RAW_WRITE &&
-                        (pending?.rawStartLba == null || pending.rawSectorCount == null) -> true
-                    (action == DestructiveAction.DELETE_PARTITION || action == DestructiveAction.FORMAT_PARTITION) &&
-                        state.selectedPartitionId == null -> true
+                        (pending.rawStartLba == null || pending.rawSectorCount == null) -> true
+                    // GPT/rescue: full URI snapshot required and must still match live state.
+                    action == DestructiveAction.GPT_RESTORE &&
+                        (pending.gptBackupUri.isNullOrBlank() ||
+                            pending.gptBackupUri != state.backupUri) -> true
+                    action == DestructiveAction.RESCUE_RESTORE &&
+                        (pending.rescueImageUri.isNullOrBlank() ||
+                            pending.rescueMapUri.isNullOrBlank() ||
+                            pending.rescueImageUri != state.rescueImageUri ||
+                            pending.rescueMapUri != state.rescueMapUri) -> true
+                    action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE &&
+                        (pending.xmlTargetName.isNullOrBlank() ||
+                            state.pendingAutounattendGeneration == null) -> true
                     else -> false
                 }
-                if (invalidState || action == null) {
+                // Fail-closed: null device/pending/action never reach effect branches.
+                if (invalidState || action == null || pending == null || device == null) {
                     ReduceResult(state.copy(pendingConfirmation = null))
                 } else if (action == DestructiveAction.VENTOY_LINK_XML) {
                     val paths =
@@ -1237,6 +1305,72 @@ object UiReducer {
                             ),
                         )
                     }
+                } else if (action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE) {
+                    val pendingGen = state.pendingAutounattendGeneration
+                    val target = pending.xmlTargetName
+                    if (pendingGen == null ||
+                        target.isNullOrBlank() ||
+                        pendingGen.xmlName != target ||
+                        pendingGen.identity != device.identity ||
+                        pendingGen.attachGeneration != device.attachGeneration
+                    ) {
+                        ReduceResult(
+                            state.copy(
+                                pendingConfirmation = null,
+                                pendingAutounattendGeneration = null,
+                                statusMessage = UiMessage.Key(UiMessageKey.TargetChanged),
+                            ),
+                        )
+                    } else {
+                        val layout = pendingGen.params.diskLayout
+                        if (layout != null && layout.writeLayout) {
+                            // Overwrite acknowledged; still need separate target-PC layout ack.
+                            val plan =
+                                pendingGen.expectedPlanSha256
+                                    ?: autounattendPlanSha256(
+                                        pendingGen.xmlName,
+                                        pendingGen.params,
+                                        pendingGen.imagePaths,
+                                    )
+                            ReduceResult(
+                                state.copy(
+                                    pendingConfirmation = null,
+                                    diskLayoutConfirmation =
+                                        DiskLayoutConfirmation(
+                                            diskId = layout.diskId,
+                                            partitionCount = layout.partitions.size,
+                                            writeLayout = true,
+                                            planSha256 = plan,
+                                        ),
+                                    statusMessage = UiMessage.Raw(
+                                        "Confirm the target PC disk layout before generating XML",
+                                    ),
+                                ),
+                            )
+                        } else {
+                            ReduceResult(
+                                state.copy(
+                                    pendingConfirmation = null,
+                                    pendingAutounattendGeneration = null,
+                                    statusMessage = UiMessage.Raw("Generating unattend XML"),
+                                ),
+                                effects = listOf(
+                                    UiEffect(
+                                        UiEffect.Kind.GenerateAutounattend,
+                                        xmlName = pendingGen.xmlName,
+                                        autounattendParams = pendingGen.params,
+                                        imagePaths = pendingGen.imagePaths,
+                                        overwriteXml = true,
+                                        allowDestructiveTemplate =
+                                            pendingGen.allowDestructiveTemplate,
+                                        expectedTemplateSha256 =
+                                            pendingGen.expectedTemplateSha256,
+                                        expectedPlanSha256 = pendingGen.expectedPlanSha256,
+                                    ),
+                                ),
+                            )
+                        }
+                    }
                 } else {
                     ReduceResult(
                         state.copy(pendingConfirmation = null),
@@ -1254,8 +1388,18 @@ object UiReducer {
                 }
             }
 
-            UiIntent.DismissConfirmation ->
-                ReduceResult(state.copy(pendingConfirmation = null))
+            UiIntent.DismissConfirmation -> {
+                val clearGen =
+                    state.pendingConfirmation?.action ==
+                        DestructiveAction.VENTOY_UNATTEND_XML_WRITE
+                ReduceResult(
+                    state.copy(
+                        pendingConfirmation = null,
+                        pendingAutounattendGeneration =
+                            if (clearGen) null else state.pendingAutounattendGeneration,
+                    ),
+                )
+            }
             is UiIntent.RequestLinkOverwrite -> {
                 val device = state.device
                 val candidateMatches =
@@ -2243,11 +2387,38 @@ object UiReducer {
                         sameTarget && !intent.overwriteXml ->
                         ReduceResult(
                             state.copy(
-                                statusMessage = UiMessage.Raw(
-                                    "Replacing an existing XML requires the separate XML-write confirmation",
-                                ),
+                                statusMessage = UiMessage.Key(UiMessageKey.XmlOverwriteRequired),
                             ),
                         )
+                    // F4: replacing an existing Parsed XML needs an explicit destructive confirm
+                    // (source name on the dialog) before layout ack or generate.
+                    state.autounattendState is AutounattendState.Parsed &&
+                        sameTarget && intent.overwriteXml && device != null -> {
+                        val pendingGen =
+                            PendingAutounattendGeneration(
+                                xmlName = intent.xmlName,
+                                params = intent.params,
+                                imagePaths = intent.imagePaths,
+                                overwriteXml = true,
+                                allowDestructiveTemplate = intent.allowDestructiveTemplate,
+                                identity = device.identity,
+                                attachGeneration = device.attachGeneration,
+                                expectedTemplateSha256 = intent.expectedTemplateSha256,
+                                expectedPlanSha256 = planSha256,
+                            )
+                        ReduceResult(
+                            state.copy(
+                                pendingAutounattendGeneration = pendingGen,
+                                pendingConfirmation =
+                                    DestructiveConfirmation.request(
+                                        device,
+                                        DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+                                        xmlTargetName = intent.xmlName,
+                                    ),
+                                statusMessage = UiMessage.Key(UiMessageKey.ConfirmXmlOverwrite),
+                            ),
+                        )
+                    }
                     device != null && layout != null && layout.writeLayout ->
                         ReduceResult(
                             state.copy(
@@ -2460,21 +2631,26 @@ object UiReducer {
                     ),
                 )
 
-            is UiIntent.SetBackupFile ->
+            is UiIntent.SetBackupFile -> {
+                val clearConfirm =
+                    state.pendingConfirmation?.action == DestructiveAction.GPT_RESTORE
                 ReduceResult(
                     state.copy(
                         backupUri = intent.uri,
+                        pendingConfirmation =
+                            if (clearConfirm) null else state.pendingConfirmation,
                         statusMessage =
                             if (intent.uri == null) {
                                 UiMessage.Key(UiMessageKey.BackupCleared)
                             } else {
                                 message(
                                     UiMessageKey.BackupReady,
-                                    intent.uri.substringAfterLast('/'),
+                                    DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
                                 )
                             },
                     ),
                 )
+            }
 
             UiIntent.StartReadScan -> nonDestructiveEffect(state, UiEffect.Kind.ReadScan)
 
@@ -2503,37 +2679,47 @@ object UiReducer {
                     )
                 }
 
-            is UiIntent.SetRescueImage ->
+            is UiIntent.SetRescueImage -> {
+                val clearConfirm =
+                    state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
                 ReduceResult(
                     state.copy(
                         rescueImageUri = intent.uri,
+                        pendingConfirmation =
+                            if (clearConfirm) null else state.pendingConfirmation,
                         statusMessage =
                             if (intent.uri == null) {
                                 UiMessage.Key(UiMessageKey.RescueImageCleared)
                             } else {
                                 message(
                                     UiMessageKey.RescueImageReady,
-                                    intent.uri.substringAfterLast('/'),
+                                    DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
                                 )
                             },
                     ),
                 )
+            }
 
-            is UiIntent.SetRescueMap ->
+            is UiIntent.SetRescueMap -> {
+                val clearConfirm =
+                    state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
                 ReduceResult(
                     state.copy(
                         rescueMapUri = intent.uri,
+                        pendingConfirmation =
+                            if (clearConfirm) null else state.pendingConfirmation,
                         statusMessage =
                             if (intent.uri == null) {
                                 UiMessage.Key(UiMessageKey.RescueMapCleared)
                             } else {
                                 message(
                                     UiMessageKey.RescueMapReady,
-                                    intent.uri.substringAfterLast('/'),
+                                    DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
                                 )
                             },
                     ),
                 )
+            }
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 
@@ -2781,6 +2967,16 @@ object UiReducer {
         return sectors.takeIf { it > 0UL }
     }
 
+    /**
+     * Prefer staged label, then SAF display name, then last path segment of the URI/path.
+     * Never invent a name when none is known — confirm is refused instead.
+     */
+    private fun rawImageSourceName(state: AppUiState): String? =
+        state.stagedRawImageLabel?.takeIf { it.isNotBlank() }
+            ?: state.imageName?.takeIf { it.isNotBlank() }
+            ?: DestructiveConfirmation.fileLabel(state.stagedRawImagePath)
+            ?: DestructiveConfirmation.fileLabel(state.imageUri)
+
     fun presenceMessage(presence: DevicePresence): UiMessage =
         when (presence) {
             DevicePresence.Absent -> UiMessage.Key(UiMessageKey.NoDevice)
@@ -2879,21 +3075,20 @@ object UiReducer {
             '\\' !in name
 
     /**
-     * Bare names resolve under /ventoy; a full path is itself. This only decides whether a
-     * rewrite confirmation applies to the currently loaded file, never where to write.
+     * Bare names resolve under /ventoy; a full path is itself. Display-only path join —
+     * rewrite gate uses [sameXmlTarget] / [XmlPath.resolve].
      */
     private fun importTarget(directory: String, name: String): String =
         if (directory == "/") "/$name" else "$directory/$name"
 
-    internal fun sameXmlTarget(loaded: String, requested: String): Boolean {
-        val a = loaded.replace('\\', '/').trim().trimStart('/')
-        val cleanRequested = requested.replace('\\', '/').trim()
-        val expected =
-            if (cleanRequested.contains("/")) {
-                cleanRequested.trimStart('/')
-            } else {
-                "ventoy/${cleanRequested.trimStart('/')}"
-            }
-        return a.equals(expected, ignoreCase = true)
-    }
+    /**
+     * Canonical equality with the writer via pure [XmlPath.resolve] (no VentoySetup/USB).
+     */
+    internal fun sameXmlTarget(loaded: String, requested: String): Boolean =
+        try {
+            XmlPath.resolve(loaded)
+                .equals(XmlPath.resolve(requested), ignoreCase = true)
+        } catch (_: IllegalArgumentException) {
+            false
+        }
 }

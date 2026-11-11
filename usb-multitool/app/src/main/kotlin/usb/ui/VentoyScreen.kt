@@ -4,8 +4,10 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -23,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,7 +47,7 @@ fun VentoyScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SectionCard(
             title = stringResource(R.string.ventoy_section_title),
@@ -313,7 +316,16 @@ private fun ImportFolderDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
 
-                    else -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    else -> Column(
+                        // Weighted with fill = false: the error line and the Refresh button
+                        // below are measured first, so the folder list can only consume the
+                        // height that is actually left in the dialog slot.
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
                         options.take(40).forEach { folder ->
                             val current = folder == selection
                             TextButton(
@@ -378,7 +390,12 @@ private fun ImportOverwriteDialog(
         onDismissRequest = onCancel,
         title = { Text(stringResource(R.string.import_overwrite_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
                     text = stringResource(R.string.import_overwrite_body),
                     style = MaterialTheme.typography.bodySmall,
@@ -411,27 +428,51 @@ private fun ImportOverwriteDialog(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = markersAck,
+                                enabled = actionsEnabled,
+                                role = Role.Checkbox,
+                                onValueChange = { markersAck = it },
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         Checkbox(
                             checked = markersAck,
-                            onCheckedChange = { markersAck = it },
+                            onCheckedChange = null,
                             enabled = actionsEnabled,
                         )
                         Text(
                             text = stringResource(R.string.import_markers_ack),
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = overwriteAck,
+                            enabled = actionsEnabled,
+                            role = Role.Checkbox,
+                            onValueChange = { overwriteAck = it },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Checkbox(
                         checked = overwriteAck,
-                        onCheckedChange = { overwriteAck = it },
+                        onCheckedChange = null,
                         enabled = actionsEnabled,
                     )
                     Text(
                         text = stringResource(R.string.import_overwrite_ack),
                         style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }

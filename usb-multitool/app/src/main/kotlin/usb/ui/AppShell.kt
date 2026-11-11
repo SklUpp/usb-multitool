@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -82,6 +84,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -152,7 +155,13 @@ fun AppShell(
                                 selected = state.tab == tab,
                                 onClick = { onIntent(UiIntent.SelectTab(tab)) },
                                 icon = { TabIcon(tab) },
-                                label = { Text(tab.title()) },
+                                label = {
+                                    Text(
+                                        text = tab.title(),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
                                 colors = NavigationBarItemDefaults.colors(
                                     indicatorColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                                     selectedIconColor = MaterialTheme.colorScheme.onSurface,
@@ -225,7 +234,7 @@ fun AppShell(
                     LogOverlay(
                         lines = state.logLines,
                         onClose = { logExpanded = false },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
             }
@@ -247,12 +256,28 @@ fun AppShell(
                 },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        confirmationLines(confirmation).forEach { line ->
-                            Text(
-                                text = line,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        // Long confirmations (a full rescue-restore warning at RU lengths) do
+                        // not fit the height-bounded dialog text slot. Scrolling the warning
+                        // keeps the acknowledgement row and both buttons permanently visible.
+                        Column(
+                            // The acknowledgement row is mandatory for the destructive
+                            // button. Making the warning the weighted child (fill = false)
+                            // means the row is measured first and the warning scrolls inside
+                            // whatever height is left, instead of pushing the row out of the
+                            // height-bounded dialog slot at large font scales.
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .heightIn(max = 280.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            confirmationLines(confirmation).forEach { line ->
+                                Text(
+                                    text = line,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         Row(
                             modifier = Modifier
@@ -282,7 +307,11 @@ fun AppShell(
                     ) {
                         Text(
                             text = stringResource(R.string.action_confirm),
-                            color = MaterialTheme.colorScheme.error,
+                            color = if (acknowledged) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            },
                             fontWeight = FontWeight.Bold,
                         )
                     }
@@ -386,6 +415,12 @@ internal fun StatusLogPanel(
 
     val failed = op?.state == OperationState.Failed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
+    // Actions live on their own row: keeping them beside a two-line title squeezed the
+    // operation name to roughly twenty characters on a 360 dp screen.
+    val hasAction = hasLog || overwrite != null ||
+        (op != null && !running) ||
+        (op == null && state.statusMessage != null) ||
+        (op != null && op.state == OperationState.Running && op.cancelable)
     // A failure must stay readable: error-on-inverseSurface is ~1.5:1 in both themes.
     val container = if (failed) {
         MaterialTheme.colorScheme.errorContainer
@@ -474,7 +509,7 @@ internal fun StatusLogPanel(
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = content,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     detail?.let { message ->
@@ -482,7 +517,7 @@ internal fun StatusLogPanel(
                             text = message,
                             style = MaterialTheme.typography.labelSmall,
                             color = content.copy(alpha = 0.85f),
-                            maxLines = 1,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -505,56 +540,77 @@ internal fun StatusLogPanel(
                         color = content,
                     )
                 }
-                if (op != null && op.state == OperationState.Running && op.cancelable) {
-                    TextButton(
-                        onClick = { onIntent(UiIntent.CancelOperation) },
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.action_cancel),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                        )
+            }
+            if (hasAction) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                ) {
+                    if (op != null && op.state == OperationState.Running && op.cancelable) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.CancelOperation) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_cancel),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                            )
+                        }
                     }
-                }
-                if (hasLog) {
-                    TextButton(
-                        onClick = onToggleLog,
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = stringResource(
-                                if (logExpanded) R.string.log_collapse else R.string.log_open,
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content,
-                        )
+                    if (hasLog) {
+                        TextButton(
+                            onClick = onToggleLog,
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(
+                                    if (logExpanded) R.string.log_collapse else R.string.log_open,
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = content,
+                            )
+                        }
                     }
-                }
-                if (op != null && !running) {
-                    TextButton(
-                        onClick = { onIntent(UiIntent.OperationUpdated(null)) },
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.status_hide),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                        )
+                    if (op != null && !running) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.OperationUpdated(null)) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.status_hide),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                            )
+                        }
+                    } else if (op == null && state.statusMessage != null) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.Status(null)) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.status_hide),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                            )
+                        }
                     }
-                } else if (op == null && state.statusMessage != null) {
-                    TextButton(
-                        onClick = { onIntent(UiIntent.Status(null)) },
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.status_hide),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                        )
+                    if (overwrite != null) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.status_overwrite),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                            )
+                        }
                     }
                 }
             }
@@ -569,20 +625,6 @@ internal fun StatusLogPanel(
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = content.copy(alpha = 0.2f),
                 )
-            }
-
-            if (overwrite != null) {
-                TextButton(
-                    onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.status_overwrite),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = content,
-                    )
-                }
             }
         }
     }
@@ -601,9 +643,9 @@ private fun LogOverlay(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val logScroll = rememberScrollState()
-    LaunchedEffect(lines.lastOrNull()) {
-        logScroll.animateScrollTo(logScroll.maxValue)
+    val logList = rememberLazyListState()
+    LaunchedEffect(lines.size) {
+        if (lines.isNotEmpty()) logList.animateScrollToItem(lines.lastIndex)
     }
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -620,7 +662,7 @@ private fun LogOverlay(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Row(
@@ -649,14 +691,13 @@ private fun LogOverlay(
                     )
                 }
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(logScroll),
+            LazyColumn(
+                state = logList,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                lines.forEach { line ->
+                items(lines.size) { index ->
                     Text(
-                        text = line,
+                        text = lines[index],
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -792,6 +833,7 @@ private fun lightDesignColors() = lightColorScheme(
 )
 
 private val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(12.dp),
     small = RoundedCornerShape(12.dp),
     medium = RoundedCornerShape(16.dp),
     large = RoundedCornerShape(28.dp),
@@ -840,6 +882,10 @@ internal fun SectionCard(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // Uppercase must follow the in-app language, not the system one: a Turkish device
+        // with the English UI would otherwise render "EFİ". LocalResources is the localized
+        // context provided by AppShell, so its configuration carries the chosen language.
+        val locale = LocalResources.current.configuration.locales[0]
         // Heading lives outside the card, like the target boards: an uppercase label above
         // its surface, separated from the content it names.
         Row(
@@ -851,7 +897,7 @@ internal fun SectionCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title.uppercase(Locale.getDefault()),
+                    text = title.uppercase(locale),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.5.sp,
@@ -992,6 +1038,8 @@ internal fun InfoRow(label: String, value: String) {
             text = value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.End,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1097,7 +1145,17 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
         AlertDialog(
             onDismissRequest = { showInfo = false },
             title = { Text(infoTitle) },
-            text = { Text(infoText) },
+            text = {
+                // Policy explanations run long at large font scales; the text slot does not
+                // scroll by itself, so the paragraph keeps its own scroll.
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(infoText)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = { showInfo = false }) {
                     Text(stringResource(R.string.info_close))
@@ -1114,7 +1172,11 @@ internal fun Badge(
     container: Color = MaterialTheme.colorScheme.secondaryContainer,
     content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
 ) {
-    Surface(shape = RoundedCornerShape(8.dp), color = container) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = container,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)),
+    ) {
         Text(
             text = text,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),

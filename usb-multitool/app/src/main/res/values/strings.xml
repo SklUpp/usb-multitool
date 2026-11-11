@@ -124,6 +124,12 @@
     <string name="confirm_irreversible">This cannot be undone.</string>
     <string name="confirm_target_partition">Partition: %1$s</string>
     <string name="confirm_create_range">New partition: LBA %1$d–%2$d, %3$d sectors</string>
+    <string name="confirm_raw_range">Write range: LBA %1$d–%2$d, %3$d sectors</string>
+    <string name="confirm_raw_source">Image source: %1$s</string>
+    <string name="confirm_gpt_backup_source">GPT backup file: %1$s</string>
+    <string name="confirm_rescue_image_source">Rescue image: %1$s</string>
+    <string name="confirm_rescue_map_source">Rescue map: %1$s</string>
+    <string name="confirm_xml_overwrite">Replaces existing unattend XML: %1$s</string>
     <string name="confirm_rescue_restore">Writes only the sector ranges in the map onto %1$s; the disk outside them is not changed. COPIED ranges are compared with the image and mismatches are rewritten. COPY is refused while any range is NON_TRIED. FAILED ranges are restored from image bytes (a backup usually writes zeros there). Sector size must match and the map must fit the disk; full disk geometry need not match.</string>
     <string name="confirm_link_new">Writes the autounattend.xml link for %1$s.</string>
     <string name="confirm_link_overwrite">Overwrites the existing link for %1$s.</string>
@@ -283,6 +289,8 @@
     <string name="msg_image_cleared">Image selection cleared.</string>
     <string name="msg_image_ready">Image ready: %1$s.</string>
     <string name="msg_writing_xml">Writing autounattend.xml for %1$s…</string>
+    <string name="msg_xml_overwrite_required">Replacing an existing unattend XML requires the separate overwrite confirmation.</string>
+    <string name="msg_confirm_xml_overwrite">Confirm replacing the existing unattend XML on the stick.</string>
     <string name="msg_backup_cleared">GPT backup selection cleared.</string>
     <string name="msg_backup_ready">GPT backup ready: %1$s.</string>
     <string name="msg_rescue_image_cleared">Rescue image selection cleared.</string>

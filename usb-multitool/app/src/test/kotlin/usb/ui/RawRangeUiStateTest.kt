@@ -74,12 +74,29 @@ class RawRangeUiStateTest {
         assertEquals(4096UL, pending.rawSectorCount)
         assertEquals(geometry.diskSectorCount, pending.diskSectorCount)
         assertEquals(geometry.sectorSize, pending.diskSectorSize)
+        // F1: source display name on the confirmation payload.
+        assertEquals("ubuntu.iso", pending.rawSourceName)
 
         val confirmed = UiReducer.reduce(result.state, UiIntent.ConfirmDestructive)
         val effect = confirmed.effects.single()
         assertEquals(UiEffect.Kind.SubmitDestructive, effect.kind)
         assertEquals(2048UL, effect.confirmation!!.rawStartLba)
         assertEquals(4096UL, effect.confirmation!!.rawSectorCount)
+        assertEquals("ubuntu.iso", effect.confirmation!!.rawSourceName)
+    }
+
+    @Test
+    fun stagedLabelPreferredOverSafUriForRawSourceName() {
+        val result =
+            UiReducer.reduce(
+                ready().copy(
+                    stagedRawImagePath = "/data/staging/copy.bin",
+                    stagedRawImageLabel = "phone-dump.img",
+                    imageUri = "content://images/ubuntu.iso",
+                ),
+                UiIntent.RequestWriteRawRange(0UL, 64UL),
+            )
+        assertEquals("phone-dump.img", result.state.pendingConfirmation!!.rawSourceName)
     }
 
     @Test

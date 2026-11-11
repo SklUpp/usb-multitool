@@ -124,6 +124,12 @@
     <string name="confirm_irreversible">Отменить это действие нельзя.</string>
     <string name="confirm_target_partition">Раздел: %1$s</string>
     <string name="confirm_create_range">Новый раздел: LBA %1$d–%2$d, секторов: %3$d</string>
+    <string name="confirm_raw_range">Диапазон записи: LBA %1$d–%2$d, секторов: %3$d</string>
+    <string name="confirm_raw_source">Источник образа: %1$s</string>
+    <string name="confirm_gpt_backup_source">Файл резервной GPT: %1$s</string>
+    <string name="confirm_rescue_image_source">Образ восстановления: %1$s</string>
+    <string name="confirm_rescue_map_source">Карта восстановления: %1$s</string>
+    <string name="confirm_xml_overwrite">Заменяет существующий unattend XML: %1$s</string>
     <string name="confirm_rescue_restore">Записывает только секторные диапазоны карты на %1$s; диск вне их не изменяется. COPIED сверяются с образом, несовпадения перезаписываются. COPY запрещена, пока есть NON_TRIED. FAILED восстанавливаются байтами из образа (backup обычно записывает там нули). Размер сектора должен совпадать, карта должна помещаться в диск; полная геометрия диска не требуется.</string>
     <string name="confirm_link_new">Записывает связь autounattend.xml для %1$s.</string>
     <string name="confirm_link_overwrite">Перезаписывает существующую связь для %1$s.</string>
@@ -146,7 +152,7 @@
     <string name="files_section_folder">Папка</string>
     <string name="files_section_selection">Выбранный элемент</string>
     <string name="files_current_partition">Текущий раздел</string>
-    <string name="files_no_partitions_hint">Разделы не найдены — создайте раздел во вкладке «Разделы».</string>
+    <string name="files_no_partitions_hint">Разделы не найдены — создайте раздел на вкладке «Разделы».</string>
     <string name="files_up">На уровень выше</string>
     <string name="files_create_folder">Создать папку</string>
     <string name="files_folder_name">Имя папки</string>
@@ -283,6 +289,8 @@
     <string name="msg_image_cleared">Выбор образа сброшен.</string>
     <string name="msg_image_ready">Образ готов: %1$s.</string>
     <string name="msg_writing_xml">Запись autounattend.xml для %1$s…</string>
+    <string name="msg_xml_overwrite_required">Замена существующего unattend XML требует отдельного подтверждения перезаписи.</string>
+    <string name="msg_confirm_xml_overwrite">Подтвердите замену существующего unattend XML на флешке.</string>
     <string name="msg_backup_cleared">Выбор копии GPT сброшен.</string>
     <string name="msg_backup_ready">Копия GPT готова: %1$s.</string>
     <string name="msg_rescue_image_cleared">Выбор образа восстановления сброшен.</string>
