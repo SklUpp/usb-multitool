@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
 import usb.partition.RawObjectKind
@@ -80,6 +81,7 @@ internal fun RawPlanMap(
     val bootColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
     val tableColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    val snapTickColor = MaterialTheme.colorScheme.outline
 
     val partitionLabels = remember(geometry) {
         val parts = geometry.objects.filter { it.kind == RawObjectKind.Partition }
@@ -100,6 +102,19 @@ internal fun RawPlanMap(
     }
 
     val spoken = stringResource(R.string.raw_map_summary, range.startLba.toLong(), range.sectorCount.toLong(), overlaps.size)
+    val snapA11y = if (confirmed) stringResource(R.string.raw_map_snap_ticks_a11y) else null
+    val spokenWithSnap = listOfNotNull(spoken, snapA11y).joinToString(". ")
+    // Screen readers get the same snap edges the pointer uses, in LBA, without dragging.
+    val snapState = if (confirmed) {
+        stringResource(
+            R.string.raw_map_snap_state,
+            range.startLba.toLong(),
+            (range.startLba + range.sectorCount - 1UL).toLong(),
+            geometry.snapPoints.size,
+        )
+    } else {
+        null
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Canvas(
@@ -107,7 +122,10 @@ internal fun RawPlanMap(
                 .fillMaxWidth()
                 .height(56.dp)
                 .onSizeChanged { widthPx = it.width }
-                .semantics { contentDescription = spoken }
+                .semantics {
+                    contentDescription = spokenWithSnap
+                    if (snapState != null) stateDescription = snapState
+                }
                 .pointerInput(geometry, widthPx) {
                     detectDragGestures(
                         onDragStart = { offset ->
@@ -167,6 +185,27 @@ internal fun RawPlanMap(
             val handleWidth = 6.dp.toPx()
             drawRect(rangeColor, Offset(rx - handleWidth / 2f, 0f), Size(handleWidth, size.height))
             drawRect(rangeColor, Offset(rx + rw - handleWidth / 2f, 0f), Size(handleWidth, size.height))
+            if (confirmed) {
+                // Visible boundary marks that dragging snaps to; numeric fields stay exact.
+                geometry.snapPoints.forEach { point ->
+                    val x = fractionOf(point) * size.width
+                    drawLine(
+                        color = snapTickColor,
+                        start = Offset(x, 0f),
+                        end = Offset(x, size.height),
+                        strokeWidth = 2.dp.toPx(),
+                    )
+                }
+            }
+        }
+
+        if (confirmed) {
+            Text(
+                text = stringResource(R.string.raw_map_snap_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
 
         FlowRow(

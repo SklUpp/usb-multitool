@@ -9,6 +9,7 @@ import usb.partition.TableScheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,10 +46,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -206,12 +209,36 @@ fun PartitionsScreen(
                         val maxMibFloat = availableMib.toFloat()
                         val safeStart = sliderStart.toFloat()
                         val safeEnd = sliderEnd.toFloat()
+                        val startLbaForA11y = regionBase + sliderStart * mibSectors
+                        // Inclusive last sector: matches the confirmation, which prints +count-1.
+                        // Compare against the region base, not absolute zero: sliderEnd = 0 means
+                        // an empty range, where subtracting would name the sector before it.
+                        val endLbaForA11y = (regionBase + sliderEnd * mibSectors).let {
+                            if (it > regionBase) it - 1UL else it
+                        }
                         val rangeA11y = stringResource(R.string.partitions_range_a11y)
+                        val rangeState = stringResource(
+                            R.string.partitions_range_a11y_state,
+                            sliderStart.toLong(),
+                            startLbaForA11y.toLong(),
+                            sliderEnd.toLong(),
+                            endLbaForA11y.toLong(),
+                            (sliderEnd - sliderStart).toLong(),
+                        )
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 text = stringResource(R.string.partitions_range_label),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            // Uniform MiB axis of the free region only — not DiskMapBar LBA widths.
+                            MibBoundaryTicks(
+                                maxMib = availableMib,
+                                startMib = sliderStart,
+                                endMib = sliderEnd,
+                                regionStartLba = regionBase,
+                                // Last sector the right handle can select, not the region tail.
+                                rightEdgeLastLba = regionBase + availableMib * mibSectors - 1UL,
                             )
                             RangeSlider(
                                 value = safeStart..safeEnd,
@@ -240,7 +267,10 @@ fun PartitionsScreen(
                                 valueRange = 0f..maxMibFloat,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .semantics { contentDescription = rangeA11y },
+                                    .semantics {
+                                        contentDescription = rangeA11y
+                                        stateDescription = rangeState
+                                    },
                             )
                             Text(
                                 text = stringResource(
@@ -501,21 +531,24 @@ fun PartitionsScreen(
     ) {
         SectionCard(
             title = stringResource(R.string.partitions_layout_title),
+            // Body already names corrupt/empty once; matching subtitle + zero badge tripled it.
             subtitle = when {
-                !state.tableValid -> stringResource(R.string.partitions_corrupt)
+                !state.tableValid -> null
                 state.partitionTableDamaged ->
                     stringResource(R.string.partitions_gpt_primary_damaged_title)
-                state.partitions.isEmpty() -> stringResource(R.string.partitions_none)
+                state.partitions.isEmpty() -> null
                 else -> diskUsageCaption(state)
             },
             trailing = {
-                Badge(
-                    text = pluralStringResource(
-                        R.plurals.partitions_count,
-                        state.partitions.size,
-                        state.partitions.size,
-                    ),
-                )
+                if (state.partitions.isNotEmpty()) {
+                    Badge(
+                        text = pluralStringResource(
+                            R.plurals.partitions_count,
+                            state.partitions.size,
+                            state.partitions.size,
+                        ),
+                    )
+                }
             },
         ) {
             if (!state.tableValid) {
@@ -613,11 +646,8 @@ fun PartitionsScreen(
         if (selected != null) {
             SectionCard(
                 title = stringResource(R.string.partitions_selected_title),
-                subtitle = listOfNotNull(
-                    selected.name,
-                    selected.filesystemLabel.ifEmpty { "—" },
-                    partitionSizeLabel(state, selected),
-                ).joinToString(" · "),
+                // Rows repeat label/size; keep identity only (MBR has no name row).
+                subtitle = selected.name,
             ) {
                 InfoRow(
                     stringResource(R.string.partitions_filesystem_label),
@@ -870,10 +900,16 @@ fun PartitionsScreen(
 
         SectionCard(
             title = stringResource(R.string.partitions_free_space_title),
-            subtitle = if (creatableRegions.isEmpty()) {
-                stringResource(R.string.partitions_free_none)
-            } else {
-                stringResource(R.string.partitions_free_count, creatableRegions.size)
+            // Status on the right; empty body explains without left subtitle copy.
+            subtitle = null,
+            trailing = {
+                Badge(
+                    text = if (creatableRegions.isEmpty()) {
+                        stringResource(R.string.partitions_free_none)
+                    } else {
+                        stringResource(R.string.partitions_free_count, creatableRegions.size)
+                    },
+                )
             },
         ) {
             if (creatableRegions.isEmpty()) {
@@ -961,8 +997,13 @@ fun PartitionsScreen(
         // fields and the disk map live here once the geometry contract lands.
         SectionCard(
             title = stringResource(R.string.partitions_raw_write_title),
-            subtitle = stringResource(R.string.partitions_raw_write_subtitle),
+            subtitle = null,
         ) {
+            Text(
+                text = stringResource(R.string.partitions_raw_write_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // One resolved source for the next write; the host never writes on pick.
             val rawName = state.stagedRawImageLabel ?: rawSourceName(state.imageUri)
             val rawStaged = state.stagedRawImagePath != null
@@ -1190,11 +1231,18 @@ fun PartitionsScreen(
                 }
             }
 
-            Text(
-                text = stringResource(R.string.partitions_raw_overwrite_note),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = stringResource(R.string.partitions_raw_overwrite_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
 
             if (rawStaged) {
                 val stagingBusy = state.operation?.state == OperationState.Running ||
@@ -1234,6 +1282,12 @@ fun PartitionsScreen(
         SectionCard(
             title = stringResource(R.string.partitions_repair_title),
             subtitle = stringResource(R.string.partitions_repair_subtitle),
+            trailing = {
+                InfoHelpButton(
+                    infoTitle = stringResource(R.string.partitions_repair_info_title),
+                    infoText = stringResource(R.string.partitions_repair_info_text),
+                )
+            },
         ) {
             OutlinedButton(
                 onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR)) },
@@ -1281,7 +1335,7 @@ private fun DiskMapBar(state: AppUiState) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(12.dp)
+            .height(20.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .semantics { contentDescription = mapDescription },
@@ -1293,17 +1347,24 @@ private fun DiskMapBar(state: AppUiState) {
             } else {
                 1f
             }
+            val isSelected = partition.id == state.selectedPartitionId
             Box(
                 Modifier
                     .weight(weight)
                     .fillMaxHeight()
                     .background(
-                        if (partition.id == state.selectedPartitionId) {
+                        if (isSelected) {
                             MaterialTheme.colorScheme.primary
                         } else {
-                            // Muted band over the track: secondaryContainer equals the track
-                            // token in both themes, which erased every unselected segment.
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                            // Solid muted band: 0.45 alpha failed 3:1 against the track.
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    .then(
+                        if (isSelected) {
+                            Modifier.border(2.dp, MaterialTheme.colorScheme.outline)
+                        } else {
+                            Modifier
                         },
                     ),
             )
@@ -1315,6 +1376,97 @@ private fun DiskMapBar(state: AppUiState) {
                 Modifier
                     .weight((free / total).toFloat().coerceAtLeast(0.02f))
                     .fillMaxHeight(),
+            )
+        }
+    }
+}
+
+/**
+ * Default Material3 range-slider thumb width. Verified in the resolved artifact
+ * material3 1.4.0: `SliderTokens.HandleWidth = 4.dp` (HandleHeight = 44.dp), and
+ * `RangeSliderState.updateMinMaxPx` maps values between `startThumbWidth / 2` and
+ * `totalWidth - endThumbWidth / 2`. The tick inset is that same half width, so marks
+ * line up with the handles instead of a guessed gap.
+ */
+private val SliderThumbWidth = 4.dp
+
+/**
+ * Visible MiB alignment marks for the create-partition slider, with the two ends of the
+ * selectable MiB span labelled exactly: the first usable aligned LBA and the last sector
+ * the right handle can select. The axis is uniform MiB of the free region (convenience
+ * first), never proportional disk LBA widths; the disk map keeps LBA geometry separately.
+ * These ends are not necessarily neighbouring block edges — an unaligned region start skips
+ * a few sectors and an unaligned tail stays outside the MiB span. Marks are thinned on large
+ * regions, so the labels name the selectable ends instead of promising a full 1 MiB grid.
+ */
+@Composable
+private fun MibBoundaryTicks(
+    maxMib: ULong,
+    startMib: ULong,
+    endMib: ULong,
+    regionStartLba: ULong,
+    rightEdgeLastLba: ULong,
+) {
+    if (maxMib == 0UL) return
+    val marks = remember(maxMib) { PartitionRangeTicks.marks(maxMib) }
+    val tickColor = MaterialTheme.colorScheme.outline
+    val activeColor = MaterialTheme.colorScheme.primary
+    val a11y = stringResource(R.string.partitions_range_ticks_a11y)
+    val trackInset = SliderThumbWidth / 2
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = a11y },
+    ) {
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(14.dp),
+        ) {
+            // Slider thumbs inset the usable track; ticks use the same span so marks line up.
+            val inset = trackInset.toPx()
+            val trackWidth = (size.width - 2f * inset).coerceAtLeast(1f)
+            val span = maxMib.toDouble()
+            marks.forEach { mark ->
+                val x = inset + (mark.toDouble() / span).toFloat() * trackWidth
+                val active = mark in startMib..endMib
+                // The two ends are the selectable span limits, not MiB steps: draw them heavier.
+                val spanEnd = mark == 0UL || mark == maxMib
+                drawLine(
+                    color = if (active || spanEnd) activeColor else tickColor,
+                    start = Offset(x, 0f),
+                    end = Offset(x, size.height),
+                    strokeWidth = when {
+                        spanEnd -> 3.dp.toPx()
+                        active -> 2.dp.toPx()
+                        else -> 1.dp.toPx()
+                    },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = trackInset),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.partitions_range_tick_edge_label,
+                    0L,
+                    regionStartLba.toLong(),
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = stringResource(
+                    R.string.partitions_range_tick_edge_label,
+                    maxMib.toLong(),
+                    rightEdgeLastLba.toLong(),
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

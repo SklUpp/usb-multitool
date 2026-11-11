@@ -6,9 +6,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +24,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.yield
 import usb.multitool.R
 
 @Composable
@@ -52,11 +58,21 @@ fun DiagnosticsScreen(
     val dangerStateLabel = stringResource(
         if (dangerExpanded) R.string.diagnostics_expanded else R.string.diagnostics_collapsed,
     )
+    // Scroll state is hoisted so expanding the danger block can bring its action into view.
+    val scrollState = rememberScrollState()
+    val wipeRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(dangerExpanded) {
+        if (dangerExpanded) {
+            // The expanded action is laid out in this frame; yield so the requester is attached.
+            yield()
+            wipeRequester.bringIntoView()
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SectionCard(
@@ -170,6 +186,8 @@ fun DiagnosticsScreen(
                     state.rescueMapUri != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
+                Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.diagnostics_restore_image))
             }
         }
@@ -177,6 +195,12 @@ fun DiagnosticsScreen(
         SectionCard(
             title = stringResource(R.string.diagnostics_gpt_restore_title),
             subtitle = stringResource(R.string.diagnostics_gpt_restore_subtitle),
+            trailing = {
+                InfoHelpButton(
+                    infoTitle = stringResource(R.string.diagnostics_gpt_restore_info_title),
+                    infoText = stringResource(R.string.diagnostics_gpt_restore_info_text),
+                )
+            },
         ) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -215,6 +239,8 @@ fun DiagnosticsScreen(
                 enabled = state.actionsEnabled && state.backupUri != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.diagnostics_restore_gpt))
             }
             if (state.partitionTableDamaged) {
@@ -273,7 +299,9 @@ fun DiagnosticsScreen(
                     Button(
                         onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.WIPE)) },
                         enabled = state.actionsEnabled,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .bringIntoViewRequester(wipeRequester),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError,
@@ -343,7 +371,7 @@ private fun DiagTile(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = content,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
