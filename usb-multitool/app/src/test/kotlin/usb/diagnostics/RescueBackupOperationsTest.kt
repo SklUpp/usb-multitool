@@ -313,6 +313,61 @@ class RescueBackupOperationsTest {
     }
 
     @Test
+    fun completedEnginePublishesCanonicalOnlyAfterDurableBoundary() {
+        val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
+        val map = tinyMap(disk)
+        val op = DiskOperation(name = "rescue-backup")
+        val sink = java.io.ByteArrayOutputStream()
+        var published = 0
+
+        RescueBackupOperations.copy(
+            disk = disk,
+            sink = sink.asRescueSink(512),
+            map = map,
+            operation = op,
+            onCheckpoint = {},
+            onFinalImageSync = {},
+            onFinalCheckpoint = {},
+            onFinalClose = {},
+            onPublishCanonical = { published++ },
+            engine = hostEngine(disk),
+        )
+
+        assertEquals(OperationState.Completed, op.state)
+        assertEquals(1, published)
+        assertTrue(op.commitReached)
+    }
+
+    @Test
+    fun completedEngineCloseFailureDowngradesToPartial() {
+        val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
+        val map = tinyMap(disk)
+        val op = DiskOperation(name = "rescue-backup")
+        val boom = IOException("final close failed")
+        val sink = java.io.ByteArrayOutputStream()
+
+        val failure =
+            assertThrows(IOException::class.java) {
+                RescueBackupOperations.copy(
+                    disk = disk,
+                    sink = sink.asRescueSink(512),
+                    map = map,
+                    operation = op,
+                    onCheckpoint = {},
+                    onFinalImageSync = {},
+                    onFinalCheckpoint = {},
+                    onFinalClose = { throw boom },
+                    engine = hostEngine(disk),
+                )
+            }
+
+        assertSame(boom, failure)
+        assertEquals(OperationState.Partial, op.state)
+        assertFalse(op.commitReached)
+        assertSame(boom, op.failureCause)
+    }
+
+    @Test
     fun finalImageSyncFailureAfterImageBytesIsPartialNotFailed() {
         val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
         val image = File(dir, "rescue-sync.img")

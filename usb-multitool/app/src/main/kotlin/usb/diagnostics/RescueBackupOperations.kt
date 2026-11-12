@@ -168,13 +168,13 @@ object RescueBackupOperations {
             onFinalClose()
             closed = true
             when (operation.state) {
-                is OperationState.Partial, is OperationState.Failed, is OperationState.Cancelled, is OperationState.Completed -> Unit
-                is OperationState.Queued, is OperationState.Running -> {
+                is OperationState.Partial, is OperationState.Failed, is OperationState.Cancelled -> Unit
+                is OperationState.Queued, is OperationState.Running, is OperationState.Completed -> {
                     if (map.failed.isNotEmpty() || map.partial) {
                         operation.state = OperationState.Partial
                     } else {
-                        // Canonical publication is a success-only step; on failure/cancel
-                        // only the verified checkpoint generations remain.
+                        // Native rescue may report Completed before this durable wrapper
+                        // publishes its canonical checkpoint and commit marker.
                         onPublishCanonical()
                         operation.commitReached = true
                         operation.state = OperationState.Completed
@@ -184,8 +184,8 @@ object RescueBackupOperations {
         } catch (failure: Throwable) {
             if (imageTouched || extentGrew()) {
                 when (operation.state) {
-                    is OperationState.Partial, is OperationState.Failed, is OperationState.Cancelled, is OperationState.Completed -> Unit
-                    is OperationState.Queued, is OperationState.Running -> {
+                    is OperationState.Partial, is OperationState.Failed, is OperationState.Cancelled -> Unit
+                    is OperationState.Queued, is OperationState.Running, is OperationState.Completed -> {
                         operation.state = OperationState.Partial
                         if (operation.failureCause == null) operation.failureCause = failure
                     }

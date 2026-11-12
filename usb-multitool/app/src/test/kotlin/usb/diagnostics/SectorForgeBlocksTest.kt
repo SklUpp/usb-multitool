@@ -137,7 +137,7 @@ class SectorForgeBlocksTest {
         assertEquals(listOf(0UL until 4UL), map.nonTried)
         assertTrue(map.failed.isEmpty())
         val saved = RescueMap.decode(map.encode())
-        assertEquals(listOf(1UL until 2UL), saved.nonTried)
+        assertEquals(listOf(0UL until 4UL), saved.nonTried)
         assertThrows(IllegalStateException::class.java) {
             RescueRestorePrep.prepare(saved, "disk", 512, liveHasSerial = true)
         }
