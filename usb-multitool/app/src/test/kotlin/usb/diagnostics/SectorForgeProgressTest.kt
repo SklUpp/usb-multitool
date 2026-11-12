@@ -1,9 +1,10 @@
 package usb.diagnostics
+import java.io.IOException
 import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
-import java.io.IOException
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.operation.DiskOperation
 
