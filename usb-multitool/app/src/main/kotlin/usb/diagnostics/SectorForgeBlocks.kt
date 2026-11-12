@@ -41,9 +41,9 @@ internal object SectorForgeBlocks {
      * exactly as it was instead of wiping recoverable progress. The reconstructed
      * map must also stay within [RescueMap.MAX_RUN_LINES] to remain encodable.
      *
-     * [inheritedFailed] is the FAILED set the target had before the run: a sector
-     * that is still non-tried because the run was interrupted keeps its previous
-     * FAILED marking instead of silently degrading to "never examined".
+     * [inheritedFailed] is the FAILED set from before run. Native NON_TRIED ranges stay
+     * NON_TRIED after cancel/fatal; only native FAILED (or uncertain writes) may be marked
+     * failed. This prevents restore from treating unread bytes as zero-filled data.
      */
     fun apply(
         target: RescueMap,
@@ -51,10 +51,9 @@ internal object SectorForgeBlocks {
         sectorSize: Int,
         inheritedFailed: List<ULongRange>,
         uncertainWrites: List<ULongRange> = emptyList(),
-        unresolvedAsFailed: Boolean = false,
     ) {
         require(triples.size % 3 == 0) { "block snapshot is not a triple list" }
-        val spans = reconstruct(triples, target.sectorCount, sectorSize, unresolvedAsFailed)
+        val spans = reconstruct(triples, target.sectorCount, sectorSize)
         target.replaceRuns(overlayInheritedFailed(spans, inheritedFailed, uncertainWrites))
     }
 
@@ -63,7 +62,6 @@ internal object SectorForgeBlocks {
         triples: LongArray,
         sectorCount: ULong,
         sectorSize: Int,
-        unresolvedAsFailed: Boolean,
     ): List<RescueMap.Span> {
         val out = ArrayList<RescueMap.Span>(triples.size / 3)
         var nextLba = 0UL
@@ -90,8 +88,7 @@ internal object SectorForgeBlocks {
                 when (triples[index + 2]) {
                     COPIED -> RescueStatus.COPIED
                     FAILED -> RescueStatus.FAILED
-                    NON_TRIED, NON_TRIMMED, NON_SCRAPED ->
-                        if (unresolvedAsFailed) RescueStatus.FAILED else RescueStatus.NON_TRIED
+                    NON_TRIED, NON_TRIMMED, NON_SCRAPED -> RescueStatus.NON_TRIED
                     else ->
                         throw IllegalArgumentException(
                             "unknown native block status ${triples[index + 2]} at $block",

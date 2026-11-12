@@ -28,7 +28,7 @@ data class SafDocument(
 )
 
 /** Tracks exact URIs returned by this operation; display names never authorize cleanup. */
-internal class SafOperationDocuments(private val delete: (Uri) -> Unit) {
+internal class SafOperationDocuments(private val delete: (Uri) -> Boolean) {
     private val owned = LinkedHashSet<Uri>()
 
     fun own(uri: Uri): Uri {
@@ -40,7 +40,7 @@ internal class SafOperationDocuments(private val delete: (Uri) -> Unit) {
         var failure: Throwable? = null
         for (uri in owned.toList().asReversed()) {
             try {
-                delete(uri)
+                check(delete(uri)) { "SAF provider refused deletion of operation-owned document $uri" }
             } catch (cause: Throwable) {
                 if (failure == null) failure = cause else failure.addSuppressed(cause)
             }

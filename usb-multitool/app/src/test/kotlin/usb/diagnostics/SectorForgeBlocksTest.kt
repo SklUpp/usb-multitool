@@ -103,19 +103,6 @@ class SectorForgeBlocksTest {
         assertEquals(listOf(1UL until 4UL, 5UL until 6UL), map.nonTried)
     }
 
-    @Test
-    fun forwardOnlyUnresolvedBlocksBecomeFailed() {
-        val map = RescueMap.forCopy(4UL, sectorSize = 512)
-        SectorForgeBlocks.apply(
-            map,
-            longArrayOf(0L, 2L * 512, SectorForgeBlocks.NON_TRIED, 2L * 512, 2L * 512, SectorForgeBlocks.COPIED),
-            512,
-            inheritedFailed = emptyList(),
-            unresolvedAsFailed = true,
-        )
-        assertEquals(listOf(0UL until 2UL), map.failed)
-        assertEquals(listOf(2UL until 4UL), map.copied)
-    }
 
     @Test fun snapshotReplacesStaleCheckpointProgress() {
         val map = RescueMap.forCopy(4UL, sectorSize = sectorSize)
@@ -190,6 +177,23 @@ class SectorForgeBlocksTest {
         assertEquals(sectorSize, map.sectorSize)
         assertEquals("SN-0123456789", map.identity)
         assertEquals(listOf(0UL until 2UL), map.copied)
+    }
+
+    @Test
+    fun nativeUntriedAfterAbortCannotBecomeFailed() {
+        val map = RescueMap.forCopy(3UL, sectorSize = sectorSize)
+        SectorForgeBlocks.apply(
+            map,
+            longArrayOf(
+                0L, sectorSize.toLong(), SectorForgeBlocks.COPIED,
+                sectorSize.toLong(), 2L * sectorSize, SectorForgeBlocks.NON_TRIED,
+            ),
+            sectorSize,
+            inheritedFailed = emptyList(),
+        )
+        assertEquals(listOf(0UL until 1UL), map.copied)
+        assertEquals(listOf(1UL until 3UL), map.nonTried)
+        assertTrue(map.failed.isEmpty())
     }
 
     @Test fun fragmentedSnapshotReconstructsEveryRun() {

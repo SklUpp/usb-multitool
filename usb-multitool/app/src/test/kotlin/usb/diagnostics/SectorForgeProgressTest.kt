@@ -68,4 +68,32 @@ class SectorForgeProgressTest {
         assertEquals(SectorForgeNative.STATUS_FATAL, writer.writeAt(512, buffer))
         assertEquals(listOf(1UL until 3UL), uncertain)
     }
+
+    @Test fun cancelSnapshotKeepsUnreadRangesNonTried() {
+        val map = RescueMap.forCopy(4UL, sectorSize = 512)
+        val op = DiskOperation(name = "copy", active = { false })
+        val progress = SectorForgeEngine.Progress(map, op, 512, emptyList(), {}, RescueSink { _, _ -> }, 2048)
+        assertFalse(progress.onProgress(512, 0, 1536, 512, longArrayOf(0, 512, 4, 512, 1536, 0)))
+        assertEquals(listOf(0UL until 4UL), map.nonTried)
+        assertTrue(map.failed.isEmpty())
+    }
+
+    @Test fun fatalSnapshotKeepsMapNonTriedAndSkipsCheckpoint() {
+        val map = RescueMap.forCopy(4UL, sectorSize = 512)
+        val op = DiskOperation("copy")
+        var checkpoints = 0
+        val progress = SectorForgeEngine.Progress(
+            map,
+            op,
+            512,
+            emptyList(),
+            { checkpoints++ },
+            RescueSink { _, _ -> },
+            2048,
+        )
+        assertFalse(progress.onProgress(0, 0, 2048, 0, longArrayOf(1, 512, SectorForgeBlocks.COPIED)))
+        assertEquals(listOf(0UL until 4UL), map.nonTried)
+        assertTrue(map.failed.isEmpty())
+        assertEquals(0, checkpoints)
+    }
 }

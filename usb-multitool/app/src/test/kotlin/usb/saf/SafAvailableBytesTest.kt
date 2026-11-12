@@ -129,7 +129,7 @@ class SafAvailableBytesTest {
     @Test
     fun operationCleanupDeletesOnlyExactOwnedUrisInReverseOrder() {
         val deleted = mutableListOf<String>()
-        val owned = SafOperationDocuments { deleted += it.toString() }
+        val owned = SafOperationDocuments { deleted += it.toString(); true }
         val archive = android.net.Uri.parse("content://tree/run")
         val image = android.net.Uri.parse("content://tree/run/image.img")
         owned.own(archive)
@@ -143,10 +143,18 @@ class SafAvailableBytesTest {
     @Test
     fun preflightFailureLeavesUnownedUserDocumentUntouched() {
         val deleted = mutableListOf<String>()
-        val owned = SafOperationDocuments { deleted += it.toString() }
+        val owned = SafOperationDocuments { deleted += it.toString(); true }
         owned.own(android.net.Uri.parse("content://tree/run"))
         owned.cleanup()
         assertEquals(listOf("content://tree/run"), deleted)
         assertFalse(deleted.contains("content://tree/existing"))
+    }
+
+    @Test
+    fun providerDeleteFalseIsReturnedAsCleanupFailure() {
+        val owned = SafOperationDocuments { false }
+        owned.own(android.net.Uri.parse("content://tree/run"))
+        val failure = owned.cleanup()
+        assertEquals("SAF provider refused deletion of operation-owned document content://tree/run", failure?.message)
     }
 }

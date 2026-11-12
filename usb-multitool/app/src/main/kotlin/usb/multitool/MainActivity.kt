@@ -1327,7 +1327,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         requirePinnedBackupAttachment(snapshot)
                         val folder = requireBackupFolder()
                         preparedFolder = folder
-                        val owned = usb.saf.SafOperationDocuments(folder::deleteDocument)
+                        val owned = usb.saf.SafOperationDocuments { uri -> folder.deleteDocument(uri) }
                         ownedDocuments = owned
                         val folderName = BackupArchive.folderName("${timestamp()}-${System.nanoTime()}")
                         val archive = owned.own(folder.createExclusiveSubfolder(folderName))
@@ -1358,7 +1358,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     },
                     onOpenFailure = {
                         runCatching { prepared?.close() }
-                        ownedDocuments?.cleanup()
+                        ownedDocuments?.cleanup()?.let { cleanup ->
+                            android.util.Log.w("UsbMultitool", "SAF rescue cleanup failed", cleanup)
+                        }
                     }
                 ) { disk, operation, _ ->
                     val folder = requireNotNull(preparedFolder)

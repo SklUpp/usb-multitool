@@ -25,4 +25,24 @@ class TransferTuningTest {
             )
         }
     }
+
+    @Test
+    fun rescueChunkUsesWholeSectorAtLargeSectorBoundary() {
+        try {
+            TransferTuning.apply(
+                scsiChunkKib = TransferTuning.DEFAULT_SCSI_CHUNK_KIB,
+                jniCapKib = TransferTuning.DEFAULT_JNI_CAP_KIB,
+                rescueCheckpointMib = TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB,
+                sectorSize = 4096,
+            )
+            assertEquals(1024 * 1024, TransferTuning.jniCapBytes)
+            assertEquals(1024 * 1024 / 4096 * 4096, TransferTuning.jniCapBytes)
+        } finally {
+            TransferTuning.apply(
+                TransferTuning.DEFAULT_SCSI_CHUNK_KIB,
+                TransferTuning.DEFAULT_JNI_CAP_KIB,
+                TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB,
+            )
+        }
+    }
 }

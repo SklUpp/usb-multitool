@@ -6,6 +6,7 @@ import usb.device.DiskException
 import usb.device.UsbDisk
 import usb.image.ImageCancelledException
 import usb.operation.DiskOperation
+import usb.device.TransferTuning
 import usb.operation.OperationState
 
 /**
@@ -72,9 +73,12 @@ internal object SectorForgeEngine {
                 maxRetries,
                 writerUncertainWrites,
             )
+        val chunkBytes = TransferTuning.jniCapBytes.toLong()
+            .coerceAtLeast(sectorSize.toLong())
+        val chunk = (chunkBytes - chunkBytes % sectorSize).coerceAtLeast(sectorSize.toLong())
+            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val checkpointBytes =
             (checkpointEverySectors * sectorSize.toULong()).toLong().coerceAtLeast(1L)
-        var handle = 0L
         var failure: Throwable? = null
         try {
             prepareResume(map, inheritedFailed, destination, sizeBytes.toLong(), checkpoint)
@@ -120,7 +124,6 @@ internal object SectorForgeEngine {
                         sectorSize,
                         inheritedFailed,
                         writerUncertainWrites,
-                        unresolvedAsFailed = maxRetries == 0 && !destination.positional,
                     )
                 } catch (cause: Throwable) {
                     record(cause)
@@ -272,7 +275,6 @@ internal object SectorForgeEngine {
                         sectorSize,
                         inheritedFailed,
                         uncertainWrites,
-                        unresolvedAsFailed = maxRetries == 0 && !destination.positional,
                     )
                     destination.ensureLength(imageBytes)
                     checkpoint(map.snapshot())
