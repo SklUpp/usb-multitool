@@ -3,6 +3,7 @@ package usb.ui
 import usb.fs.FilesystemId
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
+import usb.partition.PartitionName
 import usb.partition.RawSchemeProblem
 import usb.partition.TableScheme
 
