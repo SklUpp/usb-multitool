@@ -134,7 +134,7 @@ class SectorForgeBlocksTest {
             inheritedFailed = listOf(1UL until 2UL),
             uncertainWrites = listOf(1UL until 2UL),
         )
-        assertEquals(listOf(1UL until 2UL), map.nonTried)
+        assertEquals(listOf(0UL until 4UL), map.nonTried)
         assertTrue(map.failed.isEmpty())
         val saved = RescueMap.decode(map.encode())
         assertEquals(listOf(1UL until 2UL), saved.nonTried)

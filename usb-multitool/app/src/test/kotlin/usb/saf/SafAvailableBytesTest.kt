@@ -1,4 +1,8 @@
 package usb.saf
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
 
 import android.database.Cursor
 import android.provider.DocumentsContract
@@ -9,6 +13,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 
 /**
  * Behaviour of SAF free-space lookup: only the unique root whose document ID equals the

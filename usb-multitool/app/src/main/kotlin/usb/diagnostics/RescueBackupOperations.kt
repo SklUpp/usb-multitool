@@ -168,9 +168,11 @@ object RescueBackupOperations {
             onFinalClose()
             closed = true
             when (operation.state) {
-                is OperationState.Partial, is OperationState.Failed -> Unit
-                else -> {
-                    if (map.failed.isEmpty() && !map.partial) {
+                is OperationState.Partial, is OperationState.Failed, is OperationState.Cancelled, is OperationState.Completed -> Unit
+                is OperationState.Queued, is OperationState.Running -> {
+                    if (map.failed.isNotEmpty() || map.partial) {
+                        operation.state = OperationState.Partial
+                    } else {
                         // Canonical publication is a success-only step; on failure/cancel
                         // only the verified checkpoint generations remain.
                         onPublishCanonical()
@@ -182,8 +184,8 @@ object RescueBackupOperations {
         } catch (failure: Throwable) {
             if (imageTouched || extentGrew()) {
                 when (operation.state) {
-                    is OperationState.Partial, is OperationState.Failed -> Unit
-                    else -> {
+                    is OperationState.Partial, is OperationState.Failed, is OperationState.Cancelled, is OperationState.Completed -> Unit
+                    is OperationState.Queued, is OperationState.Running -> {
                         operation.state = OperationState.Partial
                         if (operation.failureCause == null) operation.failureCause = failure
                     }

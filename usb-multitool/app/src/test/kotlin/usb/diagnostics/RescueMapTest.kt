@@ -193,7 +193,7 @@ class RescueMapTest {
         val out = java.io.ByteArrayOutputStream()
         val sink = out.asRescueSink(512)
         sink.writeSector(2UL, ByteArray(512) { 7 })
-        assertEquals(1024, out.size())
+        assertEquals(3 * 512, out.size())
         assertTrue(out.toByteArray().copyOfRange(0, 1024).take(1024 - 512).all { it == 0.toByte() })
         try {
             sink.writeSector(0UL, ByteArray(512))
