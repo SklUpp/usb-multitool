@@ -21,7 +21,6 @@ import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -172,8 +171,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         /** Persisted SAF tree shared by image+map folders and GPT copies. */
         const val BACKUP_FOLDER_URI_KEY = "backup_folder_uri"
         const val BACKUP_FOLDER_NAME_KEY = "backup_folder_name"
-        private const val VENTOY_ASSETS_DIR = "ventoy-assets"
-        private const val VENTOY_STAGING_DIR = "ventoy-staging"
         const val PROGRESS_TICK_MS = 120L
         /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
         const val LOG_TICK_MS = 3_000L
@@ -5355,15 +5352,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: throw IllegalStateException(
                 "external files directory is unavailable; cannot save the backup",
             )
-
-    /**
-     * Pre-staged Ventoy release files. App-private: no /sdcard/ventoy lookup and no
-     * all-files permission is required to read them.
-     */
-    private fun ventoyAssetsDir(): File = getApplication<Application>().getDir(VENTOY_ASSETS_DIR, Context.MODE_PRIVATE)
-
-    /** Download staging for a fetched release archive; app-private, deleted after use. */
-    private fun ventoyStagingDir(): File = getApplication<Application>().getDir(VENTOY_STAGING_DIR, Context.MODE_PRIVATE)
 
     /** Read the selected SAF document, bounded by the size this device needs. */
         private fun readTextDocument(

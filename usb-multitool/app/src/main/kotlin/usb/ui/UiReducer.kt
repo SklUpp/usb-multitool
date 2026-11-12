@@ -1665,7 +1665,7 @@ object UiReducer {
                                     // Snapshot now: later edits on screen cannot change what
                                     // the confirmed install/update will write. Staged edits for
                                     // a chosen non-default file must never leak into the default
-                                    // ventoy.json; they are written only by Update.
+                                    // ventoy.json; they are written only when that source is selected.
                                     ventoyControls =
                                         if (state.ventoySettingsSource.isDefaultPath()) {
                                             state.pendingVentoyControls

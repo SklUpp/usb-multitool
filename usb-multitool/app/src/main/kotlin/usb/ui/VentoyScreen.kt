@@ -57,13 +57,10 @@ fun VentoyScreen(
     // does not triple-mount while caches are still null. Cleared when all three land or
     // epoch moves (invalidate).
     var catalogLoadEpoch by remember { mutableStateOf<Long?>(null) }
-// Network download of a new release is separate from installing already-fetched
-// assets; only the download path is warned about here, before any traffic starts.
-var showDownloadWarning by remember { mutableStateOf(false) }
-// One automatic upstream check per attachment: a failed check ends as n/a and does not
-// retry on every recomposition; a new attach gets a fresh check after the old one is
-// fenced out by the reducer.
-var upstreamCheckedGeneration by remember { mutableStateOf<Long?>(null) }
+    // One automatic upstream check per attachment: a failed check ends as n/a and does not
+    // retry on every recomposition; a new attach gets a fresh check after the old one is
+    // fenced out by the reducer.
+    var upstreamCheckedGeneration by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(
         state.ventoyGlobalSettings,
