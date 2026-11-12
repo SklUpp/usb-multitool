@@ -12,7 +12,7 @@ import java.nio.ByteOrder
 open class UsbDisk(
     private val session: BotSession,
     geometry: BlockGeometry? = null,
-    private val lease: UsbExclusiveClaim.Lease? = null,
+    private var lease: UsbExclusiveClaim.Lease? = lease
 ) : BlockDevice {
     private var closed = false
     private var closeFailure: Throwable? = null
@@ -235,6 +235,12 @@ open class UsbDisk(
         // Release ownership only after session close is confirmed.
         lease?.releaseAfterSessionClose()
     }
+    internal fun bindLease(boundLease: UsbExclusiveClaim.Lease) {
+        if (lease === boundLease) return
+        check(lease == null) { "USB lease already bound" }
+        lease = boundLease
+        boundLease.bindSession()
+    }
     internal fun beginHigherLevelClose() {
         lease?.holdForHigherLevelClose()
     }
@@ -242,7 +248,6 @@ open class UsbDisk(
     internal fun confirmHigherLevelClose() {
         lease?.confirmHigherLevelClose()
     }
-
 
     private fun closeSessionPreserving(primary: Throwable) {
         try {

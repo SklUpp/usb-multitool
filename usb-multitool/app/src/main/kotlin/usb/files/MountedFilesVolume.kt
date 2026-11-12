@@ -14,6 +14,12 @@ class MountedFilesVolume(
     init {
         disk.beginHigherLevelClose()
     }
+
+    internal fun bindLease(lease: usb.device.UsbExclusiveClaim.Lease) {
+        disk.bindLease(lease)
+        disk.beginHigherLevelClose()
+    }
+
     override fun close() {
         closeFailure?.let { throw it }
         var failure: Throwable? = null

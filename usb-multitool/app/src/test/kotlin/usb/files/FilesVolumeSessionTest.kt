@@ -31,14 +31,16 @@ class FilesVolumeSessionTest {
     private val pinA = AttachmentPin(1L, "1:stick-a")
     private val pinB = AttachmentPin(2L, "1:stick-b")
 
-    /** Session whose live attachment is [current]; [open] ignores the pin it was called with. */
+    /** Session whose live attachment is [current]; test factory binds lease to opened disk. */
     private fun pinnedSession(
         current: () -> AttachmentPin? = { pinA },
         open: (String, Boolean) -> MountedFilesVolume,
     ): FilesVolumeSession =
         FilesVolumeSession(
             currentAttachment = current,
-            openMounted = { partitionId, writable, _, _ -> open(partitionId, writable) },
+            openMounted = { partitionId, writable, _, lease ->
+                open(partitionId, writable).also { it.bindLease(lease) }
+            }
         )
 
     @Test
@@ -57,6 +59,23 @@ class FilesVolumeSessionTest {
         session.withLock { session.volumeForLocked(pinA, "1") }
         assertNull(session.close())
         assertEquals(listOf("volume", "disk"), events)
+    }
+    @Test
+    fun earlyBotCloseCannotReleaseClaimBeforeFilesystemClose() {
+        val claim = UsbExclusiveClaim()
+        val events = mutableListOf<String>()
+        val first = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                mounted(partitionId, writable, events, volumeClose = null, diskClose = null, lease = lease)
+            },
+            claim = claim,
+        )
+        first.withLock { first.volumeForLocked(pinA, "1") }
+        assertTrue(claim.isHeld())
+        assertNull(first.close())
+        assertEquals(listOf("volume", "disk"), events)
+        assertFalse(claim.isHeld())
     }
 
     @Test
@@ -1192,6 +1211,8 @@ class FilesVolumeSessionTest {
                     if (volumeClose != null) throw volumeClose
                 }
             }
-        return MountedFilesVolume(partitionId, disk, volume, writable)
+        return MountedFilesVolume(partitionId, disk, volume, writable).also {
+            if (lease != null) it.bindLease(lease)
+        }
     }
 }
