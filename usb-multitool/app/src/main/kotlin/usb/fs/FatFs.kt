@@ -176,6 +176,7 @@ class FatVolume internal constructor(
 
     fun isOpen(): Boolean = open
 
+    @Synchronized
     override fun space(): FilesystemSpace {
         ensureOpen()
         val out = LongArray(2)
@@ -185,6 +186,7 @@ class FatVolume internal constructor(
         return FilesystemSpace(totalBytes = out[0].toULong(), freeBytes = out[1].toULong())
     }
 
+    @Synchronized
     override fun list(path: String): List<UsbFsDirEntry> {
         ensureOpen()
         return FatFsNative.nativeList(volumeHandle, path).map {
@@ -192,6 +194,7 @@ class FatVolume internal constructor(
         }
     }
 
+    @Synchronized
     override fun stat(path: String): UsbFsDirEntry {
         ensureOpen()
         val e = FatFsNative.nativeStat(volumeHandle, path)
@@ -205,11 +208,13 @@ class FatVolume internal constructor(
             mapFatStatOrNullFailure(path, failure)
         }
 
+    @Synchronized
     override fun mkdir(path: String) {
         ensureOpen()
         FatFsNative.nativeMkdir(volumeHandle, path)
     }
 
+    @Synchronized
     override fun delete(path: String) {
         ensureOpen()
         try {
@@ -219,11 +224,13 @@ class FatVolume internal constructor(
         }
     }
 
+    @Synchronized
     override fun rename(from: String, to: String) {
         ensureOpen()
         FatFsNative.nativeRename(volumeHandle, from, to)
     }
 
+    @Synchronized
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
         requireValidRange(offset, length.toLong())
@@ -231,6 +238,7 @@ class FatVolume internal constructor(
         return FatFsNative.nativeRead(volumeHandle, path, offset, length)
     }
 
+    @Synchronized
     override fun write(
         path: String,
         data: ByteArray,
@@ -246,11 +254,13 @@ class FatVolume internal constructor(
         requireFullWrite(wrote, data.size)
     }
 
+    @Synchronized
     override fun sync() {
         ensureOpen()
         FatFsNative.nativeSync(volumeHandle)
     }
 
+    @Synchronized
     override fun close() {
         if (!open) return
         open = false

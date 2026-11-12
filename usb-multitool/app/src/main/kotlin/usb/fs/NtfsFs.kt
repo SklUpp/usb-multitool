@@ -3,7 +3,6 @@ package usb.fs
 import usb.requireLinkedEngine
 import usb.device.BlockDevice
 import java.io.Closeable
-import java.util.Collections
 import java.util.WeakHashMap
 
 data class NtfsDirEntry(
@@ -69,7 +68,9 @@ object NtfsFs {
         }
     }
 
-    private val openVolumes = Collections.synchronizedMap(WeakHashMap<BlockDevice, NtfsVolume>())
+    private val registryLock = Any()
+    private val openVolumes = WeakHashMap<BlockDevice, NtfsVolume>()
+    private val mountingDevices = WeakHashMap<BlockDevice, Boolean>()
 
     /**
      * @param readOnly default true (browse-safe). RW mount refused when the on-disk
@@ -78,35 +79,43 @@ object NtfsFs {
     fun mount(device: BlockDevice, readOnly: Boolean = true): NtfsVolume {
         require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
         require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
-
-        return withNativeEngine {
-            if (!readOnly && isDirty(device)) {
-                throw NtfsException(
-                    "NTFS volume is dirty; refusing read-write mount. " +
-                        "Run ntfsfix on a PC, or clear the dirty flag only if you accept the risk.",
-                )
+        synchronized(registryLock) {
+            if (openVolumes.containsKey(device) || mountingDevices.containsKey(device)) {
+                throw NtfsException("NTFS volume already mounted")
             }
-
-            val err = IntArray(1)
-            val handle = nativeMount(
-                device,
-                device.sectorSize,
-                device.sectorCount.toLong(),
-                readOnly,
-                err,
-            )
-            if (handle == 0L) {
-                throw when (err[0]) {
-                    16 /* EBUSY */ -> NtfsException(
+            mountingDevices[device] = true
+        }
+        try {
+            return withNativeEngine {
+                if (!readOnly && isDirty(device)) {
+                    throw NtfsException(
                         "NTFS volume is dirty; refusing read-write mount. " +
                             "Run ntfsfix on a PC, or clear the dirty flag only if you accept the risk.",
                     )
-                    else -> NtfsException("Failed to mount NTFS volume (errno=${err[0]})")
                 }
+                val err = IntArray(1)
+                val handle = nativeMount(
+                    device,
+                    device.sectorSize,
+                    device.sectorCount.toLong(),
+                    readOnly,
+                    err,
+                )
+                if (handle == 0L) {
+                    throw when (err[0]) {
+                        16 /* EBUSY */ -> NtfsException(
+                            "NTFS volume is dirty; refusing read-write mount. " +
+                                "Run ntfsfix on a PC, or clear the dirty flag only if you accept the risk.",
+                        )
+                        else -> NtfsException("Failed to mount NTFS volume (errno=${err[0]})")
+                    }
+                }
+                val volume = NtfsVolume(handle, device, readOnly)
+                synchronized(registryLock) { openVolumes[device] = volume }
+                volume
             }
-            val volume = NtfsVolume(handle, device, readOnly)
-            openVolumes[device] = volume
-            volume
+        } finally {
+            synchronized(registryLock) { mountingDevices.remove(device) }
         }
     }
 
@@ -169,29 +178,37 @@ object NtfsFs {
             )
         }
 
-        synchronized(openVolumes) {
-            openVolumes[device]?.let { vol ->
-                if (vol.isOpen()) {
-                    vol.close()
-                }
-                openVolumes.remove(device)
+        val mounted = synchronized(registryLock) {
+            if (mountingDevices.containsKey(device)) {
+                throw NtfsException("NTFS volume mount or close already in progress")
             }
+            mountingDevices[device] = true
+            openVolumes[device]
         }
-        volumeGate.closeAll(device)
-
-        return withNativeEngine {
-            nativeClearDirty(
-                device,
-                device.sectorSize,
-                device.sectorCount.toLong(),
-                confirmationToken,
-            )
+        try {
+            mounted?.close()
+            synchronized(registryLock) {
+                if (openVolumes[device] === mounted) openVolumes.remove(device)
+            }
+            volumeGate.closeAll(device)
+            return withNativeEngine {
+                nativeClearDirty(
+                    device,
+                    device.sectorSize,
+                    device.sectorCount.toLong(),
+                    confirmationToken,
+                )
+            }
+        } finally {
+            synchronized(registryLock) { mountingDevices.remove(device) }
         }
     }
 
 
-    internal fun unregisterVolume(device: BlockDevice) {
-        openVolumes.remove(device)
+    internal fun unregisterVolume(device: BlockDevice, volume: NtfsVolume) {
+        synchronized(registryLock) {
+            if (openVolumes[device] === volume) openVolumes.remove(device)
+        }
     }
 
     @JvmStatic private external fun nativeMount(
@@ -276,6 +293,7 @@ class NtfsVolume internal constructor(
         check(open) { "NTFS volume closed" }
     }
 
+    @Synchronized
     override fun space(): FilesystemSpace {
         ensureOpen()
         val out = LongArray(2)
@@ -290,6 +308,7 @@ class NtfsVolume internal constructor(
         if (readOnly) throw NtfsException("Read-only NTFS volume")
     }
 
+    @Synchronized
     override fun list(path: String): List<UsbFsDirEntry> {
         ensureOpen()
         val entries = NtfsFs.nativeList(handle, path)
@@ -300,6 +319,7 @@ class NtfsVolume internal constructor(
     override fun stat(path: String): UsbFsDirEntry =
         statOrNull(path) ?: throw NtfsException("Path not found: $path")
 
+    @Synchronized
     override fun statOrNull(path: String): UsbFsDirEntry? {
         ensureOpen()
         val err = IntArray(1)
@@ -308,6 +328,7 @@ class NtfsVolume internal constructor(
         return UsbFsDirEntry(name, st.isDirectory, st.size)
     }
 
+    @Synchronized
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
         requireIoRange(offset, length, MAX_NTFS_IO_BYTES)
@@ -322,6 +343,7 @@ class NtfsVolume internal constructor(
     }
 
 
+    @Synchronized
     override fun write(
         path: String,
         data: ByteArray,
@@ -337,11 +359,13 @@ class NtfsVolume internal constructor(
         }
     }
 
+    @Synchronized
     override fun mkdir(path: String) {
         ensureWritable()
         NtfsFs.nativeMkdir(handle, path)
     }
 
+    @Synchronized
     override fun delete(path: String) {
         ensureWritable()
         try {
@@ -354,11 +378,13 @@ class NtfsVolume internal constructor(
         }
     }
 
+    @Synchronized
     override fun rename(from: String, to: String) {
         ensureWritable()
         NtfsFs.nativeRename(handle, from, to)
     }
 
+    @Synchronized
     override fun sync() {
         ensureOpen()
         val rc = NtfsFs.nativeSync(handle)
@@ -367,6 +393,7 @@ class NtfsVolume internal constructor(
         }
     }
 
+    @Synchronized
     fun isDirty(): Boolean {
         ensureOpen()
         return NtfsFs.nativeIsVolumeDirty(handle)
@@ -377,12 +404,13 @@ class NtfsVolume internal constructor(
         if (!open) return
         open = false
         try {
-            NtfsFs.unregisterVolume(device)
-        } finally {
             val rc = NtfsFs.nativeClose(handle)
             if (rc != 0) {
                 throw NtfsException("Failed to close NTFS volume: rc=$rc")
             }
+        } finally {
+            // Keep registry entry until native teardown returns; direct remount cannot overlap close.
+            NtfsFs.unregisterVolume(device, this)
         }
     }
 }

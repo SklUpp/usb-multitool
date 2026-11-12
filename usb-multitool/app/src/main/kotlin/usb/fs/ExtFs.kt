@@ -2,7 +2,6 @@ package usb.fs
 
 import usb.device.BlockDevice
 import java.io.Closeable
-import java.util.Collections
 import java.util.WeakHashMap
 
 data class ExtDirEntry(
@@ -47,30 +46,43 @@ object ExtFs {
         }
     }
 
-    private val openVolumes = Collections.synchronizedMap(WeakHashMap<BlockDevice, ExtVolume>())
+    /** Registry lock protects map/reservation only; never hold it across native callbacks. */
+    private val registryLock = Any()
+    private val openVolumes = WeakHashMap<BlockDevice, ExtVolume>()
+    /** Prevents concurrent duplicate native mounts while mount callback is in flight. */
+    private val mountingDevices = WeakHashMap<BlockDevice, Boolean>()
 
     fun mount(device: BlockDevice, readOnly: Boolean = true): ExtVolume {
         ensureNative()
         require(device.sectorSize in 512..4096) { "Unsupported sector size: ${device.sectorSize}" }
         require(device.sectorCount > 0uL) { "Invalid sector count: ${device.sectorCount}" }
-
-        val err = IntArray(1)
-        val handle =
-            nativeMount(device, device.sectorSize, device.sectorCount.toLong(), readOnly, err)
-        if (handle == 0L) {
-            throw when (err[0]) {
-                16 /* EBUSY */ -> ExtException(
-                    "EXT volume looks dirty/unclean; refusing mount. " +
-                        "Do not clear the flag from this app — run e2fsck on a PC, then remount",
-                )
-                95 /* ENOTSUP */, 48 /* ENOTSUP darwin */ ->
-                    ExtException("EXT volume uses unsupported features; refusing mount")
-                else -> ExtException("Failed to mount EXT volume (errno=${err[0]})")
+        synchronized(registryLock) {
+            if (openVolumes.containsKey(device) || mountingDevices.containsKey(device)) {
+                throw ExtException("EXT volume already mounted")
             }
+            mountingDevices[device] = true
         }
-        val volume = ExtVolume(handle, device, readOnly = readOnly)
-        openVolumes[device] = volume
-        return volume
+        try {
+            val err = IntArray(1)
+            val handle =
+                nativeMount(device, device.sectorSize, device.sectorCount.toLong(), readOnly, err)
+            if (handle == 0L) {
+                throw when (err[0]) {
+                    16 /* EBUSY */ -> ExtException(
+                        "EXT volume looks dirty/unclean; refusing mount. " +
+                            "Do not clear the flag from this app — run e2fsck on a PC, then remount",
+                    )
+                    95 /* ENOTSUP */, 48 /* ENOTSUP darwin */ ->
+                        ExtException("EXT volume uses unsupported features; refusing mount")
+                    else -> ExtException("Failed to mount EXT volume (errno=${err[0]})")
+                }
+            }
+            val volume = ExtVolume(handle, device, readOnly = readOnly)
+            synchronized(registryLock) { openVolumes[device] = volume }
+            return volume
+        } finally {
+            synchronized(registryLock) { mountingDevices.remove(device) }
+        }
     }
 
     fun mkfs(device: BlockDevice, label: String = "") {
@@ -86,10 +98,11 @@ object ExtFs {
         return nativeProbe(device, device.sectorSize, device.sectorCount.toLong())
     }
 
-    internal fun unregisterVolume(device: BlockDevice) {
-        openVolumes.remove(device)
+    internal fun unregisterVolume(device: BlockDevice, volume: ExtVolume) {
+        synchronized(registryLock) {
+            if (openVolumes[device] === volume) openVolumes.remove(device)
+        }
     }
-
     @JvmStatic
     private external fun nativeMount(
         device: BlockDevice,
@@ -127,6 +140,7 @@ class ExtVolume internal constructor(
     val device: BlockDevice,
     val readOnly: Boolean,
 ) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
+    // Every native operation shares this monitor with close; callbacks run outside registryLock.
     @Volatile private var open: Boolean = true
 
     fun isOpen(): Boolean = open
@@ -140,6 +154,7 @@ class ExtVolume internal constructor(
         if (readOnly) throw ExtException("Read-only EXT volume")
     }
 
+    @Synchronized
     override fun space(): FilesystemSpace {
         ensureOpen()
         val out = LongArray(2)
@@ -149,6 +164,7 @@ class ExtVolume internal constructor(
         return FilesystemSpace(totalBytes = out[0].toULong(), freeBytes = out[1].toULong())
     }
 
+    @Synchronized
     override fun list(path: String): List<UsbFsDirEntry> {
         ensureOpen()
         val entries = ExtFs.nativeList(handle, path)
@@ -159,6 +175,7 @@ class ExtVolume internal constructor(
     override fun stat(path: String): UsbFsDirEntry =
         statOrNull(path) ?: throw ExtException("Path not found: $path")
 
+    @Synchronized
     override fun statOrNull(path: String): UsbFsDirEntry? {
         ensureOpen()
         val err = IntArray(1)
@@ -167,6 +184,7 @@ class ExtVolume internal constructor(
         return UsbFsDirEntry(name, st.isDirectory, st.size)
     }
 
+    @Synchronized
     override fun read(path: String, offset: Long, length: Int): ByteArray {
         ensureOpen()
         requireIoRange(offset, length, MAX_FAT_EXT_IO_BYTES)
@@ -174,6 +192,7 @@ class ExtVolume internal constructor(
             ?: throw ExtException("Failed to read: $path")
     }
 
+    @Synchronized
     override fun write(
         path: String,
         data: ByteArray,
@@ -189,11 +208,13 @@ class ExtVolume internal constructor(
         }
     }
 
+    @Synchronized
     override fun mkdir(path: String) {
         ensureWritable()
         ExtFs.nativeMkdir(handle, path)
     }
 
+    @Synchronized
     override fun delete(path: String) {
         ensureWritable()
         try {
@@ -206,11 +227,13 @@ class ExtVolume internal constructor(
         }
     }
 
+    @Synchronized
     override fun rename(from: String, to: String) {
         ensureWritable()
         ExtFs.nativeRename(handle, from, to)
     }
 
+    @Synchronized
     override fun sync() {
         ensureOpen()
         if (ExtFs.nativeSync(handle) != 0) throw ExtException("EXT sync failed")
@@ -231,14 +254,15 @@ class ExtVolume internal constructor(
         // remain — we do not retry umount or clear the flag; run e2fsck on a PC.
         // FilesVolumeSession latches this failure and refuses remount in-process.
         try {
-            ExtFs.unregisterVolume(device)
-        } finally {
             val rc = ExtFs.nativeClose(handle)
             if (rc != 0) {
                 throw ExtException(
                     "EXT close/sync failed (rc=$rc). If the volume will not remount, run e2fsck on a PC",
                 )
             }
+        } finally {
+            // Keep registry entry until native teardown returns; direct remount cannot overlap close.
+            ExtFs.unregisterVolume(device, this)
         }
     }
 }
