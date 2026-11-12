@@ -1418,6 +1418,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         runCatching { prepared?.close() }
                     }
                 }
+            }
 
             UiEffect.CaptureGptBackup ->
                 submitReadOnlyDiskOperation(
