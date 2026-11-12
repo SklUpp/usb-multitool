@@ -1361,7 +1361,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ownedDocuments?.cleanup()?.let { cleanup ->
                             android.util.Log.w("UsbMultitool", "SAF rescue cleanup failed", cleanup)
                         }
-                    }
+                    },
                 ) { disk, operation, _ ->
                     val folder = requireNotNull(preparedFolder)
                     val archiveUri = requireNotNull(preparedArchive)
