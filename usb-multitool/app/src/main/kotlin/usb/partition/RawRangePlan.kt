@@ -229,6 +229,25 @@ enum class RawRangeProblem {
     BeyondEndOfDisk,
     RangeTooLarge,
     SourceLargerThanRange,
+
+    /** The decoded image length is unknown, so no honest end bound can be computed. */
+    SourceSizeUnknown,
+
+    /** The decoded image is empty; there is nothing to write. */
+    SourceEmpty,
+
+    /** The decoded size cannot be represented without overflow. */
+    SourceSizeOverflow,
+}
+
+/** Result of deriving the range from the start LBA and the decoded image size. */
+sealed interface RawWritePlan {
+    data class Ready(
+        val range: RawWriteRange,
+        val warnings: List<RawRangeWarning>,
+    ) : RawWritePlan
+
+    data class Rejected(val problems: Set<RawRangeProblem>) : RawWritePlan
 }
 
 sealed interface RawRangeWarning {
@@ -272,6 +291,52 @@ object RawRangePlan {
             problems += RawRangeProblem.RangeTooLarge
         }
         return problems
+    }
+
+    /**
+     * Derive the only range the UI can offer: [startLba] plus exactly the sectors the
+     * decoded image needs, rounded up to a whole sector. Nothing is clamped and nothing
+     * is guessed: an unknown, empty, overflowing or not-fitting image is rejected before
+     * any confirmation or write.
+     */
+    fun planFromSourceSize(
+        startLba: ULong,
+        sourceBytes: Long?,
+        geometry: RawRangeGeometry,
+    ): RawWritePlan {
+        if (sourceBytes == null) {
+            return RawWritePlan.Rejected(setOf(RawRangeProblem.SourceSizeUnknown))
+        }
+        if (sourceBytes < 0L) {
+            return RawWritePlan.Rejected(setOf(RawRangeProblem.SourceSizeOverflow))
+        }
+        if (sourceBytes == 0L) {
+            return RawWritePlan.Rejected(setOf(RawRangeProblem.SourceEmpty))
+        }
+        val sectorSize = geometry.sectorSize
+        require(sectorSize > 0) { "sector size must be positive" }
+        val bytes = sourceBytes.toULong()
+        val whole = bytes / sectorSize.toULong()
+        val sectorCount = whole + if (bytes % sectorSize.toULong() == 0UL) 0UL else 1UL
+
+        val problems = linkedSetOf<RawRangeProblem>()
+        if (sectorCount > maxRepresentableSectors(sectorSize)) {
+            problems += RawRangeProblem.RangeTooLarge
+        }
+        if (sectorCount > geometry.diskSectorCount ||
+            startLba > geometry.diskSectorCount - sectorCount
+        ) {
+            problems += RawRangeProblem.BeyondEndOfDisk
+        }
+        if (problems.isNotEmpty()) return RawWritePlan.Rejected(problems)
+
+        return when (val check = check(startLba, sectorCount, geometry, bytes)) {
+            is RawRangeCheck.Rejected -> RawWritePlan.Rejected(check.problems)
+            is RawRangeCheck.Ok -> RawWritePlan.Ready(
+                range = RawWriteRange(startLba, sectorCount),
+                warnings = check.warnings,
+            )
+        }
     }
 
     fun check(

@@ -121,8 +121,8 @@ sealed class UiIntent {
      */
     data class RequestInitializePartitionTable(val scheme: PartitionScheme) : UiIntent()
 
-    /** One raw tool: write the explicitly chosen absolute sector range. */
-    data class RequestWriteRawRange(val startLba: ULong, val sectorCount: ULong) : UiIntent()
+    /** One raw tool: the start LBA; the end comes from the decoded image size. */
+    data class RequestRawWrite(val startLba: ULong) : UiIntent()
 
     /** Presence hint for the drafted raw range; never a veto and never contents. */
     data class RequestRangeProbe(val startLba: ULong, val sectorCount: ULong) : UiIntent()
@@ -155,8 +155,31 @@ sealed class UiIntent {
         val name: String? = null,
         val sizeBytes: Long? = null,
     ) : UiIntent()
-    data class SetStagedRawImage(val path: String, val label: String) : UiIntent()
+    data class SetStagedRawImage(
+        val path: String,
+        val label: String,
+        /** Stored byte length of the staged copy; null = unknown, so no range is offered. */
+        val sizeBytes: Long? = null,
+        /** The staged bytes start with gzip/xz magic, so the name must not size the range. */
+        val compressedMagic: Boolean = false,
+    ) : UiIntent()
     data class ClearStagedRawImage(val deleteFile: Boolean = true) : UiIntent()
+
+    /**
+     * Result of the cancellable decode-count pass for [source]. Accepted only for the
+     * current [generation] and active source; bytes null means the pass failed.
+     */
+    data class RawSourceMeasured(
+        val generation: Long,
+        val source: String?,
+        val bytes: Long?,
+        val sha256: String? = null,
+        val error: String? = null,
+        val errorKind: RawMeasureError? = null,
+    ) : UiIntent()
+
+    /** User explicitly stops a stuck decode-count pass. */
+    data object CancelRawSourceMeasurement : UiIntent()
 
     /** Scan the selected partition for raw-write sources; no extension filter. */
     data object LoadRawSourceCandidates : UiIntent()
@@ -593,6 +616,16 @@ sealed interface UiEffect {
 
     /** Drop only a pending system picker owned by [pickSessionId]; newer launches survive. */
     data class CancelPendingWindowsImport(val pickSessionId: String) : UiEffect
+    /** Read-only decode-count pass for a raw source; no temporary uncompressed file. */
+    data class MeasureRawSource(
+        val source: String,
+        val staged: Boolean,
+        val generation: Long,
+        /** Disk capacity bound; a larger decoded stream is refused during the pass. */
+        val limitBytes: Long? = null,
+    ) : UiEffect
+
+    data object CancelRawSourceMeasure : UiEffect
 
     data class LoadWindowsIsoCandidates(val requestGeneration: Long) : UiEffect
 
@@ -1183,7 +1216,16 @@ object UiReducer {
                             }
                             if (cancelPickInspection) add(UiEffect.CancelIsoImportInspection)
                         },
-                )
+                ).let { result ->
+                    // A source chosen before capacity/geometry was known waits without a
+                    // decode pass; start the bounded pass as soon as a positive bound exists.
+                    val resumed = resumeRawMeasurement(result.state)
+                    if (resumed == null) {
+                        result
+                    } else {
+                        ReduceResult(resumed.first, result.effects + listOf(resumed.second))
+                    }
+                }
             }
 
             is UiIntent.OperationUpdated -> {
@@ -1294,8 +1336,8 @@ object UiReducer {
             is UiIntent.RequestInitializePartitionTable ->
                 PartitionTransitions.requestInitializePartitionTable(state, intent)
 
-            is UiIntent.RequestWriteRawRange ->
-                RawTransitions.requestWriteRawRange(state, intent)
+            is UiIntent.RequestRawWrite ->
+                RawTransitions.requestRawWrite(state, intent)
             is UiIntent.RequestRangeProbe ->
                 RawTransitions.requestRangeProbe(state, intent)
             is UiIntent.RangeProbeResulted ->
@@ -1321,6 +1363,10 @@ object UiReducer {
                         intent.action == DestructiveAction.RAW_WRITE &&
                             state.imageUri == null && state.stagedRawImagePath == null ->
                             UiMessage.Key(UiMessageKey.SelectImageFirst)
+                        // Raw writing needs a start plus the decoded image size; the whole-disk
+                        // shortcut would bypass the derived end bound.
+                        intent.action == DestructiveAction.RAW_WRITE ->
+                            UiMessage.Key(UiMessageKey.RawRangeInvalid)
                         intent.action == DestructiveAction.GPT_RESTORE && state.backupUri == null ->
                             UiMessage.Key(UiMessageKey.ChooseGptBackup)
                         intent.action == DestructiveAction.RESCUE_RESTORE &&
@@ -1384,34 +1430,6 @@ object UiReducer {
                                     targetPart,
                                     formatId = formatId,
                                     target = state.selectedPartition(),
-                                    rawStartLba =
-                                        if (intent.action == DestructiveAction.RAW_WRITE) 0UL else null,
-                                    rawSectorCount =
-                                        if (intent.action == DestructiveAction.RAW_WRITE) {
-                                            state.rawGeometry?.diskSectorCount
-                                                ?: defaultWholeDiskSectors(state)
-                                        } else {
-                                            null
-                                        },
-                                    diskSectorCount =
-                                        if (intent.action == DestructiveAction.RAW_WRITE) {
-                                            state.rawGeometry?.diskSectorCount
-                                                ?: defaultWholeDiskSectors(state)
-                                        } else {
-                                            null
-                                        },
-                                    diskSectorSize =
-                                        if (intent.action == DestructiveAction.RAW_WRITE) {
-                                            state.rawGeometry?.sectorSize ?: state.diskSectorSize
-                                        } else {
-                                            null
-                                        },
-                                    rawSourceName =
-                                        if (intent.action == DestructiveAction.RAW_WRITE) {
-                                            rawImageSourceName(state)
-                                        } else {
-                                            null
-                                        },
                                     gptBackupUri =
                                         if (intent.action == DestructiveAction.GPT_RESTORE) {
                                             state.backupUri
@@ -1810,26 +1828,76 @@ object UiReducer {
                 if (!state.actionsEnabled) {
                     // Busy / pending confirm — do not clear staged source under a live raw write.
                     ReduceResult(state)
+                } else if (uri == null) {
+                    // Clearing the SAF pick keeps an existing staged copy as the source.
+                    val key = state.stagedRawImagePath
+                    ReduceResult(
+                        state.copy(
+                            imageUri = null,
+                            rangeProbe = null,
+                            rangeProbeRequestedRange = null,
+                            imageName = null,
+                            imageSizeBytes = null,
+                            statusMessage = UiMessage.Key(UiMessageKey.ImageCleared),
+                            rawDecodedSizeBytes = state.rawDecodedSizeBytes.takeIf {
+                                key != null && state.rawDecodedSizeSource == key
+                            },
+                            rawDecodedSizeSource = key,
+                            rawDecodedSizeError = state.rawDecodedSizeError.takeIf { key != null },
+                            rawDecodedErrorKind = state.rawDecodedErrorKind.takeIf { key != null },
+                            rawDecodedSha256 = state.rawDecodedSha256.takeIf { key != null },
+                            rawSizeMeasuring = false,
+                            rawMeasurementPending = state.rawMeasurementPending && key != null,
+                        ),
+                        effects =
+                            if (key == null) {
+                                listOf(UiEffect.CancelRawSourceMeasure)
+                            } else {
+                                emptyList()
+                            },
+                    )
                 } else {
+                    val generation = state.rawSizeGeneration + 1L
+                    // SAF content is not an immutable snapshot: measure it (and hash it)
+                    // before any confirmation regardless of the provider SIZE. A pass only
+                    // starts once a positive disk/geometry bound is known.
+                    val limit = rawMeasureLimit(state)?.takeIf { it > 0L }
                     ReduceResult(
                         state.copy(
                             imageUri = uri,
                             rangeProbe = null,
                             rangeProbeRequestedRange = null,
-                            imageName = if (uri != null) intent.name else null,
-                            imageSizeBytes = if (uri != null) intent.sizeBytes else null,
-                            stagedRawImagePath = if (uri != null) null else state.stagedRawImagePath,
-                            stagedRawImageLabel = if (uri != null) null else state.stagedRawImageLabel,
-                            statusMessage =
-                                if (uri == null) {
-                                    UiMessage.Key(UiMessageKey.ImageCleared)
-                                } else {
-                                    UiMessage.Key(
-                                        UiMessageKey.ImageReady,
-                                        listOf(intent.name ?: uri),
-                                    )
-                                },
+                            imageName = intent.name,
+                            imageSizeBytes = intent.sizeBytes,
+                            stagedRawImagePath = null,
+                            stagedRawImageLabel = null,
+                            stagedRawImageSizeBytes = null,
+                            rawDecodedSizeBytes = null,
+                            rawDecodedSizeSource = uri,
+                            rawDecodedSizeError = null,
+                            rawDecodedErrorKind = null,
+                            rawDecodedSha256 = null,
+                            rawSizeMeasuring = limit != null,
+                            rawMeasurementPending = limit == null,
+                            rawSizeGeneration = generation,
+                            statusMessage = UiMessage.Key(
+                                UiMessageKey.ImageReady,
+                                listOf(intent.name ?: uri),
+                            ),
                         ),
+                        effects =
+                            if (limit != null) {
+                                listOf(
+                                    UiEffect.MeasureRawSource(
+                                        uri,
+                                        staged = false,
+                                        generation = generation,
+                                        limitBytes = limit,
+                                    ),
+                                )
+                            } else {
+                                emptyList()
+                            },
                     )
                 }
             }
@@ -1838,6 +1906,10 @@ object UiReducer {
                 RawTransitions.setStagedRawImage(state, intent)
             is UiIntent.ClearStagedRawImage ->
                 RawTransitions.clearStagedRawImage(state, intent)
+            is UiIntent.RawSourceMeasured ->
+                RawTransitions.rawSourceMeasured(state, intent)
+            is UiIntent.CancelRawSourceMeasurement ->
+                RawTransitions.cancelRawSourceMeasurement(state)
             is UiIntent.LoadRawSourceCandidates ->
                 RawTransitions.loadRawSourceCandidates(state, intent)
             is UiIntent.RawSourceCandidatesLoaded ->
@@ -3537,25 +3609,51 @@ object UiReducer {
 
 
     /**
-     * Whole-disk default when no geometry snapshot is available yet (e.g. an unreadable
-     * table): sector count from the confirmed capacity, never from a screen estimate.
+     * Store-size shortcut only when it really is the decoded length: a named,
+     * uncompressed source with a positive reported size. Everything else (gz/xz,
+     * unnamed SAF, missing SIZE) goes through the cancellable decode-count pass.
      */
-    private fun defaultWholeDiskSectors(state: AppUiState): ULong? {
-        val device = state.device ?: return null
-        if (state.diskSectorSize <= 0) return null
-        val sectors = device.capacityBytes / state.diskSectorSize.toULong()
-        return sectors.takeIf { it > 0UL }
+    internal fun cheapRawDecodedBytes(name: String?, storedBytes: Long?): Long? {
+        if (name.isNullOrBlank() || storedBytes == null || storedBytes <= 0L) return null
+        if (usb.image.ImageFormatNames.isCompressed(name)) return null
+        return storedBytes
     }
 
-    /**
-     * Prefer staged label, then SAF display name, then last path segment of the URI/path.
-     * Never invent a name when none is known — confirm is refused instead.
-     */
-    internal fun rawImageSourceName(state: AppUiState): String? =
-        state.stagedRawImageLabel?.takeIf { it.isNotBlank() }
-            ?: state.imageName?.takeIf { it.isNotBlank() }
-            ?: DestructiveConfirmation.fileLabel(state.stagedRawImagePath)
-            ?: DestructiveConfirmation.fileLabel(state.imageUri)
+    /** Largest decoded image that could possibly fit the disk; bounds SAF measurement. */
+    internal fun rawMeasureLimit(state: AppUiState): Long? {
+        val geometry = state.rawGeometry
+        val sectors = geometry?.diskSectorCount
+        val sectorSize = geometry?.sectorSize ?: state.diskSectorSize.takeIf { it > 0 }
+        if (sectors != null && sectorSize != null && sectorSize > 0) {
+            val ss = sectorSize.toULong()
+            if (sectors > Long.MAX_VALUE.toULong() / ss) return Long.MAX_VALUE
+            return (sectors * ss).toLong()
+        }
+        val capacity = state.device?.capacityBytes ?: return null
+        return if (capacity > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else capacity.toLong()
+    }
+
+    /** Start a queued bounded pass once capacity/geometry is known. */
+    private fun resumeRawMeasurement(
+        state: AppUiState,
+    ): Pair<AppUiState, UiEffect>? {
+        if (!state.rawMeasurementPending) return null
+        val key = state.rawSourceKey ?: return null
+        val limit = rawMeasureLimit(state)?.takeIf { it > 0L } ?: return null
+        val generation = state.rawSizeGeneration + 1L
+        val staged = state.stagedRawImagePath != null
+        return state.copy(
+            rawSizeMeasuring = true,
+            rawMeasurementPending = false,
+            rawSizeGeneration = generation,
+        ) to
+            UiEffect.MeasureRawSource(
+                source = key,
+                staged = staged,
+                generation = generation,
+                limitBytes = limit,
+            )
+    }
 
     private fun OperationTitle.clearsPendingVentoyControls(): Boolean =
         when (this) {

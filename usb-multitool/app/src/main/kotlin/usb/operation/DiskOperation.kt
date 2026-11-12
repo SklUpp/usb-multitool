@@ -25,8 +25,19 @@ open class DiskOperation(
 ) {
     private val explicitActive = AtomicBoolean(true)
     private val inactive = CompletableDeferred<Unit>()
+    private val inactiveListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
 
     fun isActive(): Boolean = explicitActive.get() && active()
+
+    /** Register a best-effort cleanup (e.g. close an in-flight source stream) on cancel. */
+    fun onInactive(listener: () -> Unit) {
+        inactiveListeners.add(listener)
+        if (!isActive()) runCatching(listener)
+    }
+
+    fun removeInactiveListener(listener: () -> Unit) {
+        inactiveListeners.remove(listener)
+    }
 
     fun report(bytes: Long) {
         bytesDone = bytes
@@ -39,6 +50,7 @@ open class DiskOperation(
     internal fun markInactive() {
         if (explicitActive.getAndSet(false)) {
             inactive.complete(Unit)
+            inactiveListeners.forEach { runCatching(it) }
         }
     }
 

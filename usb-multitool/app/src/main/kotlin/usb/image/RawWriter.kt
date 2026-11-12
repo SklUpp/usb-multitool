@@ -13,6 +13,13 @@ import usb.operation.DiskOperation
 import usb.operation.OperationState
 
 class ImageTooLargeException(message: String) : Exception(message)
+
+/** The source decoded to zero bytes. */
+class EmptyImageException(message: String = "image is empty") : Exception(message)
+
+/** The decoded source changed after the range was confirmed; nothing may be written. */
+class SourceChangedException(message: String) : Exception(message)
+
 class ImageCancelledException(message: String = "image write cancelled") : CancellationException(message)
 class OverwriteRequiredException(message: String = "raw write requires overwrite=true") : Exception(message)
 class ImageVerifyException(
@@ -26,9 +33,67 @@ private class ReadbackOutcome(
 
 object RawWriter {
     /**
+     * Reserve the bounded source-close budget before the first provider open. Ownership
+     * moves to a measurement handle when one is needed and is reacquired before the next
+     * open, so every open is admitted and active + deferred streams stay globally capped.
+     */
+    private class WriteAdmission(private var lease: CloseAdmission?) {
+        fun take(): CloseAdmission {
+            val current = lease ?: error("write admission was already transferred")
+            lease = null
+            return current
+        }
+
+        fun acquire() {
+            if (lease != null) return
+            lease =
+                MeasurementHandle.admitOrNull()
+                    ?: throw java.io.IOException(
+                        "too many provider streams are still closing; " +
+                            "retry the write after they finish",
+                    )
+        }
+
+        fun release() {
+            lease?.release()
+            lease = null
+        }
+    }
+
+    private inline fun <T> withCloseAdmission(block: (WriteAdmission) -> T): T {
+        val admission =
+            WriteAdmission(
+                MeasurementHandle.admitOrNull()
+                    ?: throw java.io.IOException(
+                        "too many provider streams are still closing; " +
+                            "retry the write after they finish",
+                    ),
+            )
+        return try {
+            block(admission)
+        } finally {
+            admission.release()
+        }
+    }
+
+    private fun openSource(source: ImageSource, admission: WriteAdmission): CountedInputStream {
+        admission.acquire()
+        return source.open()
+    }
+
+    /**
      * Stream [source] into [range] on [disk] in [TransferPlan.MAX_CHUNK]-sized blocks.
      * The range is absolute; every write and the readback use `range.startLba + offset`.
-     * Size/bounds rejection happens before any sector write.
+     * Size/bounds rejection happens before any sector write. An uncompressed source uses
+     * its declared decoded length; a compressed or unknown stream is decoded once to count
+     * its real length (no temporary file), then written streamingly. A source whose decoded
+     * length differs from [expectedDecodedBytes] is refused with [SourceChangedException];
+     * an empty source with [EmptyImageException]. For a non-snapshot (SAF) source with
+     * [expectedSha256], a bounded digest preflight must match before the first write, and
+     * the digest is recomputed while streaming: a provider swap after the preflight can
+     * still overwrite part of the range, but it is reported as Partial/Unverified and can
+     * never be reported as Completed/Verified. Staged files are immutable snapshots and
+     * skip the extra digest pass.
      * Caller must release any files volume on the disk first (fail-closed).
      * [confirmation] must match [identity] and the whole-disk capacity.
      * [overwrite] must be true; silent overwrite is refused.
@@ -46,25 +111,87 @@ object RawWriter {
         confirmation: DestructiveConfirmation,
         overwrite: Boolean,
         range: RawWriteRange,
+        /** Decoded size the confirmed range was derived from; a changed source is refused. */
+        expectedDecodedBytes: Long? = null,
+        /** SHA-256 of the decoded bytes; non-snapshot sources must match before writing. */
+        expectedSha256: String? = null,
         operation: DiskOperation = DiskOperation("raw-write"),
-    ): RawWriteResult {
+    ): RawWriteResult = withCloseAdmission { admission ->
         confirmation.requireMatch(identity, disk.capacityBytes)
         if (!overwrite) throw OverwriteRequiredException()
 
         val sectorSize = disk.sectorSize
         RawRangePlan.requireWritable(range, disk.sectorCount, sectorSize)
         val capacity = range.byteLength(sectorSize)
-        val known = source.declaredDecodedSize
-        if (known != null && (known < 0L || known.toULong() > capacity)) {
-            throw ImageTooLargeException("image $known exceeds selected range $capacity bytes")
-        }
 
         val chunkBytes = TransferPlan.MAX_CHUNK
         require(chunkBytes % sectorSize == 0) {
             "TransferPlan.MAX_CHUNK must be a multiple of sectorSize"
         }
 
-        val input = source.open()
+        var input = openSource(source, admission)
+        fun closeQuietly() {
+            try {
+                input.close()
+            } catch (_: Throwable) {
+            }
+        }
+        // Opening resolves magic. An uncompressed image may use its declared length; a
+        // compressed or unknown stream is decoded once here to get the real length without
+        // a temporary file, then reopened for the streaming write.
+        val measureLimit =
+            if (capacity > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else capacity.toLong()
+        var measuredSha: String? = null
+        var knownRaw = source.decodedSizeForRawWrite
+        if (knownRaw == null || (!source.snapshot && expectedSha256 != null)) {
+            // Unknown size or a provider that may return different bytes: one bounded pass
+            // serves both the decoded length and the confirmation digest. A provider SIZE
+            // is only authoritative for an immutable snapshot or when no confirmed decoded
+            // length exists; expectedDecodedBytes is checked below instead.
+            closeQuietly()
+            val checked =
+                measureWithCancellation(source, operation, measureLimit, admission.take())
+            input = openSource(source, admission)
+            measuredSha = checked.sha256
+            if (knownRaw != null &&
+                (source.snapshot || expectedDecodedBytes == null) &&
+                checked.bytes != knownRaw
+            ) {
+                closeQuietly()
+                throw SourceChangedException(
+                    "decoded source is ${checked.bytes} bytes but expected $knownRaw",
+                )
+            }
+            knownRaw = checked.bytes
+        }
+        if (!source.snapshot && expectedSha256 != null && measuredSha != expectedSha256) {
+            closeQuietly()
+            throw SourceChangedException(
+                "source digest changed after confirmation; refusing to write",
+            )
+        }
+        val known = knownRaw ?: throw IllegalStateException("decoded size is unknown")
+        val writeDigest =
+            if (!source.snapshot && expectedSha256 != null) {
+                java.security.MessageDigest.getInstance("SHA-256")
+            } else {
+                null
+            }
+        if (known <= 0L) {
+            closeQuietly()
+            throw EmptyImageException()
+        }
+        if (expectedDecodedBytes != null && known != expectedDecodedBytes) {
+            closeQuietly()
+            throw SourceChangedException(
+                "decoded source is $known bytes but the confirmed range expected " +
+                    "$expectedDecodedBytes; refusing to write",
+            )
+        }
+        if (known.toULong() > capacity) {
+            closeQuietly()
+            throw ImageTooLargeException("image $known exceeds selected range $capacity bytes")
+        }
         val result =
             try {
                 streamToRange(
@@ -76,6 +203,7 @@ object RawWriter {
                     sectorSize = sectorSize,
                     chunkBytes = chunkBytes,
                     known = known,
+                    digest = writeDigest,
                     operation = operation,
                 )
             } catch (primary: Throwable) {
@@ -95,7 +223,9 @@ object RawWriter {
             } catch (e: Throwable) {
                 e
             }
-        if (closeFailure == null) return result
+        if (closeFailure == null) {
+            return finishWithDigest(result, writeDigest, expectedSha256, operation)
+        }
 
         val primaryFailure = result.failure
         if (primaryFailure != null) {
@@ -104,7 +234,70 @@ object RawWriter {
         val failure = primaryFailure ?: closeFailure
         operation.state = OperationState.Partial
         operation.failureCause = failure
-        return result.copy(state = RawWriteStatus.Partial, failure = failure)
+        return finishWithDigest(
+            result.copy(state = RawWriteStatus.Partial, failure = failure),
+            writeDigest,
+            expectedSha256,
+            operation,
+        )
+    }
+
+    /**
+     * Cancellation closes the tracked stream via a best-effort hook. Closing does not
+     * guarantee that a provider read blocked inside the provider returns immediately, but
+     * it prevents an untracked descriptor and makes the cooperative check honest.
+     */
+    private fun measureWithCancellation(
+        source: ImageSource,
+        operation: DiskOperation,
+        limitBytes: Long,
+        admission: CloseAdmission,
+    ): MeasuredSource {
+        val handle = MeasurementHandle(admission)
+        val closeOnCancel = { handle.cancel() }
+        return try {
+            operation.onInactive(closeOnCancel)
+            source.measureDecoded(
+                isActive = operation::isActive,
+                limitBytes = limitBytes,
+                handle = handle,
+            )
+        } finally {
+            try {
+                operation.removeInactiveListener(closeOnCancel)
+            } finally {
+                handle.cancel()
+                handle.abandon()
+            }
+        }
+    }
+
+    /**
+     * A source that changed between the preflight hash and the streaming read must never
+     * report Completed/Verified, even if readback compared against the changed source.
+     */
+    private fun finishWithDigest(
+        result: RawWriteResult,
+        digest: java.security.MessageDigest?,
+        expectedSha256: String?,
+        operation: DiskOperation,
+    ): RawWriteResult {
+        if (digest == null || expectedSha256 == null || result.failure != null) return result
+        val actual = digest.digest().digestHex()
+        if (actual == expectedSha256) return result
+        val failure =
+            SourceChangedException("source digest changed during write; refusing to verify it")
+        operation.state = OperationState.Partial
+        operation.failureCause = failure
+        return result.copy(
+            readback =
+                ReadbackVerdict.Unverified(
+                    range = result.range,
+                    detail = "source changed during write; readback was against the changed source",
+                ),
+            state = RawWriteStatus.Partial,
+            failure = failure,
+        )
     }
 
     private fun streamToRange(
@@ -116,6 +309,7 @@ object RawWriter {
         sectorSize: Int,
         chunkBytes: Int,
         known: Long?,
+        digest: java.security.MessageDigest? = null,
         operation: DiskOperation,
     ): RawWriteResult {
         val expected = input.decodedSizeHint ?: known
@@ -163,6 +357,7 @@ object RawWriter {
                 break
             }
             if (n <= 0) break
+            digest?.update(chunk, 0, n)
             val padded =
                 if (n % sectorSize == 0) {
                     n
@@ -338,7 +533,25 @@ object RawWriter {
         val diskChunk = ByteArray(chunkBytes)
         var mismatched = 0UL
         var firstMismatchLba: ULong? = null
-        source.open().use { input ->
+        val verifyAdmission =
+            MeasurementHandle.admitOrNull()
+                ?: return ReadbackOutcome(
+                    ReadbackVerdict.Incomplete(
+                        ReadbackProblem.IoError,
+                        "readback skipped: too many provider streams are still closing",
+                    ),
+                )
+        val verifyHandle = MeasurementHandle(verifyAdmission)
+        val input =
+            try {
+                source.open()
+            } catch (failure: Throwable) {
+                verifyHandle.abandon()
+                throw failure
+            }
+        verifyHandle.attach(input)
+        var readbackFailure: Throwable? = null
+        try {
             var offset = 0L
             while (offset < expectedDiskBytes) {
                 if (checkActive && !operation.isActive()) {
@@ -393,6 +606,20 @@ object RawWriter {
                     )
                 }
             }
+        } catch (failure: Throwable) {
+            readbackFailure = failure
+            throw failure
+        } finally {
+            try {
+                verifyHandle.releaseOrThrow(input)
+            } catch (closeFailure: Throwable) {
+                val primary = readbackFailure
+                if (primary != null) {
+                    primary.addSuppressed(closeFailure)
+                } else {
+                    throw closeFailure
+                }
+            }
         }
         if (mismatched == 0UL) return ReadbackOutcome(ReadbackVerdict.Verified)
         return ReadbackOutcome(
@@ -405,12 +632,31 @@ object RawWriter {
 
     private fun readFully(input: CountedInputStream, buffer: ByteArray, length: Int): Int {
         var offset = 0
+        var zeroReads = 0
         while (offset < length) {
             val n = input.read(buffer, offset, length - offset)
             if (n < 0) break
-            if (n == 0) continue
+            if (n == 0) {
+                if (++zeroReads >= WRITER_ZERO_READ_LIMIT) {
+                    throw java.io.IOException("stream made no progress during raw write")
+                }
+                continue
+            }
+            zeroReads = 0
             offset += n
         }
         return offset
     }
+}
+
+private const val WRITER_ZERO_READ_LIMIT = 3
+
+private fun ByteArray.digestHex(): String {
+    val digits = "0123456789abcdef"
+    val out = StringBuilder(size * 2)
+    for (b in this) {
+        val v = b.toInt() and 0xFF
+        out.append(digits[v ushr 4]).append(digits[v and 0x0F])
+    }
+    return out.toString()
 }

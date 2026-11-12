@@ -360,6 +360,10 @@ data class DestructiveConfirmation(
     /** Absolute raw-write range confirmed by the user; null for every other action. */
     val rawStartLba: ULong? = null,
     val rawSectorCount: ULong? = null,
+    /** Decoded image bytes the confirmed range was derived from; a changed source is refused. */
+    val rawDecodedBytes: Long? = null,
+    /** SHA-256 of the decoded bytes; a SAF provider returning other bytes is refused. */
+    val rawSourceSha256: String? = null,
     /** Geometry the raw range was drafted against; refuses a re-plug with other geometry. */
     val diskSectorCount: ULong? = null,
     val diskSectorSize: Int? = null,
@@ -430,6 +434,8 @@ data class DestructiveConfirmation(
             target: PartitionTab? = null,
             rawStartLba: ULong? = null,
             rawSectorCount: ULong? = null,
+            rawDecodedBytes: Long? = null,
+            rawSourceSha256: String? = null,
             diskSectorCount: ULong? = null,
             diskSectorSize: Int? = null,
             rawSourceName: String? = null,
@@ -461,6 +467,10 @@ data class DestructiveConfirmation(
                 partitionSectorCount = target?.sectorCount,
                 rawStartLba = if (action == DestructiveAction.RAW_WRITE) rawStartLba else null,
                 rawSectorCount = if (action == DestructiveAction.RAW_WRITE) rawSectorCount else null,
+                rawDecodedBytes =
+                    if (action == DestructiveAction.RAW_WRITE) rawDecodedBytes else null,
+                rawSourceSha256 =
+                    if (action == DestructiveAction.RAW_WRITE) rawSourceSha256 else null,
                 diskSectorCount =
                     if (action == DestructiveAction.RAW_WRITE) diskSectorCount else null,
                 diskSectorSize =
@@ -1245,6 +1255,25 @@ data class AppUiState(
     val backupFolderUri: String? = null,
     val backupFolderName: String? = null,
     val backupFolderUsable: Boolean = false,
+    /** Stored byte length of the staged copy; null means unknown and no range is offered. */
+    val stagedRawImageSizeBytes: Long? = null,
+    /**
+     * Exact decoded length measured for the active raw source. Null until a cheap stored
+     * size is trusted or the cancellable decode-count pass finishes.
+     */
+    val rawDecodedSizeBytes: Long? = null,
+    /** Source key the measurement belongs to; a changed source invalidates it. */
+    val rawDecodedSizeSource: String? = null,
+    val rawDecodedSizeError: String? = null,
+    val rawDecodedErrorKind: RawMeasureError? = null,
+    /** SHA-256 of the measured decoded bytes; binds confirmation to SAF content. */
+    val rawDecodedSha256: String? = null,
+    /** True while the decode-count pass for the current source is running. */
+    val rawSizeMeasuring: Boolean = false,
+    /** Waiting for a positive capacity/geometry before a bounded pass may start. */
+    val rawMeasurementPending: Boolean = false,
+    /** Monotonic id so a late measurement cannot describe a newer source. */
+    val rawSizeGeneration: Long = 0L,
     val backupUri: String? = null,
     /** Bounded inspection of [backupUri] (file facts only; live geometry is rechecked on request). */
     val backupInspection: GptBackupInspection? = null,
@@ -1365,6 +1394,33 @@ fun PartitionBinding.matches(state: AppUiState): Boolean {
     if (state.selectedPartitionId != partitionId) return false
     val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
     return partition.startLba == startLba && partition.sectorCount == sectorCount
+}
+
+/**
+ * Display name the raw writer will show, preferring the staged label, then the SAF name.
+ * Never invents a name: null means the confirmation must be refused.
+ */
+val AppUiState.rawWriteSourceName: String?
+    get() = stagedRawImageLabel?.takeIf { it.isNotBlank() }
+        ?: imageName?.takeIf { it.isNotBlank() }
+        ?: DestructiveConfirmation.fileLabel(stagedRawImagePath)
+        ?: DestructiveConfirmation.fileLabel(imageUri)
+
+enum class RawMeasureError { Busy, CloseCapacity, Failed }
+
+/** Active source key: staged copy wins over the SAF image. */
+val AppUiState.rawSourceKey: String?
+    get() = stagedRawImagePath ?: imageUri
+
+/**
+ * Decoded length that may size the raw range. Only an exact measurement for the active
+ * source is accepted; a compressed or unknown source waits for the decode-count pass.
+ * The writer independently re-measures and refuses a changed source before writing.
+ */
+fun AppUiState.rawWriteDecodedBytes(): Long? {
+    val key = rawSourceKey ?: return null
+    if (rawDecodedSizeSource != key) return null
+    return rawDecodedSizeBytes
 }
 
 /**

@@ -290,6 +290,76 @@ class RawRangePlanTest {
         assertTrue(check.warnings.any { it is RawRangeWarning.MetadataCoverageUnknown })
     }
 
+    @Test fun plannerRoundsDecodedBytesUpToWholeSectors() {
+        val geometry = RawRangeGeometry.from(mbrTable(), 10_000UL, sectorSize)
+        val exact = RawRangePlan.planFromSourceSize(2048UL, 512L, geometry) as RawWritePlan.Ready
+        assertEquals(RawWriteRange(2048UL, 1UL), exact.range)
+        val partial = RawRangePlan.planFromSourceSize(2048UL, 513L, geometry) as RawWritePlan.Ready
+        assertEquals(RawWriteRange(2048UL, 2UL), partial.range)
+        val oneByte = RawRangePlan.planFromSourceSize(0UL, 1L, geometry) as RawWritePlan.Ready
+        assertEquals(1UL, oneByte.range.sectorCount)
+    }
+
+    @Test fun plannerRejectsUnknownEmptyAndOverflowingSizes() {
+        val geometry = RawRangeGeometry.from(mbrTable(), 10_000UL, sectorSize)
+        assertEquals(
+            setOf(RawRangeProblem.SourceSizeUnknown),
+            (RawRangePlan.planFromSourceSize(0UL, null, geometry) as RawWritePlan.Rejected).problems,
+        )
+        assertEquals(
+            setOf(RawRangeProblem.SourceEmpty),
+            (RawRangePlan.planFromSourceSize(0UL, 0L, geometry) as RawWritePlan.Rejected).problems,
+        )
+        assertEquals(
+            setOf(RawRangeProblem.SourceSizeOverflow),
+            (RawRangePlan.planFromSourceSize(0UL, -1L, geometry) as RawWritePlan.Rejected).problems,
+        )
+        val huge = RawRangeGeometry.unreadable(Long.MAX_VALUE.toULong(), sectorSize)
+        assertTrue(
+            (RawRangePlan.planFromSourceSize(0UL, Long.MAX_VALUE, huge) as RawWritePlan.Rejected)
+                .problems.contains(RawRangeProblem.RangeTooLarge),
+        )
+    }
+
+    @Test fun plannerRejectsImageThatDoesNotFitFromStart() {
+        val geometry = RawRangeGeometry.from(mbrTable(), 10_000UL, sectorSize)
+        val rejected =
+            RawRangePlan.planFromSourceSize(9_999UL, 1024L, geometry) as RawWritePlan.Rejected
+        assertEquals(setOf(RawRangeProblem.BeyondEndOfDisk), rejected.problems)
+        // 2 sectors starting at 9_999 end exactly at 10_001: one past the disk.
+        val exactlyFits =
+            RawRangePlan.planFromSourceSize(9_998UL, 1024L, geometry) as RawWritePlan.Ready
+        assertEquals(RawWriteRange(9_998UL, 2UL), exactlyFits.range)
+        assertEquals(10_000UL, exactlyFits.range.endLbaExclusive)
+    }
+
+    @Test fun derivedRangeOverlapUsesExclusiveEnd() {
+        val geometry = RawRangeGeometry.from(
+            mbrTable(partitions = listOf(
+                Partition(2048UL, 1000UL, name = "A"),
+                Partition(3048UL, 500UL, name = "B"),
+            )),
+            10_000UL,
+            sectorSize,
+        )
+        val first = RawRangePlan.planFromSourceSize(2048UL, 512L, geometry) as RawWritePlan.Ready
+        val overlap = first.warnings.filterIsInstance<RawRangeWarning.OverlapsObjects>().single()
+        assertEquals(listOf("A"), overlap.overlaps.map { it.target.name })
+        assertTrue(overlap.overlaps.single().fullyCovered)
+
+        // Starting exactly at B's start overlaps only B, never A.
+        val atBoundary = RawRangePlan.planFromSourceSize(3048UL, 512L, geometry) as RawWritePlan.Ready
+        val boundaryOverlap =
+            atBoundary.warnings.filterIsInstance<RawRangeWarning.OverlapsObjects>().single()
+        assertEquals(listOf("B"), boundaryOverlap.overlaps.map { it.target.name })
+
+        // Ending exactly at B's start (3048) does not touch B.
+        val coversA = RawRangePlan.planFromSourceSize(2048UL, 1000L * 512L, geometry) as RawWritePlan.Ready
+        val coversAOverlap = coversA.warnings.filterIsInstance<RawRangeWarning.OverlapsObjects>()
+        assertEquals(1, coversAOverlap.size)
+        assertEquals(listOf("A"), coversAOverlap.single().overlaps.map { it.target.name })
+    }
+
     @Test fun writerPreflightRejectsSameBoundProblems() {
         val range = RawWriteRange(9UL, 2UL)
         try {

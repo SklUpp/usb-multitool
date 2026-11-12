@@ -6,9 +6,9 @@ package usb.ui
  * only entry point; this object holds no state and performs no I/O.
  */
 internal object RawTransitions {
-    fun requestWriteRawRange(
+    fun requestRawWrite(
         state: AppUiState,
-        intent: UiIntent.RequestWriteRawRange,
+        intent: UiIntent.RequestRawWrite,
     ): ReduceResult {
         val device = state.device
         val geometry = state.rawGeometry
@@ -27,38 +27,53 @@ internal object RawTransitions {
                     ),
                 )
             else -> {
-                val check =
-                    usb.partition.RawRangePlan.check(
-                        intent.startLba,
-                        intent.sectorCount,
-                        geometry,
-                    )
-                if (check is usb.partition.RawRangeCheck.Rejected) {
-                    ReduceResult(
+                val sourceBytes = state.rawWriteDecodedBytes()
+                val contentNeedsDigest =
+                    state.imageUri != null && state.stagedRawImagePath == null
+                if (contentNeedsDigest && state.rawDecodedSha256 == null) {
+                    return ReduceResult(
                         state.copy(
                             statusMessage = UiMessage.Key(UiMessageKey.RawRangeInvalid),
                         ),
                     )
-                } else {
-                    ReduceResult(
-                        state.copy(
-                            pendingConfirmation =
-                                DestructiveConfirmation.request(
-                                    device,
-                                    DestructiveAction.RAW_WRITE,
-                                    rawStartLba = intent.startLba,
-                                    rawSectorCount = intent.sectorCount,
-                                    diskSectorCount = geometry.diskSectorCount,
-                                    diskSectorSize = geometry.sectorSize,
-                                    rawSourceName = UiReducer.rawImageSourceName(state),
-                                ),
-                            rangeProbe =
-                                state.rangeProbe?.takeIf {
-                                    it.range.startLba == intent.startLba &&
-                                        it.range.sectorCount == intent.sectorCount
-                                },
-                        ),
+                }
+                val plan =
+                    usb.partition.RawRangePlan.planFromSourceSize(
+                        startLba = intent.startLba,
+                        sourceBytes = sourceBytes,
+                        geometry = geometry,
                     )
+                when (plan) {
+                    is usb.partition.RawWritePlan.Rejected ->
+                        ReduceResult(
+                            state.copy(
+                                statusMessage = UiMessage.Key(UiMessageKey.RawRangeInvalid),
+                            ),
+                        )
+                    is usb.partition.RawWritePlan.Ready -> {
+                        val range = plan.range
+                        ReduceResult(
+                            state.copy(
+                                pendingConfirmation =
+                                    DestructiveConfirmation.request(
+                                        device,
+                                        DestructiveAction.RAW_WRITE,
+                                        rawStartLba = range.startLba,
+                                        rawSectorCount = range.sectorCount,
+                                        rawDecodedBytes = sourceBytes,
+                                        rawSourceSha256 = state.rawDecodedSha256,
+                                        diskSectorCount = geometry.diskSectorCount,
+                                        diskSectorSize = geometry.sectorSize,
+                                        rawSourceName = state.rawWriteSourceName,
+                                    ),
+                                rangeProbe =
+                                    state.rangeProbe?.takeIf {
+                                        it.range.startLba == range.startLba &&
+                                            it.range.sectorCount == range.sectorCount
+                                    },
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -133,17 +148,47 @@ internal object RawTransitions {
         if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
             ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.CannotChangeStaged)))
         } else {
+            val generation = state.rawSizeGeneration + 1L
+            val cheap =
+                if (intent.compressedMagic) {
+                    null
+                } else {
+                    UiReducer.cheapRawDecodedBytes(intent.label, intent.sizeBytes)
+                }
+            val limit = if (cheap == null) UiReducer.rawMeasureLimit(state)?.takeIf { it > 0L } else null
             ReduceResult(
                 state.copy(
                     stagedRawImagePath = intent.path,
                     stagedRawImageLabel = intent.label,
+                    stagedRawImageSizeBytes = intent.sizeBytes,
                     imageUri = null,
                     rangeProbe = null,
                     rangeProbeRequestedRange = null,
                     imageName = null,
                     imageSizeBytes = null,
+                    rawDecodedSizeBytes = cheap,
+                    rawDecodedSizeSource = intent.path,
+                    rawDecodedSizeError = null,
+                    rawDecodedErrorKind = null,
+                    rawDecodedSha256 = null,
+                    rawSizeMeasuring = cheap == null && limit != null,
+                    rawMeasurementPending = cheap == null && limit == null,
+                    rawSizeGeneration = generation,
                     statusMessage = UiReducer.message(UiMessageKey.StagedImageReady, intent.label),
                 ),
+                effects =
+                    if (cheap == null && limit != null) {
+                        listOf(
+                            UiEffect.MeasureRawSource(
+                                intent.path,
+                                staged = true,
+                                generation = generation,
+                                limitBytes = limit,
+                            ),
+                        )
+                    } else {
+                        listOf(UiEffect.CancelRawSourceMeasure)
+                    },
             )
         }
 
@@ -155,12 +200,72 @@ internal object RawTransitions {
                 state.copy(
                     stagedRawImagePath = null,
                     stagedRawImageLabel = null,
+                    stagedRawImageSizeBytes = null,
                     rangeProbe = null,
                     rangeProbeRequestedRange = null,
+                    rawDecodedSizeBytes = null,
+                    rawDecodedSizeSource = state.imageUri,
+                    rawDecodedSizeError = null,
+                    rawDecodedErrorKind = null,
+                    rawDecodedSha256 = null,
+                    rawSizeMeasuring = false,
+                    rawMeasurementPending = false,
+                    rawSizeGeneration = state.rawSizeGeneration + 1L,
                     statusMessage = UiMessage.Key(UiMessageKey.StagedCleared),
+                ),
+                effects = listOf(UiEffect.CancelRawSourceMeasure),
+            )
+        }
+
+    fun rawSourceMeasured(state: AppUiState, intent: UiIntent.RawSourceMeasured): ReduceResult {
+        val key = state.rawSourceKey
+        return if (intent.generation != state.rawSizeGeneration ||
+            key == null ||
+            intent.source != key
+        ) {
+            // Late pass for a source that is no longer active: keep current state.
+            ReduceResult(state)
+        } else if (intent.bytes != null && intent.bytes >= 0L) {
+            ReduceResult(
+                state.copy(
+                    rawDecodedSizeBytes = intent.bytes,
+                    rawDecodedSizeSource = key,
+                    rawDecodedSizeError = null,
+                    rawDecodedErrorKind = null,
+                    rawDecodedSha256 = intent.sha256,
+                    rawSizeMeasuring = false,
+                    rawMeasurementPending = false,
+                ),
+            )
+        } else {
+            ReduceResult(
+                state.copy(
+                    rawDecodedSizeBytes = null,
+                    rawDecodedSizeSource = key,
+                    rawDecodedSizeError =
+                        intent.error ?: "decoded size could not be measured",
+                    rawDecodedErrorKind = intent.errorKind ?: RawMeasureError.Failed,
+                    rawDecodedSha256 = null,
+                    rawSizeMeasuring = false,
+                    rawMeasurementPending = false,
                 ),
             )
         }
+    }
+
+    fun cancelRawSourceMeasurement(state: AppUiState): ReduceResult =
+        ReduceResult(
+            state.copy(
+                rawDecodedSizeBytes = null,
+                rawDecodedSizeError = null,
+                rawDecodedErrorKind = null,
+                rawDecodedSha256 = null,
+                rawSizeMeasuring = false,
+                rawMeasurementPending = false,
+                rawSizeGeneration = state.rawSizeGeneration + 1L,
+            ),
+            effects = listOf(UiEffect.CancelRawSourceMeasure),
+        )
 
     fun loadRawSourceCandidates(
         state: AppUiState,

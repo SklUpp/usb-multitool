@@ -1,6 +1,7 @@
 package usb.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -44,6 +45,12 @@ class RawRangeUiStateTest {
             device = device,
             rawGeometry = geometry,
             imageUri = "content://images/ubuntu.iso",
+            imageName = "ubuntu.iso",
+            // 4096 sectors of 512 bytes: one sector of headroom on the test disk.
+            imageSizeBytes = 4096L * 512L,
+            rawDecodedSizeBytes = 4096L * 512L,
+            rawDecodedSizeSource = "content://images/ubuntu.iso",
+            rawDecodedSha256 = "confirmed-digest",
             diskSectorSize = 512,
         )
 
@@ -66,7 +73,7 @@ class RawRangeUiStateTest {
     fun explicitRangeReachesConfirmationWithAbsoluteStartAndSize() {
         val state = ready()
         val result =
-            UiReducer.reduce(state, UiIntent.RequestWriteRawRange(2048UL, 4096UL))
+            UiReducer.reduce(state, UiIntent.RequestRawWrite(2048UL))
         val pending = result.state.pendingConfirmation
         assertNotNull(pending)
         assertEquals(DestructiveAction.RAW_WRITE, pending!!.action)
@@ -91,11 +98,282 @@ class RawRangeUiStateTest {
                 ready().copy(
                     stagedRawImagePath = "/data/staging/copy.bin",
                     stagedRawImageLabel = "phone-dump.img",
-                    imageUri = "content://images/ubuntu.iso",
+                    stagedRawImageSizeBytes = 64L * 512L,
+                    rawDecodedSizeBytes = 64L * 512L,
+                    rawDecodedSizeSource = "/data/staging/copy.bin",
+                    rawDecodedSha256 = null,
+                    imageUri = null,
+                    imageName = null,
                 ),
-                UiIntent.RequestWriteRawRange(0UL, 64UL),
+                UiIntent.RequestRawWrite(0UL),
             )
         assertEquals("phone-dump.img", result.state.pendingConfirmation!!.rawSourceName)
+        assertEquals(64UL, result.state.pendingConfirmation!!.rawSectorCount)
+    }
+
+    @Test
+    fun compressedSourceWaitsForMeasuredSizeThenConfirms() {
+        val measuring =
+            ready().copy(
+                imageName = "ubuntu.img.gz",
+                imageSizeBytes = 1024L,
+                rawDecodedSizeBytes = null,
+                rawSizeMeasuring = true,
+                rawSizeGeneration = 5L,
+            )
+        val waiting = UiReducer.reduce(measuring, UiIntent.RequestRawWrite(0UL))
+        assertNull(waiting.state.pendingConfirmation)
+
+        val measured =
+            UiReducer.reduce(
+                waiting.state,
+                UiIntent.RawSourceMeasured(
+                    generation = 5L,
+                    source = measuring.imageUri,
+                    bytes = 4096L * 512L,
+                    sha256 = "measured-digest",
+                ),
+            )
+        assertEquals(4096L * 512L, measured.state.rawWriteDecodedBytes())
+        val confirmed = UiReducer.reduce(measured.state, UiIntent.RequestRawWrite(0UL))
+        assertNotNull(confirmed.state.pendingConfirmation)
+        assertEquals(4096UL, confirmed.state.pendingConfirmation!!.rawSectorCount)
+        assertEquals(4096L * 512L, confirmed.state.pendingConfirmation!!.rawDecodedBytes)
+        assertEquals("measured-digest", confirmed.state.pendingConfirmation!!.rawSourceSha256)
+    }
+
+    @Test
+    fun unnamedUnknownSourceIsMeasuredRatherThanRejectedByName() {
+        val measuring =
+            ready().copy(
+                imageName = null,
+                imageSizeBytes = null,
+                rawDecodedSizeBytes = null,
+                rawSizeMeasuring = true,
+                rawSizeGeneration = 6L,
+            )
+        val measured =
+            UiReducer.reduce(
+                measuring,
+                UiIntent.RawSourceMeasured(
+                    generation = 6L,
+                    source = measuring.imageUri,
+                    bytes = 4096L * 512L,
+                    sha256 = "measured-digest",
+                ),
+            )
+        val confirmed = UiReducer.reduce(measured.state, UiIntent.RequestRawWrite(0UL))
+        assertEquals(4096UL, confirmed.state.pendingConfirmation!!.rawSectorCount)
+    }
+
+    @Test
+    fun measurementDoesNotStartWithoutPositiveCapacityOrGeometry() {
+        val noBound =
+            ready().copy(
+                device = device.copy(capacityBytes = 0UL),
+                rawGeometry = null,
+                diskSectorSize = 0,
+                imageUri = null,
+                rawDecodedSizeBytes = null,
+            )
+        val result =
+            UiReducer.reduce(
+                noBound,
+                UiIntent.SetImage(
+                    uri = "content://images/ubuntu.img.gz",
+                    name = "ubuntu.img.gz",
+                    sizeBytes = 1024L,
+                ),
+            )
+        assertTrue(result.state.rawMeasurementPending)
+        assertFalse(result.state.rawSizeMeasuring)
+        assertTrue(result.effects.isEmpty())
+    }
+
+    @Test
+    fun measurementResumesWhenGeometryBecomesAvailable() {
+        val noBound =
+            ready().copy(
+                device = device.copy(capacityBytes = 0UL),
+                rawGeometry = null,
+                diskSectorSize = 0,
+                imageUri = null,
+                rawDecodedSizeBytes = null,
+            )
+        val waiting =
+            UiReducer.reduce(
+                noBound,
+                UiIntent.SetImage(
+                    uri = "content://images/ubuntu.img.gz",
+                    name = "ubuntu.img.gz",
+                    sizeBytes = 1024L,
+                ),
+            )
+        val resumed =
+            UiReducer.reduce(
+                waiting.state,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = device,
+                    sectorSize = 512,
+                    rawGeometry = geometry,
+                ),
+            )
+        assertFalse(resumed.state.rawMeasurementPending)
+        assertTrue(resumed.state.rawSizeMeasuring)
+        val measure = resumed.effects.filterIsInstance<UiEffect.MeasureRawSource>().single()
+        assertEquals("content://images/ubuntu.img.gz", measure.source)
+        assertNotNull(measure.limitBytes)
+    }
+
+    @Test
+    fun stagedCompressedMagicRequestsMeasurementEvenWithIsoName() {
+        val result =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.SetStagedRawImage(
+                    path = "/data/staging/copy.iso",
+                    label = "backup.iso",
+                    sizeBytes = 1000L,
+                    compressedMagic = true,
+                ),
+            )
+        assertTrue(result.state.rawSizeMeasuring)
+        assertNull(result.state.rawWriteDecodedBytes())
+        val effect = result.effects.single() as UiEffect.MeasureRawSource
+        assertTrue(effect.staged)
+        assertEquals("/data/staging/copy.iso", effect.source)
+    }
+
+    @Test
+    fun stagedPlainImageUsesFileSizeWithoutMeasurement() {
+        val result =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.SetStagedRawImage(
+                    path = "/data/staging/copy.img",
+                    label = "backup.img",
+                    sizeBytes = 2_097_152L,
+                ),
+            )
+        assertEquals(2_097_152L, result.state.rawWriteDecodedBytes())
+        assertFalse(result.state.rawSizeMeasuring)
+        assertTrue(result.effects.none { it is UiEffect.MeasureRawSource })
+    }
+
+    @Test
+    fun explicitCancelStopsMeasurementAndDropsLateResult() {
+        val measuring =
+            ready().copy(
+                rawDecodedSizeBytes = null,
+                rawDecodedSha256 = null,
+                rawSizeMeasuring = true,
+                rawSizeGeneration = 11L,
+            )
+        val cancelled =
+            UiReducer.reduce(measuring, UiIntent.CancelRawSourceMeasurement)
+        assertFalse(cancelled.state.rawSizeMeasuring)
+        assertNull(cancelled.state.rawWriteDecodedBytes())
+        assertTrue(cancelled.effects.single() is UiEffect.CancelRawSourceMeasure)
+        assertTrue(cancelled.state.rawSizeGeneration > 11L)
+
+        val late =
+            UiReducer.reduce(
+                cancelled.state,
+                UiIntent.RawSourceMeasured(
+                    generation = 11L,
+                    source = measuring.imageUri,
+                    bytes = 1024L,
+                    sha256 = "late",
+                ),
+            )
+        assertNull(late.state.rawWriteDecodedBytes())
+    }
+
+    @Test
+    fun staleOrFailedMeasurementNeverSizesARange() {
+        val measuring =
+            ready().copy(
+                rawDecodedSizeBytes = null,
+                rawSizeMeasuring = true,
+                rawSizeGeneration = 9L,
+            )
+        val stale =
+            UiReducer.reduce(
+                measuring,
+                UiIntent.RawSourceMeasured(
+                    generation = 8L,
+                    source = measuring.imageUri,
+                    bytes = 4096L * 512L,
+                ),
+            )
+        assertNull(stale.state.rawDecodedSizeBytes)
+        assertNull(UiReducer.reduce(stale.state, UiIntent.RequestRawWrite(0UL)).state.pendingConfirmation)
+
+        val otherSource =
+            UiReducer.reduce(
+                measuring,
+                UiIntent.RawSourceMeasured(
+                    generation = 9L,
+                    source = "content://other.iso",
+                    bytes = 4096L * 512L,
+                ),
+            )
+        assertNull(otherSource.state.rawDecodedSizeBytes)
+
+        val failed =
+            UiReducer.reduce(
+                measuring,
+                UiIntent.RawSourceMeasured(
+                    generation = 9L,
+                    source = measuring.imageUri,
+                    bytes = null,
+                    error = "decoder I/O",
+                ),
+            )
+        assertEquals("decoder I/O", failed.state.rawDecodedSizeError)
+        assertEquals(RawMeasureError.Failed, failed.state.rawDecodedErrorKind)
+        assertNull(UiReducer.reduce(failed.state, UiIntent.RequestRawWrite(0UL)).state.pendingConfirmation)
+    }
+
+    @Test
+    fun emptyMeasuredSourceIsRejected() {
+        val measured =
+            UiReducer.reduce(
+                ready().copy(rawSizeGeneration = 7L),
+                UiIntent.RawSourceMeasured(
+                    generation = 7L,
+                    source = "content://images/ubuntu.iso",
+                    bytes = 0L,
+                    sha256 = "empty-digest",
+                ),
+            )
+        assertNull(UiReducer.reduce(measured.state, UiIntent.RequestRawWrite(0UL)).state.pendingConfirmation)
+    }
+
+    @Test
+    fun compressedPickRequestsMeasurement() {
+        val result =
+            UiReducer.reduce(
+                ready().copy(imageUri = null, rawDecodedSizeBytes = null),
+                UiIntent.SetImage(
+                    uri = "content://images/ubuntu.img.gz",
+                    name = "ubuntu.img.gz",
+                    sizeBytes = 1024L,
+                ),
+            )
+        val effect = result.effects.single() as UiEffect.MeasureRawSource
+        assertEquals("content://images/ubuntu.img.gz", effect.source)
+        assertEquals(false, effect.staged)
+        assertTrue(result.state.rawSizeMeasuring)
+        assertNull(result.state.rawWriteDecodedBytes())
+    }
+
+    @Test
+    fun imageThatDoesNotFitFromStartIsRejectedBeforeConfirmation() {
+        val result = UiReducer.reduce(ready(), UiIntent.RequestRawWrite(130_000UL))
+        assertNull(result.state.pendingConfirmation)
+        assertTrue(result.effects.isEmpty())
     }
 
     @Test
@@ -103,7 +381,7 @@ class RawRangeUiStateTest {
         val result =
             UiReducer.reduce(
                 ready(),
-                UiIntent.RequestWriteRawRange(131_072UL, 2UL),
+                UiIntent.RequestRawWrite(131_072UL),
             )
         assertNull(result.state.pendingConfirmation)
         assertTrue(result.effects.isEmpty())
@@ -111,20 +389,22 @@ class RawRangeUiStateTest {
 
     @Test
     fun missingSourceOrGeometryBlocksConfirmation() {
-        val noSource = UiReducer.reduce(ready().copy(imageUri = null), UiIntent.RequestWriteRawRange(0UL, 1UL))
+        val noSource = UiReducer.reduce(
+            ready().copy(imageUri = null, stagedRawImagePath = null),
+            UiIntent.RequestRawWrite(0UL),
+        )
         assertNull(noSource.state.pendingConfirmation)
 
-        val noGeometry = UiReducer.reduce(ready().copy(rawGeometry = null), UiIntent.RequestWriteRawRange(0UL, 1UL))
+        val noGeometry = UiReducer.reduce(ready().copy(rawGeometry = null), UiIntent.RequestRawWrite(0UL))
         assertNull(noGeometry.state.pendingConfirmation)
     }
 
     @Test
-    fun wholeMediumDefaultIsStartZeroAndFullDisk() {
+    fun rawWriteCannotBypassTheDerivedRange() {
         val result =
             UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE))
-        val pending = result.state.pendingConfirmation!!
-        assertEquals(0UL, pending.rawStartLba)
-        assertEquals(geometry.diskSectorCount, pending.rawSectorCount)
+        assertNull(result.state.pendingConfirmation)
+        assertEquals(UiMessage.Key(UiMessageKey.RawRangeInvalid), result.state.statusMessage)
     }
 
     @Test

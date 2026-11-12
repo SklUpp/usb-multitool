@@ -45,6 +45,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import usb.device.DiskException
@@ -110,6 +111,7 @@ import usb.fs.FilesystemUsageSnapshot
 import usb.ui.filesystemUsageKey
 import usb.ui.needsFilesystemUsageRequest
 import usb.ui.fatChildPath
+import usb.ui.RawMeasureError
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
 import usb.ui.PartitionBinding
@@ -125,6 +127,8 @@ import usb.partition.TableInitializer
 import usb.partition.VirtualPartition
 import usb.partition.isProtectedSystemPartition
 import usb.image.ImageSource
+import usb.image.MeasurementHandle
+import usb.image.CloseCapacityException
 import usb.image.ImageStaging
 import usb.image.stageRawImageChunks
 import usb.image.RawWriter
@@ -184,8 +188,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val pickerCancellations: Flow<String> = _pickerCancellations.receiveAsFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    /** Survives ViewModel scope cancellation so completion can still release the handle. */
+    private val mainHandler =
+        android.os.Handler(android.os.Looper.getMainLooper())
     private var activeHandle: OperationHandle? = null
     private var rawSourceHandle: OperationHandle? = null
+    private var rawMeasureJob: Job? = null
+    private var rawMeasureHandle: MeasurementHandle? = null
+    private var rawMeasureRunning = false
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
     /**
@@ -1138,6 +1148,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         confirmation = confirmation,
                                         overwrite = true,
                                         range = range,
+                                        expectedDecodedBytes = confirmation.rawDecodedBytes,
+                                        expectedSha256 = confirmation.rawSourceSha256,
                                         operation = this,
                                     )
                                     if (stagedPath != null) {
@@ -1458,6 +1470,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 rawSourceHandle?.cancel()
                 rawSourceHandle = null
             }
+
+            is UiEffect.MeasureRawSource -> measureRawSource(effect)
+
+            UiEffect.CancelRawSourceMeasure -> cancelRawMeasurement()
 
             is UiEffect.LoadWindowsIsoCandidates -> {
                 loadWindowsImageCandidates(effect.requestGeneration)
@@ -2771,7 +2787,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onSuccess = {
                 val stagedPath = stagedPathHolder[0]
                 if (stagedPath != null) {
-                    onIntent(UiIntent.SetStagedRawImage(stagedPath, name))
+                    val stagedFile = java.io.File(stagedPath)
+                    val compressedMagic =
+                        runCatching {
+                            java.io.FileInputStream(stagedFile).use {
+                                usb.image.ImageFormatNames.readCompressedMagic(it)
+                            }
+                        }.getOrDefault(false)
+                    onIntent(
+                        UiIntent.SetStagedRawImage(
+                            path = stagedPath,
+                            label = name,
+                            sizeBytes = stagedFile.length(),
+                            compressedMagic = compressedMagic,
+                        ),
+                    )
                 }
             },
             onTerminal = { outcome ->
@@ -2849,6 +2879,117 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
     // Source choosers: raw image, Ventoy link candidates, and phone import.
     // ---------------------------------------------------------------------
+
+    /**
+     * Read-only decode-count pass for the raw source. No temporary uncompressed file:
+     * bytes are discarded as they are decoded, and cancellation is checked between
+     * chunks. The result is bound to the reducer generation; a stale pass is ignored.
+     */
+    private fun measureRawSource(effect: UiEffect.MeasureRawSource) {
+        MeasurementHandle.retryDeferredCloses()
+        if (rawMeasureRunning) {
+            // Never start an unbounded second read while the previous provider read is
+            // still blocked. Close best-effort and report an honest localized busy error;
+            // the guard clears only when the background read actually returns.
+            rawMeasureHandle?.cancel()
+            rawMeasureHandle = null
+            rawMeasureJob?.cancel()
+            onIntent(measureError(effect, RawMeasureError.Busy))
+            return
+        }
+        startRawMeasurement(effect)
+    }
+
+    private fun startRawMeasurement(effect: UiEffect.MeasureRawSource) {
+        rawMeasureHandle?.cancel()
+        val handle = try {
+            MeasurementHandle()
+        } catch (_: CloseCapacityException) {
+            onIntent(measureError(effect, RawMeasureError.CloseCapacity))
+            return
+        }
+        rawMeasureHandle = handle
+        rawMeasureRunning = true
+        val resolver = getApplication<Application>().contentResolver
+        val job =
+            try {
+                scope.launch(Dispatchers.IO) {
+                    val measurementScope = this
+                    val outcome = runCatching {
+                        val source =
+                            if (effect.staged) {
+                                ImageSource.fromFile(java.io.File(effect.source))
+                            } else {
+                                ImageSource.fromContentUri(Uri.parse(effect.source), resolver)
+                            }
+                        source.measureDecoded(
+                            isActive = { measurementScope.isActive },
+                            limitBytes = effect.limitBytes,
+                            handle = handle,
+                        )
+                    }
+                    val failure = outcome.exceptionOrNull()
+                    if (failure !is java.util.concurrent.CancellationException &&
+                        measurementScope.isActive
+                    ) {
+                        val detail = failure?.let { it.message ?: it.javaClass.simpleName }
+                        val measured = outcome.getOrNull()
+                        withContext(Dispatchers.Main.immediate) {
+                            onIntent(
+                                UiIntent.RawSourceMeasured(
+                                    generation = effect.generation,
+                                    source = effect.source,
+                                    bytes = measured?.bytes,
+                                    sha256 = measured?.sha256,
+                                    error = detail,
+                                    errorKind =
+                                        if (failure == null) null else RawMeasureError.Failed,
+                                ),
+                            )
+                        }
+                    }
+                }
+            } catch (failure: Throwable) {
+                handle.cancel()
+                handle.abandon()
+                rawMeasureRunning = false
+                rawMeasureHandle = null
+                rawMeasureJob = null
+                throw failure
+            }
+        rawMeasureJob = job
+        job.invokeOnCompletion {
+            // Runs even if the coroutine was cancelled before its body started; for a
+            // blocked provider read this is delayed until the read actually returns.
+            // Handle release must not depend on [scope], which is cancelled on destroy.
+            handle.cancel()
+            handle.abandon()
+            mainHandler.post {
+                rawMeasureRunning = false
+                if (rawMeasureJob === job) rawMeasureJob = null
+                if (rawMeasureHandle === handle) rawMeasureHandle = null
+            }
+        }
+    }
+
+    private fun measureError(
+        effect: UiEffect.MeasureRawSource,
+        kind: RawMeasureError,
+    ): UiIntent.RawSourceMeasured =
+        UiIntent.RawSourceMeasured(
+            generation = effect.generation,
+            source = effect.source,
+            bytes = null,
+            errorKind = kind,
+        )
+
+    /** Close the tracked provider stream, if any. No new pass is queued. */
+    private fun cancelRawMeasurement() {
+        rawMeasureHandle?.cancel()
+        rawMeasureHandle = null
+        rawMeasureJob?.cancel()
+        rawMeasureJob = null
+    }
 
     private fun loadRawSourceCandidates(binding: PartitionBinding, generation: Long) {
         val pin = currentAttachmentPin()

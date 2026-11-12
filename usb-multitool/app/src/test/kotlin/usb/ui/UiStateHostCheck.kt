@@ -60,6 +60,17 @@ object UiStateHostCheck {
                         FileEntry("win11.iso", isDirectory = false, sizeBytes = 5_000_000_000uL),
                     ),
                 imageUri = "content://test/win11.iso",
+                imageName = "win11.iso",
+                imageSizeBytes = 1024L,
+                rawDecodedSizeBytes = 1024L,
+                rawDecodedSizeSource = "content://test/win11.iso",
+                rawDecodedSha256 = "confirmed-digest",
+                rawGeometry =
+                    usb.partition.RawRangeGeometry(
+                        diskSectorCount = 61_440_000UL,
+                        sectorSize = 512,
+                        trust = usb.partition.SchemeTrust.Confirmed(TableScheme.MBR),
+                    ),
             )
         require(ready.actionsEnabled)
 
@@ -315,8 +326,9 @@ object UiStateHostCheck {
         }
 
         val pending =
-            UiReducer.reduce(ready, UiIntent.RequestDestructive(DestructiveAction.RAW_WRITE))
+            UiReducer.reduce(ready, UiIntent.RequestRawWrite(0UL))
         require(pending.state.pendingConfirmation != null)
+        require(pending.state.pendingConfirmation!!.rawSectorCount == 2UL)
         val disconnected =
             UiReducer.reduce(
                 pending.state,

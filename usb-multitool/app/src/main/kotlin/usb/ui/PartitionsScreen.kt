@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,11 +59,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import usb.image.RangeProbeAttachment
 import usb.image.RangeProbeFinding
-import usb.partition.RawRangeCheck
 import usb.partition.RawRangePlan
 import usb.partition.RawRangeProblem
 import usb.partition.RawRangeWarning
-import usb.partition.RawWriteRange
+import usb.partition.RawWritePlan
 import usb.multitool.R
 import kotlin.math.roundToInt
 
@@ -83,7 +81,6 @@ fun PartitionsScreen(
     onPickImage: () -> Unit = {},
 ) {
     var createRegion by remember(state.device, state.freeRegions) { mutableStateOf<FreeRegionUi?>(null) }
-    var rawPickerOpen by remember { mutableStateOf(false) }
     var sectorCount by remember { mutableStateOf("") }
     var startLbaInput by remember { mutableStateOf("") }
     var createName by remember { mutableStateOf("") }
@@ -993,17 +990,22 @@ fun PartitionsScreen(
             }
         }
 
-        // Raw writing: one tool for the whole medium and for any sub-range of it. The range
-        // fields and the disk map live here once the geometry contract lands.
+        // Raw writing: one tool for the whole medium and for any sub-range of it. Only the
+        // start is chosen; the end is derived from the decoded image size.
         SectionCard(
             title = stringResource(R.string.partitions_raw_write_title),
             subtitle = null,
+            trailing = {
+                InfoHelpButton(
+                    infoTitle = stringResource(R.string.partitions_raw_info_title),
+                    infoText = listOf(
+                        stringResource(R.string.partitions_raw_write_subtitle),
+                        stringResource(R.string.partitions_raw_overwrite_note),
+                        stringResource(R.string.raw_map_snap_hint),
+                    ).joinToString("\n\n"),
+                )
+            },
         ) {
-            Text(
-                text = stringResource(R.string.partitions_raw_write_subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             // One resolved source for the next write; the host never writes on pick.
             val rawName = state.stagedRawImageLabel ?: rawSourceName(state.imageUri)
             val rawStaged = state.stagedRawImagePath != null
@@ -1016,8 +1018,14 @@ fun PartitionsScreen(
                     state = state,
                     onPickImage = onPickImage,
                     onOpenStick = {
-                        rawPickerOpen = true
-                        onIntent(UiIntent.LoadRawSourceCandidates)
+                        onIntent(
+                            UiIntent.BeginFilesPick(
+                                purpose = FilesPickPurpose.RawSource,
+                                returnTab = ShellTab.Partitions,
+                                target = FilesPickTarget.File,
+                                partitionId = state.selectedPartitionId,
+                            ),
+                        )
                     },
                 )
             } else {
@@ -1060,8 +1068,14 @@ fun PartitionsScreen(
                     state = state,
                     onPickImage = onPickImage,
                     onOpenStick = {
-                        rawPickerOpen = true
-                        onIntent(UiIntent.LoadRawSourceCandidates)
+                        onIntent(
+                            UiIntent.BeginFilesPick(
+                                purpose = FilesPickPurpose.RawSource,
+                                returnTab = ShellTab.Partitions,
+                                target = FilesPickTarget.File,
+                                partitionId = state.selectedPartitionId,
+                            ),
+                        )
                     },
                 )
             }
@@ -1072,86 +1086,126 @@ fun PartitionsScreen(
                 // destructive action, so the section stops here.
                 EmptyHint(stringResource(R.string.raw_write_geometry_unavailable))
             } else {
-                var startText by remember(state.device?.identity, geometry.diskSectorCount) {
+                val sourceBytes = state.rawWriteDecodedBytes()
+                var startText by remember(
+                    state.device?.identity,
+                    geometry.diskSectorCount,
+                    sourceBytes,
+                ) {
                     mutableStateOf("0")
                 }
-                var sizeText by remember(state.device?.identity, geometry.diskSectorCount) {
-                    mutableStateOf(geometry.diskSectorCount.toString())
-                }
                 val draftStart = startText.trim().toULongOrNull()
-                val draftCount = sizeText.trim().toULongOrNull()
-                val draft = if (draftStart != null && draftCount != null && draftCount > 0UL) {
-                    RawWriteRange(draftStart, draftCount)
-                } else {
-                    null
+                // The end is never typed: it is exactly what the decoded image needs.
+                val plan = draftStart?.let {
+                    RawRangePlan.planFromSourceSize(it, sourceBytes, geometry)
+                }
+                val planRange =
+                    if (state.imageUri != null &&
+                        state.stagedRawImagePath == null &&
+                        state.rawDecodedSha256 == null
+                    ) {
+                        null
+                    } else {
+                        (plan as? RawWritePlan.Ready)?.range
+                    }
+                val planProblems =
+                    ((plan as? RawWritePlan.Rejected)?.problems ?: emptySet())
+                        .filterNot { sourceBytes == null && it == RawRangeProblem.SourceSizeUnknown }
+                        .toSet()
+
+                if (state.rawSizeMeasuring) {
+                    Text(
+                        text = stringResource(R.string.raw_write_size_measuring),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(
+                        onClick = { onIntent(UiIntent.CancelRawSourceMeasurement) },
+                    ) {
+                        Text(stringResource(R.string.raw_write_cancel_measure))
+                    }
+                } else if (state.rawMeasurementPending) {
+                    Text(
+                        text = stringResource(R.string.raw_write_size_waiting),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (state.rawDecodedSizeError != null || state.rawDecodedErrorKind != null) {
+                    val text = when (state.rawDecodedErrorKind) {
+                        RawMeasureError.Busy -> stringResource(R.string.raw_write_error_busy)
+                        RawMeasureError.CloseCapacity ->
+                            stringResource(R.string.raw_write_error_close_capacity)
+                        RawMeasureError.Failed, null -> stringResource(
+                            R.string.raw_write_size_measure_failed,
+                            state.rawDecodedSizeError ?: "",
+                        )
+                    }
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (sourceBytes == null) {
+                    Text(
+                        text = stringResource(R.string.raw_write_problem_source_unknown),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
 
-                // Dragging a handle writes back into the two fields, so the map and the request
-                // never disagree; typing is never snapped or rewritten.
+                // One draggable start; the end follows the image size and is never a handle.
                 RawPlanMap(
                     geometry = geometry,
-                    range = draft ?: RawWriteRange(0UL, geometry.diskSectorCount),
-                    onRangeChange = {
-                        startText = it.startLba.toString()
-                        sizeText = it.sectorCount.toString()
-                    },
+                    startLba = (draftStart ?: 0UL).coerceAtMost(geometry.diskSectorCount),
+                    sectorCount = planRange?.sectorCount,
+                    onStartChange = { startText = it.toString() },
                 )
 
-                Row(
+                OutlinedTextField(
+                    value = startText,
+                    onValueChange = { startText = it },
+                    label = { Text(stringResource(R.string.raw_write_start_label)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedTextField(
-                        value = startText,
-                        onValueChange = { startText = it },
-                        label = { Text(stringResource(R.string.raw_write_start_label)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = sizeText,
-                        onValueChange = { sizeText = it },
-                        label = { Text(stringResource(R.string.raw_write_size_label)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                )
 
-                if (draft != null) {
+                planRange?.let { range ->
                     Text(
                         text = stringResource(
                             R.string.raw_write_end_and_size,
-                            (draft.startLba + draft.sectorCount - 1UL).toLong(),
-                            DeviceIdentity.formatCapacity(draft.byteLength(geometry.sectorSize)),
+                            (range.startLba + range.sectorCount - 1UL).toLong(),
+                            DeviceIdentity.formatCapacity(range.byteLength(geometry.sectorSize)),
                         ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
 
-                val check = draft?.let { RawRangePlan.check(it.startLba, it.sectorCount, geometry) }
-                if (check is RawRangeCheck.Rejected) {
-                    check.problems.forEach { problem ->
-                        Text(
-                            text = stringResource(
-                                when (problem) {
-                                    RawRangeProblem.EmptyRange -> R.string.raw_write_problem_empty
-                                    RawRangeProblem.BeyondEndOfDisk -> R.string.raw_write_problem_beyond_disk
-                                    RawRangeProblem.RangeTooLarge -> R.string.raw_write_problem_too_large
-                                    RawRangeProblem.SourceLargerThanRange ->
-                                        R.string.raw_write_problem_source_larger
-                                },
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
+                planProblems.forEach { problem ->
+                    Text(
+                        text = stringResource(
+                            when (problem) {
+                                RawRangeProblem.EmptyRange -> R.string.raw_write_problem_empty
+                                RawRangeProblem.BeyondEndOfDisk -> R.string.raw_write_problem_beyond_disk
+                                RawRangeProblem.RangeTooLarge -> R.string.raw_write_problem_too_large
+                                RawRangeProblem.SourceLargerThanRange ->
+                                    R.string.raw_write_problem_source_larger
+                                RawRangeProblem.SourceSizeUnknown ->
+                                    R.string.raw_write_problem_source_unknown
+                                RawRangeProblem.SourceEmpty ->
+                                    R.string.raw_write_problem_source_empty
+                                RawRangeProblem.SourceSizeOverflow ->
+                                    R.string.raw_write_problem_source_overflow
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
-                if (check is RawRangeCheck.Ok) {
+                if (plan is RawWritePlan.Ready) {
                     // Overlaps are printed under the map; only the remaining warnings show here.
-                    check.warnings.forEach { warning ->
+                    plan.warnings.forEach { warning ->
                         when (warning) {
                             is RawRangeWarning.UnalignedStart -> Text(
                                 text = stringResource(
@@ -1182,12 +1236,22 @@ fun PartitionsScreen(
                     )
                 }
                 val probe = state.rangeProbe
-                val probeFresh = draft != null && attachment != null && probe != null &&
-                    probe.matches(draft, geometry.diskSectorCount, geometry.sectorSize, attachment)
-                if (draft != null) {
+                val probeFresh = planRange != null && attachment != null && probe != null &&
+                    probe.matches(
+                        planRange,
+                        geometry.diskSectorCount,
+                        geometry.sectorSize,
+                        attachment,
+                    )
+                if (planRange != null) {
                     TextButton(
                         onClick = {
-                            onIntent(UiIntent.RequestRangeProbe(draft.startLba, draft.sectorCount))
+                            onIntent(
+                                UiIntent.RequestRangeProbe(
+                                    planRange.startLba,
+                                    planRange.sectorCount,
+                                ),
+                            )
                         },
                         enabled = state.actionsEnabled,
                     ) {
@@ -1210,17 +1274,14 @@ fun PartitionsScreen(
 
                 Button(
                     onClick = {
-                        // The intent builds the confirmation from these two numbers; the button
-                        // never asks for a destructive action on its own. `enabled` guards the
-                        // tap, but the lambda needs its own null check to type-check.
-                        draft?.let { range ->
-                            onIntent(
-                                UiIntent.RequestWriteRawRange(range.startLba, range.sectorCount),
-                            )
+                        // The reducer re-derives the same range from the decoded size; the
+                        // button never sends a hand-typed end LBA.
+                        draftStart?.let { start ->
+                            onIntent(UiIntent.RequestRawWrite(start))
                         }
                     },
-                    enabled = state.actionsEnabled && rawName != null && draft != null &&
-                        check is RawRangeCheck.Ok && probeFresh,
+                    enabled = state.actionsEnabled && rawName != null && planRange != null &&
+                        probeFresh,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
@@ -1229,19 +1290,6 @@ fun PartitionsScreen(
                 ) {
                     Text(stringResource(R.string.partitions_raw_write_action))
                 }
-            }
-
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = stringResource(R.string.partitions_raw_overwrite_note),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                )
             }
 
             if (rawStaged) {
@@ -1258,23 +1306,6 @@ fun PartitionsScreen(
                 }
             }
 
-        }
-
-        if (rawPickerOpen) {
-            RawSourceDialog(
-                candidates = state.rawSourceCandidates,
-                truncated = state.rawSourceCandidatesTruncated,
-                enabled = state.actionsEnabled,
-                onRefresh = { onIntent(UiIntent.LoadRawSourceCandidates) },
-                onPick = { candidate ->
-                    onIntent(UiIntent.SelectRawSource(candidate.path, candidate.name))
-                    rawPickerOpen = false
-                },
-                onDismiss = {
-                    rawPickerOpen = false
-                    onIntent(UiIntent.CancelRawSourceLoad)
-                },
-            )
         }
 
         // Table repair is not a write of user data; it keeps its own section so a raw write can
@@ -1584,84 +1615,4 @@ private fun PickerButtons(
             Text(stringResource(R.string.raw_choose_phone))
         }
     }
-}
-
-/**
- * File picker for the raw source, limited to real files on the mounted stick. The list is
- * produced by the host from the partition, never from the phone filesystem, and a truncated
- * answer is shown as truncated instead of looking complete.
- */
-@Composable
-private fun RawSourceDialog(
-    candidates: List<RawSourceCandidate>?,
-    truncated: Boolean,
-    enabled: Boolean,
-    onRefresh: () -> Unit,
-    onPick: (RawSourceCandidate) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.raw_stick_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                if (candidates == null) {
-                    Text(
-                        text = stringResource(R.string.raw_stick_loading),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                } else if (candidates.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.raw_stick_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                } else {
-                    Column(
-                        // Weighted with fill = false: the truncated note below is measured
-                        // first and stays visible; the file list scrolls in the remainder.
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        candidates.take(40).forEach { candidate ->
-                            TextButton(
-                                onClick = { onPick(candidate) },
-                                enabled = enabled,
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                            ) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text(
-                                        text = candidate.path,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = DeviceIdentity.formatCapacity(candidate.sizeBytes.toULong()),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                if (truncated) {
-                    Text(
-                        text = stringResource(R.string.raw_stick_truncated),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onRefresh) { Text(stringResource(R.string.unattend_refresh)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
-        },
-    )
 }

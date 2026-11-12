@@ -31,6 +31,128 @@ class RawWriterTest {
     private fun rawSource(bytes: ByteArray, decodedSize: Long? = bytes.size.toLong()) =
         ImageSource.fromBytes(bytes, format = ImageFormat.IMG, decodedSize = decodedSize)
 
+    @Test fun verifyIsSkippedWithoutItsOwnAdmission() {
+        awaitFreshBudget()
+        val held = mutableListOf<MeasurementHandle>()
+        try {
+            repeat(3) { held.add(MeasurementHandle()) }
+            val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+            var opens = 0
+            val payload = ByteArray(512) { 4 }
+            val source =
+                ImageSource.fromContent(
+                    openRaw = {
+                        opens++
+                        java.io.ByteArrayInputStream(payload)
+                    },
+                    displayName = "verify.img",
+                    size = payload.size.toLong(),
+                )
+            val result =
+                RawWriter.write(
+                    source,
+                    disk,
+                    identity,
+                    conf(disk),
+                    overwrite = true,
+                    range = wholeDisk(disk),
+                )
+            assertEquals("verify must not open a second unadmitted stream", 1, opens)
+            assertTrue(result.readback is ReadbackVerdict.Incomplete)
+        } finally {
+            held.forEach {
+                it.cancel()
+                it.abandon()
+            }
+        }
+        awaitFreshBudget()
+    }
+
+    @Test fun snapshotWithKnownSizeAndDigestIsNotReadTwice() {
+        awaitFreshBudget()
+        val payload = ByteArray(1024) { 8 }
+        var opens = 0
+        val source =
+            ImageSource.fromContent(
+                openRaw = {
+                    opens++
+                    java.io.ByteArrayInputStream(payload)
+                },
+                displayName = "staged.img",
+                size = payload.size.toLong(),
+                snapshot = true,
+            )
+        val digest = source.measureDecoded().sha256
+        opens = 0
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val result =
+            RawWriter.write(
+                source,
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = wholeDisk(disk),
+                expectedSha256 = digest,
+            )
+        assertEquals("snapshot size+digest must skip measure (write + readback only)", 2, opens)
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        awaitFreshBudget()
+    }
+
+    @Test fun writerRefusesBeforeOpeningWhenAdmissionIsExhausted() {
+        awaitFreshBudget()
+        val held = mutableListOf<MeasurementHandle>()
+        try {
+            repeat(4) { held.add(MeasurementHandle()) }
+            val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+            var opens = 0
+            val source =
+                ImageSource.fromContent(
+                    openRaw = {
+                        opens++
+                        java.io.ByteArrayInputStream(ByteArray(512))
+                    },
+                    displayName = "late.img",
+                    size = 512L,
+                )
+            val failure =
+                try {
+                    RawWriter.write(
+                        source,
+                        disk,
+                        identity,
+                        conf(disk),
+                        overwrite = true,
+                        range = wholeDisk(disk),
+                    )
+                    null
+                } catch (expected: java.io.IOException) {
+                    expected
+                }
+            assertTrue(failure != null)
+            assertEquals("source must not be opened without admission", 0, opens)
+        } finally {
+            held.forEach {
+                it.cancel()
+                it.abandon()
+            }
+        }
+        awaitFreshBudget()
+    }
+
+    private fun awaitFreshBudget() {
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+        while (MeasurementHandle.availableAdmissions() < 4 &&
+            System.nanoTime() < deadline
+        ) {
+            MeasurementHandle.retryDeferredCloses()
+            Thread.sleep(5)
+        }
+        assertEquals(4, MeasurementHandle.availableAdmissions())
+    }
+
     @Test fun rangeWriteUsesAbsoluteLbasAndLeavesOtherSectorsAlone() {
         val payload = ByteArray(2048) { 3 }
         val disk = RecordingDisk(sectorCount = 64UL, sectorSize = 512)
@@ -133,6 +255,125 @@ class RawWriterTest {
         assertEquals(emptyList<ULong>(), disk.writes)
     }
 
+    @Test fun stagedGzipMagicInIsoNameIsWrittenDecoded() {
+        val payload = ByteArray(6000) { 5 }
+        val file = java.io.File.createTempFile("staged-backup", ".iso")
+        try {
+            file.writeBytes(gzip(payload))
+            val disk = RecordingDisk(sectorCount = 20UL, sectorSize = 512)
+            val result = RawWriter.write(
+                ImageSource.fromFile(file),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(0UL, 12UL),
+                expectedDecodedBytes = 6000L,
+            )
+            assertEquals(RawWriteStatus.Completed, result.state)
+            assertEquals(ReadbackVerdict.Verified, result.readback)
+            assertTrue(disk.bytes().copyOfRange(0, payload.size).contentEquals(payload))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun safDigestMismatchAfterConfirmationWritesNothing() {
+        var bytes = ByteArray(1024) { 1 }
+        val source = ImageSource.fromContent(
+            openRaw = { java.io.ByteArrayInputStream(bytes) },
+            displayName = "disk.img",
+            size = bytes.size.toLong(),
+        )
+        val confirmedDigest = source.measureDecoded().sha256
+        // Equal-size content swap between confirmation and write.
+        bytes = ByteArray(1024) { 9 }
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                source,
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(0UL, 2UL),
+                expectedDecodedBytes = 1024L,
+                expectedSha256 = confirmedDigest,
+            )
+            fail("expected SourceChangedException")
+        } catch (_: SourceChangedException) {
+        }
+        assertEquals(0L, disk.writeCount)
+        assertEquals(0L, disk.syncCount)
+        assertEquals(emptyList<ULong>(), disk.reads)
+    }
+
+    @Test fun safDigestMatchWritesAndReadsBack() {
+        val bytes = ByteArray(1024) { 4 }
+        val source = ImageSource.fromContent(
+            openRaw = { java.io.ByteArrayInputStream(bytes) },
+            displayName = "disk.img",
+            size = bytes.size.toLong(),
+        )
+        val digest = source.measureDecoded().sha256
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(0UL, 2UL),
+            expectedDecodedBytes = 1024L,
+            expectedSha256 = digest,
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+    }
+
+    @Test fun zeroProviderSizeIsMeasuredNotTreatedAsEmpty() {
+        // SAF providers may report SIZE = 0 for a stream with real content. The writer must
+        // measure the decoded bytes instead of trusting the declared size.
+        val bytes = ByteArray(1024) { 6 }
+        val source = ImageSource.fromContent(
+            openRaw = { java.io.ByteArrayInputStream(bytes) },
+            displayName = "disk.img",
+            size = 0L,
+        )
+        val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = wholeDisk(disk),
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(1024L, result.writtenBytes)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+    }
+
+    @Test fun compressedSourceIsDecodedCountedThenWrittenStreamingly() {
+        val payload = ByteArray(6000) { 7 }
+        val source = ImageSource.fromBytes(gzip(payload))
+        val disk = RecordingDisk(sectorCount = 20UL, sectorSize = 512)
+        val result = RawWriter.write(
+            source,
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(1UL, 12UL),
+            expectedDecodedBytes = 6000L,
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(6000L, result.writtenBytes)
+        assertEquals(listOf(1L to 12), disk.writtenRanges)
+        assertTrue(disk.bytes().copyOfRange(512, 512 + payload.size).contentEquals(payload))
+    }
+
     @Test fun gzipDecodedSizeIsUnknownSoOverflowIsDetectedWhileStreaming() {
         // The gzip footer is not a decoded length (ISIZE is mod 2^32 and only covers the
         // last member), so the stream is the authority: the range fills, the extra byte is
@@ -156,6 +397,24 @@ class RawWriterTest {
         assertEquals(1L, disk.syncCount)
         assertEquals(-1L, op.bytesTotal)
         assertEquals(OperationState.Partial, op.state)
+    }
+
+    @Test fun compressedSourceLargerThanRangeIsRefusedBeforeAnyWrite() {
+        val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                source,
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = wholeDisk(disk),
+            )
+            fail("expected ImageTooLargeException")
+        } catch (_: ImageTooLargeException) {
+        }
+        assertEquals(0L, disk.writeCount)
     }
 
     @Test fun gzipFooterIsNeverTakenAsDecodedSize() {
@@ -220,11 +479,11 @@ class RawWriterTest {
         assertEquals(0.toByte(), bytes[0])
     }
 
-    @Test fun unknownLengthOverflowWritesOnlyTheRangeThenSyncsAndReadsBack() {
-        // Unknown decoded size plus a 2-sector range: three sectors must not be truncated
-        // silently — exactly the requested range is written, the tail is refused.
+    @Test fun declaredSizeOverflowWritesOnlyTheRangeThenSyncsAndReadsBack() {
+        // A source that declares 1024 bytes but delivers 1536: the extra sector must not be
+        // truncated silently — exactly the requested range is written, the tail is refused.
         val payload = ByteArray(3 * 512) { 7 }
-        val source = rawSource(payload, decodedSize = null)
+        val source = rawSource(payload, decodedSize = 1024L)
         val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
         val op = DiskOperation("raw-range-overflow")
         val result = RawWriter.write(
@@ -245,7 +504,8 @@ class RawWriterTest {
         assertTrue(disk.reads.contains(2UL))
         assertEquals(OperationState.Partial, op.state)
         assertTrue(op.mutationAttempted)
-        assertNull(op.bytesTotal.takeIf { it > 0L })
+        // The declared size is still known, so progress advertises it.
+        assertEquals(1024L, op.bytesTotal)
         assertTrue(result.failure is ImageTooLargeException)
     }
 
@@ -510,7 +770,7 @@ class RawWriterTest {
         assertEquals(0L, disk.writeCount)
     }
 
-    @Test fun progressTotalIsKnownOnlyForKnownDecodedSize() {
+    @Test fun progressTotalIsKnownAfterMeasurement() {
         val knownDisk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
         val knownOp = DiskOperation("known")
         val known = RawWriter.write(
@@ -537,8 +797,64 @@ class RawWriterTest {
             operation = unknownOp,
         )
         assertEquals(RawWriteStatus.Completed, unknown.state)
-        assertEquals(-1L, unknownOp.bytesTotal)
+        assertEquals(1024L, unknownOp.bytesTotal)
         assertEquals(1024L, unknownOp.bytesDone)
+    }
+
+    @Test fun unknownDecodedSizeIsMeasuredAndWrittenBeforeCommit() {
+        val payload = ByteArray(1024) { 3 }
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        val result = RawWriter.write(
+            rawSource(payload, decodedSize = null),
+            disk,
+            identity,
+            conf(disk),
+            overwrite = true,
+            range = RawWriteRange(1UL, 2UL),
+            expectedDecodedBytes = 1024L,
+        )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(ReadbackVerdict.Verified, result.readback)
+        assertEquals(listOf(1L to 2), disk.writtenRanges)
+    }
+
+    @Test fun unknownDecodedSizeLargerThanRangeIsRefusedBeforeAnyWrite() {
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                rawSource(ByteArray(1024) { 1 }, decodedSize = null),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(1UL, 1UL),
+            )
+            fail("expected ImageTooLargeException")
+        } catch (_: ImageTooLargeException) {
+        }
+        assertEquals(0L, disk.writeCount)
+        assertEquals(0L, disk.syncCount)
+        assertEquals(emptyList<ULong>(), disk.reads)
+    }
+
+    @Test fun sourceChangedAfterConfirmationIsRefusedBeforeAnyWrite() {
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                rawSource(ByteArray(1024) { 1 }),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(1UL, 2UL),
+                expectedDecodedBytes = 512L,
+            )
+            fail("expected SourceChangedException")
+        } catch (_: SourceChangedException) {
+        }
+        assertEquals(0L, disk.writeCount)
+        assertEquals(0L, disk.syncCount)
+        assertEquals(emptyList<ULong>(), disk.reads)
     }
 
     @Test fun uncompressedFileSourceKeepsDeclaredSize() {
@@ -726,6 +1042,41 @@ class RawWriterTest {
     ) : java.io.ByteArrayInputStream(data) {
         override fun close() {
             if (failClose) throw java.io.IOException("close failed")
+        }
+    }
+
+    @Test fun zeroReadStreamFailsInsteadOfHangingTheWriter() {
+        val source = ImageSource.fromContent(
+            openRaw = { ZeroAfterPrefix(ByteArray(6)) },
+            displayName = "disk.img",
+            size = 6L,
+        )
+        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
+        try {
+            RawWriter.write(
+                source,
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = RawWriteRange(0UL, 1UL),
+            )
+            fail("expected IOException")
+        } catch (_: java.io.IOException) {
+        }
+        assertEquals(0L, disk.writeCount)
+    }
+
+    private class ZeroAfterPrefix(private val prefix: ByteArray) : java.io.InputStream() {
+        private var index = 0
+        override fun read(): Int =
+            if (index < prefix.size) prefix[index++].toInt() and 0xFF else 0
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (index < prefix.size && len > 0) {
+                b[off] = prefix[index++]
+                return 1
+            }
+            return 0
         }
     }
 
