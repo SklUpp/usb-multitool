@@ -12,17 +12,23 @@ class MountedFilesVolume(
 ) : AutoCloseable {
     override fun close() {
         var failure: Throwable? = null
+        disk.beginHigherLevelClose()
         try {
-            volume.close()
-        } catch (t: Throwable) {
-            failure = t
-        } finally {
             try {
-                disk.close()
+                volume.close()
             } catch (t: Throwable) {
-                if (failure == null) failure = t else failure!!.addSuppressed(t)
+                failure = t
+            } finally {
+                try {
+                    disk.close()
+                } catch (t: Throwable) {
+                    if (failure == null) failure = t else failure!!.addSuppressed(t)
+                }
             }
+            if (failure != null) throw failure!!
+            disk.confirmHigherLevelClose()
+        } catch (t: Throwable) {
+            throw t
         }
-        if (failure != null) throw failure!!
     }
 }

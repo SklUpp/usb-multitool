@@ -137,8 +137,9 @@ class FilesVolumeSession(
      *
      * [open] then runs **outside** the lock with the claim held, so the slow USB open does
      * not block a UI-thread close/probe; the claim, not the lock, keeps other openers out.
-     * If [open] throws, the lease is released here and the failure rethrown. An unconfirmed
-     * close throws through [requireFilesVolumeClosed] before anything opens.
+     * If [open] throws before a [UsbDisk] binds the lease, the lease is released here. Once a
+     * disk owns it, Lease.close() is guarded and only the disk releases after confirmed close.
+     * An unconfirmed close throws through [requireFilesVolumeClosed] before anything opens.
      */
     fun <T> openAfterCloseClaimed(open: (UsbExclusiveClaim.Lease) -> T): T {
         val lease =
@@ -202,8 +203,8 @@ class FilesVolumeSession(
             unconfirmedClose = t
             CloseEpochResult.ClosedFailed(t)
         } finally {
-            // Idempotent with the disk's own release: the session must not keep the device
-            // claimed after the mount is dropped, even if the opener ignored the lease.
+            // Bound UsbDisk owns release. Mark failed volume close so all external cleanup stays blocked.
+            if (unconfirmedClose != null) current.lease.retainAfterCloseFailure()
             current.lease.close()
         }
     }
@@ -273,8 +274,6 @@ class FilesVolumeSession(
                 opened.close()
             } catch (closeErr: Throwable) {
                 unconfirmedClose = closeErr
-            } finally {
-                lease.close()
             }
             throw AttachmentChangedException()
         }

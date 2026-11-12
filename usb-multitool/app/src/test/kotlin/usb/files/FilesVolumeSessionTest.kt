@@ -240,6 +240,36 @@ class FilesVolumeSessionTest {
         val err = session.close()
         assertSame(diskErr, err)
     }
+    @Test
+    fun failedDiskCloseKeepsSharedClaimBlockedAcrossSessions() {
+        val diskErr = IOException("disk close failed")
+        val claim = UsbExclusiveClaim()
+        val first =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = null, diskClose = diskErr, lease = lease)
+                },
+                claim = claim,
+            )
+        val second =
+            FilesVolumeSession(
+                currentAttachment = { pinA },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+                },
+                claim = claim,
+            )
+
+        first.withLock { first.volumeForLocked(pinA, "1") }
+        assertSame(diskErr, first.close())
+        assertTrue("failed disk close must retain shared claim", claim.isHeld())
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) {
+            second.withLock { second.volumeForLocked(pinA, "1") }
+        }
+        assertSame(diskErr, first.close())
+        assertTrue(claim.isHeld())
+    }
 
     @Test
     fun volumeCloseFailureSuppressesDiskCloseFailure() {

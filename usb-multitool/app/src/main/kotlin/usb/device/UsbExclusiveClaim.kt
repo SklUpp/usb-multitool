@@ -24,21 +24,61 @@ class UsbExclusiveClaim {
     class BusyException : IllegalStateException("USB device is claimed by another session")
 
     /**
-     * Ownership token. [close] is idempotent and identity-checked, so a disk closed twice
-     * can never free a successor's lease. A failed disk close retains this lease until the
-     * underlying session close is confirmed.
-     * The released check and claim clear happen in one monitor hold: a concurrent
-     * [tryAcquire] sees either the old lease or no lease, never a half-released one.
+     * Ownership token. [close] is idempotent and identity-checked. Before a BOT session binds,
+     * [close] releases an open-failure lease. After bind, external cleanup is a no-op: only
+     * confirmed BOT close, followed by confirmed higher-level volume close, can release claim.
+     * Any close failure therefore keeps process-wide ownership fail-closed.
      */
     inner class Lease : AutoCloseable {
         private var released = false
+        private var sessionBound = false
+        private var sessionClosed = false
+        private var closeUnconfirmed = false
+
+        /** Mark lease owned by BOT session; external close calls become no-ops. */
+        internal fun bindSession() {
+            synchronized(this@UsbExclusiveClaim) {
+                check(!released) { "USB lease already released" }
+                sessionBound = true
+            }
+        }
+
+        /** Hold process claim while higher-level volume close runs. */
+        internal fun holdForHigherLevelClose() {
+            synchronized(this@UsbExclusiveClaim) {
+                closeUnconfirmed = true
+            }
+        }
+
+        /** Confirm higher-level close; release if BOT session already closed. */
+        internal fun confirmHigherLevelClose() {
+            synchronized(this@UsbExclusiveClaim) {
+                closeUnconfirmed = false
+                if (sessionClosed) releaseLocked()
+            }
+        }
+
+        /** Release only after owning BOT session close has been confirmed. */
+        internal fun releaseAfterSessionClose() {
+            synchronized(this@UsbExclusiveClaim) {
+                if (!sessionBound) return
+                sessionBound = false
+                sessionClosed = true
+                if (!closeUnconfirmed) releaseLocked()
+            }
+        }
 
         override fun close() {
             synchronized(this@UsbExclusiveClaim) {
-                if (released) return
-                released = true
-                if (held === this) held = null
+                if (sessionBound || closeUnconfirmed) return
+                releaseLocked()
             }
+        }
+
+        private fun releaseLocked() {
+            if (released) return
+            released = true
+            if (held === this) held = null
         }
     }
 

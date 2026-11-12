@@ -22,14 +22,16 @@ object UsbDiskSession {
             ?: throw DiskException.IoFailure("no SCSI BOT mass-storage interface on device")
         val channel = AndroidUsbBulkChannel.open(manager, target)
         val session = BotSessionImpl(channel, lun = lun)
+        lease.bindSession()
         return try {
             initialize(session)
             UsbDisk(session, lease = lease)
         } catch (e: Exception) {
             try {
                 session.close()
-            } finally {
-                lease.close()
+                lease.releaseAfterSessionClose()
+            } catch (closeError: Throwable) {
+                if (closeError !== e) e.addSuppressed(closeError)
             }
             throw e
         }

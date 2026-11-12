@@ -30,6 +30,7 @@ open class UsbDisk(
         this.geometry = resolved
         this.sectorSize = resolved.sectorSize
         this.sectorCount = resolved.sectorCount
+        lease?.bindSession()
     }
 
     @Synchronized
@@ -232,8 +233,16 @@ open class UsbDisk(
             throw t
         }
         // Release ownership only after session close is confirmed.
-        lease?.close()
+        lease?.releaseAfterSessionClose()
     }
+    internal fun beginHigherLevelClose() {
+        lease?.holdForHigherLevelClose()
+    }
+
+    internal fun confirmHigherLevelClose() {
+        lease?.confirmHigherLevelClose()
+    }
+
 
     private fun closeSessionPreserving(primary: Throwable) {
         try {

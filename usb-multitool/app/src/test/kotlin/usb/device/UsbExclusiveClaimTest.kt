@@ -75,6 +75,19 @@ class UsbExclusiveClaimTest {
         successor.close()
         assertFalse(claim.isHeld())
     }
+    @Test
+    fun externalLeaseCloseCannotReleaseBoundSession() {
+        val claim = UsbExclusiveClaim()
+        val lease = claim.tryAcquire()
+        lease.bindSession()
+
+        lease.close()
+        assertTrue("external cleanup must not release session-owned claim", claim.isHeld())
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) { claim.tryAcquire() }
+
+        lease.releaseAfterSessionClose()
+        assertFalse(claim.isHeld())
+    }
 
     @Test
     fun diskCloseFailureKeepsLeaseAndBlocksNextClaim() {
