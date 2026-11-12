@@ -43,14 +43,23 @@ class UsbExclusiveClaim {
             }
         }
 
-        /** Hold process claim while higher-level volume close runs. */
+        /** Hold process claim for full mounted-volume lifetime. */
         internal fun holdForHigherLevelClose() {
             synchronized(this@UsbExclusiveClaim) {
                 closeUnconfirmed = true
             }
         }
 
-        /** Confirm higher-level close; release if BOT session already closed. */
+        /** Abort volume open only when no close remains unconfirmed. */
+        internal fun abortHigherLevelClose() {
+            synchronized(this@UsbExclusiveClaim) {
+                if (sessionBound && !sessionClosed) return
+                closeUnconfirmed = false
+                releaseLocked()
+            }
+        }
+
+        /** Confirm filesystem and BOT close; release process claim. */
         internal fun confirmHigherLevelClose() {
             synchronized(this@UsbExclusiveClaim) {
                 closeUnconfirmed = false
@@ -58,7 +67,7 @@ class UsbExclusiveClaim {
             }
         }
 
-        /** Release only after owning BOT session close has been confirmed. */
+        /** Release only after owning BOT session close is confirmed. */
         internal fun releaseAfterSessionClose() {
             synchronized(this@UsbExclusiveClaim) {
                 if (!sessionBound) return

@@ -150,6 +150,7 @@ class FilesVolumeSession(
         return try {
             open(lease)
         } catch (t: Throwable) {
+            lease.abortHigherLevelClose()
             lease.close()
             throw t
         }
@@ -202,10 +203,6 @@ class FilesVolumeSession(
         } catch (t: Throwable) {
             unconfirmedClose = t
             CloseEpochResult.ClosedFailed(t)
-        } finally {
-            // Bound UsbDisk owns release. Mark failed volume close so all external cleanup stays blocked.
-            if (unconfirmedClose != null) current.lease.retainAfterCloseFailure()
-            current.lease.close()
         }
     }
 
@@ -260,10 +257,12 @@ class FilesVolumeSession(
         // Claim the device only after the previous mount is fully closed under this lock:
         // no second session can hold the interface while this one opens.
         val lease = claim.tryAcquire()
+        lease.holdForHigherLevelClose()
         val opened =
             try {
                 openMounted(partitionId, writable, pinned, lease)
             } catch (t: Throwable) {
+                lease.abortHigherLevelClose()
                 lease.close()
                 throw t
             }
@@ -275,6 +274,7 @@ class FilesVolumeSession(
             } catch (closeErr: Throwable) {
                 unconfirmedClose = closeErr
             }
+            lease.close()
             throw AttachmentChangedException()
         }
         mounted = Mounted(opened, epoch, pinned, lease)
