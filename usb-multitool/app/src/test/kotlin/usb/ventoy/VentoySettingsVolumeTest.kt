@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Test
@@ -317,5 +318,115 @@ class VentoySettingsVolumeTest {
             "a no-op removal must not create ventoy.json",
             VentoySetup.readGlobalSettings(disk) == VentoyGlobalSettings.Missing,
         )
+    }
+
+    @Test
+    fun aChosenFileIsReadFromItsOwnPathAndMissingIsNotCreated() {
+        val disk = mountableVentoyStick()
+        withPart1(disk) { volume ->
+            volume.mkdir("/ventoy")
+            volume.write(
+                "/ventoy/custom.json",
+                """{"control": [{"CUSTOM_KEY": "kept"}], "extra": {"a": 1}}"""
+                    .toByteArray(),
+                create = true,
+            )
+            volume.sync()
+        }
+        val read = VentoySetup.readGlobalSettingsAt(disk, "/ventoy/custom.json")
+        assertTrue(read is VentoyGlobalSettings.Present)
+        assertEquals("CUSTOM_KEY", (read as VentoyGlobalSettings.Present).entries.single().key)
+
+        assertTrue(
+            VentoySetup.readGlobalSettingsAt(disk, "/ventoy/absent.json") ==
+                VentoyGlobalSettings.Missing,
+        )
+        assertThrows(IllegalStateException::class.java) {
+            VentoySetup.applyGlobalControlsAt(
+                disk,
+                "/ventoy/absent.json",
+                listOf(VentoyControlSetting("CUSTOM_KEY", "value")),
+            )
+        }
+        withPart1(disk) { volume ->
+            assertNull(
+                "a chosen missing file must not be created",
+                volume.statOrNull("/ventoy/absent.json"),
+            )
+        }
+    }
+
+    @Test
+    fun aChosenDirectoryFailsClosedForReadAndWrite() {
+        val disk = mountableVentoyStick()
+        withPart1(disk) { volume ->
+            volume.mkdir("/ventoy")
+            volume.mkdir("/ventoy/as-directory")
+            volume.sync()
+        }
+        assertTrue(
+            VentoySetup.readGlobalSettingsAt(disk, "/ventoy/as-directory") is
+                VentoyGlobalSettings.ReadError,
+        )
+        assertThrows(IllegalStateException::class.java) {
+            VentoySetup.applyGlobalControlsAt(
+                disk,
+                "/ventoy/as-directory",
+                listOf(VentoyControlSetting("CUSTOM_KEY", "value")),
+            )
+        }
+    }
+
+    @Test
+    fun updatingAChosenFileLeavesTheDefaultFileUntouched() {
+        val disk = mountableVentoyStick()
+        seedConfig(
+            disk,
+            """{"control": [{"VTOY_WIN11_BYPASS_CHECK": "0"}], "default_extra": true}""",
+        )
+        withPart1(disk) { volume ->
+            volume.write(
+                "/ventoy/custom.json",
+                """{"control": [{"VTOY_WIN11_BYPASS_CHECK": "0"}], "user_block": {"keep": 1}}"""
+                    .toByteArray(),
+                create = true,
+            )
+            volume.sync()
+        }
+
+        assertTrue(
+            VentoySetup.applyGlobalControlsAt(
+                disk,
+                "/ventoy/custom.json",
+                listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+            ),
+        )
+        withPart1(disk) { volume ->
+            val custom =
+                volume.statOrNull("/ventoy/custom.json")
+                    ?.let { entry ->
+                        String(volume.read("/ventoy/custom.json", 0L, entry.size.toInt()))
+                    }
+                    .orEmpty()
+            val customRoot = MiniJson.parse(custom) as Map<*, *>
+            val customControl = (customRoot["control"] as List<*>).single() as Map<*, *>
+            assertEquals("1", customControl["VTOY_WIN11_BYPASS_CHECK"])
+            assertEquals(1, (customRoot["user_block"] as Map<*, *>)["keep"])
+
+            val default =
+                volume.statOrNull("/ventoy/ventoy.json")
+                    ?.let { entry ->
+                        String(volume.read("/ventoy/ventoy.json", 0L, entry.size.toInt()))
+                    }
+                    .orEmpty()
+            val defaultRoot = MiniJson.parse(default) as Map<*, *>
+            val defaultControl = (defaultRoot["control"] as List<*>).single() as Map<*, *>
+            assertEquals(
+                "the default file must not be edited by a chosen-file update",
+                "0",
+                defaultControl["VTOY_WIN11_BYPASS_CHECK"],
+            )
+            assertEquals(true, defaultRoot["default_extra"])
+        }
     }
 }

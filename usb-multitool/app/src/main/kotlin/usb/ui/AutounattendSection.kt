@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -44,6 +45,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
@@ -68,7 +70,10 @@ import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoyKnownControl
 import usb.ventoy.VentoySetting
-import usb.ventoy.XmlPath
+import usb.ventoy.VentoySettingsSource
+
+/** Orange marks a settings file that is not Ventoy's own `/ventoy/ventoy.json`. */
+private val NonDefaultSettingsPath = Color(0xFFE65100)
 
 /**
  * Autounattend subsection of the Ventoy tab: the answer file that already exists, the
@@ -80,7 +85,11 @@ import usb.ventoy.XmlPath
  * in its own dialog that never shows this stick's identity.
  */
 @Composable
-internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit) {
+internal fun AutounattendSection(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    onPickVentoySettingsFile: () -> Unit = {},
+) {
     val template = state.windowsTemplatePath
     val document = (state.autounattendState as? AutounattendState.Parsed)?.document
     var pickerOpen by remember { mutableStateOf(false) }
@@ -418,7 +427,7 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
         }
     }
 
-    GlobalSettingsCard(state, onIntent)
+    GlobalSettingsCard(state, onIntent, onPickVentoySettingsFile)
 
     state.diskLayoutConfirmation?.let { confirmation ->
         LayoutConfirmDialog(
@@ -431,6 +440,7 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
 
     if (pickerOpen) {
         TemplatePickerDialog(
+            title = stringResource(R.string.unattend_pick_template),
             candidates = state.windowsIsoCandidates?.map { it.path },
             incomplete = state.windowsIsoCandidatesError != null,
             onRefresh = { onIntent(UiIntent.LoadWindowsIsoCandidates) },
@@ -467,13 +477,40 @@ internal fun AutounattendSection(state: AppUiState, onIntent: (UiIntent) -> Unit
 }
 
 /**
- * Global `control` entries. Missing, empty, and unreadable stay distinct; known keys offer
- * explicit choices, other keys stay editable as key/value, and every edit is staged until
- * Apply now or the confirmed install/update writes it.
+ * Global `control` entries. The file can be Ventoy's own `/ventoy/ventoy.json`, another file
+ * on the stick (chosen through the shared Files picker), or a phone document chosen with
+ * OpenDocument. Missing, empty, and unreadable stay distinct; known keys are toggles, other
+ * keys stay editable as key/value, and every edit is staged until Update or the confirmed
+ * install/update writes the default file.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) {
+private fun GlobalSettingsCard(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    onPickVentoySettingsFile: () -> Unit,
+) {
+    var sourceMenuOpen by remember { mutableStateOf(false) }
+    // The shared Files picker is the only USB navigation. Its result is pinned to the
+    // attachment and partition; adopt it once, then clear the hand-off entry so a later
+    // unrelated selection cannot re-apply here.
+    LaunchedEffect(state.filesPickSelections) {
+        val picked = state.filesPickSelections[FilesPickPurpose.VentoyConfig] ?: return@LaunchedEffect
+        if (picked.purpose != FilesPickPurpose.VentoyConfig || picked.isDirectory) {
+            return@LaunchedEffect
+        }
+        onIntent(
+            UiIntent.SelectVentoySettingsUsbFile(
+                path = picked.path,
+                identity = picked.identity,
+                attachGeneration = picked.attachGeneration,
+                partitionId = picked.partitionId,
+                partitionStartLba = picked.startLba,
+                partitionSectorCount = picked.sectorCount,
+            ),
+        )
+        onIntent(UiIntent.ClearFilesPickSelection(FilesPickPurpose.VentoyConfig))
+    }
     SectionCard(
         title = stringResource(R.string.settings_title),
         trailing = {
@@ -483,12 +520,89 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
             )
         },
     ) {
-        InfoRow(
-            stringResource(R.string.settings_file_label),
-            XmlPath.CONFIG_PATH,
-        )
+        val source = state.ventoySettingsSource
+        val customPath = !source.isDefaultPath()
         val settings = state.ventoyGlobalSettings
         val entries = (settings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = source.label(),
+                style = MaterialTheme.typography.bodySmall,
+                color =
+                    if (customPath) {
+                        NonDefaultSettingsPath
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                modifier = Modifier.weight(1f),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = when {
+                    state.ventoySettingsSourceLoading ->
+                        stringResource(R.string.settings_source_status_reading)
+                    settings == null -> stringResource(R.string.settings_source_status_unread)
+                    settings == VentoyGlobalSettings.Missing ->
+                        stringResource(R.string.settings_source_status_missing)
+                    settings == VentoyGlobalSettings.Empty ->
+                        stringResource(R.string.settings_source_status_empty)
+                    settings is VentoyGlobalSettings.Present ->
+                        stringResource(
+                            R.string.settings_source_status_valid,
+                            settings.entries.size,
+                        )
+                    else -> stringResource(R.string.settings_source_status_error)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.End,
+                color =
+                    when (settings) {
+                        is VentoyGlobalSettings.ReadError,
+                        VentoyGlobalSettings.Missing
+                        -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+            )
+        }
+        if (customPath) {
+            Text(
+                text = stringResource(R.string.settings_source_custom_path),
+                style = MaterialTheme.typography.labelSmall,
+                color = NonDefaultSettingsPath,
+            )
+        }
+        if (source is VentoySettingsSource.Document) {
+            Text(
+                text = stringResource(R.string.settings_source_phone_note),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            OutlinedButton(
+                onClick = { sourceMenuOpen = true },
+                enabled = state.actionsEnabled,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.settings_source_choose))
+            }
+            if (customPath) {
+                TextButton(
+                    onClick = { onIntent(UiIntent.UseDefaultVentoySettingsFile) },
+                    enabled = state.actionsEnabled,
+                ) {
+                    Text(stringResource(R.string.settings_source_use_default))
+                }
+            }
+        }
         when (settings) {
             null -> {
                 // null = not read yet, or nothing is attached to read from. No in-flight flag
@@ -506,15 +620,24 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
                 StagedControls(state = state, onIntent = onIntent)
                 return@SectionCard
             }
-            VentoyGlobalSettings.Missing -> EmptyHint(stringResource(R.string.settings_missing))
+            VentoyGlobalSettings.Missing ->
+                EmptyHint(
+                    stringResource(
+                        if (customPath) {
+                            R.string.settings_source_status_missing
+                        } else {
+                            R.string.settings_missing
+                        },
+                    ),
+                )
             VentoyGlobalSettings.Empty -> EmptyHint(stringResource(R.string.settings_empty))
             is VentoyGlobalSettings.ReadError -> {
                 Text(
                     text = stringResource(
-                        if (settings.damagedLayout) {
-                            R.string.settings_damaged_layout
-                        } else {
-                            R.string.settings_read_error
+                        when {
+                            settings.damagedLayout -> R.string.settings_damaged_layout
+                            customPath -> R.string.settings_source_status_error
+                            else -> R.string.settings_read_error
                         },
                     ),
                     style = MaterialTheme.typography.bodySmall,
@@ -585,6 +708,54 @@ private fun GlobalSettingsCard(state: AppUiState, onIntent: (UiIntent) -> Unit) 
             Text(stringResource(R.string.unattend_refresh))
         }
     }
+    if (sourceMenuOpen) {
+        SettingsSourceDialog(
+            onStick = {
+                sourceMenuOpen = false
+                onIntent(
+                    UiIntent.BeginFilesPick(
+                        purpose = FilesPickPurpose.VentoyConfig,
+                        returnTab = ShellTab.Ventoy,
+                        target = FilesPickTarget.File,
+                        initialPath = "/ventoy",
+                    ),
+                )
+            },
+            onPhone = {
+                sourceMenuOpen = false
+                onPickVentoySettingsFile()
+            },
+            onDismiss = { sourceMenuOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun SettingsSourceDialog(
+    onStick: () -> Unit,
+    onPhone: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_source_choose)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onStick, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.settings_source_choose_stick))
+                }
+                TextButton(onClick = onPhone, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.settings_source_choose_phone))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.import_error_dismiss))
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -598,28 +769,54 @@ private fun KnownControlRow(
 ) {
     val staged = pending.firstOrNull { it.key == known.key }
     val onDisk = entries.firstOrNull { it.key == known.key }
+    val value = if (staged != null) staged.value else onDisk?.rawValue
     val current =
         when {
             staged != null -> staged.value ?: stringResource(R.string.settings_will_remove)
             onDisk != null -> onDisk.rawValue
             else -> stringResource(R.string.settings_not_set)
         }
+    val booleanKey =
+        known.allowed.size == 2 && known.allowed.containsAll(listOf("0", "1"))
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = knownControlTitle(known.key),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            text = stringResource(R.string.settings_current, current),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         // Only keys this app understands get an explanation; unknown keys stay raw.
         val keyHint = when (known.key) {
             "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_hint
             "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
             else -> null
+        }
+        if (booleanKey) {
+            SwitchRow(
+                label = knownControlTitle(known.key),
+                checked = value == "1",
+                onCheckedChange = { enabled ->
+                    onIntent(
+                        UiIntent.StageVentoyControl(known.key, if (enabled) "1" else "0"),
+                    )
+                },
+                enabled = actionsEnabled,
+                hint = stringResource(R.string.settings_current, current),
+            )
+        } else {
+            Text(
+                text = knownControlTitle(known.key),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(R.string.settings_current, current),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                known.allowed.forEach { option ->
+                    TextButton(
+                        onClick = { onIntent(UiIntent.StageVentoyControl(known.key, option)) },
+                        enabled = actionsEnabled,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) { Text(knownOptionLabel(known.key, option)) }
+                }
+            }
         }
         keyHint?.let {
             Text(
@@ -636,14 +833,8 @@ private fun KnownControlRow(
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            known.allowed.forEach { value ->
-                TextButton(
-                    onClick = { onIntent(UiIntent.StageVentoyControl(known.key, value)) },
-                    enabled = actionsEnabled,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                ) { Text(knownOptionLabel(known.key, value)) }
-            }
+        // A toggle sets 0/1; removal is separate because Ventoy's own default is neither.
+        if (staged != null || onDisk != null) {
             TextButton(
                 onClick = { onIntent(UiIntent.StageVentoyControl(known.key, null)) },
                 enabled = actionsEnabled,
@@ -773,8 +964,10 @@ private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
             setOf(
                 OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
                 OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
-                OperationTitle.Destructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL),
             )
+    val writePartial =
+        operation?.state == OperationState.Partial &&
+            operation.title == OperationTitle.SetVentoyGlobalSetting
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = stringResource(R.string.settings_staged),
@@ -809,6 +1002,19 @@ private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         if (installPartial) {
             Text(
                 text = stringResource(R.string.settings_retry_pending),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (writePartial) {
+            Text(
+                text = stringResource(
+                    if (state.ventoySettingsSource is VentoySettingsSource.Document) {
+                        R.string.settings_source_partial
+                    } else {
+                        R.string.settings_write_partial
+                    },
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -979,6 +1185,7 @@ private fun LayoutConfirmDialog(
 
 @Composable
 private fun TemplatePickerDialog(
+    title: String,
     candidates: List<String>?,
     incomplete: Boolean,
     onRefresh: () -> Unit,
@@ -987,7 +1194,7 @@ private fun TemplatePickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.unattend_pick_template)) },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (incomplete) {

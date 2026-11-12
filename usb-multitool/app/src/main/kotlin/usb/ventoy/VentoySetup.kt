@@ -18,10 +18,13 @@ import usb.partition.VirtualPartition
 object VentoySetup {
     const val ISO_DIR = "ISO"
     const val VENTOY_DIR = "ventoy"
-    const val CONFIG_PATH = "/ventoy/ventoy.json"
+    const val CONFIG_PATH = DEFAULT_VENTOY_CONFIG_PATH
 
     /** Refuse to load an unreasonably large template as text. */
     const val MAX_TEMPLATE_BYTES: Long = 2L * 1024 * 1024
+
+    /** ventoy.json is a small control file; this bound keeps a malformed volume from hanging. */
+    const val MAX_SETTINGS_BYTES: Long = 2L * 1024 * 1024
 
     /** Volume-relative key for the read/write helpers; a leading slash hides it. */
     internal const val CONFIG_KEY = VENTOY_DIR + "/ventoy.json"
@@ -98,49 +101,31 @@ object VentoySetup {
 
     /** Raw global control entries, preserving unknown keys, sections, and exact raw values. */
     fun readGlobalSettings(disk: BlockDevice): VentoyGlobalSettings =
+        readSettingsFile(disk, CONFIG_PATH, defaultPath = true)
+
+    /**
+     * Read one explicit settings file on the data partition. Unlike the default path, a
+     * missing file is [VentoyGlobalSettings.Missing] and must never be created by a read;
+     * a directory, an oversized file, or a missing Ventoy layout is a [VentoyGlobalSettings.ReadError].
+     */
+    fun readGlobalSettingsAt(disk: BlockDevice, path: String): VentoyGlobalSettings =
+        readSettingsFile(disk, normalizeVentoyFilePath(path), defaultPath = false)
+
+    private fun readSettingsFile(
+        disk: BlockDevice,
+        requestedPath: String,
+        defaultPath: Boolean,
+    ): VentoyGlobalSettings =
         try {
             withVolume(disk) { volume ->
-                // Absence is decided by stat; any other list/stat failure propagates and the
-                // host reports ReadError instead of silently showing "no settings".
-                val ventoyDir = volume.statOrNull(VENTOY_DIR)
-                    ?: return@withVolume VentoyGlobalSettings.Missing
-                if (!ventoyDir.isDirectory) {
-                    return@withVolume VentoyGlobalSettings.ReadError(
-                        "$VENTOY_DIR exists but is not a directory",
-                    )
-                }
-                val fileName = CONFIG_PATH.substringAfterLast('/')
-                val entries = volume.list(VENTOY_DIR)
-                val entry = entries.firstOrNull {
-                    !it.isDirectory && it.name.equals(fileName, ignoreCase = true)
-                }
-                if (entry == null) {
-                    val directory = entries.any {
-                        it.isDirectory && it.name.equals(fileName, ignoreCase = true)
-                    }
-                    return@withVolume if (directory) {
-                        VentoyGlobalSettings.ReadError("$CONFIG_PATH is a directory, not a file")
-                    } else {
-                        VentoyGlobalSettings.Missing
-                    }
-                }
-                if (entry.size > Int.MAX_VALUE) {
-                    return@withVolume VentoyGlobalSettings.ReadError(
-                        "$CONFIG_PATH is ${entry.size} bytes; refusing to load it as text",
-                    )
-                }
-                val json =
-                    if (entry.size <= 0L) {
-                        ""
-                    } else {
-                        String(
-                            volume.read(CONFIG_PATH, 0L, entry.size.toInt()),
-                            Charsets.UTF_8,
-                        )
-                    }
-                parseGlobalSettings(json)
+                readSettingsFile(volume, requestedPath, defaultPath)
             }
         } catch (failure: IncompatibleVentoyException) {
+            if (!defaultPath) {
+                return VentoyGlobalSettings.ReadError(
+                    "the Ventoy data partition is not available; cannot read $requestedPath",
+                )
+            }
             // No provable Ventoy layout is the honest "no ventoy.json yet" state. A damaged
             // layout that still carries Ventoy signatures is a read error, not empty/missing.
             val damaged =
@@ -163,6 +148,40 @@ object VentoySetup {
                 VentoyGlobalSettings.Missing
             }
         }
+
+    private fun readSettingsFile(
+        volume: UsbFsVolume,
+        requestedPath: String,
+        defaultPath: Boolean,
+    ): VentoyGlobalSettings {
+        val entry = volume.statOrNull(requestedPath)
+        if (entry == null) {
+            if (!defaultPath) return VentoyGlobalSettings.Missing
+            // Absence of the default path is decided by stat; any list/stat failure
+            // propagates and the host reports ReadError instead of "no settings".
+            val ventoyDir = volume.statOrNull(VENTOY_DIR)
+                ?: return VentoyGlobalSettings.Missing
+            if (!ventoyDir.isDirectory) {
+                return VentoyGlobalSettings.ReadError("$VENTOY_DIR exists but is not a directory")
+            }
+            return VentoyGlobalSettings.Missing
+        }
+        if (entry.isDirectory) {
+            return VentoyGlobalSettings.ReadError("$requestedPath is a directory, not a file")
+        }
+        if (entry.size > MAX_SETTINGS_BYTES) {
+            return VentoyGlobalSettings.ReadError(
+                "$requestedPath is ${entry.size} bytes; limit is $MAX_SETTINGS_BYTES",
+            )
+        }
+        val json =
+            if (entry.size <= 0L) {
+                ""
+            } else {
+                String(volume.read(requestedPath, 0L, entry.size.toInt()), Charsets.UTF_8)
+            }
+        return parseGlobalSettings(json)
+    }
 
     /** Cancellation and JVM/linkage faults must never be turned into a Missing/ReadError result. */
     private fun Throwable.isFatalReadFailure(): Boolean =
@@ -238,11 +257,41 @@ object VentoySetup {
      * Write explicitly chosen control values in one read-merge-write. Unknown JSON sections
      * and all other keys are preserved; a null value removes just that key.
      * Returns false when the merge changes nothing, in which case no file is written.
+     *
+     * A missing default file may be created, matching install/update behaviour. A file chosen
+     * by the user must already exist: [applyGlobalControlsAt] refuses to create it.
      */
     fun applyGlobalControls(
         disk: BlockDevice,
         settings: List<VentoyControlSetting>,
         onMutation: () -> Unit = {},
+    ): Boolean = applySettingsFile(disk, CONFIG_PATH, settings, allowCreate = true, onMutation)
+
+    /**
+     * Read-merge-write exactly [path] on the data partition. The file is never copied to the
+     * default path or to another file. Absence, a directory, or an oversized file fails closed
+     * before any write; unknown sections and unrelated keys are preserved.
+     */
+    fun applyGlobalControlsAt(
+        disk: BlockDevice,
+        path: String,
+        settings: List<VentoyControlSetting>,
+        onMutation: () -> Unit = {},
+    ): Boolean =
+        applySettingsFile(
+            disk,
+            normalizeVentoyFilePath(path),
+            settings,
+            allowCreate = false,
+            onMutation,
+        )
+
+    private fun applySettingsFile(
+        disk: BlockDevice,
+        path: String,
+        settings: List<VentoyControlSetting>,
+        allowCreate: Boolean,
+        onMutation: () -> Unit,
     ): Boolean {
         val changed =
             withVolume(disk) { volume ->
@@ -250,17 +299,36 @@ object VentoySetup {
                 VentoyControlCatalog.problem(settings)?.let {
                     throw IllegalArgumentException(it)
                 }
-                if (volume.statOrNull(CONFIG_PATH)?.isDirectory == true) {
+                val entry = volume.statOrNull(path)
+                if (entry?.isDirectory == true) {
                     throw IllegalStateException(
-                        "$CONFIG_PATH is a directory; refusing to overwrite it",
+                        "$path is a directory; refusing to overwrite it",
                     )
                 }
-                val existingJson = readText(volume, CONFIG_PATH)
+                if (entry == null && !allowCreate) {
+                    throw IllegalStateException(
+                        "$path no longer exists; refusing to create a chosen settings file",
+                    )
+                }
+                if (entry != null && entry.size > MAX_SETTINGS_BYTES) {
+                    throw IllegalStateException(
+                        "$path is ${entry.size} bytes; limit is $MAX_SETTINGS_BYTES",
+                    )
+                }
+                val existingJson =
+                    when {
+                        entry == null -> null
+                        entry.size <= 0L -> ""
+                        else -> String(
+                            volume.read(path, 0L, entry.size.toInt()),
+                            Charsets.UTF_8,
+                        )
+                    }
                 val merged = WindowsSetup.applyControls(existingJson, settings)
                     ?: return@withVolume false
                 onMutation()
-                ensureDirectory(volume, VENTOY_DIR)
-                replaceFile(volume, CONFIG_PATH, merged.toByteArray(Charsets.UTF_8))
+                if (allowCreate) ensureDirectory(volume, VENTOY_DIR)
+                replaceFile(volume, path, merged.toByteArray(Charsets.UTF_8))
                 true
             }
         // The FAT volume is closed; flush the block device so the reported success is durable.

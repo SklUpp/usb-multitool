@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +16,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
@@ -45,18 +48,22 @@ fun VentoyScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
+    onPickVentoySettingsFile: () -> Unit = {},
 ) {
-    val pinned = usb.ventoy.VentoyAssets.PINNED_RELEASE
-    val latest = state.latestVentoyRelease
-    val newerLatest = latest?.takeIf { it != pinned }
-    val updateAvailable = newerLatest != null
+    val bundled = state.bundledVentoyRelease
+    val target = ventoyTargetRelease(bundled, state.downloadedVentoyRelease?.release)
+    val comparison = ventoyReleaseComparison(state.installedVentoyRelease, target)
     // Remember epoch we already asked catalogs for so actionsEnabled flicker mid-flight
     // does not triple-mount while caches are still null. Cleared when all three land or
     // epoch moves (invalidate).
     var catalogLoadEpoch by remember { mutableStateOf<Long?>(null) }
-    // Network download of a new release is separate from installing already-fetched
-    // assets; only the download path is warned about here, before any traffic starts.
-    var showDownloadWarning by remember { mutableStateOf(false) }
+// Network download of a new release is separate from installing already-fetched
+// assets; only the download path is warned about here, before any traffic starts.
+var showDownloadWarning by remember { mutableStateOf(false) }
+// One automatic upstream check per attachment: a failed check ends as n/a and does not
+// retry on every recomposition; a new attach gets a fresh check after the old one is
+// fenced out by the reducer.
+var upstreamCheckedGeneration by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(
         state.ventoyGlobalSettings,
@@ -104,6 +111,22 @@ fun VentoyScreen(
         }
         if (state.windowsIsoCandidates == null) onIntent(UiIntent.LoadWindowsIsoCandidates)
     }
+
+    LaunchedEffect(
+        state.device?.attachGeneration,
+        state.ventoyUpstreamChecking,
+    ) {
+        val generation = state.device?.attachGeneration ?: return@LaunchedEffect
+        if (upstreamCheckedGeneration == generation ||
+            state.ventoyUpstreamChecking ||
+            state.upstreamVentoyRelease != null
+        ) {
+            return@LaunchedEffect
+        }
+        upstreamCheckedGeneration = generation
+        onIntent(UiIntent.CheckVentoyUpstream)
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -112,101 +135,117 @@ fun VentoyScreen(
     ) {
         SectionCard(
             title = stringResource(R.string.ventoy_section_title),
-            subtitle = buildString {
-                append(stringResource(R.string.ventoy_pinned_prefix, pinned))
-                newerLatest?.let { append(stringResource(R.string.ventoy_latest_suffix, it)) }
-            },
+            // White-on-black in the dark theme and black-on-white in the light theme.
+            titleColor = MaterialTheme.colorScheme.onSurface,
             trailing = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.ventoy_help_title),
-                        infoText = stringResource(R.string.ventoy_help_text),
-                    )
-                    if (updateAvailable) {
+                    state.downloadedVentoyRelease?.let { downloaded ->
                         Badge(
-                            text = stringResource(R.string.ventoy_badge_update),
+                            text = stringResource(
+                                R.string.ventoy_badge_downloaded,
+                                downloaded.release,
+                            ),
                             container = MaterialTheme.colorScheme.tertiaryContainer,
                             content = MaterialTheme.colorScheme.onTertiaryContainer,
                         )
                     }
+                    InfoHelpButton(
+                        infoTitle = stringResource(R.string.ventoy_help_title),
+                        infoText = stringResource(R.string.ventoy_help_text) +
+                            "\n\n" +
+                            stringResource(R.string.ventoy_help_details),
+                    )
                 }
             },
         ) {
             if (!state.actionsEnabled) {
                 EmptyHint(UiReducer.presenceMessage(state.presence).localized())
             }
-            Button(
-                onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
-                enabled = state.actionsEnabled,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.ventoy_update))
-            }
-            OutlinedButton(
-                onClick = {
-                    if (VentoyDownloadWarning.requiresConfirmation(DestructiveAction.VENTOY_DOWNLOAD_INSTALL)) {
-                        showDownloadWarning = true
-                    } else {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL))
-                    }
-                },
-                enabled = state.actionsEnabled,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.ventoy_download))
-            }
-            Text(
-                text = stringResource(R.string.ventoy_update_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        SectionCard(
-            title = stringResource(R.string.efi_section_title),
-            trailing = {
-                InfoHelpButton(
-                    infoTitle = stringResource(R.string.efi_policy_info_title),
-                    infoText = stringResource(R.string.efi_policy_info_text),
+            VentoyVersionRow(state = state, onIntent = onIntent)
+            if (!state.ventoyInstallAvailable) {
+                Text(
+                    text = stringResource(R.string.msg_ventoy_store_unavailable),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
                 )
-            },
-        ) {
-            val efis = state.efiPartitions.filter { it.startLba != null && it.sectorCount != null }
-            if (efis.isEmpty()) {
-                EmptyHint(stringResource(R.string.efi_missing))
-            } else {
-                var targetId by remember(
-                    state.device?.identity,
-                    state.device?.attachGeneration,
-                    state.partitions,
+            }
+            val downloaded = state.downloadedVentoyRelease
+            val upstream = state.upstreamVentoyRelease
+            if (downloaded == null && upstream != null && state.upstreamVentoyPinned == false) {
+                Text(
+                    text = stringResource(R.string.ventoy_upstream_unpinned, upstream),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (downloaded != null && upstream != null && upstream != downloaded.release) {
+                Text(
+                    text = if (state.upstreamVentoyPinned == false) {
+                        stringResource(
+                            R.string.ventoy_pinned_unavailable,
+                            downloaded.release,
+                            upstream,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.ventoy_pinned_diff,
+                            downloaded.release,
+                            upstream,
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL))
+                    },
+                    enabled = state.actionsEnabled &&
+                        state.ventoyInstallAvailable &&
+                        !state.ventoyDownloadInFlight &&
+                        (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
                 ) {
-                    mutableStateOf<String?>(null)
-                }
-                val target = efis.firstOrNull { it.id == targetId }
-                    ?: efis.firstOrNull { it.id == state.vtoyEfiWritePartitionId }
-                    ?: efis.firstOrNull { it.id == state.selectedPartitionId }
-                    ?: efis.first()
-                val unlocked = state.isEfiWriteAllowed(target)
-                if (efis.size > 1) {
-                    CompactChoice(
-                        options = efis.map { it.id to it.name },
-                        selected = target.id,
-                        onSelect = { targetId = it },
-                        label = stringResource(R.string.efi_partition_label),
-                        enabled = state.actionsEnabled,
+                    Text(
+                        text = stringResource(R.string.ventoy_install),
+                        fontWeight = FontWeight.Bold,
                     )
-                } else {
-                    InfoRow(stringResource(R.string.efi_partition_label), target.name)
                 }
-                SwitchRow(
-                    label = stringResource(R.string.efi_allow_writes),
-                    checked = unlocked,
-                    onCheckedChange = { onIntent(UiIntent.SetVtoyEfiWritable(target.id, it)) },
-                    enabled = state.actionsEnabled,
-                    hint = stringResource(R.string.efi_allow_hint),
+                Button(
+                    onClick = {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE))
+                    },
+                    enabled = state.actionsEnabled &&
+                        state.ventoyInstallAvailable &&
+                        !state.ventoyDownloadInFlight &&
+                        (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = ventoyUpdateLabel(comparison),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            state.ventoyDownloadError?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
                 )
             }
         }
@@ -222,57 +261,186 @@ fun VentoyScreen(
         // Windows/XML work is one subsection of this tab: the answer file that already exists,
         // the parameters used to regenerate it, which images are bound to it, and the real
         // global `control` values. No new tab, nothing in Files.
-        AutounattendSection(state = state, onIntent = onIntent)
+        AutounattendSection(
+            state = state,
+            onIntent = onIntent,
+            onPickVentoySettingsFile = onPickVentoySettingsFile,
+        )
+    }
+}
 
-        SectionCard(
-            title = stringResource(R.string.ventoy_fresh_title),
-            danger = true,
+/**
+ * Three real version facts, plus the two read-only actions. A missing fact renders as
+ * n/a instead of silently borrowing another release. The check and download actions never
+ * mount the stick; download persists only verified bytes in app-private storage.
+ */
+@Composable
+private fun VentoyVersionRow(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+) {
+    val checkLabel = stringResource(R.string.ventoy_check_version)
+    val downloadLabel = stringResource(R.string.ventoy_download)
+    // Network traffic is the only thing this action starts; Install/Update stays separate.
+    var showDownloadWarning by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        VentoyVersionFact(
+            glyph = Glyph.Package,
+            label = stringResource(R.string.ventoy_version_bundled),
+            value = state.bundledVentoyRelease,
+            modifier = Modifier.weight(1f),
+        )
+        VentoyVersionFact(
+            glyph = Glyph.Usb,
+            label = stringResource(R.string.ventoy_version_installed),
+            value = state.installedVentoyRelease,
+            readError = state.installedVentoyReadError,
+            modifier = Modifier.weight(1f),
+        )
+        VentoyVersionFact(
+            glyph = Glyph.Cloud,
+            label = stringResource(R.string.ventoy_version_upstream),
+            value = state.upstreamVentoyRelease,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(
+            onClick = { onIntent(UiIntent.CheckVentoyUpstream) },
+            enabled = !state.ventoyUpstreamChecking,
+            modifier = Modifier.semantics { contentDescription = checkLabel },
         ) {
-            Text(
-                text = stringResource(R.string.ventoy_fresh_body),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(
-                onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
-                enabled = state.actionsEnabled,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error,
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-            ) {
-                Text(
-                    stringResource(R.string.ventoy_fresh_action),
-                    fontWeight = FontWeight.Bold,
-                )
+            if (state.ventoyUpstreamChecking) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                GlyphIcon(Glyph.Refresh, size = 20.dp)
+            }
+        }
+        IconButton(
+            onClick = {
+                if (VentoyDownloadWarning.requiresConfirmation(state.ventoyDownloadInFlight)) {
+                    showDownloadWarning = true
+                } else {
+                    onIntent(UiIntent.RequestDownloadVentoyRelease)
+                }
+            },
+            enabled = !state.ventoyDownloadInFlight,
+            modifier = Modifier.semantics { contentDescription = downloadLabel },
+        ) {
+            if (state.ventoyDownloadInFlight) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                GlyphIcon(Glyph.Download, size = 20.dp)
             }
         }
     }
-
     if (showDownloadWarning) {
-        AlertDialog(
-            onDismissRequest = { showDownloadWarning = false },
-            title = { Text(stringResource(R.string.ventoy_download_warning_title)) },
-            text = { Text(stringResource(R.string.ventoy_download_warning_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDownloadWarning = false
-                        onIntent(
-                            UiIntent.RequestDestructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL),
-                        )
-                    },
-                ) { Text(stringResource(R.string.ventoy_download_warning_confirm)) }
+        VentoyDownloadWarningDialog(
+            onConfirm = {
+                showDownloadWarning = false
+                onIntent(UiIntent.RequestDownloadVentoyRelease)
             },
-            dismissButton = {
-                TextButton(onClick = { showDownloadWarning = false }) {
-                    Text(stringResource(R.string.ventoy_download_warning_cancel))
-                }
+            onDismiss = { showDownloadWarning = false },
+        )
+    }
+}
+
+/** Confirms the network fetch only; it never writes the stick by itself. */
+@Composable
+private fun VentoyDownloadWarningDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.ventoy_download_warning_title)) },
+        text = { Text(stringResource(R.string.ventoy_download_warning_body)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.ventoy_download_warning_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.ventoy_download_warning_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun VentoyVersionFact(
+    glyph: Glyph,
+    label: String,
+    value: String?,
+    modifier: Modifier = Modifier,
+    readError: String? = null,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            GlyphIcon(
+                glyph = glyph,
+                size = 14.dp,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = when {
+                readError != null -> stringResource(R.string.ventoy_version_error)
+                value != null -> value
+                else -> stringResource(R.string.ventoy_version_na)
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = if (readError != null) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = if (readError != null) {
+                Modifier.semantics { contentDescription = readError }
+            } else {
+                Modifier
             },
         )
     }
 }
+
+@Composable
+private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
+    when {
+        comparison.installed != null &&
+            comparison.target != null &&
+            comparison.same ->
+            stringResource(R.string.ventoy_update_current, comparison.target)
+        comparison.installed != null && comparison.target != null ->
+            stringResource(
+                R.string.ventoy_update_from_to,
+                comparison.installed,
+                comparison.target,
+            )
+        comparison.target != null ->
+            stringResource(R.string.ventoy_update_to, comparison.target)
+        else -> stringResource(R.string.ventoy_update)
+    }
 
 
 /**

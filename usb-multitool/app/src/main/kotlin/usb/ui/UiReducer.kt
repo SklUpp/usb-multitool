@@ -20,6 +20,8 @@ import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlCatalog
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoyReleaseSource
+import usb.ventoy.VentoySettingsSource
 import usb.ventoy.XmlPath
 import usb.ventoy.autounattendPlanSha256
 import usb.ventoy.diskLayoutInstallTargetPartitionId
@@ -342,6 +344,25 @@ sealed class UiIntent {
 
     /** Global ventoy.json control entries, raw values included. */
     data object LoadVentoyGlobalSettings : UiIntent()
+    /**
+     * Use the file chosen by the shared Files picker. [identity]/[attachGeneration] came from
+     * that picker and must still match the attached stick or the choice is stale.
+     */
+    data class SelectVentoySettingsUsbFile(
+        val path: String,
+        val identity: String? = null,
+        val attachGeneration: Long? = null,
+        val partitionId: String? = null,
+        val partitionStartLba: ULong? = null,
+        val partitionSectorCount: ULong? = null,
+    ) : UiIntent()
+    /** Phone document chosen with OpenDocument; it is edited through this URI in place. */
+    data class SelectVentoySettingsDocument(
+        val uri: String,
+        val displayName: String? = null,
+    ) : UiIntent()
+    /** Go back to Ventoy's own `/ventoy/ventoy.json`. */
+    data object UseDefaultVentoySettingsFile : UiIntent()
     /** Re-read the direct children of [AppUiState.ventoyFolderPath]. */
     data object LoadVentoyFolders : UiIntent()
     /** Enter one listed child folder; unlisted values are ignored as stale. */
@@ -371,6 +392,8 @@ sealed class UiIntent {
         val epoch: Long = 0L,
         /** Must match [AppUiState.ventoyGlobalSettingsRequest], else an older read arrived late. */
         val requestToken: Long = 0L,
+        /** Echoes the read source; a result for another file is stale. */
+        val source: VentoySettingsSource = VentoySettingsSource.Default,
     ) : UiIntent()
     /** Only catalog-known keys and validated values. null value removes the key. */
     data class StageVentoyControl(val key: String, val value: String?) : UiIntent()
@@ -378,6 +401,66 @@ sealed class UiIntent {
     data class DiscardStagedVentoyControl(val key: String) : UiIntent()
     /** Write the staged controls to an existing Ventoy stick, or retry after a Partial. */
     data object RequestApplyVentoyControls : UiIntent()
+    /** Read-only GitHub release check; never touches the stick. */
+    data object CheckVentoyUpstream : UiIntent()
+    /**
+     * Answer to [CheckVentoyUpstream]. An older [requestToken] is stale, and the attach
+     * generation is checked by the reducer's own reset, so a pre-attach check cannot
+     * repopulate the new attachment's header.
+     */
+    data class SetVentoyUpstreamRelease(
+        val requestToken: Long,
+        val tag: String?,
+        /** Null when no tag landed; false means the tag has no independent local pin. */
+        val pinned: Boolean? = null,
+    ) : UiIntent()
+    /** Read-only download into app-private storage; never writes the stick. */
+    data object RequestDownloadVentoyRelease : UiIntent()
+    data class VentoyReleaseDownloaded(
+        val requestToken: Long,
+        val provenance: usb.ventoy.VentoyReleaseProvenance,
+    ) : UiIntent()
+    data class VentoyReleaseDownloadFailed(
+        val requestToken: Long,
+        val message: String,
+    ) : UiIntent()
+    /**
+     * The save failed after changing the readable store: either a recovered/promoted
+     * release remains, or publication happened without a confirmed directory fsync.
+     * Keep the new provenance and the warning; this is never a clean success.
+     */
+    data class VentoyReleaseStoreChanged(
+        val requestToken: Long,
+        val provenance: usb.ventoy.VentoyReleaseProvenance,
+        val message: String,
+    ) : UiIntent()
+
+    /** The store was mutated but cannot be verified; drop cached provenance. */
+    data class VentoyReleaseStoreUnknown(
+        val requestToken: Long,
+        val message: String,
+    ) : UiIntent()
+    /** Bundled release read from the APK assets at startup. */
+    data class SetVentoyBundledRelease(val release: String?) : UiIntent()
+    /**
+     * App-private store fact loaded at startup. [revision] is captured before the IO, so a
+     * late load cannot overwrite a download/store change that finished while it read.
+     */
+    data class SetVentoyStoreState(
+        val revision: Long,
+        val storeState: usb.ventoy.VentoyReleaseStoreState,
+    ) : UiIntent()
+    /**
+     * Real `VENTOY_VERSION` read from the stick. Dropped unless the attachment pin still
+     * matches, so a probe from the previous stick cannot show its version on the next one.
+     * [error] is a FAT/IO failure and stays distinct from an absent marker.
+     */
+    data class SetVentoyInstalledRelease(
+        val release: String?,
+        val attachGeneration: Long,
+        val identity: String?,
+        val error: String? = null,
+    ) : UiIntent()
 
     data class RequestBindAutounattend(
         val xmlName: String,
@@ -524,8 +607,6 @@ sealed class UiIntent {
      * operation. New lines may still arrive; Android logcat is not touched.
      */
     data object ClearLog : UiIntent()
-    /** Store the latest Ventoy release tag fetched from GitHub (null = check failed). */
-    data class SetLatestVentoyRelease(val tag: String?) : UiIntent()
 
     /**
      * Ask for a read-only free-space measurement of the selected partition. The host
@@ -671,13 +752,37 @@ sealed interface UiEffect {
         val expectedPlanSha256: String?,
     ) : UiEffect
 
-    data class LoadVentoyGlobalSettings(val requestToken: Long) : UiEffect
+    /** Read-only GitHub check; [requestToken] fences a result that outlived its attachment. */
+    data class CheckVentoyUpstream(val requestToken: Long) : UiEffect
+
+    /**
+     * Fetch and verify a release into app-private storage. No USB device is opened, no
+     * volume is mounted and no disk byte is written.
+     */
+    data class DownloadVentoyRelease(
+        val requestToken: Long,
+        /** Upstream latest; the host picks it only when this build pins it. */
+        val upstreamVersion: String? = null,
+    ) : UiEffect
+
+    data class LoadVentoyGlobalSettings(
+        val requestToken: Long,
+        /** File to read; the host does not fall back to the default path. */
+        val source: VentoySettingsSource = VentoySettingsSource.Default,
+    ) : UiEffect
 
     /** Read one directory level; [path] is normalized before it reaches the host. */
     data class LoadVentoyFolders(val requestToken: Long, val path: String = "/") : UiEffect
 
+    /**
+     * Write the pinned source in place. Identity/generation are checked again by the host;
+     * a phone document is updated through its own URI, a USB file at its own path.
+     */
     data class ApplyVentoyControls(
         val settings: List<VentoyControlSetting>,
+        val source: VentoySettingsSource = VentoySettingsSource.Default,
+        val identity: String? = null,
+        val attachGeneration: Long? = null,
     ) : UiEffect
 
     data class BindAutounattend(
@@ -1193,6 +1298,30 @@ object UiReducer {
                             if (keepVentoy) state.ventoyFolderPath else "/",
                         pendingVentoyControls =
                             if (keepVentoy) state.pendingVentoyControls else emptyList(),
+                        // A chosen path/document is pinned to this attachment; a new stick
+                        // must not inherit it even when the path text matches.
+                        ventoySettingsSource =
+                            if (keepVentoy) {
+                                state.ventoySettingsSource
+                            } else {
+                                VentoySettingsSource.Default
+                            },
+                        ventoySettingsSourceIdentity =
+                            if (keepVentoy) state.ventoySettingsSourceIdentity else null,
+                        ventoySettingsSourceAttachGeneration =
+                            if (keepVentoy) {
+                                state.ventoySettingsSourceAttachGeneration
+                            } else {
+                                null
+                            },
+                        ventoySettingsSourcePartitionId =
+                            if (keepVentoy) state.ventoySettingsSourcePartitionId else null,
+                        ventoySettingsSourceStartLba =
+                            if (keepVentoy) state.ventoySettingsSourceStartLba else null,
+                        ventoySettingsSourceSectorCount =
+                            if (keepVentoy) state.ventoySettingsSourceSectorCount else null,
+                        ventoySettingsSourceLoading =
+                            if (keepVentoy) state.ventoySettingsSourceLoading else false,
                         ventoyFolders =
                             if (keepVentoy) state.ventoyFolders else null,
                         ventoyFoldersError =
@@ -1203,6 +1332,27 @@ object UiReducer {
                             if (keepVentoy) state.ventoyFoldersPending else false,
                         ventoyCacheEpoch =
                             if (keepVentoy) state.ventoyCacheEpoch else state.ventoyCacheEpoch + 1,
+                        // Installed/upstream facts belong to one attachment. An old probe or
+                        // GitHub answer must not repaint the header after a re-plug; the
+                        // bumped request id also drops a check that was already in flight.
+                        installedVentoyRelease =
+                            if (keepVentoy) state.installedVentoyRelease else null,
+                        installedVentoyReadError =
+                            if (keepVentoy) state.installedVentoyReadError else null,
+                        upstreamVentoyRelease =
+                            if (keepVentoy) state.upstreamVentoyRelease else null,
+                        upstreamVentoyPinned =
+                            if (keepVentoy) state.upstreamVentoyPinned else null,
+                        ventoyUpstreamChecking =
+                            if (keepVentoy) state.ventoyUpstreamChecking else false,
+                        ventoyUpstreamRequest =
+                            if (keepVentoy) {
+                                state.ventoyUpstreamRequest
+                            } else {
+                                state.ventoyUpstreamRequest + 1L
+                            },
+                        ventoyDownloadError =
+                            if (keepVentoy) state.ventoyDownloadError else null,
                         linkOverwriteCandidate =
                             state.linkOverwriteCandidate.takeIf { candidateMatchesDevice },
                         linkOverwriteCandidateIdentity =
@@ -1261,7 +1411,9 @@ object UiReducer {
                             if (terminal &&
                                 progress != null &&
                                 progress.state == OperationState.Completed &&
-                                progress.title.clearsPendingVentoyControls()
+                                progress.title.clearsPendingVentoyControls() &&
+                                (progress.title == OperationTitle.SetVentoyGlobalSetting ||
+                                    state.ventoySettingsSource.isDefaultPath())
                             ) {
                                 emptyList()
                             } else {
@@ -1410,6 +1562,11 @@ object UiReducer {
                         // Scheme initialization needs its pinned target and snapshot.
                         intent.action == DestructiveAction.INITIALIZE_PARTITION_TABLE ->
                             UiMessage.Key(UiMessageKey.SchemeUnknown)
+                        // An unreadable store must block install/update, never fall back.
+                        (intent.action == DestructiveAction.VENTOY_INSTALL ||
+                            intent.action == DestructiveAction.VENTOY_UPDATE) &&
+                            !state.ventoyInstallAvailable ->
+                            UiMessage.Key(UiMessageKey.VentoyStoreUnavailable)
                         else -> null
                     }
                 if (device != null && state.actionsEnabled && missingInput != null) {
@@ -1506,8 +1663,16 @@ object UiReducer {
                                             null
                                         },
                                     // Snapshot now: later edits on screen cannot change what
-                                    // the confirmed install/update will write.
-                                    ventoyControls = state.pendingVentoyControls,
+                                    // the confirmed install/update will write. Staged edits for
+                                    // a chosen non-default file must never leak into the default
+                                    // ventoy.json; they are written only by Update.
+                                    ventoyControls =
+                                        if (state.ventoySettingsSource.isDefaultPath()) {
+                                            state.pendingVentoyControls
+                                        } else {
+                                            emptyList()
+                                        },
+                                    ventoyRelease = ventoyReleaseSource(state),
                                 ).let { base ->
                                     if (intent.action == DestructiveAction.GPT_REPAIR) {
                                         val snapshot = state.partitions.mapNotNull { tab ->
@@ -1644,11 +1809,14 @@ object UiReducer {
                             state.pendingAutounattendGeneration == null) -> true
                     // The confirmed control snapshot must still be writable.
                     (action == DestructiveAction.VENTOY_INSTALL ||
-                        action == DestructiveAction.VENTOY_UPDATE ||
-                        action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL) &&
+                        action == DestructiveAction.VENTOY_UPDATE) &&
                         pending?.ventoyControls?.let {
                             VentoyControlCatalog.problem(it) != null
                         } == true -> true
+                    // A store that became unknown/corrupt must not be confirmed.
+                    (action == DestructiveAction.VENTOY_INSTALL ||
+                        action == DestructiveAction.VENTOY_UPDATE) &&
+                        !state.ventoyInstallAvailable -> true
                     else -> false
                 }
                 // Fail-closed: null device/pending/action never reach effect branches.
@@ -3092,6 +3260,12 @@ object UiReducer {
                 )
 
             UiIntent.LoadVentoyGlobalSettings -> VentoyTransitions.loadVentoyGlobalSettings(state)
+            is UiIntent.SelectVentoySettingsUsbFile ->
+                VentoyTransitions.selectVentoySettingsUsbFile(state, intent)
+            is UiIntent.SelectVentoySettingsDocument ->
+                VentoyTransitions.selectVentoySettingsDocument(state, intent)
+            UiIntent.UseDefaultVentoySettingsFile ->
+                VentoyTransitions.useDefaultVentoySettingsFile(state)
             UiIntent.LoadVentoyFolders -> VentoyTransitions.loadVentoyFolders(state)
             is UiIntent.OpenVentoyFolder ->
                 VentoyTransitions.openVentoyFolder(state, intent)
@@ -3105,6 +3279,150 @@ object UiReducer {
             is UiIntent.DiscardStagedVentoyControl ->
                 VentoyTransitions.discardStagedVentoyControl(state, intent)
             UiIntent.RequestApplyVentoyControls -> VentoyTransitions.requestApplyVentoyControls(state)
+
+            UiIntent.CheckVentoyUpstream -> {
+                val token = state.ventoyUpstreamRequest + 1L
+                ReduceResult(
+                    state.copy(
+                        ventoyUpstreamRequest = token,
+                        ventoyUpstreamChecking = true,
+                        // A failed re-check must end as n/a, never as the previous answer.
+                        upstreamVentoyRelease = null,
+                        upstreamVentoyPinned = null,
+                    ),
+                    effects = listOf(UiEffect.CheckVentoyUpstream(requestToken = token)),
+                )
+            }
+
+            is UiIntent.SetVentoyUpstreamRelease ->
+                if (intent.requestToken != state.ventoyUpstreamRequest) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            upstreamVentoyRelease = intent.tag?.trim()?.takeIf { it.isNotEmpty() },
+                            upstreamVentoyPinned =
+                                intent.tag?.trim()?.takeIf { it.isNotEmpty() }
+                                    ?.let { intent.pinned },
+                            ventoyUpstreamChecking = false,
+                        ),
+                    )
+                }
+
+            UiIntent.RequestDownloadVentoyRelease ->
+                if (state.ventoyDownloadInFlight) {
+                    ReduceResult(state)
+                } else {
+                    val token = state.ventoyDownloadRequest + 1L
+                    ReduceResult(
+                        state.copy(
+                            ventoyDownloadRequest = token,
+                            ventoyDownloadInFlight = true,
+                            ventoyDownloadError = null,
+                        ),
+                        effects = listOf(
+                            UiEffect.DownloadVentoyRelease(
+                                requestToken = token,
+                                upstreamVersion = state.upstreamVentoyRelease,
+                            ),
+                        ),
+                    )
+                }
+
+            is UiIntent.VentoyReleaseDownloaded ->
+                if (intent.requestToken != state.ventoyDownloadRequest) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyStoreState =
+                                usb.ventoy.VentoyReleaseStoreState.Verified(intent.provenance),
+                            ventoyStoreRevision = state.ventoyStoreRevision + 1L,
+                            ventoyDownloadInFlight = false,
+                            ventoyDownloadError = null,
+                        ),
+                    )
+                }
+
+            is UiIntent.VentoyReleaseDownloadFailed ->
+                if (intent.requestToken != state.ventoyDownloadRequest) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyDownloadInFlight = false,
+                            ventoyDownloadError = intent.message,
+                        ),
+                    )
+                }
+
+            is UiIntent.VentoyReleaseStoreChanged ->
+                if (intent.requestToken != state.ventoyDownloadRequest) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyStoreState =
+                                usb.ventoy.VentoyReleaseStoreState.Verified(intent.provenance),
+                            ventoyStoreRevision = state.ventoyStoreRevision + 1L,
+                            ventoyDownloadInFlight = false,
+                            ventoyDownloadError = intent.message,
+                        ),
+                    )
+                }
+
+            is UiIntent.VentoyReleaseStoreUnknown ->
+                if (intent.requestToken != state.ventoyDownloadRequest) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyStoreState = usb.ventoy.VentoyReleaseStoreState.Unknown,
+                            ventoyStoreRevision = state.ventoyStoreRevision + 1L,
+                            ventoyDownloadInFlight = false,
+                            ventoyDownloadError = intent.message,
+                        ),
+                    )
+                }
+
+            is UiIntent.SetVentoyBundledRelease ->
+                ReduceResult(
+                    state.copy(
+                        bundledVentoyRelease =
+                            intent.release?.trim()?.takeIf { it.isNotEmpty() },
+                    ),
+                )
+
+            is UiIntent.SetVentoyStoreState ->
+                if (intent.revision != state.ventoyStoreRevision) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(state.copy(ventoyStoreState = intent.storeState))
+                }
+
+            is UiIntent.SetVentoyInstalledRelease -> {
+                val device = state.device
+                val matches =
+                    device != null &&
+                        device.attachGeneration == intent.attachGeneration &&
+                        device.identity == intent.identity
+                if (!matches) {
+                    ReduceResult(state)
+                } else {
+                    val error = intent.error?.trim()?.takeIf { it.isNotEmpty() }
+                    ReduceResult(
+                        state.copy(
+                            installedVentoyRelease =
+                                if (error == null) {
+                                    intent.release?.trim()?.takeIf { it.isNotEmpty() }
+                                } else {
+                                    null
+                                },
+                            installedVentoyReadError = error,
+                        ),
+                    )
+                }
+            }
 
             is UiIntent.RequestBindAutounattend ->
                 if (!state.actionsEnabled) {
@@ -3460,9 +3778,6 @@ object UiReducer {
             // Appends keep working afterwards, and nothing outside logLines is touched.
             UiIntent.ClearLog -> ReduceResult(state.copy(logLines = emptyList()))
 
-            is UiIntent.SetLatestVentoyRelease ->
-                VentoyTransitions.setLatestVentoyRelease(state, intent)
-
             is UiIntent.RequestFilesystemUsage -> {
                 val generation = state.filesystemUsageGeneration + 1L
                 val requested = state.copy(filesystemUsageGeneration = generation)
@@ -3723,8 +4038,7 @@ object UiReducer {
         when (this) {
             is OperationTitle.Destructive ->
                 action == DestructiveAction.VENTOY_INSTALL ||
-                    action == DestructiveAction.VENTOY_UPDATE ||
-                    action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL
+                    action == DestructiveAction.VENTOY_UPDATE
             OperationTitle.SetVentoyGlobalSetting -> true
             else -> false
         }
@@ -3741,7 +4055,6 @@ object UiReducer {
                     DestructiveAction.WIPE,
                     DestructiveAction.VENTOY_INSTALL,
                     DestructiveAction.VENTOY_UPDATE,
-                    DestructiveAction.VENTOY_DOWNLOAD_INSTALL,
                     DestructiveAction.RAW_WRITE,
                     DestructiveAction.FORMAT_PARTITION,
                     DestructiveAction.DELETE_PARTITION,
@@ -3803,6 +4116,7 @@ object UiReducer {
             diskLayoutConfirmation = null,
             pendingAutounattendGeneration = null,
             ventoyGlobalSettings = null,
+            ventoySettingsSourceLoading = false,
             ventoyFolderPath = "/",
             ventoyFolders = null,
             ventoyFoldersError = null,
@@ -3821,6 +4135,21 @@ object UiReducer {
             // The import-folder demand is NOT dropped here: on the same attachment the user
             // must still be asked to choose again after an unrelated mutation (R6).
         )
+    /**
+     * Pins the payload the user is about to confirm. A downloaded release wins with its
+     * full provenance; otherwise the bundled release is named explicitly. The host may
+     * only load this source and must abort when it no longer matches.
+     */
+    private fun ventoyReleaseSource(state: AppUiState): VentoyReleaseSource? =
+        when (val store = state.ventoyStoreState) {
+            is usb.ventoy.VentoyReleaseStoreState.Verified ->
+                VentoyReleaseSource.Downloaded(store.provenance)
+            usb.ventoy.VentoyReleaseStoreState.Absent ->
+                state.bundledVentoyRelease?.let { VentoyReleaseSource.Bundled(it) }
+            usb.ventoy.VentoyReleaseStoreState.Unknown,
+            usb.ventoy.VentoyReleaseStoreState.Corrupt -> null
+        }
+
     fun presenceMessage(presence: DevicePresence): UiMessage =
         when (presence) {
             DevicePresence.Absent -> UiMessage.Key(UiMessageKey.NoDevice)

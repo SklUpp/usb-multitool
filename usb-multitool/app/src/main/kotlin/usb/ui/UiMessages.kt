@@ -128,6 +128,8 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_gpt_backup_disk_mismatch, *args.toTypedArray())
             UiMessageKey.SelectImageFirst -> stringResource(R.string.msg_select_image_first)
             UiMessageKey.CorruptTableCreate -> stringResource(R.string.msg_corrupt_table_create)
+            UiMessageKey.VentoyStoreUnavailable ->
+                stringResource(R.string.msg_ventoy_store_unavailable)
             UiMessageKey.Probing -> stringResource(R.string.msg_probing)
             UiMessageKey.NoPartitionsFound -> stringResource(R.string.msg_no_partitions_found)
             UiMessageKey.ProbeCancelled -> stringResource(R.string.msg_probe_cancelled)
@@ -197,6 +199,12 @@ fun UiMessage.localized(): String =
             UiMessageKey.ConfirmXmlOverwrite ->
                 stringResource(R.string.msg_confirm_xml_overwrite)
             UiMessageKey.LogCopied -> stringResource(R.string.msg_log_copied)
+            UiMessageKey.SettingsSourceInvalid ->
+                stringResource(R.string.msg_settings_source_invalid)
+            UiMessageKey.SettingsSourceStale ->
+                stringResource(R.string.msg_settings_source_stale)
+            UiMessageKey.SettingsSourceUnavailable ->
+                stringResource(R.string.msg_settings_source_unavailable)
         }
     }
 
@@ -243,8 +251,6 @@ fun DestructiveAction.label(): String =
         DestructiveAction.WIPE -> stringResource(R.string.action_wipe)
         DestructiveAction.VENTOY_INSTALL -> stringResource(R.string.action_ventoy_install)
         DestructiveAction.VENTOY_UPDATE -> stringResource(R.string.action_ventoy_update)
-        DestructiveAction.VENTOY_DOWNLOAD_INSTALL ->
-            stringResource(R.string.action_ventoy_download_install)
         DestructiveAction.RAW_WRITE -> stringResource(R.string.action_raw_write)
         DestructiveAction.FORMAT_PARTITION -> stringResource(R.string.action_format_partition)
         DestructiveAction.DELETE_PARTITION -> stringResource(R.string.action_delete_partition)
@@ -363,6 +369,16 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             confirmation.initialPartitionNames.forEach { name ->
                 lines += stringResource(R.string.confirm_repair_kept_partition, name)
             }
+        }
+    }
+    confirmation.ventoyRelease?.let { release ->
+        lines += stringResource(R.string.confirm_ventoy_release, release.release)
+        if (release is usb.ventoy.VentoyReleaseSource.Downloaded) {
+            lines += stringResource(
+                R.string.confirm_ventoy_provenance,
+                release.provenance.archiveSha256,
+                release.provenance.sourceUrl,
+            )
         }
     }
     confirmation.targetPartitionName?.let {

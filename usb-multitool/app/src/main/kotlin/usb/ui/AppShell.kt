@@ -150,6 +150,8 @@ fun AppShell(
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
     /** Opens the phone picker for the pinned Files pick session (directory, session id). */
     onPickWindowsImage: (String, String) -> Unit = { _, _ -> },
+    /** Opens OpenDocument for a phone-side Ventoy settings JSON edited in place. */
+    onPickVentoySettingsFile: () -> Unit = {},
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
@@ -370,7 +372,7 @@ fun AppShell(
                                     state = state,
                                     onIntent = onIntent,
                                     modifier = Modifier.fillMaxSize(),
-                                    onPickWindowsFile = onPickWindowsFile,
+                                    onPickVentoySettingsFile = onPickVentoySettingsFile,
                                 )
                                 ShellTab.Partitions -> PartitionsScreen(
                                     state = state,
@@ -1393,6 +1395,7 @@ internal fun SectionCard(
     danger: Boolean = false,
     subtitle: String? = null,
     trailing: (@Composable () -> Unit)? = null,
+    /** Overrides the muted section label; the default keeps the existing section styling. */
     titleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -1425,10 +1428,9 @@ internal fun SectionCard(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.5.sp,
-                    color = if (danger) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        titleColor
+                    color = when {
+                        danger -> MaterialTheme.colorScheme.error
+                        else -> titleColor
                     },
                     modifier = Modifier
                         .weight(1f)
@@ -1743,6 +1745,10 @@ internal enum class Glyph {
     Eye,
     /** Hide a revealed value. */
     EyeOff,
+    /** Release bundled with the app. */
+    Package,
+    /** Release reported by the upstream server. */
+    Cloud,
 }
 
 @Composable
@@ -2029,6 +2035,28 @@ internal fun GlyphIcon(
                         1.8f,
                     )
                 }
+                Glyph.Package -> {
+                    drawRect(
+                        tint,
+                        topLeft = androidx.compose.ui.geometry.Offset(4f, 6f),
+                        size = androidx.compose.ui.geometry.Size(16f, 14f),
+                        style = stroke,
+                    )
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(4f, 11f), androidx.compose.ui.geometry.Offset(20f, 11f), 1.8f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 6f), androidx.compose.ui.geometry.Offset(12f, 20f), 1.8f)
+                }
+                Glyph.Cloud -> drawPath(
+                    Path().apply {
+                        moveTo(7f, 18f)
+                        lineTo(17f, 18f)
+                        cubicTo(21f, 18f, 22f, 12f, 18f, 11f)
+                        cubicTo(17f, 6f, 9f, 6f, 8f, 11f)
+                        cubicTo(4f, 11f, 3f, 18f, 7f, 18f)
+                        close()
+                    },
+                    tint,
+                    style = stroke,
+                )
             }
         }
     }

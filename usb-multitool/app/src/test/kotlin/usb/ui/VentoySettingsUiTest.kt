@@ -7,6 +7,7 @@ import org.junit.Test
 import usb.fs.FilesystemId
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoySettingsSource
 
 /** Reducer + confirmation contract for staged Ventoy global settings. */
 class VentoySettingsUiTest {
@@ -53,6 +54,59 @@ class VentoySettingsUiTest {
         val effect = confirmed.effects.filterIsInstance<UiEffect.SubmitDestructive>().single()
         assertEquals(controls, effect.confirmation.ventoyControls)
         assertNull(confirmed.state.pendingConfirmation)
+    }
+
+    @Test
+    fun selectingTheStandardFileOnTheStickKeepsDefaultSemantics() {
+        val selected =
+            UiReducer.reduce(
+                ready(pending = controls),
+                UiIntent.SelectVentoySettingsUsbFile(
+                    path = "/VENTOY/Ventoy.JSON",
+                    identity = "Test Stick",
+                    attachGeneration = 1L,
+                ),
+            ).state
+        assertEquals(
+            "the standard file is the same default file, not a custom path",
+            VentoySettingsSource.Default,
+            selected.ventoySettingsSource,
+        )
+        assertEquals(
+            "re-selecting the same standard file must not drop staged controls",
+            controls,
+            selected.pendingVentoyControls,
+        )
+
+        // Even if an older state still holds a UsbFile wrapper for the standard path, the
+        // install snapshot and completion must use default semantics instead of dropping
+        // staged controls.
+        val direct =
+            ready(pending = controls).copy(
+                ventoySettingsSource = VentoySettingsSource.UsbFile("/ventoy/ventoy.json"),
+            )
+        val requested =
+            UiReducer.reduce(
+                direct,
+                UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL),
+            ).state
+        assertEquals(controls, requested.pendingConfirmation?.ventoyControls)
+
+        val completed =
+            UiReducer.reduce(
+                requested,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Completed,
+                        title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                    ),
+                ),
+            ).state
+        assertEquals(
+            "default-path updates must clear written controls",
+            emptyList<VentoyControlSetting>(),
+            completed.pendingVentoyControls,
+        )
     }
 
     @Test
@@ -304,5 +358,301 @@ class VentoySettingsUiTest {
                 UiIntent.VentoyGlobalSettingsLoaded(VentoyGlobalSettings.Missing, epoch = 0L),
             ).state
         assertEquals(VentoyGlobalSettings.Missing, missing.ventoyGlobalSettings)
+    }
+
+    @Test
+    fun selectingAStickFilePinsSourceDropsStagedEditsAndReadsExactlyThatFile() {
+        val selected =
+            UiReducer.reduce(
+                ready(pending = controls),
+                UiIntent.SelectVentoySettingsUsbFile(
+                    path = "/custom/ventoy-config.json",
+                    identity = "Test Stick",
+                    attachGeneration = 1L,
+                ),
+            )
+        assertEquals(
+            VentoySettingsSource.UsbFile("/custom/ventoy-config.json"),
+            selected.state.ventoySettingsSource,
+        )
+        assertEquals("Test Stick", selected.state.ventoySettingsSourceIdentity)
+        assertEquals(1L, selected.state.ventoySettingsSourceAttachGeneration)
+        assertNull(selected.state.ventoyGlobalSettings)
+        assertEquals(emptyList<VentoyControlSetting>(), selected.state.pendingVentoyControls)
+        assertTrue(selected.state.ventoySettingsSourceLoading)
+        val effect =
+            selected.effects.filterIsInstance<UiEffect.LoadVentoyGlobalSettings>().single()
+        assertEquals(
+            VentoySettingsSource.UsbFile("/custom/ventoy-config.json"),
+            effect.source,
+        )
+    }
+
+    @Test
+    fun aFilePinnedToAnotherAttachmentIsRefusedWithoutARead() {
+        val reduced =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.SelectVentoySettingsUsbFile(
+                    path = "/custom/ventoy-config.json",
+                    identity = "Other Stick",
+                    attachGeneration = 2L,
+                ),
+            )
+        assertEquals(VentoySettingsSource.Default, reduced.state.ventoySettingsSource)
+        assertTrue(reduced.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.SettingsSourceStale),
+            reduced.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun aReadForAnotherSourceCannotOverwriteTheSelectedFile() {
+        val selected =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.SelectVentoySettingsUsbFile(
+                    path = "/custom/one.json",
+                    identity = "Test Stick",
+                    attachGeneration = 1L,
+                ),
+            ).state
+        val late =
+            UiReducer.reduce(
+                selected,
+                UiIntent.VentoyGlobalSettingsLoaded(
+                    VentoyGlobalSettings.Present(emptyList()),
+                    epoch = selected.ventoyCacheEpoch,
+                    requestToken = selected.ventoyGlobalSettingsRequest,
+                    source = VentoySettingsSource.UsbFile("/custom/two.json"),
+                ),
+            ).state
+        assertNull(late.ventoyGlobalSettings)
+        assertTrue(late.ventoySettingsSourceLoading)
+    }
+
+    @Test
+    fun applyEffectCarriesTheSelectedSourceAndAttachmentPin() {
+        val selected =
+            UiReducer.reduce(
+                UiReducer.reduce(
+                    ready(),
+                    UiIntent.SelectVentoySettingsUsbFile(
+                        path = "/custom/ventoy-config.json",
+                        identity = "Test Stick",
+                        attachGeneration = 1L,
+                    ),
+                ).state,
+                UiIntent.VentoyGlobalSettingsLoaded(
+                    VentoyGlobalSettings.Present(emptyList()),
+                    epoch = 0L,
+                    requestToken = 1L,
+                    source = VentoySettingsSource.UsbFile("/custom/ventoy-config.json"),
+                ),
+            ).state
+        val staged =
+            UiReducer.reduce(
+                selected,
+                UiIntent.StageVentoyControl("VTOY_WIN11_BYPASS_CHECK", "1"),
+            ).state
+        val effect =
+            UiReducer.reduce(staged, UiIntent.RequestApplyVentoyControls)
+                .effects.filterIsInstance<UiEffect.ApplyVentoyControls>()
+                .single()
+        assertEquals(
+            VentoySettingsSource.UsbFile("/custom/ventoy-config.json"),
+            effect.source,
+        )
+        assertEquals("Test Stick", effect.identity)
+        assertEquals(1L, effect.attachGeneration)
+    }
+
+    @Test
+    fun aMissingChosenFileFailsClosedInsteadOfCreatingIt() {
+        val selected =
+            UiReducer.reduce(
+                ready(pending = controls),
+                UiIntent.SelectVentoySettingsUsbFile(
+                    path = "/custom/ventoy-config.json",
+                    identity = "Test Stick",
+                    attachGeneration = 1L,
+                ),
+            ).state
+        val missing =
+            UiReducer.reduce(
+                selected,
+                UiIntent.VentoyGlobalSettingsLoaded(
+                    VentoyGlobalSettings.Missing,
+                    epoch = 0L,
+                    requestToken = 1L,
+                    source = VentoySettingsSource.UsbFile("/custom/ventoy-config.json"),
+                ),
+            ).state
+        val staged =
+            UiReducer.reduce(
+                missing,
+                UiIntent.StageVentoyControl("VTOY_WIN11_BYPASS_CHECK", "1"),
+            ).state
+        val blocked = UiReducer.reduce(staged, UiIntent.RequestApplyVentoyControls)
+        assertTrue(blocked.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.SettingsSourceUnavailable),
+            blocked.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun installConfirmationDoesNotCarryEditsForANonDefaultFile() {
+        val selected =
+            UiReducer.reduce(
+                ready(pending = controls),
+                UiIntent.SelectVentoySettingsUsbFile(
+                    path = "/custom/ventoy-config.json",
+                    identity = "Test Stick",
+                    attachGeneration = 1L,
+                ),
+            ).state
+        val staged =
+            UiReducer.reduce(
+                selected,
+                UiIntent.StageVentoyControl("VTOY_WIN11_BYPASS_CHECK", "1"),
+            ).state
+        val requested =
+            UiReducer.reduce(
+                staged,
+                UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL),
+            ).state
+        assertEquals(
+            emptyList<VentoyControlSetting>(),
+            requested.pendingConfirmation?.ventoyControls,
+        )
+    }
+
+    @Test
+    fun reselectingTheSameDocumentUriWithAnotherNameKeepsStagedControls() {
+        val first =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.SelectVentoySettingsDocument(
+                    uri = "content://provider/config.json",
+                    displayName = "config.json",
+                ),
+            ).state
+        val staged =
+            UiReducer.reduce(
+                first,
+                UiIntent.StageVentoyControl("VTOY_WIN11_BYPASS_CHECK", "1"),
+            ).state
+        val renamed =
+            UiReducer.reduce(
+                staged,
+                UiIntent.SelectVentoySettingsDocument(
+                    uri = "content://provider/config.json",
+                    displayName = "renamed.json",
+                ),
+            ).state
+        assertEquals(
+            "a display-name change is not a different document",
+            staged.pendingVentoyControls,
+            renamed.pendingVentoyControls,
+        )
+        assertEquals(
+            "renamed.json",
+            (renamed.ventoySettingsSource as VentoySettingsSource.Document).displayName,
+        )
+
+        val other =
+            UiReducer.reduce(
+                renamed,
+                UiIntent.SelectVentoySettingsDocument(
+                    uri = "content://provider/other.json",
+                    displayName = "renamed.json",
+                ),
+            ).state
+        assertEquals(
+            "a different URI must drop staged edits",
+            emptyList<VentoyControlSetting>(),
+            other.pendingVentoyControls,
+        )
+    }
+
+    @Test
+    fun stalePartitionGeometryBlocksReadAndUpdate() {
+        val base =
+            ready(pending = controls).copy(
+                ventoySettingsSource = VentoySettingsSource.UsbFile("/custom/config.json"),
+                ventoyGlobalSettings = VentoyGlobalSettings.Present(emptyList()),
+                ventoySettingsSourcePartitionId = "1",
+                ventoySettingsSourceStartLba = 2048uL,
+                ventoySettingsSourceSectorCount = 4096uL,
+            )
+        val repartitioned =
+            base.copy(
+                partitions =
+                    listOf(
+                        base.partitions.single().copy(
+                            startLba = 8192uL,
+                            sectorCount = 4096uL,
+                        ),
+                    ),
+            )
+
+        val apply = UiReducer.reduce(repartitioned, UiIntent.RequestApplyVentoyControls)
+        assertTrue(apply.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.SettingsSourceStale),
+            apply.state.statusMessage,
+        )
+
+        val load = UiReducer.reduce(repartitioned, UiIntent.LoadVentoyGlobalSettings)
+        assertTrue(load.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.SettingsSourceStale),
+            load.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun blankDocumentSelectionIsRejectedWithoutChangingTheSource() {
+        val reduced =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.SelectVentoySettingsDocument(""),
+            )
+        assertEquals(VentoySettingsSource.Default, reduced.state.ventoySettingsSource)
+        assertTrue(reduced.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.SettingsSourceInvalid),
+            reduced.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun aNewAttachmentResetsTheChosenSourceToTheDefaultPath() {
+        val selected =
+            UiReducer.reduce(
+                ready(pending = controls),
+                UiIntent.SelectVentoySettingsDocument("content://provider/config.json"),
+            ).state
+        assertEquals(
+            VentoySettingsSource.Document("content://provider/config.json"),
+            selected.ventoySettingsSource,
+        )
+        val replaced =
+            UiReducer.reduce(
+                selected,
+                UiIntent.DeviceChanged(
+                    presence = DevicePresence.Ready,
+                    device = DeviceIdentity(
+                        label = "Other Stick",
+                        capacityBytes = 16_000_000_000uL,
+                        attachGeneration = 2L,
+                    ),
+                ),
+            ).state
+        assertEquals(VentoySettingsSource.Default, replaced.ventoySettingsSource)
+        assertNull(replaced.ventoySettingsSourceIdentity)
+        assertNull(replaced.ventoySettingsSourceAttachGeneration)
     }
 }

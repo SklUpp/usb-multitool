@@ -55,12 +55,74 @@ object VentoyDownloader {
             ),
         )
 
-    fun sourceFor(release: String): ReleaseSource =
+    fun pinnedSourceOrNull(release: String): ReleaseSource? =
         RELEASES.firstOrNull { it.release == release }
+
+    /** Newest release this build can independently verify; never the bare upstream latest. */
+    fun newestPinnedSource(): ReleaseSource =
+        RELEASES.maxWithOrNull { left, right ->
+            compareVersions(left.release, right.release)
+        } ?: throw VentoyAssetsMissingException("No independently pinned Ventoy release is configured")
+
+    /**
+     * Picks the upstream release only when this build pins it; otherwise falls back to the
+     * newest pinned release so the Download action still has a real, honestly-labelled
+     * payload. The UI keeps showing the unverified upstream version separately.
+     */
+    fun pinnedDownloadSource(upstream: String?): ReleaseSource =
+        upstream?.let(::pinnedSourceOrNull) ?: newestPinnedSource()
+
+    private fun compareVersions(left: String, right: String): Int {
+        fun parts(value: String): List<Long> =
+            value.split('.').map { part -> part.toLongOrNull() ?: 0L }
+        val a = parts(left)
+        val b = parts(right)
+        val size = maxOf(a.size, b.size)
+        for (index in 0 until size) {
+            val cmp = a.getOrElse(index) { 0L }.compareTo(b.getOrElse(index) { 0L })
+            if (cmp != 0) return cmp
+        }
+        return 0
+    }
+
+    fun sourceFor(release: String): ReleaseSource =
+        pinnedSourceOrNull(release)
             ?: throw IllegalArgumentException(
                 "Release $release has no pinned digests; supported: ${RELEASES.joinToString(", ") { it.release }}",
             )
 
+    /**
+     * Recomputes every member digest and requires it to match this app's independent pin.
+     * `sha256.txt` shipped beside the bytes is never a trust anchor: a directory or store
+     * whose file and manifest agree with each other still fails here.
+     */
+    fun requirePinned(assets: VentoyAssets): ReleaseSource {
+        val source = pinnedSourceOrNull(assets.release)
+            ?: throw VentoyAssetsMissingException(
+                "Ventoy ${assets.release} has no independently pinned SHA-256 in this app; " +
+                    "refusing to use it for install/update. Available pinned releases: " +
+                    RELEASES.joinToString(", ") { it.release },
+            )
+        val actual =
+            mapOf(
+                "boot.img" to sha256Hex(assets.bootImg),
+                "core.img.xz" to sha256Hex(assets.coreImg),
+                "ventoy.disk.img.xz" to sha256Hex(assets.efiPartImg),
+            )
+        for ((name, got) in actual) {
+            val expected = source.memberHashes[name]
+                ?: throw VentoyAssetsMissingException(
+                    "Ventoy ${assets.release} has no independent pin for $name; refusing to use it",
+                )
+            if (!got.equals(expected, ignoreCase = true)) {
+                throw VentoyAssetsMissingException(
+                    "Ventoy ${assets.release} member $name SHA-256 $got does not match the " +
+                        "independently pinned $expected; refusing to use it",
+                )
+            }
+        }
+        return source
+    }
     /** Loads pre-staged Ventoy assets from an app-private directory. */
     fun loadFromExternalStorage(dir: File, strict: Boolean = true): VentoyAssets {
         require(dir.exists() && dir.isDirectory) { "Ventoy assets directory not found: ${dir.path}" }
@@ -78,7 +140,7 @@ object VentoyDownloader {
         onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> },
         isActive: () -> Boolean = { true },
     ): VentoyReleaseDownload {
-        val source = if (release == null) latestSource() else sourceFor(release)
+        val source = if (release == null) newestPinnedSource() else sourceFor(release)
         cacheDir.mkdirs()
         if (!cacheDir.isDirectory) {
             throw VentoyAssetsMissingException("Cache directory ${cacheDir.path} is not writable")
@@ -142,8 +204,10 @@ object VentoyDownloader {
     }
 
     /**
-     * Loads the pinned release from app-private storage, then from the APK assets.
-     * Never reaches the network implicitly; call [downloadRelease] for that.
+     * Non-destructive loader for inspection/tests: app-private storage first, then APK
+     * assets. It is not install-safe because pre-staged bytes are only self-attested;
+     * install/update must go through [VentoyInstallAssets.resolve], which requires the
+     * independent pin and the exact confirmed release.
      */
     fun loadWithFallback(
         externalDir: File? = null,
@@ -166,30 +230,6 @@ object VentoyDownloader {
                 "ventoy.disk.img.xz in ${externalDir?.path ?: "<app-private>/ventoy-assets"} or APK assets/ventoy, " +
                 "or download a pinned release from the server. " + failures.joinToString("; "),
         )
-    }
-    private fun latestSource(): ReleaseSource {
-        val connection = openConnection("https://api.github.com/repos/ventoy/Ventoy/releases/latest")
-        try {
-            val body = connection.inputStream.bufferedReader().use { it.readTextLimited(1024 * 1024) }
-            val json = org.json.JSONObject(body)
-            val tag = json.getString("tag_name")
-            require(Regex("v[0-9]+(?:\\.[0-9]+)+").matches(tag)) { "Invalid Ventoy release tag" }
-            val version = tag.substring(1)
-            val expectedName = "ventoy-$version-linux.tar.gz"
-            val assets = json.getJSONArray("assets")
-            val asset = (0 until assets.length()).map { assets.getJSONObject(it) }
-                .single { it.getString("name") == expectedName }
-            val digest = asset.getString("digest").removePrefix("sha256:")
-            require(Regex("[0-9a-fA-F]{64}").matches(digest)) { "Missing Ventoy SHA-256" }
-            val pinned = RELEASES.firstOrNull { it.release == version }
-            if (pinned != null) {
-                require(digest.equals(pinned.archiveSha256, ignoreCase = true)) { "Ventoy pinned digest mismatch" }
-                return pinned
-            }
-            return ReleaseSource(version, "", listOf("$DEFAULT_BASE_URL/$tag/$expectedName"), digest, emptyMap())
-        } finally {
-            connection.disconnect()
-        }
     }
     private fun java.io.Reader.readTextLimited(limit: Int): String {
         val text = StringBuilder()

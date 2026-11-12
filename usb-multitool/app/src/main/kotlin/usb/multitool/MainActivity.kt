@@ -21,6 +21,8 @@ import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -35,8 +37,9 @@ import androidx.lifecycle.ViewModelProvider
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendState
 import usb.ventoy.UnreadableProblem
-import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoySettingsDocument
+import usb.ventoy.VentoySettingsSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -136,7 +139,6 @@ import usb.image.RawWriter
 import usb.ventoy.VentoyAssets
 import usb.ventoy.VentoyDownloader
 import usb.ventoy.VentoyOperations
-import usb.ventoy.VentoyAssetOperations
 import usb.ventoy.VentoySetup
 import java.io.File
 import java.io.RandomAccessFile
@@ -313,10 +315,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+        val storeRevision = state.ventoyStoreRevision
         scope.launch {
-            val tag = kotlinx.coroutines.withContext(Dispatchers.IO) { usb.ventoy.VentoyDownloader.checkLatestRelease() }
-            onIntent(UiIntent.SetLatestVentoyRelease(tag))
+            val app = application
+            val bundled = withContext(Dispatchers.IO) {
+                VentoyAssets.bundledRelease(app.assets)
+            }
+            val storeState =
+                withContext(Dispatchers.IO) {
+                    when (val inspection =
+                        usb.ventoy.VentoyReleaseStore.inspect(app.filesDir)) {
+                        usb.ventoy.VentoyReleaseStore.Inspection.Absent ->
+                            usb.ventoy.VentoyReleaseStoreState.Absent
+                        usb.ventoy.VentoyReleaseStore.Inspection.Unknown ->
+                            usb.ventoy.VentoyReleaseStoreState.Unknown
+                        usb.ventoy.VentoyReleaseStore.Inspection.Corrupt ->
+                            usb.ventoy.VentoyReleaseStoreState.Corrupt
+                        is usb.ventoy.VentoyReleaseStore.Inspection.Verified -> {
+                            val stored = inspection.stored
+                            usb.ventoy.VentoyReleaseStoreState.Verified(
+                                usb.ventoy.VentoyReleaseProvenance(
+                                    release = stored.assets.release,
+                                    archiveSha256 = stored.archiveSha256,
+                                    sourceUrl = stored.sourceUrl,
+                                ),
+                            )
+                        }
+                    }
+                }
+            onIntent(UiIntent.SetVentoyBundledRelease(bundled))
+            onIntent(UiIntent.SetVentoyStoreState(storeRevision, storeState))
         }
+        onIntent(UiIntent.CheckVentoyUpstream)
     }
     /**
      * Owns the mounted FAT volume of the selected partition via [FilesVolumeSession].
@@ -1057,11 +1087,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                             (prepNote?.let { " — $it" } ?: "")
                                 }
                                 DestructiveAction.VENTOY_INSTALL -> {
-                                    val assets = VentoyDownloader.loadWithFallback(
-                                        externalDir = ventoyAssetsDir(),
-                                        assetManager = getApplication<Application>().assets,
-                                        strict = true,
-                                    )
+                                    val assets = ventoyAssetsForInstall(confirmed.ventoyRelease)
                                     // First disk.write marks mutationAttempted (partitionDisk wrap).
                                     val settingsWritten =
                                         VentoyOperations.install(
@@ -1079,11 +1105,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.VENTOY_UPDATE -> {
-                                    val assets = VentoyDownloader.loadWithFallback(
-                                        externalDir = ventoyAssetsDir(),
-                                        assetManager = getApplication<Application>().assets,
-                                        strict = true,
-                                    )
+                                    val assets = ventoyAssetsForInstall(confirmed.ventoyRelease)
                                     val settingsWritten =
                                         VentoyOperations.update(
                                             partitionDisk,
@@ -1101,28 +1123,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                                     settingsWritten,
                                                 )
                                             }
-                                    report(disk.geometry.capacityBytes.toLong())
-                                }
-                                DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> {
-                                    val released = VentoyAssetOperations.download(
-                                        cacheDir = ventoyStagingDir(),
-                                        operation = this,
-                                        isActive = { isActive() },
-                                    )
-                                    bytesTotal = -1L
-                                    val settingsWritten =
-                                        VentoyOperations.install(
-                                            partitionDisk,
-                                            released.assets,
-                                            this,
-                                            controls = confirmed.ventoyControls,
-                                        )
-                                    result =
-                                        "Ventoy installed" +
-                                            settingsSuffix(
-                                                confirmed.ventoyControls.size,
-                                                settingsWritten,
-                                            )
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
                                 DestructiveAction.RAW_WRITE -> {
@@ -1270,7 +1270,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             DestructiveAction.RESCUE_RESTORE,
                             DestructiveAction.VENTOY_INSTALL,
                             DestructiveAction.VENTOY_UPDATE,
-                            DestructiveAction.VENTOY_DOWNLOAD_INSTALL,
                             DestructiveAction.SET_PARTITION_ROLE,
                             DestructiveAction.SET_PARTITION_BOOTABLE,
                             DestructiveAction.RENAME_PARTITION,
@@ -1646,13 +1645,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             is UiEffect.GenerateAutounattend -> generateAutounattend(effect)
 
+            is UiEffect.CheckVentoyUpstream -> checkVentoyUpstream(effect.requestToken)
+            is UiEffect.DownloadVentoyRelease ->
+                downloadVentoyRelease(effect.requestToken, effect.upstreamVersion)
             is UiEffect.LoadVentoyGlobalSettings ->
-                loadVentoyGlobalSettings(effect.requestToken)
+                loadVentoyGlobalSettings(effect.requestToken, effect.source)
 
             is UiEffect.LoadVentoyFolders ->
                 loadVentoyFolders(effect.requestToken, effect.path)
 
-            is UiEffect.ApplyVentoyControls -> applyVentoyControls(effect.settings)
+            is UiEffect.ApplyVentoyControls -> applyVentoyControls(effect)
 
             is UiEffect.BindAutounattend -> {
                 if (effect.imagePaths.isNotEmpty()) {
@@ -2071,6 +2073,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val failure = tableResult.exceptionOrNull()
                     val isTransport = failure is DiskException || failure?.cause is DiskException
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
+                    val installedRelease =
+                        if (isTransport) {
+                            usb.ventoy.VentoyInstalledVersion.Present(null)
+                        } else {
+                            readInstalledVentoyRelease(disk)
+                        }
                     withContext(Dispatchers.Main.immediate) {
                         if (!attachmentIs(gen, device)) {
                             return@withContext
@@ -2107,6 +2115,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     ),
                             ),
                         )
+                        if (!isTransport) {
+                            val read = installedRelease
+                            onIntent(
+                                UiIntent.SetVentoyInstalledRelease(
+                                    release = (read as? usb.ventoy.VentoyInstalledVersion.Present)?.release,
+                                    attachGeneration = gen,
+                                    identity = probedIdentity.identity,
+                                    error = (read as? usb.ventoy.VentoyInstalledVersion.ReadFailed)?.message,
+                                ),
+                            )
+                        }
 
                         tableResult.onSuccess {
                             if (partitions.isEmpty()) {
@@ -2204,6 +2223,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Real `VENTOY_VERSION` from VTOYEFI, read-only. Absence, FAT/IO failure and
+     * cancellation stay distinct; this never walks up to bundled bytes.
+     */
+    private fun readInstalledVentoyRelease(
+        disk: usb.device.BlockDevice,
+    ): usb.ventoy.VentoyInstalledVersion =
+        try {
+            usb.ventoy.classifyVentoyVersion(usb.ventoy.VentoyLayout.probe(disk))
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (unsupported: usb.ventoy.UnsupportedSectorSizeException) {
+            usb.ventoy.VentoyInstalledVersion.Present(null)
+        } catch (failure: Throwable) {
+            usb.ventoy.VentoyInstalledVersion.ReadFailed(
+                failure.message ?: failure.javaClass.simpleName,
+            )
+        }
+
     fun refreshPartitions() {
         val dev = attachedDevice ?: return
         if (usbManager == null) return
@@ -2222,6 +2260,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val failure = tableResult.exceptionOrNull()
                     val isTransport = failure is DiskException || failure?.cause is DiskException
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
+                    val installedRelease =
+                        if (isTransport) {
+                            usb.ventoy.VentoyInstalledVersion.Present(null)
+                        } else {
+                            readInstalledVentoyRelease(disk)
+                        }
                     withContext(Dispatchers.Main.immediate) {
                         if (!attachmentIs(gen, dev)) {
                             return@withContext
@@ -2254,6 +2298,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     ),
                             ),
                         )
+                        if (!isTransport) {
+                            val read = installedRelease
+                            onIntent(
+                                UiIntent.SetVentoyInstalledRelease(
+                                    release = (read as? usb.ventoy.VentoyInstalledVersion.Present)?.release,
+                                    attachGeneration = gen,
+                                    identity = identity.identity,
+                                    error = (read as? usb.ventoy.VentoyInstalledVersion.ReadFailed)?.message,
+                                ),
+                            )
+                        }
 
                         tableResult.onFailure { err ->
                             val key = if (isTransport) {
@@ -4090,7 +4145,178 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
-    private fun loadVentoyGlobalSettings(requestToken: Long) {
+    private fun checkVentoyUpstream(requestToken: Long) {
+        scope.launch {
+            val tag = withContext(Dispatchers.IO) {
+                usb.ventoy.VentoyDownloader.checkLatestRelease()
+            }
+            onIntent(
+                UiIntent.SetVentoyUpstreamRelease(
+                    requestToken = requestToken,
+                    tag = tag,
+                    pinned = tag?.let { VentoyDownloader.pinnedSourceOrNull(it) != null },
+                ),
+            )
+        }
+    }
+
+    /**
+     * Downloads and verifies a release without opening the USB device. The verified bytes
+     * are published in app-private storage before the UI records the release, so a restart
+     * can reuse exactly what was checked. Failure leaves the previous release untouched.
+     */
+    private fun downloadVentoyRelease(requestToken: Long, upstreamVersion: String?) {
+        val app = application
+        val filesDir = app.filesDir
+        scope.launch {
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+                    val source =
+                        usb.ventoy.VentoyDownloader.pinnedDownloadSource(upstreamVersion)
+                    val downloaded = usb.ventoy.VentoyDownloader.downloadRelease(
+                        cacheDir = app.cacheDir,
+                        release = source.release,
+                        isActive = { job?.isActive == true },
+                    )
+                    usb.ventoy.VentoyReleaseStore.save(
+                        filesDir = filesDir,
+                        download = downloaded,
+                        syncDirectory = ::fsyncDirectory,
+                    )
+                }
+            }
+            outcome.fold(
+                onSuccess = { stored ->
+                    onIntent(
+                        UiIntent.VentoyReleaseDownloaded(
+                            requestToken = requestToken,
+                            provenance = usb.ventoy.VentoyReleaseProvenance(
+                                release = stored.assets.release,
+                                archiveSha256 = stored.archiveSha256,
+                                sourceUrl = stored.sourceUrl,
+                            ),
+                        ),
+                    )
+                },
+                onFailure = { failure ->
+                    usb.ventoy.VentoyReleaseStore.fatalCauseOrNull(failure)?.let { throw it }
+                    when (failure) {
+                        is usb.ventoy.VentoyReleaseStore.PromotionButUnconfirmedException -> {
+                            val stored = failure.stored
+                            onIntent(
+                                UiIntent.VentoyReleaseStoreChanged(
+                                    requestToken = requestToken,
+                                    provenance = usb.ventoy.VentoyReleaseProvenance(
+                                        release = stored.assets.release,
+                                        archiveSha256 = stored.archiveSha256,
+                                        sourceUrl = stored.sourceUrl,
+                                    ),
+                                    message = application.getString(
+                                        R.string.ventoy_promotion_unconfirmed,
+                                        failure.requestedRelease,
+                                        stored.assets.release,
+                                    ),
+                                ),
+                            )
+                        }
+
+                        is usb.ventoy.VentoyReleaseStore.PublishedButUnconfirmedException -> {
+                            val stored = failure.stored
+                            onIntent(
+                                UiIntent.VentoyReleaseStoreChanged(
+                                    requestToken = requestToken,
+                                    provenance = usb.ventoy.VentoyReleaseProvenance(
+                                        release = stored.assets.release,
+                                        archiveSha256 = stored.archiveSha256,
+                                        sourceUrl = stored.sourceUrl,
+                                    ),
+                                    message = application.getString(
+                                        R.string.ventoy_download_unconfirmed,
+                                        stored.assets.release,
+                                    ),
+                                ),
+                            )
+                        }
+
+                        is usb.ventoy.VentoyReleaseStore.StoreUnknownException -> {
+                            onIntent(
+                                UiIntent.VentoyReleaseStoreUnknown(
+                                    requestToken = requestToken,
+                                    message = application.getString(
+                                        R.string.ventoy_download_unknown,
+                                        failure.requestedRelease,
+                                    ),
+                                ),
+                            )
+                        }
+
+                        is usb.ventoy.VentoyReleaseStore.StoreChangedException -> {
+                            val stored = failure.stored
+                            onIntent(
+                                UiIntent.VentoyReleaseStoreChanged(
+                                    requestToken = requestToken,
+                                    provenance = usb.ventoy.VentoyReleaseProvenance(
+                                        release = stored.assets.release,
+                                        archiveSha256 = stored.archiveSha256,
+                                        sourceUrl = stored.sourceUrl,
+                                    ),
+                                    message = application.getString(
+                                        R.string.ventoy_download_recovered,
+                                        failure.requestedRelease,
+                                        stored.assets.release,
+                                    ),
+                                ),
+                            )
+                        }
+
+                        else -> onIntent(
+                            UiIntent.VentoyReleaseDownloadFailed(
+                                requestToken,
+                                failure.message ?: failure.javaClass.simpleName,
+                            ),
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    /** Makes a directory-entry change durable; failures abort the download, not hidden. */
+    private fun fsyncDirectory(dir: File) {
+        val fd = android.system.Os.open(dir.path, android.system.OsConstants.O_RDONLY)
+        try {
+            android.system.Os.fsync(fd)
+        } catch (failure: android.system.ErrnoException) {
+            // EINVAL means this filesystem does not fsync directory entries; all file
+            // data was already fsynced. Any other errno is a real failure.
+            if (failure.errno != android.system.OsConstants.EINVAL) throw failure
+        } finally {
+            android.system.Os.close(fd)
+        }
+    }
+
+    /**
+     * Resolves exactly the release named in the confirmation. No external-storage or
+     * bundled fallback is allowed: a missing/changed store aborts before any write.
+     */
+    private fun ventoyAssetsForInstall(source: usb.ventoy.VentoyReleaseSource?): VentoyAssets {
+        val app = application
+        return usb.ventoy.VentoyInstallAssets.resolve(
+            source = source,
+            loadBundled = { VentoyAssets.loadFromAssets(app.assets, strict = true) },
+            loadStored = { usb.ventoy.VentoyReleaseStore.load(app.filesDir) },
+        )
+    }
+
+    private fun loadVentoyGlobalSettings(
+        requestToken: Long,
+        source: VentoySettingsSource,
+    ) {
+        if (source is VentoySettingsSource.Document) {
+            loadVentoySettingsDocument(requestToken, source)
+            return
+        }
         val expected = attachment.snapshot()
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
@@ -4104,13 +4330,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
                 try {
-                    val settings = usb.ventoy.VentoySetup.readGlobalSettings(disk)
-                    if (attachmentMatches(expectedAttach, expectedKey)) {
+                    val settings =
+                        when (source) {
+                            VentoySettingsSource.Default ->
+                                usb.ventoy.VentoySetup.readGlobalSettings(disk)
+                            is VentoySettingsSource.UsbFile ->
+                                usb.ventoy.VentoySetup.readGlobalSettingsAt(disk, source.path)
+                            is VentoySettingsSource.Document -> error("handled before disk open")
+                        }
+                    if (attachmentMatches(expectedAttach, expectedKey) &&
+                        this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
+                        isActive()
+                    ) {
                         post(
                             UiIntent.VentoyGlobalSettingsLoaded(
                                 settings,
                                 epoch = expectedEpoch,
                                 requestToken = requestToken,
+                                source = source,
                             ),
                         )
                     }
@@ -4125,26 +4362,193 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachmentMatches(expectedAttach, expectedKey)
+                    attachmentMatches(expectedAttach, expectedKey) &&
+                    this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
+                    outcome.cause !is kotlinx.coroutines.CancellationException
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
                         UiIntent.VentoyGlobalSettingsLoaded(
-                            if (outcome.cause is usb.ventoy.IncompatibleVentoyException) {
+                            if (outcome.cause is usb.ventoy.IncompatibleVentoyException &&
+                                source is VentoySettingsSource.Default
+                            ) {
                                 // No Ventoy layout is the honest "no ventoy.json yet" state,
-                                // not a read failure.
+                                // not a read failure. A chosen file never becomes Missing just
+                                // because the data partition vanished.
                                 VentoyGlobalSettings.Missing
                             } else {
                                 VentoyGlobalSettings.ReadError(message)
                             },
                             epoch = expectedEpoch,
                             requestToken = requestToken,
+                            source = source,
                         ),
                     )
                 }
             } finally {
                 activeHandles.remove(handle)
             }
+        }
+    }
+
+    /**
+     * Phone document: read and parse the exact URI chosen with OpenDocument. The document is
+     * never copied; a provider-reported size mismatch and an oversized document fail closed.
+     */
+    private fun loadVentoySettingsDocument(
+        requestToken: Long,
+        source: VentoySettingsSource.Document,
+    ) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val expectedEpoch = state.ventoyCacheEpoch
+        val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
+            override suspend fun run() {
+                val settings = readSettingsDocument(source)
+                if (attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey &&
+                    this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
+                    isActive()
+                ) {
+                    post(
+                        UiIntent.VentoyGlobalSettingsLoaded(
+                            settings,
+                            epoch = expectedEpoch,
+                            requestToken = requestToken,
+                            source = source,
+                        ),
+                    )
+                }
+            }
+        }
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                if (outcome is usb.operation.OperationState.Failed &&
+                    attachGeneration == expectedAttach &&
+                    deviceKey(attachedDevice) == expectedKey &&
+                    this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
+                    outcome.cause !is kotlinx.coroutines.CancellationException
+                ) {
+                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                    post(
+                        UiIntent.VentoyGlobalSettingsLoaded(
+                            VentoyGlobalSettings.ReadError(message),
+                            epoch = expectedEpoch,
+                            requestToken = requestToken,
+                            source = source,
+                        ),
+                    )
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    /** Read/validate one SAF document; every failure is a distinct ReadError, never Empty. */
+    private fun readSettingsDocument(
+        source: VentoySettingsSource.Document,
+    ): VentoyGlobalSettings =
+        try {
+            usb.ventoy.VentoySetup.parseGlobalSettings(readSettingsDocumentText(source))
+        } catch (failure: Exception) {
+            VentoyGlobalSettings.ReadError(
+                failure.message ?: failure.javaClass.simpleName,
+            )
+        }
+
+    /**
+     * Read the exact document bytes without parsing. Used by both the validation read and the
+     * in-place merge, so the write path re-reads immediately before it opens the output stream.
+     */
+    private fun readSettingsDocumentText(
+        source: VentoySettingsSource.Document,
+    ): String {
+        val resolver = getApplication<Application>().contentResolver
+        val uri =
+            try {
+                Uri.parse(source.uri)
+            } catch (failure: Exception) {
+                throw usb.ventoy.VentoySettingsDocumentException(
+                    "selected settings document URI is invalid: " +
+                        (failure.message ?: "parse failed"),
+                    failure,
+                )
+            }
+        val type =
+            try {
+                resolver.getType(uri)
+            } catch (failure: Exception) {
+                throw usb.ventoy.VentoySettingsDocumentException(
+                    "selected settings document type could not be read: " +
+                        (failure.message ?: failure.javaClass.simpleName),
+                    failure,
+                )
+            }
+        if (type == DocumentsContract.Document.MIME_TYPE_DIR) {
+            throw usb.ventoy.VentoySettingsDocumentException(
+                "selected settings document is a directory, not a file",
+            )
+        }
+        var displayName: String? = null
+        var expectedBytes: Long? = null
+        try {
+            resolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                        displayName = cursor.getString(nameIndex)
+                    }
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                        expectedBytes = cursor.getLong(sizeIndex)
+                    }
+                }
+            }
+        } catch (failure: Exception) {
+            // Metadata is advisory; reading the stream still decides. Do not fake a size.
+        }
+        if (expectedBytes != null && expectedBytes!! > VentoySettingsDocument.MAX_BYTES) {
+            throw usb.ventoy.VentoySettingsDocumentException(
+                "selected settings document is $expectedBytes bytes; " +
+                    "limit is ${VentoySettingsDocument.MAX_BYTES}",
+            )
+        }
+        return try {
+            val input =
+                resolver.openInputStream(uri)
+                    ?: throw usb.ventoy.VentoySettingsDocumentException(
+                        "selected settings document could not be opened",
+                    )
+            input.use { VentoySettingsDocument.read(it, expectedBytes) }
+        } catch (failure: java.io.FileNotFoundException) {
+            throw usb.ventoy.VentoySettingsDocumentException(
+                "selected settings document is no longer available: " +
+                    (failure.message ?: displayName ?: source.uri),
+                failure,
+            )
+        } catch (failure: SecurityException) {
+            throw usb.ventoy.VentoySettingsDocumentException(
+                "no permission to read the selected settings document; choose it again",
+                failure,
+            )
+        } catch (failure: usb.ventoy.VentoySettingsDocumentException) {
+            throw failure
+        } catch (failure: Exception) {
+            throw usb.ventoy.VentoySettingsDocumentException(
+                "selected settings document could not be read: " +
+                    (failure.message ?: failure.javaClass.simpleName),
+                failure,
+            )
         }
     }
 
@@ -4213,15 +4617,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else -> "; $selected global setting" + (if (selected == 1) " saved" else "s saved")
         }
 
-    private fun applyVentoyControls(settings: List<VentoyControlSetting>) {
+    private fun applyVentoyControls(effect: UiEffect.ApplyVentoyControls) {
+        val source = effect.source
+        if (source is VentoySettingsSource.Document) {
+            applyVentoyControlsDocument(effect, source)
+            return
+        }
         val expected = attachment.snapshot()
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
+        val expectedIdentity = state.ventoySettingsSourceIdentity
+        if (!state.ventoySettingsSource.sameTarget(source)) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+            return
+        }
         val title = OperationTitle.SetVentoyGlobalSetting
         val op = object : DiskOperation(title.logLabel) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
+                require(effect.identity == null || expectedIdentity == effect.identity) {
+                    "settings source belongs to another attachment"
+                }
+                require(this@MainViewModel.state.ventoySettingsSource.sameTarget(source)) {
+                    "settings source changed"
+                }
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
                     require(deviceKey(live.device) == expectedKey) { "USB device changed" }
@@ -4230,22 +4650,138 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val disk = raw.disk
                 try {
                     val changed =
-                        usb.ventoy.VentoySetup.applyGlobalControls(
-                            disk = disk,
-                            settings = settings,
-                            onMutation = { mutationAttempted = true },
-                        )
+                        when (source) {
+                            VentoySettingsSource.Default ->
+                                usb.ventoy.VentoySetup.applyGlobalControls(
+                                    disk = disk,
+                                    settings = effect.settings,
+                                    onMutation = { mutationAttempted = true },
+                                )
+                            is VentoySettingsSource.UsbFile ->
+                                usb.ventoy.VentoySetup.applyGlobalControlsAt(
+                                    disk = disk,
+                                    path = source.path,
+                                    settings = effect.settings,
+                                    onMutation = { mutationAttempted = true },
+                                )
+                            is VentoySettingsSource.Document -> error("handled by the SAF path")
+                        }
                     if (mutationAttempted) commitReached = true
                     result =
                         if (changed) {
-                            "Applied ${settings.size} Ventoy global setting" +
-                                if (settings.size == 1) "" else "s"
+                            "Applied ${effect.settings.size} Ventoy global setting" +
+                                if (effect.settings.size == 1) "" else "s"
                         } else {
                             "No Ventoy setting changed"
                         }
                 } finally {
                     disk.close()
                 }
+            }
+        }
+        onIntent(
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Running,
+                    title = title,
+                    cancelable = false,
+                ),
+            ),
+        )
+        val handle = DiskController.get().submit(op)
+        activeHandles.add(handle)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            title = title,
+                            errorMessage = message,
+                            resultMessage = op.result,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (mappedState != OperationState.Completed && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+    /**
+     * Update the exact SAF document in place. The existing bytes are read and merged before
+     * the provider stream is opened for writing; there is deliberately no temporary file and
+     * no rollback promise. Once `"wt"` is opened the provider may truncate, so any failure
+     * after that point is reported as Partial, not as an untouched file.
+     */
+    private fun applyVentoyControlsDocument(
+        effect: UiEffect.ApplyVentoyControls,
+        source: VentoySettingsSource.Document,
+    ) {
+        val expectedAttach = attachGeneration
+        val expectedKey = deviceKey(attachedDevice)
+        val expectedIdentity = state.ventoySettingsSourceIdentity
+        if (!state.ventoySettingsSource.sameTarget(source)) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+            return
+        }
+        val title = OperationTitle.SetVentoyGlobalSetting
+        val op = object : DiskOperation(title.logLabel) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
+                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+                require(effect.identity == null || expectedIdentity == effect.identity) {
+                    "settings source belongs to another attachment"
+                }
+                require(this@MainViewModel.state.ventoySettingsSource.sameTarget(source)) { "settings source changed" }
+                val existing = readSettingsDocumentText(source)
+                val merge = VentoySettingsDocument.merge(existing, effect.settings)
+                if (!merge.changed) {
+                    result = "No Ventoy setting changed"
+                    return
+                }
+                // A canceled request must not open a truncating stream.
+                if (!isActive()) return
+                val resolver = getApplication<Application>().contentResolver
+                val uri = Uri.parse(source.uri)
+                mutationAttempted = true
+                val outcome =
+                    VentoySettingsDocument.writeTruncating(
+                        open = {
+                            resolver.openOutputStream(uri, "wt")
+                                ?: throw usb.ventoy.VentoySettingsDocumentException(
+                                    "provider did not open the selected settings document " +
+                                        "for writing; its current content is unknown",
+                                )
+                        },
+                        text = merge.text,
+                    )
+                val failure = outcome.failure
+                if (failure != null) {
+                    state = OperationState.Partial
+                    val cause =
+                        usb.ventoy.VentoySettingsDocumentException(
+                            "selected settings document may have been truncated; it was not " +
+                                "updated and no rollback is possible: " +
+                                (failure.message ?: failure.javaClass.simpleName),
+                            failure,
+                        )
+                    failureCause = cause
+                    throw cause
+                }
+                commitReached = true
+                result =
+                    "Applied ${effect.settings.size} Ventoy global setting" +
+                        if (effect.settings.size == 1) "" else "s"
             }
         }
         onIntent(
@@ -4930,6 +5466,44 @@ class MainActivity : ComponentActivity() {
         viewModel.onGptBackupPicked(uri)
     }
 
+    /**
+     * SAF document chosen as the live Ventoy settings source. It is read and updated through
+     * this URI in place; nothing is imported onto the stick.
+     */
+    private val ventoySettingsPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.onIntent(
+            UiIntent.SelectVentoySettingsDocument(
+                uri = uri.toString(),
+                displayName = documentDisplayName(uri),
+            ),
+        )
+    }
+
+    private fun documentDisplayName(uri: Uri): String? =
+        runCatching {
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index < 0) null else cursor.getString(index)
+            }
+        }.getOrNull()
+
     /** Common SAF tree for image+map folders and GPT copies. */
     private val backupFolderLaunches by lazy {
         BackupFolderLaunchQueue(viewModel.backupFolderLaunchToken)
@@ -5419,6 +5993,9 @@ class MainActivity : ComponentActivity() {
                         directory,
                         sessionId,
                     )
+                },
+                onPickVentoySettingsFile = {
+                    ventoySettingsPickerLauncher.launch(arrayOf("*/*"))
                 },
                 onPickBackup = {
                     gptBackupPickerLauncher.launch(arrayOf("*/*"))

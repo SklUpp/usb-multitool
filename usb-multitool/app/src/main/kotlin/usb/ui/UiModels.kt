@@ -14,6 +14,10 @@ import usb.ventoy.LayoutPartition
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoyReleaseProvenance
+import usb.ventoy.VentoyReleaseSource
+import usb.ventoy.VentoyReleaseStoreState
+import usb.ventoy.VentoySettingsSource
 import java.util.Locale
 import kotlin.math.roundToLong
 
@@ -269,8 +273,17 @@ enum class UiMessageKey {
     /** User must confirm replacing the existing unattend XML on the stick. */
     ConfirmXmlOverwrite,
 
+    /** Downloaded release store is unknown/corrupt; install/update must not fall back. */
+    VentoyStoreUnavailable,
     /** Whole in-app log was copied to the clipboard on an explicit action. */
     LogCopied,
+
+    /** The chosen settings path is relative, empty, or traverses outside the volume. */
+    SettingsSourceInvalid,
+    /** The chosen file was pinned to another attachment or partition. */
+    SettingsSourceStale,
+    /** The chosen file disappeared or cannot be read; Update is refused. */
+    SettingsSourceUnavailable,
 }
 
 /**
@@ -291,7 +304,6 @@ enum class DestructiveAction {
     WIPE,
     VENTOY_INSTALL,
     VENTOY_UPDATE,
-    VENTOY_DOWNLOAD_INSTALL,
     RAW_WRITE,
     FORMAT_PARTITION,
     DELETE_PARTITION,
@@ -316,7 +328,6 @@ enum class DestructiveAction {
     val cooperative: Boolean
         get() =
             this == RAW_WRITE ||
-                this == VENTOY_DOWNLOAD_INSTALL ||
                 this == RESCUE_RESTORE
 }
 
@@ -426,10 +437,15 @@ data class DestructiveConfirmation(
     /** SHA-256 of the inspected template bytes this confirmation applies to. */
     val templateSha256: String? = null,
     /**
-     * Exact global control writes chosen when the confirmation was opened. Only install,
-     * download-install, and update carry it; later edits on screen cannot change it.
+     * Exact global control writes chosen when the confirmation was opened. Only install
+     * and update carry it; later edits on screen cannot change it.
      */
     val ventoyControls: List<VentoyControlSetting> = emptyList(),
+    /**
+     * Exact release payload confirmed for install/update. The host revalidates this
+     * snapshot and aborts on mismatch instead of falling back to another release.
+     */
+    val ventoyRelease: VentoyReleaseSource? = null,
 ) {
     companion object {
         fun request(
@@ -462,6 +478,7 @@ data class DestructiveConfirmation(
             allowDestructiveTemplate: Boolean = false,
             templateSha256: String? = null,
             ventoyControls: List<VentoyControlSetting> = emptyList(),
+            ventoyRelease: VentoyReleaseSource? = null,
         ): DestructiveConfirmation =
             DestructiveConfirmation(
                 action = action,
@@ -513,12 +530,19 @@ data class DestructiveConfirmation(
                     if (action == DestructiveAction.VENTOY_LINK_XML) templateSha256 else null,
                 ventoyControls =
                     if (action == DestructiveAction.VENTOY_INSTALL ||
-                        action == DestructiveAction.VENTOY_UPDATE ||
-                        action == DestructiveAction.VENTOY_DOWNLOAD_INSTALL
+                        action == DestructiveAction.VENTOY_UPDATE
                     ) {
                         ventoyControls
                     } else {
                         emptyList()
+                    },
+                ventoyRelease =
+                    if (action == DestructiveAction.VENTOY_INSTALL ||
+                        action == DestructiveAction.VENTOY_UPDATE
+                    ) {
+                        ventoyRelease
+                    } else {
+                        null
                     },
             )
 
@@ -544,7 +568,6 @@ fun DestructiveAction.displayName(): String =
         DestructiveAction.WIPE -> "wipe"
         DestructiveAction.VENTOY_INSTALL -> "Ventoy install"
         DestructiveAction.VENTOY_UPDATE -> "Ventoy update (keeps the ISO partition)"
-        DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> "Ventoy download and install"
         DestructiveAction.RAW_WRITE -> "raw image write"
         DestructiveAction.FORMAT_PARTITION -> "format partition"
         DestructiveAction.DELETE_PARTITION -> "delete partition"
@@ -1224,6 +1247,20 @@ data class AppUiState(
     val ventoyFoldersRequest: Long = 0L,
     /** Same ordering contract as [ventoyFoldersRequest] for [ventoyGlobalSettings]. */
     val ventoyGlobalSettingsRequest: Long = 0L,
+    /** File the global-settings block reads and edits; default is Ventoy's own path. */
+    val ventoySettingsSource: VentoySettingsSource = VentoySettingsSource.Default,
+    /**
+     * Identity/attach generation the source was chosen on. A result for another stick is
+     * stale even if the path looks the same. Reset with the source, not with its rows.
+     */
+    val ventoySettingsSourceIdentity: String? = null,
+    val ventoySettingsSourceAttachGeneration: Long? = null,
+    /** Geometry of the Ventoy data partition when a USB file was chosen (null = not pinned). */
+    val ventoySettingsSourcePartitionId: String? = null,
+    val ventoySettingsSourceStartLba: ULong? = null,
+    val ventoySettingsSourceSectorCount: ULong? = null,
+    /** A source read is on its way; null settings alone is not "in progress". */
+    val ventoySettingsSourceLoading: Boolean = false,
     /**
      * Bumped when stick-scoped Ventoy/XML caches must be considered stale (destructive
      * mutation, detach, new attachment). Ventoy-tab composition keys on this to re-read
@@ -1310,12 +1347,54 @@ data class AppUiState(
      */
     val logLines: List<String> = emptyList(),
     /**
-     * Latest Ventoy release tag fetched from GitHub API at startup (null until checked).
-     * Shown in [VentoyScreen] alongside [VentoyAssets.PINNED_RELEASE].
+     * Release bundled with this APK. Read from the real bundled assets at startup; null
+     * until that read lands. Never guessed from the current download.
      */
-    val latestVentoyRelease: String? = null,
+    val bundledVentoyRelease: String? = null,
+    /**
+     * `VENTOY_VERSION` read back from the attached stick's VTOYEFI partition. Null means
+     * "not detected" and renders as n/a. Cleared when the attachment changes.
+     */
+    val installedVentoyRelease: String? = null,
+    /**
+     * FAT/IO failure while reading the installed marker. Distinct from an absent marker
+     * ([installedVentoyRelease] == null with this null), which renders as n/a.
+     */
+    val installedVentoyReadError: String? = null,
+    /**
+     * Latest official Ventoy release reported by the upstream check. Null means the check
+     * has not landed for this attachment or failed; both render as n/a.
+     */
+    val upstreamVentoyRelease: String? = null,
+    /** True/false when the upstream check could classify it; null until then. */
+    val upstreamVentoyPinned: Boolean? = null,
+    /**
+     * Explicit app-private release store fact. Only [VentoyReleaseStoreState.Verified]
+     * may feed Install/Update from downloaded bytes; [VentoyReleaseStoreState.Absent] may
+     * use bundled assets. Unknown/corrupt stores block destructive source selection.
+     */
+    val ventoyStoreState: VentoyReleaseStoreState = VentoyReleaseStoreState.Absent,
+    /** Incremented whenever the readable store changes, fencing late startup loads. */
+    val ventoyStoreRevision: Long = 0L,
+    /** Monotonic upstream-check id; answers with an older id are stale and dropped. */
+    val ventoyUpstreamRequest: Long = 0L,
+    val ventoyUpstreamChecking: Boolean = false,
+    /** Monotonic download id; answers with an older id are stale and dropped. */
+    val ventoyDownloadRequest: Long = 0L,
+    val ventoyDownloadInFlight: Boolean = false,
+    /** Last download failure, kept until the next attempt; never replaces the release fact. */
+    val ventoyDownloadError: String? = null,
 ) {
     companion object { const val LOG_MAX_LINES = 200 }
+    /** Verified downloaded bytes, only when the store fact is trustworthy. */
+    val downloadedVentoyRelease: VentoyReleaseProvenance?
+        get() = (ventoyStoreState as? VentoyReleaseStoreState.Verified)?.provenance
+
+    /** Install/update may either use verified downloaded bytes or the bundled fallback. */
+    val ventoyInstallAvailable: Boolean
+        get() = ventoyStoreState is VentoyReleaseStoreState.Absent ||
+            ventoyStoreState is VentoyReleaseStoreState.Verified
+
     val actionsEnabled: Boolean
         get() =
             presence == DevicePresence.Ready &&

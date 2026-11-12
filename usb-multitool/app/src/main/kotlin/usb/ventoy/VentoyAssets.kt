@@ -98,6 +98,21 @@ data class VentoyAssets(
         const val OFFICIAL_DISK_IMG_SHA256 =
             "19174f133c4df8acda4423b1bc40ae69961773ef54e286ffd8c42fefaf6f174f"
 
+        /**
+         * Version actually bundled with this APK: assets/ventoy/version when shipped,
+         * otherwise the pinned release that names the same bundled bytes. No download and
+         * no external-storage lookup can change this value.
+         */
+        fun bundledRelease(
+            assetManager: android.content.res.AssetManager,
+            basePath: String = "ventoy",
+        ): String =
+            runCatching {
+                assetManager.open("$basePath/version").bufferedReader().use { reader ->
+                    reader.readLine()?.trim()
+                }
+            }.getOrNull()?.takeIf { it.isNotEmpty() } ?: PINNED_RELEASE
+
         fun loadFromAssets(
             assetManager: android.content.res.AssetManager,
             basePath: String = "ventoy",

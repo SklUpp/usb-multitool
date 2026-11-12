@@ -134,7 +134,6 @@ class UiEffectTypingTest {
     fun cooperativeCancelLivesOnDestructiveAction() {
         assertTrue(DestructiveAction.RAW_WRITE.cooperative)
         assertTrue(DestructiveAction.RESCUE_RESTORE.cooperative)
-        assertTrue(DestructiveAction.VENTOY_DOWNLOAD_INSTALL.cooperative)
         assertFalse(DestructiveAction.WIPE.cooperative)
         assertFalse(DestructiveAction.FORMAT_PARTITION.cooperative)
         assertFalse(DestructiveAction.VENTOY_INSTALL.cooperative)

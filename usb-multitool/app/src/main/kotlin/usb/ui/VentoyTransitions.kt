@@ -3,8 +3,10 @@ package usb.ui
 import usb.ventoy.VentoyControlCatalog
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoySettingsSource
 import usb.ventoy.folderParent
 import usb.ventoy.normalizeFolderPath
+import usb.ventoy.normalizeVentoyFilePath
 
 /**
  * Pure transitions of the Ventoy tab: install/update flags, folder browsing, global
@@ -86,11 +88,203 @@ internal object VentoyTransitions {
     fun setVtoyLocalAccount(state: AppUiState, intent: UiIntent.SetVtoyLocalAccount): ReduceResult =
         ReduceResult(state.copy(vtoyLocalAccount = intent.enabled))
 
-    fun loadVentoyGlobalSettings(state: AppUiState): ReduceResult {
+    fun loadVentoyGlobalSettings(state: AppUiState): ReduceResult =
+        if (!state.settingsSourceGeometryMatches()) {
+            ReduceResult(
+                state.copy(
+                    ventoySettingsSourceLoading = false,
+                    statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                ),
+            )
+        } else {
+            val token = state.ventoyGlobalSettingsRequest + 1L
+            val device = state.device
+            ReduceResult(
+                state.copy(
+                    ventoyGlobalSettingsRequest = token,
+                    ventoySettingsSourceLoading = true,
+                    ventoySettingsSourceIdentity = device?.identity,
+                    ventoySettingsSourceAttachGeneration = device?.attachGeneration,
+                ),
+                effects = listOf(
+                    UiEffect.LoadVentoyGlobalSettings(
+                        requestToken = token,
+                        source = state.ventoySettingsSource,
+                    ),
+                ),
+            )
+        }
+
+    fun selectVentoySettingsUsbFile(
+        state: AppUiState,
+        intent: UiIntent.SelectVentoySettingsUsbFile,
+    ): ReduceResult {
+        val normalized =
+            try {
+                normalizeVentoyFilePath(intent.path)
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        val device = state.device
+        val pinnedPartition =
+            intent.partitionId?.let { id -> state.partitions.firstOrNull { it.id == id } }
+        val pinnedStart = intent.partitionStartLba
+        val pinnedCount = intent.partitionSectorCount
+        return when {
+            normalized == null ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceInvalid),
+                    ),
+                )
+            !state.actionsEnabled ->
+                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            device == null ->
+                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            intent.identity != null && intent.identity != device.identity ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                    ),
+                )
+            intent.attachGeneration != null &&
+                intent.attachGeneration != device.attachGeneration ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                    ),
+                )
+            intent.partitionId != null && pinnedPartition == null ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                    ),
+                )
+            pinnedPartition != null && pinnedStart != null &&
+                pinnedStart != pinnedPartition.startLba ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                    ),
+                )
+            pinnedPartition != null && pinnedCount != null &&
+                pinnedCount != pinnedPartition.sectorCount ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                    ),
+                )
+            else -> {
+                val picked = VentoySettingsSource.UsbFile(normalized)
+                startSettingsSourceRead(
+                    state = state,
+                    // The standard file picked on the stick is the same default file;
+                    // keeping a UsbFile wrapper would bypass default create/clear rules.
+                    source =
+                        if (picked.isDefaultPath()) {
+                            VentoySettingsSource.Default
+                        } else {
+                            picked
+                        },
+                    device = device,
+                    partitionId = intent.partitionId,
+                    partitionStartLba = pinnedStart,
+                    partitionSectorCount = pinnedCount,
+                )
+            }
+        }
+    }
+
+    fun selectVentoySettingsDocument(
+        state: AppUiState,
+        intent: UiIntent.SelectVentoySettingsDocument,
+    ): ReduceResult =
+        when {
+            intent.uri.isBlank() ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceInvalid),
+                    ),
+                )
+            !state.actionsEnabled ->
+                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            else ->
+                startSettingsSourceRead(
+                    state = state,
+                    source = VentoySettingsSource.Document(
+                        uri = intent.uri,
+                        displayName = intent.displayName?.takeIf { it.isNotBlank() },
+                    ),
+                    device = state.device,
+                )
+        }
+
+    fun useDefaultVentoySettingsFile(state: AppUiState): ReduceResult =
+        if (!state.actionsEnabled) {
+            ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+        } else {
+            startSettingsSourceRead(
+                state = state,
+                source = VentoySettingsSource.Default,
+                device = state.device,
+            )
+        }
+
+    /**
+     * A chosen USB file is valid only while the partition it was picked on still has the same
+     * geometry. Repartitioning the same stick must not make a stale path address new bytes.
+     */
+    private fun AppUiState.settingsSourceGeometryMatches(): Boolean {
+        if (ventoySettingsSource !is VentoySettingsSource.UsbFile) return true
+        val partitionId = ventoySettingsSourcePartitionId ?: return true
+        val partition =
+            partitions.firstOrNull { it.id == partitionId } ?: return false
+        val expectedStart = ventoySettingsSourceStartLba
+        val expectedCount = ventoySettingsSourceSectorCount
+        if (expectedStart != null && partition.startLba != expectedStart) return false
+        if (expectedCount != null && partition.sectorCount != expectedCount) return false
+        return true
+    }
+
+    /**
+     * Select exactly [source] and start its read. Staged writes belong to the previous file,
+     * so they are dropped: applying them to a different file would be a silent cross-file
+     * edit. Identity/generation and the picked partition geometry pin the choice.
+     */
+    private fun startSettingsSourceRead(
+        state: AppUiState,
+        source: VentoySettingsSource,
+        device: DeviceIdentity?,
+        partitionId: String? = null,
+        partitionStartLba: ULong? = null,
+        partitionSectorCount: ULong? = null,
+    ): ReduceResult {
         val token = state.ventoyGlobalSettingsRequest + 1L
+        val pinGeometry = source is VentoySettingsSource.UsbFile && !source.isDefaultPath()
         return ReduceResult(
-            state.copy(ventoyGlobalSettingsRequest = token),
-            effects = listOf(UiEffect.LoadVentoyGlobalSettings(requestToken = token)),
+            state.copy(
+                ventoySettingsSource = source,
+                ventoyGlobalSettings = null,
+                ventoySettingsSourceLoading = true,
+                ventoySettingsSourceIdentity = device?.identity,
+                ventoySettingsSourceAttachGeneration = device?.attachGeneration,
+                ventoySettingsSourcePartitionId = if (pinGeometry) partitionId else null,
+                ventoySettingsSourceStartLba = if (pinGeometry) partitionStartLba else null,
+                ventoySettingsSourceSectorCount =
+                    if (pinGeometry) partitionSectorCount else null,
+                pendingVentoyControls =
+                    if (state.ventoySettingsSource.sameTarget(source)) {
+                        // Re-selecting the same target (URI, or the same stick path) must not
+                        // discard staged edits; a changed displayName is not a new target.
+                        state.pendingVentoyControls
+                    } else {
+                        emptyList()
+                    },
+                statusMessage = null,
+            ),
+            effects = listOf(
+                UiEffect.LoadVentoyGlobalSettings(requestToken = token, source = source),
+            ),
         )
     }
 
@@ -171,13 +365,15 @@ internal object VentoyTransitions {
         intent: UiIntent.VentoyGlobalSettingsLoaded,
     ): ReduceResult =
         if (intent.epoch != state.ventoyCacheEpoch ||
-            intent.requestToken != state.ventoyGlobalSettingsRequest
+            intent.requestToken != state.ventoyGlobalSettingsRequest ||
+            !intent.source.sameTarget(state.ventoySettingsSource)
         ) {
             ReduceResult(state)
         } else {
             ReduceResult(
                 state.copy(
                     ventoyGlobalSettings = intent.settings,
+                    ventoySettingsSourceLoading = false,
                     // Only fires while Ventoy tab open (or manual refresh); surface
                     // a real read/parse failure without turning it into "empty".
                     statusMessage =
@@ -243,6 +439,23 @@ internal object VentoyTransitions {
                         statusMessage = UiMessage.Raw("No Ventoy setting changes to apply"),
                     ),
                 )
+            !state.settingsSourceGeometryMatches() ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
+                    ),
+                )
+            !state.ventoySettingsSource.isDefaultPath() &&
+                state.ventoyGlobalSettings !is VentoyGlobalSettings.Present &&
+                state.ventoyGlobalSettings !is VentoyGlobalSettings.Empty ->
+                // A chosen file must be read and valid now. Missing, a directory, or a
+                // parse error is never turned into a create/overwrite attempt.
+                ReduceResult(
+                    state.copy(
+                        statusMessage =
+                            UiMessage.Key(UiMessageKey.SettingsSourceUnavailable),
+                    ),
+                )
             else ->
                 ReduceResult(
                     state,
@@ -250,14 +463,12 @@ internal object VentoyTransitions {
                         listOf(
                             UiEffect.ApplyVentoyControls(
                                 settings = state.pendingVentoyControls,
+                                source = state.ventoySettingsSource,
+                                identity = state.ventoySettingsSourceIdentity,
+                                attachGeneration =
+                                    state.ventoySettingsSourceAttachGeneration,
                             ),
                         ),
                 )
         }
-
-    fun setLatestVentoyRelease(
-        state: AppUiState,
-        intent: UiIntent.SetLatestVentoyRelease,
-    ): ReduceResult =
-        ReduceResult(state.copy(latestVentoyRelease = intent.tag))
 }

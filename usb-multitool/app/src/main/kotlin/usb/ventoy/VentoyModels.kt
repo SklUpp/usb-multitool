@@ -5,6 +5,68 @@ package usb.ventoy
  * renders them, so they never live in usb.ui.
  */
 
+/**
+ * Ventoy's own config location. Kept here so pure UI models do not have to compile the
+ * filesystem/engine layer just to compare a chosen path.
+ */
+const val DEFAULT_VENTOY_CONFIG_PATH = "/ventoy/ventoy.json"
+
+/**
+ * Which file the global-settings block reads and edits.
+ *
+ * [Default] is Ventoy's own `/ventoy/ventoy.json` on the stick. [UsbFile] is another file
+ * on the same Ventoy data partition, chosen through the shared Files picker. [Document] is
+ * a phone document chosen with the Android picker; it is updated through its content URI
+ * and is never copied onto the stick.
+ *
+ * Only [Default] may create a missing file. A chosen file must still exist and be a regular
+ * file at write time; absence or a directory fails closed.
+ */
+sealed interface VentoySettingsSource {
+    data object Default : VentoySettingsSource
+
+    data class UsbFile(val path: String) : VentoySettingsSource
+
+    data class Document(
+        val uri: String,
+        val displayName: String? = null,
+    ) : VentoySettingsSource
+
+    /** A non-default path is highlighted and warned about in the UI. */
+    fun isDefaultPath(): Boolean =
+        when (this) {
+            Default -> true
+            // FAT names are case-insensitive, so the standard path is not "custom" in
+            // another case.
+            is UsbFile -> path.equals(DEFAULT_VENTOY_CONFIG_PATH, ignoreCase = true)
+            is Document -> false
+        }
+
+    /** Path or provider name shown to the user; never a forged absolute phone path. */
+    fun label(): String =
+        when (this) {
+            Default -> DEFAULT_VENTOY_CONFIG_PATH
+            is UsbFile -> path
+            is Document -> displayName?.takeIf { it.isNotBlank() } ?: uri
+        }
+
+    /**
+     * Same underlying file. A phone document is identified by its URI, not by the provider's
+     * display name, so renaming the document must not discard staged edits. Stick paths are
+     * FAT-backed and therefore compared case-insensitively; the standard path is the default.
+     */
+    fun sameTarget(other: VentoySettingsSource): Boolean =
+        when {
+            this is Document && other is Document -> uri == other.uri
+            this is Document || other is Document -> false
+            this is UsbFile && other is UsbFile ->
+                path.equals(other.path, ignoreCase = true)
+            this == Default && other is UsbFile -> other.isDefaultPath()
+            this is UsbFile && other == Default -> this.isDefaultPath()
+            else -> this == Default && other == Default
+        }
+}
+
 /** One global ventoy.json `control` entry, shown with its raw value. */
 data class VentoySetting(
     val key: String,
@@ -136,5 +198,43 @@ object VentoyControlCatalog {
             if (!seen.add(setting.key)) return "duplicate key \"${setting.key}\""
         }
         return null
+    }
+}
+
+/**
+ * Provenance of one offline verified release. [archiveSha256] is the digest of the official
+ * archive that was independently pinned before download; [sourceUrl] is one of that pin's
+ * HTTPS URLs. Neither value is accepted when it only comes from the downloaded payload.
+ */
+data class VentoyReleaseProvenance(
+    val release: String,
+    val archiveSha256: String,
+    val sourceUrl: String,
+)
+
+/**
+ * Explicit app-private release store fact. `Absent` is a confirmed empty store and may
+ * fall back to bundled assets; `Unknown`/`Corrupt` must block destructive source
+ * selection instead of silently choosing the bundled fallback.
+ */
+sealed interface VentoyReleaseStoreState {
+    data object Absent : VentoyReleaseStoreState
+    data class Verified(val provenance: VentoyReleaseProvenance) : VentoyReleaseStoreState
+    data object Unknown : VentoyReleaseStoreState
+    data object Corrupt : VentoyReleaseStoreState
+}
+
+/**
+ * Exact payload a destructive install/update was confirmed for. The host must load this
+ * source and revalidate it before the first write; changing the store or availability must
+ * abort the operation, never silently switch to bundled bytes.
+ */
+sealed interface VentoyReleaseSource {
+    val release: String
+
+    data class Bundled(override val release: String) : VentoyReleaseSource
+
+    data class Downloaded(val provenance: VentoyReleaseProvenance) : VentoyReleaseSource {
+        override val release: String get() = provenance.release
     }
 }

@@ -19,6 +19,17 @@ fun normalizeFolderPath(raw: String): String {
     return if (segments.isEmpty()) "/" else segments.joinToString("/", prefix = "/")
 }
 
+/**
+ * Same rules as [normalizeFolderPath], but a file path must name something below the root.
+ * The volume API accepts `..`; rejecting it here keeps a stale picker value from escaping
+ * the mounted partition.
+ */
+fun normalizeVentoyFilePath(raw: String): String {
+    val normalized = normalizeFolderPath(raw)
+    require(normalized != "/") { "\"$raw\" does not name a file" }
+    return normalized
+}
+
 /** Parent folder, or null at the data-partition root. */
 fun folderParent(path: String): String? {
     val normalized = normalizeFolderPath(path)

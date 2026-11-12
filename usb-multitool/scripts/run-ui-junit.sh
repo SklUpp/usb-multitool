@@ -116,6 +116,8 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ui/RescueBackupTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/VentoyTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/VentoyReleasePresentation.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/VentoyDownloadWarning.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/WindowsImportLaunchQueue.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/BackupFolderLaunch.kt" \
   "$ROOT/app/src/main/kotlin/usb/files/AttachmentState.kt" \
@@ -150,6 +152,8 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/AutounattendReloadUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoyUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/VentoySettingsUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/VentoyReleaseUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/VentoyDownloadWarningTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PhoneImportUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FilesPickUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiEffectTypingTest.kt" \
@@ -203,6 +207,8 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.AutounattendReloadUiTest \
   usb.ui.VentoyUiStateTest \
   usb.ui.VentoySettingsUiTest \
+  usb.ui.VentoyReleaseUiTest \
+  usb.ui.VentoyDownloadWarningTest \
   usb.ui.PhoneImportUiTest \
   usb.ui.FilesPickUiTest \
   usb.ui.UiEffectTypingTest \
