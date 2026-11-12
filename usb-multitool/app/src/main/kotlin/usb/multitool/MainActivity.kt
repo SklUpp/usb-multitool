@@ -1159,7 +1159,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 // RawWriter already synced the medium after the last write
                                 // and folded any sync failure into its readback verdict; a
                                 // second sync would only duplicate that checked call.
-                                if (state == OperationState.Completed) commitReached = true
+                                if (state == usb.operation.OperationState.Completed) commitReached = true
                             } else {
                                 syncDestructiveDisk(disk)
                             }

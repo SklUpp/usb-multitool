@@ -447,10 +447,10 @@ object VentoyInstaller {
         // Clean initial sectors — first mutation; failures after this → Partial.
         // One 17 KiB request per region instead of 34 sector requests: same bytes, same
         // error propagation, 34× fewer USB round trips.
-        val zeroRegion = ByteBuffer.allocate(ZERO_REGION_SECTORS * VentoyLayout.SECTOR_SIZE)
-        disk.write(0L, zeroRegion.duplicate().clear())
+        val zeroRegion = ByteBuffer.allocate(VentoyLayout.ZERO_REGION_SECTORS * VentoyLayout.SECTOR_SIZE)
+        disk.write(0L, zeroRegion.duplicate())
         if (gpt) {
-            disk.write(diskSectors - ZERO_REGION_SECTORS.toLong(), zeroRegion.duplicate().clear())
+            disk.write(diskSectors - VentoyLayout.ZERO_REGION_SECTORS.toLong(), zeroRegion.duplicate())
         }
 
         // Write VTOYEFI partition data
