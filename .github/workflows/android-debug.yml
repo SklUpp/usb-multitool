@@ -40,13 +40,13 @@ jobs:
       - name: Fetch pinned engines
         run: ./scripts/fetch-third-party.sh
 
-      - name: Set up Rust for the rescue engine
+      - name: Set up Rust 1.99.1 for the rescue engine
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup target add aarch64-linux-android
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup target add --toolchain 1.99.1 aarch64-linux-android
 
       - name: SectorForge engine fault tests
-        run: cargo test --manifest-path app/src/main/rust/sf-bridge/Cargo.toml
+        run: cargo +1.99.1 test --locked --manifest-path app/src/main/rust/sf-bridge/Cargo.toml
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
