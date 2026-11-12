@@ -1320,20 +1320,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 var preparedFolder: SafBackupFolder? = null
                 var preparedArchive: Uri? = null
                 var preparedImage: Uri? = null
+                var ownedDocuments: usb.saf.SafOperationDocuments? = null
                 submitReadOnlyDiskOperation(
                     OperationTitle.RescueBackup,
                     beforeOpen = { snapshot ->
                         requirePinnedBackupAttachment(snapshot)
                         val folder = requireBackupFolder()
                         preparedFolder = folder
+                        val owned = usb.saf.SafOperationDocuments(folder::deleteDocument)
+                        ownedDocuments = owned
                         val folderName = BackupArchive.folderName("${timestamp()}-${System.nanoTime()}")
-                        val archive = folder.createExclusiveSubfolder(folderName)
+                        val archive = owned.own(folder.createExclusiveSubfolder(folderName))
                         preparedArchive = archive
                         try {
-                            val imageUri = folder.createExclusiveFile(
-                                archive,
-                                BackupArchive.IMAGE_NAME,
-                                "application/octet-stream",
+                            val imageUri = owned.own(
+                                folder.createExclusiveFile(
+                                    archive,
+                                    BackupArchive.IMAGE_NAME,
+                                    "application/octet-stream",
+                                ),
                             )
                             preparedImage = imageUri
                             val image = folder.openPositionalImage(imageUri)
@@ -1347,46 +1352,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         } catch (failure: Throwable) {
                             runCatching { prepared?.close() }.onFailure(failure::addSuppressed)
-                            preparedImage?.let { runCatching { folder.deleteDocument(it) } }
-                            runCatching { folder.deleteDocument(archive) }.onFailure(failure::addSuppressed)
+                            runCatching { owned.cleanup() }.getOrNull()?.let(failure::addSuppressed)
                             throw failure
                         }
                     },
                     onOpenFailure = {
                         runCatching { prepared?.close() }
-                        preparedFolder?.let { folder ->
-                            preparedImage?.let { runCatching { folder.deleteDocument(it) } }
-                            preparedArchive?.let { archive ->
-                                runCatching { folder.deleteDocument(archive) }
-                            }
-                        }
+                        ownedDocuments?.cleanup()
                     }
                 ) { disk, operation, _ ->
                     val folder = requireNotNull(preparedFolder)
                     val archiveUri = requireNotNull(preparedArchive)
-                    val sectorSize = disk.geometry.sectorSize
-                    val deviceId = state.device
-                        ?: throw IllegalStateException("no device identity for rescue map")
-                    if (!deviceId.hasStableSerial) {
-                        throw IllegalStateException(
-                            "USB serial unavailable; refuse rescue map without stable identity " +
-                                "(resume and backup maps would be ambiguous across same-model sticks)",
-                        )
-                    }
-                    val need = usb.diagnostics.RescueRangePolicy.requireSignedBytes(
-                        disk.geometry.sectorCount,
-                        disk.geometry.sectorSize,
-                    )
-                    operation.bytesTotal = need
-                    folder.availableBytes()?.let { usable ->
-                        if (usable >= 0 && usable < need) {
-                            throw java.io.IOException(
-                                "not enough free space in the selected folder: " +
-                                    "usable=$usable, need≈$need (provider estimate)",
+                    try {
+                        val sectorSize = disk.geometry.sectorSize
+                        val deviceId = state.device
+                            ?: throw IllegalStateException("no device identity for rescue map")
+                        if (!deviceId.hasStableSerial) {
+                            throw IllegalStateException(
+                                "USB serial unavailable; refuse rescue map without stable identity " +
+                                    "(resume and backup maps would be ambiguous across same-model sticks)",
                             )
                         }
-                    }
-                    try {
+                        val need = usb.diagnostics.RescueRangePolicy.requireSignedBytes(
+                            disk.geometry.sectorCount,
+                            disk.geometry.sectorSize,
+                        )
+                        operation.bytesTotal = need
+                        folder.availableBytes()?.let { usable ->
+                            if (usable >= 0 && usable < need) {
+                                throw java.io.IOException(
+                                    "not enough free space in the selected folder: " +
+                                        "usable=$usable, need≈$need (provider estimate)",
+                                )
+                            }
+                        }
                         val copyMap = RescueMap.forCopy(
                             disk.geometry.sectorCount,
                             sectorSize = sectorSize,
@@ -1407,6 +1406,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "Rescue backup: archive ${archiveUri.lastPathSegment}: " +
                             "(${BackupArchive.IMAGE_NAME} + ${BackupArchive.MAP_NAME}): " +
                             "$copied copied, $unreadable unreadable of ${copyMap.sectorCount} sectors$note"
+                    } catch (failure: Throwable) {
+                        if (!operation.mutationAttempted) {
+                            prepared?.let { runCatching { it.close() }.onFailure(failure::addSuppressed) }
+                            ownedDocuments?.cleanup()?.let(failure::addSuppressed)
+                        }
+                        throw failure
                     } finally {
                         runCatching { prepared?.close() }
                     }
@@ -5251,15 +5256,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
+                var beforeOpenAttempted = false
                 var beforeOpenSucceeded = false
                 val raw = try {
                     openRawDisk { live ->
+                        beforeOpenAttempted = beforeOpen != null
                         beforeOpen?.invoke(live)
                         beforeOpenSucceeded = true
                         live.device ?: throw DiskException.Disconnected()
                     } ?: throw DiskException.Disconnected()
                 } catch (failure: Throwable) {
-                    if (beforeOpenSucceeded) {
+                    if (beforeOpenAttempted || beforeOpenSucceeded) {
                         runCatching { onOpenFailure?.invoke() }.onFailure(failure::addSuppressed)
                     }
                     throw failure

@@ -103,6 +103,20 @@ class SectorForgeBlocksTest {
         assertEquals(listOf(1UL until 4UL, 5UL until 6UL), map.nonTried)
     }
 
+    @Test
+    fun forwardOnlyUnresolvedBlocksBecomeFailed() {
+        val map = RescueMap(4UL)
+        SectorForgeBlocks.apply(
+            map,
+            longArrayOf(0L, 2L * 512, SectorForgeBlocks.NON_TRIED, 2L * 512, 2L * 512, SectorForgeBlocks.COPIED),
+            512,
+            inheritedFailed = emptyList(),
+            unresolvedAsFailed = true,
+        )
+        assertEquals(listOf(0UL until 2UL), map.failed)
+        assertEquals(listOf(2UL until 4UL), map.copied)
+    }
+
     @Test fun snapshotReplacesStaleCheckpointProgress() {
         val map = RescueMap.forCopy(4UL, sectorSize = sectorSize)
         map.markCopied(0UL, 4UL) // stale: a previous checkpoint claimed everything
@@ -121,6 +135,25 @@ class SectorForgeBlocksTest {
         assertEquals(listOf(0UL until 1UL), map.copied)
         assertEquals(listOf(1UL until 4UL), map.nonTried)
         assertTrue(map.failed.isEmpty())
+    }
+
+    @Test
+    fun uncertainWriteOverridesInheritedFailedForRestoreSafety() {
+        val map = RescueMap.forCopy(4UL)
+        SectorForgeBlocks.apply(
+            map,
+            longArrayOf(0L, 4L * 512, SectorForgeBlocks.NON_TRIED),
+            512,
+            inheritedFailed = listOf(1UL until 2UL),
+            uncertainWrites = listOf(1UL until 2UL),
+        )
+        assertEquals(listOf(1UL until 2UL), map.nonTried)
+        assertTrue(map.failed.isEmpty())
+        val saved = RescueMap.decode(map.encode())
+        assertEquals(listOf(1UL until 2UL), saved.nonTried)
+        assertThrows(IllegalStateException::class.java) {
+            RescueRestorePrep.prepare(saved, "disk", 512, liveHasSerial = true)
+        }
     }
 
     @Test fun demoteFailedToNonTriedIsLinearAndCoalesces() {

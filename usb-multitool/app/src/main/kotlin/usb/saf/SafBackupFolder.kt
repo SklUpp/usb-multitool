@@ -27,6 +27,28 @@ data class SafDocument(
     val sizeBytes: Long?,
 )
 
+/** Tracks exact URIs returned by this operation; display names never authorize cleanup. */
+internal class SafOperationDocuments(private val delete: (Uri) -> Unit) {
+    private val owned = LinkedHashSet<Uri>()
+
+    fun own(uri: Uri): Uri {
+        owned += uri
+        return uri
+    }
+
+    fun cleanup(): Throwable? {
+        var failure: Throwable? = null
+        for (uri in owned.toList().asReversed()) {
+            try {
+                delete(uri)
+            } catch (cause: Throwable) {
+                if (failure == null) failure = cause else failure.addSuppressed(cause)
+            }
+        }
+        owned.clear()
+        return failure
+    }
+}
 /**
  * Thin platform adapter for a user-selected SAF tree. It owns document placement and
  * byte sync only; rescue naming, validation and the durable engine boundary live in

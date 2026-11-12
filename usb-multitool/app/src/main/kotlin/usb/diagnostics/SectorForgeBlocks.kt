@@ -50,10 +50,12 @@ internal object SectorForgeBlocks {
         triples: LongArray,
         sectorSize: Int,
         inheritedFailed: List<ULongRange>,
+        uncertainWrites: List<ULongRange> = emptyList(),
+        unresolvedAsFailed: Boolean = false,
     ) {
         require(triples.size % 3 == 0) { "block snapshot is not a triple list" }
-        val spans = reconstruct(triples, target.sectorCount, sectorSize)
-        target.replaceRuns(overlayInheritedFailed(spans, inheritedFailed))
+        val spans = reconstruct(triples, target.sectorCount, sectorSize, unresolvedAsFailed)
+        target.replaceRuns(overlayInheritedFailed(spans, inheritedFailed, uncertainWrites))
     }
 
     /** Maps the native triples to app runs, coalescing adjacent equal statuses. */
@@ -61,6 +63,7 @@ internal object SectorForgeBlocks {
         triples: LongArray,
         sectorCount: ULong,
         sectorSize: Int,
+        unresolvedAsFailed: Boolean,
     ): List<RescueMap.Span> {
         val out = ArrayList<RescueMap.Span>(triples.size / 3)
         var nextLba = 0UL
@@ -87,7 +90,8 @@ internal object SectorForgeBlocks {
                 when (triples[index + 2]) {
                     COPIED -> RescueStatus.COPIED
                     FAILED -> RescueStatus.FAILED
-                    NON_TRIED, NON_TRIMMED, NON_SCRAPED -> RescueStatus.NON_TRIED
+                    NON_TRIED, NON_TRIMMED, NON_SCRAPED ->
+                        if (unresolvedAsFailed) RescueStatus.FAILED else RescueStatus.NON_TRIED
                     else ->
                         throw IllegalArgumentException(
                             "unknown native block status ${triples[index + 2]} at $block",
@@ -111,37 +115,50 @@ internal object SectorForgeBlocks {
     private fun overlayInheritedFailed(
         spans: List<RescueMap.Span>,
         inheritedFailed: List<ULongRange>,
+        uncertainWrites: List<ULongRange>,
     ): List<RescueMap.Span> {
-        if (inheritedFailed.isEmpty()) return spans
-        val out = ArrayList<RescueMap.Span>(spans.size + inheritedFailed.size * 2)
-        var cursor = 0
+        if (inheritedFailed.isEmpty() && uncertainWrites.isEmpty()) return spans
+        val out = ArrayList<RescueMap.Span>(spans.size + (inheritedFailed.size + uncertainWrites.size) * 2)
         for (span in spans) {
-            if (span.status != RescueStatus.NON_TRIED) {
+            var pieces = listOf(span)
+            if (span.status == RescueStatus.NON_TRIED) {
+                for (range in inheritedFailed) pieces = paintRange(pieces, range, RescueStatus.FAILED)
+            }
+            for (range in uncertainWrites) pieces = paintRange(pieces, range, RescueStatus.NON_TRIED)
+            out += pieces
+        }
+        return out
+    }
+
+    private fun paintRange(
+        spans: List<RescueMap.Span>,
+        range: ULongRange,
+        status: RescueStatus,
+    ): List<RescueMap.Span> {
+        val out = ArrayList<RescueMap.Span>(spans.size + 2)
+        for (span in spans) {
+            val end = span.start + span.count
+            val from = maxOf(span.start, range.first)
+            val to = minOf(end, range.last + 1UL)
+            if (from >= to) {
                 out += span
                 continue
             }
-            val spanFirst = span.start
-            val spanLast = span.start + span.count - 1UL
-            while (cursor < inheritedFailed.size && inheritedFailed[cursor].last < spanFirst) {
-                cursor++
-            }
-            var lba = spanFirst
-            var i = cursor
-            while (i < inheritedFailed.size) {
-                val range = inheritedFailed[i]
-                if (range.first > spanLast) break
-                val from = maxOf(range.first, spanFirst, lba)
-                if (from > spanLast) break
-                if (from > lba) out += RescueMap.Span(lba, from - lba, RescueStatus.NON_TRIED)
-                val to = minOf(range.last, spanLast)
-                out += RescueMap.Span(from, to - from + 1UL, RescueStatus.FAILED)
-                lba = to + 1UL
-                if (range.last > spanLast) break
-                i++
-            }
-            cursor = i
-            if (lba <= spanLast) {
-                out += RescueMap.Span(lba, spanLast - lba + 1UL, RescueStatus.NON_TRIED)
+            if (span.start < from) out += RescueMap.Span(span.start, from - span.start, span.status)
+            out += RescueMap.Span(from, to - from, status)
+            if (to < end) out += RescueMap.Span(to, end - to, span.status)
+        }
+        return coalesce(out)
+    }
+
+    private fun coalesce(spans: List<RescueMap.Span>): List<RescueMap.Span> {
+        val out = ArrayList<RescueMap.Span>(spans.size)
+        for (span in spans) {
+            val previous = out.lastOrNull()
+            if (previous != null && previous.status == span.status && previous.start + previous.count == span.start) {
+                out[out.lastIndex] = RescueMap.Span(previous.start, previous.count + span.count, span.status)
+            } else {
+                out += span
             }
         }
         return out

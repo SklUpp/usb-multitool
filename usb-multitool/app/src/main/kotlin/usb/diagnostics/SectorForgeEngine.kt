@@ -57,11 +57,21 @@ internal object SectorForgeEngine {
         require(sizeBytes <= Long.MAX_VALUE.toULong()) { "disk capacity exceeds the signed offset range" }
         val seeds = SectorForgeBlocks.seeds(map)
         val inheritedFailed = map.failed
+        val writerUncertainWrites = ArrayList<ULongRange>()
         val reader = Reader(disk, sectorSize)
-        val writer = Writer(destination, sectorSize)
+        val writer = Writer(destination, sectorSize, writerUncertainWrites)
         val progress =
-            Progress(map, operation, sectorSize, inheritedFailed, checkpoint, destination, sizeBytes.toLong())
-        val chunk = Diagnostics.SCAN_CHUNK_BYTES
+            Progress(
+                map,
+                operation,
+                sectorSize,
+                inheritedFailed,
+                checkpoint,
+                destination,
+                sizeBytes.toLong(),
+                maxRetries,
+                writerUncertainWrites,
+            )
         val checkpointBytes =
             (checkpointEverySectors * sectorSize.toULong()).toLong().coerceAtLeast(1L)
         var handle = 0L
@@ -104,7 +114,14 @@ internal object SectorForgeEngine {
             if (handle != 0L) {
                 try {
                     val snapshot = SectorForgeNative.blocks(handle)
-                    SectorForgeBlocks.apply(map, snapshot, sectorSize, inheritedFailed)
+                    SectorForgeBlocks.apply(
+                        map,
+                        snapshot,
+                        sectorSize,
+                        inheritedFailed,
+                        writerUncertainWrites,
+                        unresolvedAsFailed = maxRetries == 0 && !destination.positional,
+                    )
                 } catch (cause: Throwable) {
                     record(cause)
                 } finally {
@@ -194,19 +211,25 @@ internal object SectorForgeEngine {
     }
 
     /** Seekable image sink for the engine; the image stays dense and positional. */
-    internal class Writer(private val destination: RescueSink, private val sectorSize: Int) {
+    internal class Writer(
+        private val destination: RescueSink,
+        private val sectorSize: Int,
+        private val uncertainWrites: MutableList<ULongRange>,
+    ) {
         @Volatile var failure: Throwable? = null
         private var scratch = ByteArray(0)
 
         fun writeAt(offset: Long, buffer: ByteBuffer): Int {
             require(offset % sectorSize == 0L) { "unaligned write at $offset" }
+            val length = buffer.remaining()
+            val range = (offset / sectorSize).toULong() until ((offset + length) / sectorSize).toULong()
             return try {
-                val length = buffer.remaining()
                 if (scratch.size < length) scratch = ByteArray(length)
                 buffer.get(scratch, 0, length)
-                destination.writeBatch((offset / sectorSize).toULong(), scratch, length, sectorSize)
+                destination.writeBatch(range.first, scratch, length, sectorSize)
                 0
             } catch (e: Exception) {
+                uncertainWrites += range
                 failure = e
                 SectorForgeNative.STATUS_FATAL
             }
@@ -222,6 +245,8 @@ internal object SectorForgeEngine {
         private val checkpoint: (RescueMap) -> Unit,
         private val destination: RescueSink,
         private val imageBytes: Long,
+        private val maxRetries: Int = 1,
+        private val uncertainWrites: List<ULongRange> = emptyList(),
     ) {
         private var highestReported = 0L
         var failure: Throwable? = null
@@ -241,7 +266,14 @@ internal object SectorForgeEngine {
                     operation.report(position)
                 }
                 if (blocks != null && blocks.isNotEmpty()) {
-                    SectorForgeBlocks.apply(map, blocks, sectorSize, inheritedFailed)
+                    SectorForgeBlocks.apply(
+                        map,
+                        blocks,
+                        sectorSize,
+                        inheritedFailed,
+                        uncertainWrites,
+                        unresolvedAsFailed = maxRetries == 0 && !destination.positional,
+                    )
                     destination.ensureLength(imageBytes)
                     checkpoint(map.snapshot())
                 }

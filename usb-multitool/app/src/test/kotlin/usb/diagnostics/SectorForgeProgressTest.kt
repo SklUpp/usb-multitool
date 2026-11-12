@@ -1,5 +1,6 @@
 package usb.diagnostics
-
+import java.nio.ByteBuffer
+import org.junit.Assert.assertEquals
 import java.io.IOException
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -52,5 +53,19 @@ class SectorForgeProgressTest {
             assertSame(failure, actual)
         }
         org.junit.Assert.assertEquals(listOf(0UL until 2UL), map.nonTried)
+    }
+
+    @Test fun writerFailureMarksEntirePossiblyPartialRangeUncertain() {
+        val uncertain = mutableListOf<ULongRange>()
+        val sink = object : RescueSink {
+            override val positional = true
+            override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
+                throw IOException("short write after first sector")
+            }
+        }
+        val writer = SectorForgeEngine.Writer(sink, 512, uncertain)
+        val buffer = ByteBuffer.allocate(1024)
+        assertEquals(SectorForgeNative.STATUS_FATAL, writer.writeAt(512, buffer))
+        assertEquals(listOf(1UL until 3UL), uncertain)
     }
 }

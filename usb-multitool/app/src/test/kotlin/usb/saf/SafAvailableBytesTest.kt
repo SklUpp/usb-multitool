@@ -5,6 +5,7 @@ import android.provider.DocumentsContract
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -123,5 +124,29 @@ class SafAvailableBytesTest {
     @Test
     fun emptyRootsAreUnknown() {
         assertNull(availableBytesForTree(rootsCursor(), "primary:"))
+    }
+
+    @Test
+    fun operationCleanupDeletesOnlyExactOwnedUrisInReverseOrder() {
+        val deleted = mutableListOf<String>()
+        val owned = SafOperationDocuments { deleted += it.toString() }
+        val archive = android.net.Uri.parse("content://tree/run")
+        val image = android.net.Uri.parse("content://tree/run/image.img")
+        owned.own(archive)
+        owned.own(image)
+        owned.cleanup()
+        assertEquals(listOf(image.toString(), archive.toString()), deleted)
+        owned.cleanup()
+        assertEquals(2, deleted.size)
+    }
+
+    @Test
+    fun preflightFailureLeavesUnownedUserDocumentUntouched() {
+        val deleted = mutableListOf<String>()
+        val owned = SafOperationDocuments { deleted += it.toString() }
+        owned.own(android.net.Uri.parse("content://tree/run"))
+        owned.cleanup()
+        assertEquals(listOf("content://tree/run"), deleted)
+        assertFalse(deleted.contains("content://tree/existing"))
     }
 }
