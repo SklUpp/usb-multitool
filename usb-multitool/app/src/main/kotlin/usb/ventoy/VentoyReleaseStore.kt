@@ -34,7 +34,7 @@ object VentoyReleaseStore {
         val stored: StoredRelease,
         val requestedRelease: String,
         cause: Throwable,
-    ) : Exception(
+    ) : IllegalStateException(
         "requested Ventoy $requestedRelease was not saved; stored ${stored.assets.release} remains",
         cause,
     )

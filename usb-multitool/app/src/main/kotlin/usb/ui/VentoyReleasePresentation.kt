@@ -36,7 +36,7 @@ fun ventoyReleaseComparison(installed: String?, target: String?): VentoyReleaseC
     for (index in 0 until size) {
         val a = leftParts.getOrElse(index) { 0L }
         val b = rightParts.getOrElse(index) { 0L }
-        if (a != b) return VentoyReleaseComparison(left, right, order = a.compareTo(b))
+        if (a != b) return VentoyReleaseComparison(left, right, order = b.compareTo(a))
     }
     return VentoyReleaseComparison(left, right, order = 0)
 }
