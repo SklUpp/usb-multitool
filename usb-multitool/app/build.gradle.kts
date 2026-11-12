@@ -4,8 +4,9 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-// SectorForge sf-core rescue engine: the Rust bridge is a static library built by
+// SectorForge sf-core rescue engine: Rust 1.99.1 bridge is a static library built by
 // cargo and linked into libusb_native.so (see src/main/cpp/CMakeLists.txt).
+val sfRustToolchain = "1.99.1"
 val sfBridgeTarget = "aarch64-linux-android"
 val sfBridgeDir = layout.projectDirectory.dir("src/main/rust/sf-bridge")
 val sfBridgeLib = layout.buildDirectory.file("rust/$sfBridgeTarget/release/libsf_bridge.a")
@@ -16,7 +17,7 @@ val buildSfBridge =
         description = "Builds the SectorForge sf-core rescue bridge (Rust static library)"
         workingDir = sfBridgeDir.asFile
         environment("CARGO_TARGET_DIR", layout.buildDirectory.dir("rust").get().asFile.absolutePath)
-        commandLine("cargo", "build", "--locked", "--release", "--target", sfBridgeTarget)
+        commandLine("cargo", "+$sfRustToolchain", "build", "--locked", "--release", "--target", sfBridgeTarget)
         inputs.dir(sfBridgeDir)
         inputs.dir(layout.projectDirectory.dir("../third_party/sectorforge/crates/sf-core/src"))
         inputs.file(layout.projectDirectory.file("../third_party/sectorforge/crates/sf-core/Cargo.toml"))
