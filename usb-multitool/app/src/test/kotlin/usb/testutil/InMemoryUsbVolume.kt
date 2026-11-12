@@ -17,6 +17,8 @@ class InMemoryUsbVolume(
     private val implicitDirectories = linkedSetOf<String>()
 
     var failWriteAtPath: String? = null
+    var failAnyWrite: Boolean = false
+
     var failRenameFrom: String? = null
     var failDeletePath: String? = null
     var unreadableDirectories: Set<String> = emptySet()
@@ -112,6 +114,7 @@ class InMemoryUsbVolume(
         plannedTotalSize: Long,
     ) {
         val normalized = normalize(path)
+        if (failAnyWrite) throw IOException("write failed")
         if (failWriteAtPath == normalized) throw IOException("write failed")
         val existing = files[normalized]
         if (existing == null && !create) throw IOException("missing $normalized")

@@ -554,8 +554,15 @@ object VentoySetup {
                     )
                 if (entry.isDirectory) throw NotOnVentoyPartitionException("\"$image\" is a directory")
             }
-            val existingJsonBytes = readBytes(volume, CONFIG_PATH)
-            val existingJson = existingJsonBytes?.let { String(it, Charsets.UTF_8) }
+            val existingJsonBytes: ByteArray?
+            val existingJson: String?
+            if (imagePaths.isEmpty()) {
+                existingJsonBytes = null
+                existingJson = readText(volume, CONFIG_PATH)
+            } else {
+                existingJsonBytes = readTextBytes(volume, CONFIG_PATH)
+                existingJson = existingJsonBytes?.let { String(it, Charsets.UTF_8) }
+            }
             val mergedJson =
                 if (imagePaths.isEmpty()) {
                     existingJson
@@ -600,14 +607,15 @@ object VentoySetup {
             onMutation()
             ensureDirectory(volume, VENTOY_DIR)
             ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
-            if (existing != null) {
-                backupBeforeReplace(volume, path, existing)
-            }
+            backupGenerationFiles(
+                volume = volume,
+                xmlPath = path,
+                existingXml = existing,
+                imagePaths = imagePaths,
+                existingJsonBytes = existingJsonBytes,
+            )
             replaceFile(volume, path, generated)
             if (imagePaths.isNotEmpty() && mergedJson != null) {
-                existingJsonBytes?.let {
-                    backupBeforeReplace(volume, CONFIG_PATH, it)
-                }
                 replaceFile(volume, CONFIG_PATH, mergedJson.toByteArray(Charsets.UTF_8))
             }
             val links = WindowsSetup.parseLinks(mergedJson)
@@ -861,6 +869,19 @@ object VentoySetup {
 
     private fun xmlTarget(input: String): String = XmlPath.resolve(input)
 
+    internal fun backupGenerationFiles(
+        volume: UsbFsVolume,
+        xmlPath: String,
+        existingXml: ByteArray?,
+        imagePaths: List<String>,
+        existingJsonBytes: ByteArray?,
+    ) {
+        if (existingXml != null) backupBeforeReplace(volume, xmlPath, existingXml)
+        if (imagePaths.isNotEmpty()) {
+            existingJsonBytes?.let { backupBeforeReplace(volume, CONFIG_PATH, it) }
+        }
+    }
+
     /** Preserve an existing target before replacement; never overwrite an earlier backup. */
     internal fun backupBeforeReplace(volume: UsbFsVolume, path: String, bytes: ByteArray): String {
         val backupPath =
@@ -917,12 +938,17 @@ object VentoySetup {
         return volume.read(path, 0L, entry.size.toInt())
     }
 
-    private fun readText(volume: UsbFsVolume, path: String): String? {
+    internal fun readTextBytes(volume: UsbFsVolume, path: String): ByteArray? {
         val entry = findEntry(volume, path) ?: return null
-        if (entry.size <= 0L) return ""
+        if (entry.size <= 0L) return ByteArray(0)
         if (entry.size > Int.MAX_VALUE) {
             throw IllegalStateException("$path is ${entry.size} bytes; refusing to load it as text")
         }
-        return String(volume.read(path, 0L, entry.size.toInt()), Charsets.UTF_8)
+        return volume.read(path, 0L, entry.size.toInt())
+    }
+
+    private fun readText(volume: UsbFsVolume, path: String): String? {
+        val bytes = readTextBytes(volume, path) ?: return null
+        return String(bytes, Charsets.UTF_8)
     }
 }

@@ -189,4 +189,67 @@ class VentoySetupTest {
         val fallback = volume.paths().single { it.startsWith("${VentoySetup.CONFIG_BACKUP_PATH}.bak-") }
         assertTrue(previous.contentEquals(requireNotNull(volume.fileBytes(fallback))))
     }
+
+    @Test
+    fun jsonByteReaderKeepsReadTextIntLimitNotXmlLimit() {
+        val volume =
+            InMemoryUsbVolume(
+                mapOf(
+                    "/ventoy/ventoy.json" to ByteArray(2 * 1024 * 1024 + 1) { '{'.code.toByte() },
+                ),
+            )
+
+        val bytes = VentoySetup.readTextBytes(volume, VentoySetup.CONFIG_PATH)
+
+        assertEquals(2 * 1024 * 1024 + 1, requireNotNull(bytes).size)
+    }
+
+    @Test
+    fun emptyImagePathsBacksUpXmlButDoesNotCreateConfigBackup() {
+        val volume =
+            InMemoryUsbVolume(
+                mapOf(
+                    "/ventoy/autounattend.xml" to byteArrayOf(1, 2),
+                    VentoySetup.CONFIG_PATH to "{}".toByteArray(),
+                ),
+            )
+
+        VentoySetup.backupGenerationFiles(
+            volume = volume,
+            xmlPath = "/ventoy/autounattend.xml",
+            existingXml = requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")),
+            imagePaths = emptyList(),
+            existingJsonBytes = null,
+        )
+
+        assertEquals(1, volume.paths().count { it.startsWith("/ventoy/autounattend.xml.bak-") })
+        assertTrue(volume.paths().none { it.contains("ventoy_backup") })
+        assertTrue("{}".toByteArray().contentEquals(requireNotNull(volume.fileBytes(VentoySetup.CONFIG_PATH))))
+    }
+
+    @Test
+    fun backupFailureBeforeTargetReplacementLeavesTargetsUntouched() {
+        val volume =
+            InMemoryUsbVolume(
+                mapOf(
+                    "/ventoy/autounattend.xml" to byteArrayOf(1, 2),
+                    VentoySetup.CONFIG_PATH to byteArrayOf(3, 4),
+                ),
+            )
+        volume.failAnyWrite = true
+
+        assertThrows(java.io.IOException::class.java) {
+            VentoySetup.backupGenerationFiles(
+                volume = volume,
+                xmlPath = "/ventoy/autounattend.xml",
+                existingXml = requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")),
+                imagePaths = listOf("/ISO/windows.iso"),
+                existingJsonBytes = requireNotNull(volume.fileBytes(VentoySetup.CONFIG_PATH)),
+            )
+        }
+
+        assertTrue(byteArrayOf(1, 2).contentEquals(requireNotNull(volume.fileBytes("/ventoy/autounattend.xml"))))
+        assertTrue(byteArrayOf(3, 4).contentEquals(requireNotNull(volume.fileBytes(VentoySetup.CONFIG_PATH))))
+        assertTrue(volume.paths().none { it.contains(".bak-") || it.contains("ventoy_backup") })
+    }
 }
