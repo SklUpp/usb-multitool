@@ -5454,6 +5454,9 @@ class MainActivity : ComponentActivity() {
         viewModel.onGptBackupPicked(uri)
     }
 
+    private var ventoySettingsPickerIdentity: String? = null
+    private var ventoySettingsPickerGeneration: Long? = null
+
     /**
      * SAF document chosen as the live Ventoy settings source. It is read and updated through
      * this URI in place; nothing is imported onto the stick.
@@ -5461,7 +5464,19 @@ class MainActivity : ComponentActivity() {
     private val ventoySettingsPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
+        val expectedIdentity = ventoySettingsPickerIdentity
+        val expectedGeneration = ventoySettingsPickerGeneration
+        ventoySettingsPickerIdentity = null
+        ventoySettingsPickerGeneration = null
         if (uri == null) return@registerForActivityResult
+        val live = viewModel.state.device
+        if (live == null ||
+            live.identity != expectedIdentity ||
+            live.attachGeneration != expectedGeneration
+        ) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+            return@registerForActivityResult
+        }
         runCatching {
             contentResolver.takePersistableUriPermission(
                 uri,
@@ -5473,6 +5488,8 @@ class MainActivity : ComponentActivity() {
             UiIntent.SelectVentoySettingsDocument(
                 uri = uri.toString(),
                 displayName = documentDisplayName(uri),
+                identity = expectedIdentity,
+                attachGeneration = expectedGeneration,
             ),
         )
     }
@@ -5983,6 +6000,9 @@ class MainActivity : ComponentActivity() {
                     )
                 },
                 onPickVentoySettingsFile = {
+                    val live = viewModel.state.device
+                    ventoySettingsPickerIdentity = live?.identity
+                    ventoySettingsPickerGeneration = live?.attachGeneration
                     ventoySettingsPickerLauncher.launch(arrayOf("*/*"))
                 },
                 onPickBackup = {

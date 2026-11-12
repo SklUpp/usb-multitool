@@ -208,6 +208,10 @@ internal object VentoyTransitions {
                 )
             !state.actionsEnabled ->
                 ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            intent.identity != null && intent.identity != state.device?.identity ->
+                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+            intent.attachGeneration != null && intent.attachGeneration != state.device?.attachGeneration ->
+                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale)))
             else ->
                 startSettingsSourceRead(
                     state = state,

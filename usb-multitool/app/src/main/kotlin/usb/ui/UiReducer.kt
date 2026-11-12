@@ -360,6 +360,8 @@ sealed class UiIntent {
     data class SelectVentoySettingsDocument(
         val uri: String,
         val displayName: String? = null,
+        val identity: String? = null,
+        val attachGeneration: Long? = null,
     ) : UiIntent()
     /** Go back to Ventoy's own `/ventoy/ventoy.json`. */
     data object UseDefaultVentoySettingsFile : UiIntent()
