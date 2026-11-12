@@ -372,6 +372,7 @@ fun AppShell(
                                     state = state,
                                     onIntent = onIntent,
                                     modifier = Modifier.fillMaxSize(),
+                                    onPickWindowsFile = onPickWindowsFile,
                                     onPickVentoySettingsFile = onPickVentoySettingsFile,
                                 )
                                 ShellTab.Partitions -> PartitionsScreen(

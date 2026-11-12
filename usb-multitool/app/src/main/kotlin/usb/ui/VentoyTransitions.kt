@@ -263,10 +263,9 @@ internal object VentoyTransitions {
         val pinGeometry = source is VentoySettingsSource.UsbFile && !source.isDefaultPath()
         return ReduceResult(
             state.copy(
+                ventoyGlobalSettingsRequest = token,
                 ventoySettingsSource = source,
                 ventoyGlobalSettings = null,
-                ventoySettingsSourceLoading = true,
-                ventoySettingsSourceIdentity = device?.identity,
                 ventoySettingsSourceAttachGeneration = device?.attachGeneration,
                 ventoySettingsSourcePartitionId = if (pinGeometry) partitionId else null,
                 ventoySettingsSourceStartLba = if (pinGeometry) partitionStartLba else null,
