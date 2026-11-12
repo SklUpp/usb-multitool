@@ -105,7 +105,7 @@ class SectorForgeBlocksTest {
 
     @Test
     fun forwardOnlyUnresolvedBlocksBecomeFailed() {
-        val map = RescueMap(4UL)
+        val map = RescueMap.forCopy(4UL, sectorSize = 512)
         SectorForgeBlocks.apply(
             map,
             longArrayOf(0L, 2L * 512, SectorForgeBlocks.NON_TRIED, 2L * 512, 2L * 512, SectorForgeBlocks.COPIED),
@@ -139,7 +139,7 @@ class SectorForgeBlocksTest {
 
     @Test
     fun uncertainWriteOverridesInheritedFailedForRestoreSafety() {
-        val map = RescueMap.forCopy(4UL)
+        val map = RescueMap.forCopy(4UL, sectorSize = 512)
         SectorForgeBlocks.apply(
             map,
             longArrayOf(0L, 4L * 512, SectorForgeBlocks.NON_TRIED),
