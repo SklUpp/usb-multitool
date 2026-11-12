@@ -254,7 +254,7 @@ object RawWriter {
         admission: CloseAdmission,
     ): MeasuredSource {
         val handle = MeasurementHandle(admission)
-        val closeOnCancel = { handle.cancel() }
+        val closeOnCancel: () -> Unit = { handle.cancel() }
         return try {
             operation.onInactive(closeOnCancel)
             source.measureDecoded(

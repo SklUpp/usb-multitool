@@ -39,6 +39,7 @@ import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -1148,8 +1149,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         confirmation = confirmation,
                                         overwrite = true,
                                         range = range,
-                                        expectedDecodedBytes = confirmation.rawDecodedBytes,
-                                        expectedSha256 = confirmation.rawSourceSha256,
+                                        expectedDecodedBytes = confirmed.rawDecodedBytes,
+                                        expectedSha256 = confirmed.rawSourceSha256,
                                         operation = this,
                                     )
                                     if (stagedPath != null) {
