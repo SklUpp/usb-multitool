@@ -5898,6 +5898,9 @@ class MainActivity : ComponentActivity() {
         usb.diagnostics.PerformancePreferences.load(applicationContext)
         // A re-delivered CreateDocument result arrives after the activity is recreated
         // (rotation/process death); without this it would find no pending name and drop it.
+        ventoySettingsPickerIdentity = savedInstanceState?.getString(STATE_VENTOY_SETTINGS_IDENTITY)
+        ventoySettingsPickerGeneration = savedInstanceState?.getLong(STATE_VENTOY_SETTINGS_ATTACH, Long.MIN_VALUE)
+            ?.takeIf { it != Long.MIN_VALUE }
         pendingDownloadName = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD)
         // The document picker may recreate the activity; without these two the result would
         // arrive as an image bound for /ISO, so an XML chosen for /ventoy would be misfiled and
@@ -6082,6 +6085,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        outState.putString(STATE_VENTOY_SETTINGS_IDENTITY, ventoySettingsPickerIdentity)
+        ventoySettingsPickerGeneration?.let {
+            outState.putLong(STATE_VENTOY_SETTINGS_ATTACH, it)
+        }
         outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
         backupFolderLaunches.pending?.let { pending ->
             outState.putString(STATE_PENDING_FOLDER_ACTION, pending.action.name)
@@ -6223,6 +6230,10 @@ class MainActivity : ComponentActivity() {
             "usb.multitool.PENDING_WINDOWS_ATTACH"
         private const val STATE_PENDING_WINDOWS_REQUEST =
             "usb.multitool.PENDING_WINDOWS_REQUEST"
+        private const val STATE_VENTOY_SETTINGS_IDENTITY =
+            "usb.multitool.VENTOY_SETTINGS_IDENTITY"
+        private const val STATE_VENTOY_SETTINGS_ATTACH =
+            "usb.multitool.VENTOY_SETTINGS_ATTACH"
         private const val WINDOWS_IMPORT_TIMEOUT_MS = 5 * 60 * 1000L
 
         @Volatile

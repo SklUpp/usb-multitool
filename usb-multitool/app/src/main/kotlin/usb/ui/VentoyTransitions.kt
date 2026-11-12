@@ -269,6 +269,7 @@ internal object VentoyTransitions {
             state.copy(
                 ventoyGlobalSettingsRequest = token,
                 ventoySettingsSource = source,
+                ventoyGlobalSettings = null,
                 ventoySettingsSourceLoading = true,
                 ventoySettingsSourceIdentity = device?.identity,
                 ventoySettingsSourceAttachGeneration = device?.attachGeneration,
