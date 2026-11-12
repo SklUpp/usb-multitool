@@ -63,7 +63,12 @@ data class LocalAccount(
     val name: String? = null,
     val password: String? = null,
     val inAdministrators: Boolean? = null,
-)
+) {
+    /** Never let a data-class dump carry the plaintext password into logs or traces. */
+    override fun toString(): String =
+        "LocalAccount(name=$name, password=${if (password == null) "null" else "<redacted>"}, " +
+            "inAdministrators=$inAdministrators)"
+}
 
 /** null = omit that block from the generated file; never write an empty block. */
 data class AutounattendParams(
@@ -169,7 +174,11 @@ fun autounattendPlanSha256(
             append("locale=").append(params.localeId).append('\n')
             append("computer=").append(params.computerName).append('\n')
             append("account.name=").append(account?.name).append('\n')
-            append("account.password=").append(account?.password).append('\n')
+            // Bind the password into the plan without carrying plaintext through the
+            // digest input (it would otherwise sit in any string dump of the plan).
+            append("account.passwordSha256=")
+                .append(account?.password?.let { sha256Hex(it) })
+                .append('\n')
             append("account.admin=").append(account?.inAdministrators).append('\n')
             append("layout.write=").append(layout?.writeLayout).append('\n')
             append("layout.diskId=").append(layout?.diskId).append('\n')
@@ -186,3 +195,7 @@ fun autounattendPlanSha256(
     val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
     return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
+
+private fun sha256Hex(value: String): String =
+    MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }

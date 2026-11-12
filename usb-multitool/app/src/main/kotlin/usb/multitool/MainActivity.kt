@@ -21,9 +21,7 @@ import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.OpenableColumns
-import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -50,6 +48,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import usb.device.DiskException
+import usb.device.TransferTuning
 import usb.device.MassStorageDiscovery
 import usb.device.UsbDisk
 import usb.device.UsbPermissionPolicy
@@ -166,12 +165,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         /** Persisted SAF tree shared by image+map folders and GPT copies. */
         const val BACKUP_FOLDER_URI_KEY = "backup_folder_uri"
         const val BACKUP_FOLDER_NAME_KEY = "backup_folder_name"
-        /**
-         * One 1 MiB chunk per filesystem call. The FAT engine opens, seeks, writes and
-         * syncs per call, so a larger chunk cuts that overhead 16×. The buffer is
-         * allocated per operation and dropped when it returns — no idle retention.
-         */
-        const val COPY_CHUNK_BYTES = 1024 * 1024
+        private const val VENTOY_ASSETS_DIR = "ventoy-assets"
+        private const val VENTOY_STAGING_DIR = "ventoy-staging"
         const val PROGRESS_TICK_MS = 120L
         /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
         const val LOG_TICK_MS = 3_000L
@@ -1032,10 +1027,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.VENTOY_INSTALL -> {
                                     val assets = VentoyDownloader.loadWithFallback(
-                                        externalDir = File(
-                                            Environment.getExternalStorageDirectory(),
-                                            "ventoy",
-                                        ),
+                                        externalDir = ventoyAssetsDir(),
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
@@ -1057,10 +1049,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.VENTOY_UPDATE -> {
                                     val assets = VentoyDownloader.loadWithFallback(
-                                        externalDir = File(
-                                            Environment.getExternalStorageDirectory(),
-                                            "ventoy",
-                                        ),
+                                        externalDir = ventoyAssetsDir(),
                                         assetManager = getApplication<Application>().assets,
                                         strict = true,
                                     )
@@ -1085,7 +1074,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 DestructiveAction.VENTOY_DOWNLOAD_INSTALL -> {
                                     val released = VentoyAssetOperations.download(
-                                        cacheDir = getApplication<Application>().cacheDir,
+                                        cacheDir = ventoyStagingDir(),
                                         operation = this,
                                         isActive = { isActive() },
                                     )
@@ -1166,7 +1155,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         "Unattend XML write/layout uses dedicated generate flow",
                                     )
                             }
-                            syncDestructiveDisk(disk)
+                            if (action == DestructiveAction.RAW_WRITE) {
+                                // RawWriter already synced the medium after the last write
+                                // and folded any sync failure into its readback verdict; a
+                                // second sync would only duplicate that checked call.
+                                if (state == OperationState.Completed) commitReached = true
+                            } else {
+                                syncDestructiveDisk(disk)
+                            }
                         } finally {
                             disk.close()
                         }
@@ -1349,6 +1345,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             target = target,
                             map = copyMap,
                             operation = operation,
+                            checkpointTargetBytes = TransferTuning.rescueCheckpointBytes,
                         )
                         val copied = copyMap.copied.sumOf { it.last - it.first + 1UL }
                         val unreadable = copyMap.failed.sumOf { it.last - it.first + 1UL }
@@ -2652,7 +2649,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         operation.mutationAttempted = true
                         usb.files.FilesOperations.delete(volume, target)
-                        volume.sync()
                         operation.commitReached = true
                     } catch (failure: Throwable) {
                         throw userVisibleDeleteError(name, target, failure)
@@ -2687,7 +2683,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // volume acquisition so a rename or post-rename sync failure is Partial.
                     operation.mutationAttempted = true
                     usb.files.FilesOperations.rename(volume, target, renamed)
-                    volume.sync()
                     operation.commitReached = true
                 }
             }
@@ -2735,7 +2730,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         target = target,
                         volume = volume,
                         operation = operation,
-                        chunkBytes = COPY_CHUNK_BYTES,
+                        chunkBytes = TransferTuning.jniCapBytes,
                         onCleanupFailure = { cleanupError ->
                             // Engine already adds the cleanup failure as suppressed to the
                             // primary upload error; keep a persistent log line as well so the
@@ -2752,7 +2747,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         },
                     )
-                    volume.sync()
                     operation.commitReached = true
                 }
             }
@@ -2822,7 +2816,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         sourceSize = size,
                         sourceName = name,
                         operation = operation,
-                        chunkBytes = COPY_CHUNK_BYTES,
+                        chunkBytes = TransferTuning.jniCapBytes,
                     )
                     stagedPathHolder[0] = stagedCopy.absolutePath
                 } catch (t: Throwable) {
@@ -4662,6 +4656,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 "external files directory is unavailable; cannot save the backup",
             )
 
+    /**
+     * Pre-staged Ventoy release files. App-private: no /sdcard/ventoy lookup and no
+     * all-files permission is required to read them.
+     */
+    private fun ventoyAssetsDir(): File = getApplication<Application>().getDir(VENTOY_ASSETS_DIR, Context.MODE_PRIVATE)
+
+    /** Download staging for a fetched release archive; app-private, deleted after use. */
+    private fun ventoyStagingDir(): File = getApplication<Application>().getDir(VENTOY_STAGING_DIR, Context.MODE_PRIVATE)
+
     /** Read the selected SAF document, bounded by the size this device needs. */
         private fun readTextDocument(
         uriString: String,
@@ -5142,6 +5145,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Transfer knobs are read once per operation, so persisted values must be live
+        // before the first disk action, not only after visiting Diagnostics.
+        usb.diagnostics.PerformancePreferences.load(applicationContext)
         // A re-delivered CreateDocument result arrives after the activity is recreated
         // (rotation/process death); without this it would find no pending name and drop it.
         pendingDownloadName = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD)
@@ -5432,20 +5438,8 @@ class MainActivity : ComponentActivity() {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-                runCatching {
-                    startActivity(intent)
-                }.onFailure {
-                    runCatching {
-                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                    }
-                }
-            }
-        }
+        // MANAGE_EXTERNAL_STORAGE stays declared in the manifest only; the app never asks
+        // for it at startup because Ventoy assets and downloads are app-private now.
     }
 
     companion object {

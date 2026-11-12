@@ -72,7 +72,7 @@ internal object VentoyTransitions {
 
     fun loadVentoyGlobalSettings(state: AppUiState): ReduceResult {
         val token = state.ventoyGlobalSettingsRequest + 1L
-        ReduceResult(
+        return ReduceResult(
             state.copy(ventoyGlobalSettingsRequest = token),
             effects = listOf(UiEffect.LoadVentoyGlobalSettings(requestToken = token)),
         )
@@ -100,7 +100,7 @@ internal object VentoyTransitions {
         }
 
     fun openVentoyFolder(state: AppUiState, intent: UiIntent.OpenVentoyFolder): ReduceResult {
-        if (!state.actionsEnabled) {
+        return if (!state.actionsEnabled) {
             ReduceResult(state)
         } else {
             val target =
@@ -191,7 +191,7 @@ internal object VentoyTransitions {
                 VentoyControlCatalog.keyProblem(intent.key)
                     ?: VentoyControlCatalog.valueProblem(intent.key, intent.value)
             }
-        if (problem != null) {
+        return if (problem != null) {
             ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
         } else {
             val staged = LinkedHashMap<String, VentoyControlSetting>()

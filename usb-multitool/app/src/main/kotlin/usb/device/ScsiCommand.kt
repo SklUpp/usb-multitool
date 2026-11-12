@@ -151,7 +151,11 @@ object ScsiCommand {
 object TransferPlan {
     const val MAX_CHUNK = 64 * 1024
 
-    fun plan(bytes: Long, sectorSize: Int): List<Int> {
+    fun plan(
+        bytes: Long,
+        sectorSize: Int,
+        maxChunk: Int = MAX_CHUNK,
+    ): List<Int> {
         require(bytes >= 0) { "bytes must be non-negative, was $bytes" }
         require(sectorSize in 512..4096) {
             "sectorSize must be in 512..4096, was $sectorSize"
@@ -163,12 +167,14 @@ object TransferPlan {
         require(bytes % sectorSize == 0L) {
             "bytes $bytes not multiple of sectorSize $sectorSize"
         }
+        val chunk = maxChunk - maxChunk % sectorSize
+        require(chunk > 0) { "maxChunk $maxChunk is smaller than one sector" }
 
         val parts = ArrayList<Int>()
         var remaining = bytes
-        while (remaining > MAX_CHUNK) {
-            parts.add(MAX_CHUNK)
-            remaining -= MAX_CHUNK
+        while (remaining > chunk) {
+            parts.add(chunk)
+            remaining -= chunk
         }
         if (remaining > 0) {
             parts.add(remaining.toInt())

@@ -21,6 +21,9 @@ open class UsbDisk(
 
     val geometry: BlockGeometry
 
+    /** Read once per disk session so a pref change cannot alter an in-flight transfer. */
+    private val scsiChunkBytes = TransferTuning.scsiChunkBytes
+
     init {
         val resolved = geometry ?: probeCapacity(session)
         this.geometry = resolved
@@ -38,7 +41,7 @@ open class UsbDisk(
         require(blocks > 0)
         requireNoOverflow(lba, blocks)
 
-        val parts = TransferPlan.plan(bytes.toLong(), sectorSize)
+        val parts = TransferPlan.plan(bytes.toLong(), sectorSize, scsiChunkBytes)
         var offsetBlocks = 0
         for (part in parts) {
             val partBlocks = part / sectorSize
@@ -57,7 +60,7 @@ open class UsbDisk(
         require(blocks > 0)
         requireNoOverflow(lba, blocks)
 
-        val parts = TransferPlan.plan(bytes.toLong(), sectorSize)
+        val parts = TransferPlan.plan(bytes.toLong(), sectorSize, scsiChunkBytes)
         var offsetBlocks = 0
         for (part in parts) {
             val partBlocks = part / sectorSize

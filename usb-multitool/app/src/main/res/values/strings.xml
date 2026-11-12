@@ -103,6 +103,16 @@
 
     <string name="diagnostics_checks_title">Checks</string>
     <string name="diagnostics_checks_subtitle">Read-only. It does not change data.</string>
+    <string name="diagnostics_perf_title">Performance</string>
+    <string name="diagnostics_perf_subtitle">Applied when the next operation starts; a running transfer keeps its values.</string>
+    <string name="diagnostics_perf_scsi_title">SCSI chunk</string>
+    <string name="diagnostics_perf_scsi_hint">Bigger chunks move more data per USB request and speed up large transfers, but cancellation waits longer and a failed request can lose up to one chunk of progress.</string>
+    <string name="diagnostics_perf_jni_title">JNI read/write cap</string>
+    <string name="diagnostics_perf_jni_hint">Buffer handed to the filesystem engine per call. Larger values cut per-call overhead and speed up copies, but use more RAM and make one failed call cost more progress.</string>
+    <string name="diagnostics_perf_rescue_title">Rescue checkpoint interval</string>
+    <string name="diagnostics_perf_rescue_hint">Data copied between map checkpoints. Smaller intervals lose less progress after a crash or cancel but publish the map more often, which slows the backup.</string>
+    <string name="diagnostics_perf_value_kib">%1$d KiB</string>
+    <string name="diagnostics_perf_value_mib">%1$d MiB</string>
     <string name="diagnostics_backups_title">Backups</string>
     <string name="diagnostics_backups_subtitle">Read-only. Files stay in the app folder.</string>
     <string name="diagnostics_backup_folder">Backup folder</string>
@@ -267,6 +277,10 @@
     <string name="ventoy_badge_update">Update</string>
     <string name="ventoy_update">Update</string>
     <string name="ventoy_download">Download and install a new version</string>
+    <string name="ventoy_download_warning_title">Download a new Ventoy release?</string>
+    <string name="ventoy_download_warning_body">The app will fetch the pinned Ventoy archive over the network, verify its SHA-256, and then rewrite the Ventoy boot files on the stick. Files on the data partition stay. A failed download never writes to the stick.</string>
+    <string name="ventoy_download_warning_confirm">Download</string>
+    <string name="ventoy_download_warning_cancel">Cancel</string>
     <string name="ventoy_update_note">Update rewrites boot files and keeps all files on the data partition.</string>
     <string name="ventoy_fresh_title">Clean install</string>
     <string name="ventoy_fresh_body">Erases all partitions and files on the drive, writes a fresh Ventoy layout and formats the data partition. Confirmation is required before writing.</string>
@@ -545,6 +559,8 @@
     <string name="params_account_admin">Add to Administrators</string>
     <string name="params_account_name">Account name</string>
     <string name="params_account_password">Password (optional)</string>
+    <string name="params_account_password_show">Show password</string>
+    <string name="params_account_password_hide">Hide password</string>
     <string name="params_computer">Computer name</string>
     <string name="params_computer_value">Computer name, up to 15 characters</string>
     <string name="params_disk_id">DiskID on the target PC</string>

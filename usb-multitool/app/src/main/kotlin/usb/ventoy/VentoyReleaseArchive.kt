@@ -14,23 +14,38 @@ internal object VentoyReleaseArchive {
     private const val BLOCK = 512
     private const val MAX_MEMBER_BYTES = 64L * 1024 * 1024
 
+    /** Whole-stream bound: the downloaded archive is already capped at 512 MiB. */
+    private const val MAX_TOTAL_BYTES = 512L * 1024 * 1024
+
     /**
      * Extracts the members whose base name is in [wantedBaseNames].
      * Throws [VentoyReleaseArchiveException] for a truncated archive, a member
-     * larger than [maxMemberBytes], or a wanted member that is missing.
+     * larger than [maxMemberBytes], a gzip stream expanding past [maxTotalBytes],
+     * or a wanted member that is missing.
      */
     fun extract(
         tarGz: InputStream,
         wantedBaseNames: Set<String>,
         maxMemberBytes: Long = MAX_MEMBER_BYTES,
+        maxTotalBytes: Long = MAX_TOTAL_BYTES,
     ): Map<String, ByteArray> {
         val found = linkedMapOf<String, ByteArray>()
+        var consumed = 0L
+        fun consume(bytes: Long) {
+            consumed += bytes
+            if (consumed > maxTotalBytes) {
+                throw VentoyReleaseArchiveException(
+                    "archive expands past the $maxTotalBytes byte limit",
+                )
+            }
+        }
         GZIPInputStream(tarGz.buffered()).use { gz ->
             val header = ByteArray(BLOCK)
             while (true) {
                 if (!readBlock(gz, header)) {
                     throw VentoyReleaseArchiveException("Truncated archive header")
                 }
+                consume(BLOCK.toLong())
                 if (header.all { it == 0.toByte() }) break
 
                 val name = cString(header, 0, 100)
@@ -39,6 +54,7 @@ internal object VentoyReleaseArchive {
                 val size = octal(header, 124, 12)
                 val fullName = if (prefix.isEmpty()) name else "$prefix/$name"
                 val baseName = fullName.substringAfterLast('/')
+                consume(size + padding(size))
 
                 val wanted = (typeFlag == '0' || typeFlag == '\u0000') && baseName in wantedBaseNames
                 if (wanted && size > maxMemberBytes) {

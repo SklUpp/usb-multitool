@@ -13,7 +13,7 @@ internal object RawTransitions {
         val device = state.device
         val geometry = state.rawGeometry
         val hasSource = state.imageUri != null || state.stagedRawImagePath != null
-        when {
+        return when {
             device == null || !state.actionsEnabled ->
                 ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
             !hasSource ->
@@ -66,7 +66,7 @@ internal object RawTransitions {
 
     fun requestRangeProbe(state: AppUiState, intent: UiIntent.RequestRangeProbe): ReduceResult {
         val geometry = state.rawGeometry
-        if (geometry == null ||
+        return if (geometry == null ||
             state.presence != DevicePresence.Ready ||
             !state.actionsEnabled ||
             intent.sectorCount == 0UL
@@ -122,7 +122,7 @@ internal object RawTransitions {
         // A late answer for another request, range, attachment or geometry describes
         // something the user no longer sees: it is ignored, never allowed to clear a
         // newer probe that is already on screen.
-        if (accepted) {
+        return if (accepted) {
             ReduceResult(state.copy(rangeProbe = intent.result))
         } else {
             ReduceResult(state)
@@ -168,7 +168,7 @@ internal object RawTransitions {
     ): ReduceResult {
         val device = state.device
         val partition = state.selectedPartition()
-        when {
+        return when {
             !state.actionsEnabled ->
                 ReduceResult(
                     state.copy(
@@ -219,7 +219,7 @@ internal object RawTransitions {
     ): ReduceResult {
         val device = state.device
         val partitionId = state.selectedPartition()?.id
-        if (device == null ||
+        return if (device == null ||
             intent.generation != state.rawSourceCandidatesGeneration ||
             intent.identity != device.identity
         ) {
@@ -262,7 +262,7 @@ internal object RawTransitions {
         intent: UiIntent.RawSourceCandidatesFailed,
     ): ReduceResult {
         val device = state.device
-        if (device == null ||
+        return if (device == null ||
             intent.generation != state.rawSourceCandidatesGeneration ||
             intent.identity != device.identity
         ) {
@@ -302,7 +302,7 @@ internal object RawTransitions {
                     it.name == intent.name &&
                     it.partitionId == partition?.id
             }
-        when {
+        return when {
             !state.actionsEnabled ->
                 ReduceResult(
                     state.copy(

@@ -114,13 +114,15 @@ object FilesOperations {
     ) {
         val size = volume.stat(target).size
         operation.bytesTotal = size
+        // Snapshot once: a Diagnostics edit must not resize an in-flight transfer.
+        val readCap = usb.device.TransferTuning.jniCapBytes
         val output = resolver.openOutputStream(destination, "wt") ?: error("cannot open $destination for writing")
         output.use { stream ->
             var offset = 0L
             try {
                 while (offset < size) {
                     if (!operation.isActive()) throw kotlinx.coroutines.CancellationException("Download cancelled")
-                    val data = volume.read(target, offset, minOf(1024 * 1024L, size - offset).toInt())
+                    val data = volume.read(target, offset, minOf(readCap.toLong(), size - offset).toInt())
                     if (data.isEmpty()) error("short read at $offset of $size bytes")
                     stream.write(data)
                     offset += data.size

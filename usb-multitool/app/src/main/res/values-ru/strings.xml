@@ -103,6 +103,16 @@
 
     <string name="diagnostics_checks_title">Проверки</string>
     <string name="diagnostics_checks_subtitle">Чтение без изменения данных</string>
+    <string name="diagnostics_perf_title">Производительность</string>
+    <string name="diagnostics_perf_subtitle">Применяется при старте следующей операции; текущая передача сохраняет свои значения.</string>
+    <string name="diagnostics_perf_scsi_title">Размер блока SCSI</string>
+    <string name="diagnostics_perf_scsi_hint">Крупные блоки переносят больше данных за один USB-запрос и ускоряют большие передачи, но отмена ждёт дольше, а сбойный запрос может стоить до одного блока прогресса.</string>
+    <string name="diagnostics_perf_jni_title">Лимит чтения/записи JNI</string>
+    <string name="diagnostics_perf_jni_hint">Буфер, передаваемый файловой системе за вызов. Большие значения снижают накладные расходы и ускоряют копирование, но занимают больше памяти, а сбой одного вызова теряет больше прогресса.</string>
+    <string name="diagnostics_perf_rescue_title">Интервал контрольных точек</string>
+    <string name="diagnostics_perf_rescue_hint">Сколько данных копируется между сохранениями карты. Меньший интервал теряет меньше прогресса после сбоя или отмены, но чаще публикует карту и замедляет копирование.</string>
+    <string name="diagnostics_perf_value_kib">%1$d КиБ</string>
+    <string name="diagnostics_perf_value_mib">%1$d МиБ</string>
     <string name="diagnostics_backups_title">Резервные копии</string>
     <string name="diagnostics_backups_subtitle">Только чтение; файлы остаются в папке приложения</string>
     <string name="diagnostics_backup_folder">Папка резервных копий</string>
@@ -267,6 +277,10 @@
     <string name="ventoy_badge_update">Обновление</string>
     <string name="ventoy_update">Обновить</string>
     <string name="ventoy_download">Скачать новую версию и установить</string>
+    <string name="ventoy_download_warning_title">Скачать новый релиз Ventoy?</string>
+    <string name="ventoy_download_warning_body">Приложение скачает закреплённый архив Ventoy по сети, проверит его SHA-256 и затем перезапишет загрузочные файлы Ventoy на флешке. Файлы на разделе данных сохранятся. Неудачная загрузка ничего не пишет на флешку.</string>
+    <string name="ventoy_download_warning_confirm">Скачать</string>
+    <string name="ventoy_download_warning_cancel">Отмена</string>
     <string name="ventoy_update_note">Обновление перезаписывает загрузочные файлы и сохраняет все файлы на разделе данных.</string>
     <string name="ventoy_fresh_title">Чистая установка</string>
     <string name="ventoy_fresh_body">Сотрёт все разделы и файлы на флешке, запишет свежую разметку Ventoy и отформатирует раздел данных. Перед записью потребуется подтверждение.</string>
@@ -545,6 +559,8 @@
     <string name="params_account_admin">Добавить в Администраторы</string>
     <string name="params_account_name">Имя учётной записи</string>
     <string name="params_account_password">Пароль (необязательно)</string>
+    <string name="params_account_password_show">Показать пароль</string>
+    <string name="params_account_password_hide">Скрыть пароль</string>
     <string name="params_computer">Имя компьютера</string>
     <string name="params_computer_value">Имя компьютера, до 15 символов</string>
     <string name="params_disk_id">DiskID на целевом ПК</string>

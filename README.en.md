@@ -96,7 +96,7 @@ The app declares these permissions in `usb-multitool/app/src/main/AndroidManifes
 | `POST_NOTIFICATIONS` | Show a notification for a long operation (Android 13+) |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE` | Run disk work in a foreground service |
 | `WAKE_LOCK` | Keep the CPU active only during an operation |
-| `MANAGE_EXTERNAL_STORAGE` | Requested on Android 11+. Reads optional Ventoy assets from `/sdcard/ventoy`. App backups use app storage. Import and export use SAF. |
+| `MANAGE_EXTERNAL_STORAGE` | Retained in the manifest for future operations; not requested at startup. Ventoy assets use app-private storage, and import/export/backups use SAF. |
 
 ## Requirements and compatibility
 

@@ -54,6 +54,9 @@ fun VentoyScreen(
     // does not triple-mount while caches are still null. Cleared when all three land or
     // epoch moves (invalidate).
     var catalogLoadEpoch by remember { mutableStateOf<Long?>(null) }
+    // Network download of a new release is separate from installing already-fetched
+    // assets; only the download path is warned about here, before any traffic starts.
+    var showDownloadWarning by remember { mutableStateOf(false) }
 
     LaunchedEffect(
         state.ventoyGlobalSettings,
@@ -144,7 +147,11 @@ fun VentoyScreen(
             }
             OutlinedButton(
                 onClick = {
-                    onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL))
+                    if (VentoyDownloadWarning.requiresConfirmation(DestructiveAction.VENTOY_DOWNLOAD_INSTALL)) {
+                        showDownloadWarning = true
+                    } else {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL))
+                    }
                 },
                 enabled = state.actionsEnabled,
                 modifier = Modifier.fillMaxWidth(),
@@ -241,6 +248,29 @@ fun VentoyScreen(
                 )
             }
         }
+    }
+
+    if (showDownloadWarning) {
+        AlertDialog(
+            onDismissRequest = { showDownloadWarning = false },
+            title = { Text(stringResource(R.string.ventoy_download_warning_title)) },
+            text = { Text(stringResource(R.string.ventoy_download_warning_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDownloadWarning = false
+                        onIntent(
+                            UiIntent.RequestDestructive(DestructiveAction.VENTOY_DOWNLOAD_INSTALL),
+                        )
+                    },
+                ) { Text(stringResource(R.string.ventoy_download_warning_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDownloadWarning = false }) {
+                    Text(stringResource(R.string.ventoy_download_warning_cancel))
+                }
+            },
+        )
     }
 }
 

@@ -37,9 +37,13 @@ object RescueArchiveOperations {
      */
     const val SAF_CHECKPOINT_TARGET_BYTES: Long = 256L * 1024 * 1024
 
-    fun checkpointEverySectors(sectorSize: Int): ULong {
+    fun checkpointEverySectors(
+        sectorSize: Int,
+        targetBytes: Long = SAF_CHECKPOINT_TARGET_BYTES,
+    ): ULong {
         require(sectorSize > 0) { "sector size must be positive" }
-        return maxOf(4096UL, (SAF_CHECKPOINT_TARGET_BYTES / sectorSize).toULong())
+        require(targetBytes > 0) { "checkpoint target must be positive" }
+        return maxOf(4096UL, (targetBytes / sectorSize).toULong())
     }
 
     /**
@@ -52,6 +56,7 @@ object RescueArchiveOperations {
         target: RescueArchiveTarget,
         map: RescueMap,
         operation: DiskOperation,
+        checkpointTargetBytes: Long = SAF_CHECKPOINT_TARGET_BYTES,
     ): RescueMap =
         RescueBackupOperations.copy(
             disk = disk,
@@ -66,6 +71,6 @@ object RescueArchiveOperations {
             onFinalCheckpoint = target::writeCheckpoint,
             onFinalClose = target::closeArchive,
             onPublishCanonical = target::publishCanonical,
-            checkpointEverySectors = checkpointEverySectors(disk.sectorSize),
+            checkpointEverySectors = checkpointEverySectors(disk.sectorSize, checkpointTargetBytes),
         )
 }

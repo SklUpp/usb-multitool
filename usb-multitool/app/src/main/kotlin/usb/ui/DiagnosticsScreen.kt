@@ -300,6 +300,8 @@ fun DiagnosticsScreen(
             }
         }
 
+        PerformanceSettingsSection()
+
         if (!state.actionsEnabled) {
             EmptyHint(UiReducer.presenceMessage(state.presence).localized())
         }

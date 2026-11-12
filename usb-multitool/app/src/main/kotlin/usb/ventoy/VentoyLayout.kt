@@ -55,6 +55,9 @@ object VentoyLayout {
     const val PART1_START_SECTOR = 2048L
     const val EFI_PART_SECTORS = 65536L
 
+    /** Initial/tail sectors zeroed before install: 34 × 512 B = 17 KiB per region. */
+    const val ZERO_REGION_SECTORS = 34
+
     /** core.img fits LBA 1..2047 on MBR; GPT starts at LBA 34, so only 2014 sectors. */
     const val MBR_CORE_MAX_SECTORS = 2047L
     const val GPT_CORE_MAX_SECTORS = 2014L
@@ -442,16 +445,12 @@ object VentoyInstaller {
 
         try {
         // Clean initial sectors — first mutation; failures after this → Partial.
-        val zeroSec = ByteBuffer.allocate(VentoyLayout.SECTOR_SIZE)
-        for (i in 0L until 34L) {
-            zeroSec.clear()
-            disk.write(i, zeroSec)
-        }
+        // One 17 KiB request per region instead of 34 sector requests: same bytes, same
+        // error propagation, 34× fewer USB round trips.
+        val zeroRegion = ByteBuffer.allocate(ZERO_REGION_SECTORS * VentoyLayout.SECTOR_SIZE)
+        disk.write(0L, zeroRegion.duplicate().clear())
         if (gpt) {
-            for (i in (diskSectors - 34L) until diskSectors) {
-                zeroSec.clear()
-                disk.write(i, zeroSec)
-            }
+            disk.write(diskSectors - ZERO_REGION_SECTORS.toLong(), zeroRegion.duplicate().clear())
         }
 
         // Write VTOYEFI partition data

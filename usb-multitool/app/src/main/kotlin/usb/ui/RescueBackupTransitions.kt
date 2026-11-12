@@ -25,7 +25,7 @@ internal object RescueBackupTransitions {
         )
 
     fun setBackupFile(state: AppUiState, intent: UiIntent.SetBackupFile): ReduceResult {
-        if (intent.requestId < state.backupSelectionGeneration) {
+        return if (intent.requestId < state.backupSelectionGeneration) {
             ReduceResult(state)
         } else {
             val clearConfirm =
@@ -67,7 +67,7 @@ internal object RescueBackupTransitions {
         nonDestructiveEffect(state, UiEffect.CaptureGptBackup)
 
     fun setRescueImage(state: AppUiState, intent: UiIntent.SetRescueImage): ReduceResult {
-        if (intent.requestId < state.rescueImageSelectionGeneration) {
+        return if (intent.requestId < state.rescueImageSelectionGeneration) {
             ReduceResult(state)
         } else {
             val clearConfirm =
@@ -95,7 +95,7 @@ internal object RescueBackupTransitions {
     }
 
     fun setRescueMap(state: AppUiState, intent: UiIntent.SetRescueMap): ReduceResult {
-        if (intent.requestId < state.rescueMapSelectionGeneration) {
+        return if (intent.requestId < state.rescueMapSelectionGeneration) {
             ReduceResult(state)
         } else {
             val clearConfirm =

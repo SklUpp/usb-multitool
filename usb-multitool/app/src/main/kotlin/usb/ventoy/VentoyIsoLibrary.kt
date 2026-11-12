@@ -76,7 +76,7 @@ object VentoyIsoLibrary {
         expectedSize: Long? = null,
         maxBytes: Long? = null,
         importDirectory: String = ISO_DIR,
-        chunkBytes: Int = 1024 * 1024,
+        chunkBytes: Int = usb.device.TransferTuning.jniCapBytes,
         onCleanupFailure: (Throwable) -> Unit = {},
     ): ImageImportOutcome {
         require(chunkBytes > 0) { "chunkBytes must be positive" }

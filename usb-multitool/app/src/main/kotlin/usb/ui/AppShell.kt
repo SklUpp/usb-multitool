@@ -1537,6 +1537,10 @@ internal enum class Glyph {
     ChevronLeft,
     /** Three stacked lines: the in-app operation log. */
     Log,
+    /** Reveal a masked value. */
+    Eye,
+    /** Hide a revealed value. */
+    EyeOff,
 }
 
 @Composable
@@ -1775,6 +1779,48 @@ internal fun GlyphIcon(
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 7f), androidx.compose.ui.geometry.Offset(19f, 7f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 12f), androidx.compose.ui.geometry.Offset(19f, 12f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 17f), androidx.compose.ui.geometry.Offset(13f, 17f), 1.8f)
+                }
+                Glyph.Eye -> {
+                    drawPath(
+                        Path().apply {
+                            moveTo(3f, 12f)
+                            quadraticBezierTo(12f, 4f, 21f, 12f)
+                            quadraticBezierTo(12f, 20f, 3f, 12f)
+                            close()
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawCircle(
+                        tint,
+                        radius = 2.4f,
+                        center = androidx.compose.ui.geometry.Offset(12f, 12f),
+                        style = stroke,
+                    )
+                }
+                Glyph.EyeOff -> {
+                    drawPath(
+                        Path().apply {
+                            moveTo(3f, 12f)
+                            quadraticBezierTo(12f, 4f, 21f, 12f)
+                            quadraticBezierTo(12f, 20f, 3f, 12f)
+                            close()
+                        },
+                        tint,
+                        style = stroke,
+                    )
+                    drawCircle(
+                        tint,
+                        radius = 2.4f,
+                        center = androidx.compose.ui.geometry.Offset(12f, 12f),
+                        style = stroke,
+                    )
+                    drawLine(
+                        tint,
+                        androidx.compose.ui.geometry.Offset(4f, 20f),
+                        androidx.compose.ui.geometry.Offset(20f, 4f),
+                        1.8f,
+                    )
                 }
             }
         }

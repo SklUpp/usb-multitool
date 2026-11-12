@@ -61,9 +61,9 @@ object VentoyDownloader {
                 "Release $release has no pinned digests; supported: ${RELEASES.joinToString(", ") { it.release }}",
             )
 
-    /** Loads Ventoy assets from a directory on external storage. */
+    /** Loads pre-staged Ventoy assets from an app-private directory. */
     fun loadFromExternalStorage(dir: File, strict: Boolean = true): VentoyAssets {
-        require(dir.exists() && dir.isDirectory) { "External directory not found: ${dir.path}" }
+        require(dir.exists() && dir.isDirectory) { "Ventoy assets directory not found: ${dir.path}" }
         return VentoyAssets.loadFromDirectory(dir, strict = strict)
     }
 
@@ -142,7 +142,7 @@ object VentoyDownloader {
     }
 
     /**
-     * Loads the pinned release from external storage, then from the APK assets.
+     * Loads the pinned release from app-private storage, then from the APK assets.
      * Never reaches the network implicitly; call [downloadRelease] for that.
      */
     fun loadWithFallback(
@@ -163,7 +163,7 @@ object VentoyDownloader {
         }
         throw VentoyAssetsMissingException(
             "Ventoy release assets are not available locally. Expected boot.img, core.img.xz and " +
-                "ventoy.disk.img.xz in ${externalDir?.path ?: "<external storage>/ventoy"} or APK assets/ventoy, " +
+                "ventoy.disk.img.xz in ${externalDir?.path ?: "<app-private>/ventoy-assets"} or APK assets/ventoy, " +
                 "or download a pinned release from the server. " + failures.joinToString("; "),
         )
     }

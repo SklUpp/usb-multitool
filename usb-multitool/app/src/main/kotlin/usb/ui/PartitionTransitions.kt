@@ -47,7 +47,7 @@ internal object PartitionTransitions {
                 UiMessage.Key(UiMessageKey.InvalidVolumeLabel)
             }
         }
-        when {
+        return when {
             state.partitionTableAmbiguous ->
                 ReduceResult(
                     state.copy(
@@ -108,7 +108,7 @@ internal object PartitionTransitions {
                 null
             }
         }
-        if (problem != null || device == null || target == null) {
+        return if (problem != null || device == null || target == null) {
             ReduceResult(state.copy(statusMessage = problem))
         } else {
             val base = DestructiveConfirmation.request(
@@ -147,7 +147,7 @@ internal object PartitionTransitions {
                 UiMessage.Key(UiMessageKey.InvalidVolumeLabel)
             }
         }
-        if (problem != null || device == null || target == null) {
+        return if (problem != null || device == null || target == null) {
             ReduceResult(state.copy(statusMessage = problem))
         } else {
             val base = DestructiveConfirmation.request(
@@ -186,7 +186,7 @@ internal object PartitionTransitions {
                 UiMessage.Key(UiMessageKey.SchemeMbrTooLarge)
             else -> null
         }
-        if (problem != null || device == null) {
+        return if (problem != null || device == null) {
             ReduceResult(state.copy(statusMessage = problem))
         } else {
             val base = DestructiveConfirmation.request(

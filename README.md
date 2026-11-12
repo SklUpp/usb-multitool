@@ -98,7 +98,7 @@ Android-приложение для работы с USB-накопителями
 | `POST_NOTIFICATIONS` | уведомление о длительной операции (Android 13+) |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE` | работа с диском в foreground-сервисе |
 | `WAKE_LOCK` | удержание CPU только на время операции |
-| `MANAGE_EXTERNAL_STORAGE` | запрашивается на Android 11+: чтение необязательных ассетов Ventoy из `/sdcard/ventoy`; бэкапы пишутся в каталог приложения, импорт/экспорт идёт через SAF |
+| `MANAGE_EXTERNAL_STORAGE` | оставлено в манифесте как задел; при запуске не запрашивается, ассеты Ventoy хранятся в app-private storage, импорт/экспорт/бэкапы идут через SAF |
 
 ## Требования и совместимость
 

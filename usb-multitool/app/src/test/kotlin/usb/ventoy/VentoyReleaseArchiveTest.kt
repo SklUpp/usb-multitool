@@ -64,6 +64,21 @@ class VentoyReleaseArchiveTest {
         }
     }
 
+    @Test
+    fun failsWhenTheStreamExpandsPastTheTotalLimit() {
+        val archive = tarGz(listOf("ventoy-1.1.18/boot/boot.img" to ByteArray(2048)))
+        try {
+            VentoyReleaseArchive.extract(
+                archive.inputStream(),
+                setOf("boot.img"),
+                maxTotalBytes = 1024,
+            )
+            fail("Expected VentoyReleaseArchiveException")
+        } catch (e: VentoyReleaseArchive.VentoyReleaseArchiveException) {
+            assertTrue(e.message!!.contains("expands past"))
+        }
+    }
+
     private fun tarGz(entries: List<Pair<String, ByteArray>>): ByteArray {
         val tar = ByteArrayOutputStream()
         for ((name, data) in entries) {

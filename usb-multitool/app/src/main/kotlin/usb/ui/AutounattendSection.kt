@@ -22,6 +22,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -41,6 +42,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
@@ -1063,6 +1066,11 @@ private fun GenerateDialog(
     var accountOn by remember { mutableStateOf(false) }
     var accountName by remember { mutableStateOf("") }
     var accountPassword by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    val showPasswordLabel = stringResource(
+        if (passwordVisible) R.string.params_account_password_hide
+        else R.string.params_account_password_show,
+    )
     var accountAdmin by remember { mutableStateOf(true) }
     var layoutOn by remember { mutableStateOf(false) }
     var wipe by remember { mutableStateOf(false) }
@@ -1171,6 +1179,24 @@ private fun GenerateDialog(
                         onValueChange = { accountPassword = it },
                         label = { Text(stringResource(R.string.params_account_password)) },
                         singleLine = true,
+                        visualTransformation = if (passwordVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { passwordVisible = !passwordVisible },
+                                modifier = Modifier.semantics {
+                                    contentDescription = showPasswordLabel
+                                },
+                            ) {
+                                GlyphIcon(
+                                    glyph = if (passwordVisible) Glyph.EyeOff else Glyph.Eye,
+                                    size = 20.dp,
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     SwitchRow(

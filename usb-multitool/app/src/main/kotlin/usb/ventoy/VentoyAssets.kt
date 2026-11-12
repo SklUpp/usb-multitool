@@ -255,15 +255,28 @@ data class VentoyAssets(
                 data[5] == 0x00.toByte()
         }
 
-        fun decompressXz(data: ByteArray): ByteArray {
+        /**
+         * Decompresses one pinned XZ asset. The output is capped at [maxBytes] so a
+         * malformed or substituted stream cannot allocate unbounded memory before the
+         * result would reach the USB medium.
+         */
+        fun decompressXz(data: ByteArray, maxBytes: Long = MAX_DECOMPRESSED_ASSET_BYTES): ByteArray {
             if (!isXz(data)) return data
+            require(maxBytes >= 0) { "maxBytes must be non-negative, was $maxBytes" }
             try {
                 val bais = java.io.ByteArrayInputStream(data)
                 val xzIn = org.apache.commons.compress.compressors.xz.XZCompressorInputStream(bais)
                 val baos = java.io.ByteArrayOutputStream()
                 val buf = ByteArray(65536)
+                var total = 0L
                 var n: Int
                 while (xzIn.read(buf).also { n = it } != -1) {
+                    total += n
+                    if (total > maxBytes) {
+                        throw IllegalStateException(
+                            "decompressed XZ asset exceeds the $maxBytes byte limit",
+                        )
+                    }
                     baos.write(buf, 0, n)
                 }
                 xzIn.close()
@@ -272,6 +285,9 @@ data class VentoyAssets(
                 throw IllegalStateException("Failed to decompress XZ asset: ${e.message}", e)
             }
         }
+
+        /** Upper bound for one decompressed Ventoy asset (64 MiB). */
+        const val MAX_DECOMPRESSED_ASSET_BYTES: Long = 64L * 1024 * 1024
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
     }
