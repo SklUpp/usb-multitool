@@ -569,9 +569,9 @@ sealed class UiIntent {
     /** Stream the SAF [uri] into [AppUiState.currentPath] in chunks. */
     data class UploadFile(val uri: String) : UiIntent()
 
-    /** Copy entry [name] from [AppUiState.currentPath] to the SAF destination [uri]. */
+    /** Copy exact [binding] from the pinned directory to SAF destination [uri]. */
     data class DownloadFile(
-        val name: String,
+        val binding: FilesDownloadBinding,
         val uri: String,
     ) : UiIntent()
 
@@ -660,7 +660,7 @@ sealed interface UiEffect {
 
     data class UploadFile(val path: String, val uri: String) : UiEffect
 
-    data class DownloadFile(val path: String, val name: String, val uri: String) : UiEffect
+    data class DownloadFile(val binding: FilesDownloadBinding, val uri: String) : UiEffect
 
     data class StageUsbImageForRawWrite(
         val path: String,
@@ -3686,22 +3686,17 @@ object UiReducer {
                         )
                     !state.actionsEnabled ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
-                    !validEntryName(intent.name) ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectFileToDownload)))
+                    !intent.binding.matches(state) ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                        )
                     else ->
                         ReduceResult(
                             state,
-                            effects =
-                                listOf(
-                                    UiEffect.DownloadFile(
-                                        path = state.currentPath,
-                                        name = intent.name,
-                                        uri = intent.uri,
-                                    ),
-                                ),
+                            effects = listOf(UiEffect.DownloadFile(intent.binding, intent.uri)),
                         )
-                }
 
+                }
             is UiIntent.FilesListed ->
                 if (!filesListMatches(
                         state,

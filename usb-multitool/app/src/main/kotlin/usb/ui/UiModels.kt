@@ -613,6 +613,37 @@ data class PartitionBinding(
     val sectorCount: ULong?,
 )
 
+/**
+ * Exact file selected before the SAF destination picker opens. The callback may arrive after
+ * navigation, re-attach or a recreated Activity; every captured field is required to still
+ * describe the visible entry before an export effect is emitted.
+ */
+data class FilesDownloadBinding(
+    val directory: String,
+    val name: String,
+    val sizeBytes: ULong,
+    val identity: String,
+    val attachGeneration: Long,
+    val partitionId: String,
+    val startLba: ULong?,
+    val sectorCount: ULong?,
+) {
+    val targetPath: String get() = fatChildPath(directory, name)
+}
+
+/** True when binding still names exact visible file on current attachment/partition. */
+fun FilesDownloadBinding.matches(state: AppUiState): Boolean {
+    val device = state.device ?: return false
+    if (device.identity != identity || device.attachGeneration != attachGeneration) return false
+    if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
+    val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    if (partition.startLba != startLba || partition.sectorCount != sectorCount) return false
+    if (name.isBlank() || name == "." || name == ".." || '/' in name || '\\' in name || '\u0000' in name) return false
+    val entry = state.files.singleOrNull { it.name == name && !it.isDirectory } ?: return false
+    return entry.sizeBytes == sizeBytes
+}
+
+
 data class PartitionTab(
     val id: String,
     val name: String,

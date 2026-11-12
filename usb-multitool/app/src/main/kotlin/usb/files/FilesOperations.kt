@@ -105,6 +105,11 @@ object FilesOperations {
         }
     }
 
+    /**
+     * Streams USB bytes into caller-owned SAF destination. A failed or cancelled write leaves
+     * destination in place: SAF does not prove exclusive ownership, so cleanup would risk
+     * deleting a document the user or provider owns. The Partial error names this honestly.
+     */
     fun download(
         resolver: ContentResolver,
         target: String,
@@ -117,9 +122,9 @@ object FilesOperations {
         // Snapshot once: a Diagnostics edit must not resize an in-flight transfer.
         val readCap = usb.device.TransferTuning.jniCapBytes
         val output = resolver.openOutputStream(destination, "wt") ?: error("cannot open $destination for writing")
-        output.use { stream ->
-            var offset = 0L
-            try {
+        var offset = 0L
+        try {
+            output.use { stream ->
                 while (offset < size) {
                     if (!operation.isActive()) throw kotlinx.coroutines.CancellationException("Download cancelled")
                     val data = volume.read(target, offset, minOf(readCap.toLong(), size - offset).toInt())
@@ -129,11 +134,15 @@ object FilesOperations {
                     operation.report(offset)
                 }
                 stream.flush()
-            } catch (failure: Throwable) {
-                operation.state = usb.operation.OperationState.Partial
-                operation.failureCause = usb.device.DiskException.IoFailure("Download destination truncated ($offset of $size bytes)", failure)
-                throw failure
             }
+        } catch (failure: Throwable) {
+            operation.state = usb.operation.OperationState.Partial
+            operation.failureCause = usb.device.DiskException.IoFailure(
+                "Download destination may contain partial bytes ($offset of $size); " +
+                    "destination retained because SAF ownership is not exclusive",
+                failure,
+            )
+            throw failure
         }
     }
 

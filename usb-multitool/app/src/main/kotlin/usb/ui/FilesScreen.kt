@@ -74,7 +74,7 @@ fun FilesScreen(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
-    onRequestDownload: (String) -> Unit = {},
+    onRequestDownload: (FilesDownloadBinding) -> Unit = {},
     onRequestDeviceImage: (String, String) -> Unit = { _, _ -> },
 ) {
     val pickMode = state.filesPickMode
@@ -140,7 +140,7 @@ fun FilesScreen(
     // must not be reported as EFI protection.
     val efiBlocked = selected != null && !state.isEfiWriteAllowed(selected)
     val canWrite = canAct && !efiBlocked
-    val selection = state.files.firstOrNull { it.name == selectedFile?.name }
+    val selection = state.files.firstOrNull { it == selectedFile }
     val writeAccess = selected?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown
     val space = selected?.let(state::filesystemSpace)
 
@@ -228,7 +228,26 @@ fun FilesScreen(
                 onNavigateUp = { onIntent(UiIntent.NavigateUp) },
                 onNewFolder = { showNewFolderDialog = true },
                 onCopyFromPhone = { uploadLauncher.launch("*/*") },
-                onSaveToPhone = { selection?.let { onRequestDownload(it.name) } },
+                onSaveToPhone = {
+                    val device = state.device
+                    val partition = state.selectedPartition()
+                    selection?.let { entry ->
+                        if (device != null && partition != null) {
+                            onRequestDownload(
+                                FilesDownloadBinding(
+                                    directory = state.currentPath,
+                                    name = entry.name,
+                                    sizeBytes = entry.sizeBytes,
+                                    identity = device.identity,
+                                    attachGeneration = device.attachGeneration,
+                                    partitionId = partition.id,
+                                    startLba = partition.startLba,
+                                    sectorCount = partition.sectorCount,
+                                ),
+                            )
+                        }
+                    }
+                },
                 onRename = {
                     val device = state.device
                     val partition = state.selectedPartition()

@@ -335,18 +335,47 @@ class UiStateMachineTest {
     }
 
     @Test
-    fun uploadAndDownloadCarrySafUris() {
-        val state = ready().copy(currentPath = "/docs", files = emptyList())
+    fun uploadAndDownloadCarrySafUrisAndExactBinding() {
+        val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
+        val binding = FilesDownloadBinding(
+            directory = "/docs",
+            name = "manual.pdf",
+            sizeBytes = 42uL,
+            identity = device.identity,
+            attachGeneration = device.attachGeneration,
+            partitionId = "1",
+            startLba = 0uL,
+            sectorCount = 2048uL,
+        )
         val upload = UiReducer.reduce(state, UiIntent.UploadFile("content://docs/42"))
         val uploadEffect = upload.effects.single() as UiEffect.UploadFile
         assertEquals("content://docs/42", uploadEffect.uri)
         assertEquals("/docs", uploadEffect.path)
 
-        val download =
-            UiReducer.reduce(state, UiIntent.DownloadFile("manual.pdf", "content://out/7"))
+        val download = UiReducer.reduce(state, UiIntent.DownloadFile(binding, "content://out/7"))
         val effect = download.effects.single() as UiEffect.DownloadFile
-        assertEquals("manual.pdf", effect.name)
+        assertEquals(binding, effect.binding)
         assertEquals("content://out/7", effect.uri)
+    }
+
+    @Test
+    fun staleDownloadBindingFailsClosedAfterDirectoryOrAttachmentChange() {
+        val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
+        val binding = FilesDownloadBinding("/docs", "manual.pdf", 42uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+        val moved = UiReducer.reduce(state.copy(currentPath = "/other"), UiIntent.DownloadFile(binding, "content://out/7"))
+        assertTrue(moved.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), moved.state.statusMessage)
+        val swapped = UiReducer.reduce(state.copy(device = device.copy(attachGeneration = 1L)), UiIntent.DownloadFile(binding, "content://out/7"))
+        assertTrue(swapped.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), swapped.state.statusMessage)
+    }
+    @Test
+    fun changedFileSizeFailsClosedEvenWhenNameStaysSame() {
+        val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
+        val binding = FilesDownloadBinding("/docs", "manual.pdf", 41uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+        val result = UiReducer.reduce(state, UiIntent.DownloadFile(binding, "content://out/7"))
+        assertTrue(result.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), result.state.statusMessage)
     }
 
     @Test
@@ -382,9 +411,10 @@ class UiStateMachineTest {
     }
 
     @Test
-    fun readOnlyPartitionStillAllowsReads() {
-        val efi = ready().copy(selectedPartitionId = "2")
-        val download = UiReducer.reduce(efi, UiIntent.DownloadFile("ubuntu.iso", "content://out/1"))
+    fun readOnlyPartitionStillAllowsBoundReads() {
+        val efi = ready().copy(selectedPartitionId = "2", currentPath = "/docs", files = listOf(FileEntry("ubuntu.iso", false, 9uL)))
+        val binding = FilesDownloadBinding("/docs", "ubuntu.iso", 9uL, device.identity, device.attachGeneration, "2", 2048uL, 4096uL)
+        val download = UiReducer.reduce(efi, UiIntent.DownloadFile(binding, "content://out/1"))
         assertTrue(download.effects.single() is UiEffect.DownloadFile)
         val listed = UiReducer.reduce(efi, UiIntent.OpenDirectory("/docs"))
         assertTrue(listed.effects.single() is UiEffect.LoadFiles)

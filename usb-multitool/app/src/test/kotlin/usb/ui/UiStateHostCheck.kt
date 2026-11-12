@@ -406,9 +406,13 @@ object UiStateHostCheck {
             UiReducer.reduce(efiEnabled, UiIntent.UploadFile("content://test/new.iso"))
                 .effects.single() is UiEffect.UploadFile,
         ) { "enabled VTOYEFI writes must be allowed" }
+        val downloadBinding =
+            FilesDownloadBinding("/", "win11.iso", 0uL, efi.device!!.identity, efi.device!!.attachGeneration, "2", 2048uL, 4096uL)
         require(
-            UiReducer.reduce(efi, UiIntent.DownloadFile("win11.iso", "content://test/out"))
-                .effects.single() is UiEffect.DownloadFile,
+            UiReducer.reduce(
+                efi.copy(currentPath = "/", files = listOf(FileEntry("win11.iso", false, 0uL))),
+                UiIntent.DownloadFile(downloadBinding, "content://test/out"),
+            ).effects.single() is UiEffect.DownloadFile,
         ) { "download is a read path and must stay allowed" }
 
         val running = ready.copy(

@@ -152,7 +152,7 @@ fun AppShell(
     onPickWindowsImage: (String, String) -> Unit = { _, _ -> },
     /** Opens OpenDocument for a phone-side Ventoy settings JSON edited in place. */
     onPickVentoySettingsFile: () -> Unit = {},
-    onRequestDownload: (String) -> Unit = {},
+    onRequestDownload: (FilesDownloadBinding) -> Unit = {},
     onPickBackup: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},

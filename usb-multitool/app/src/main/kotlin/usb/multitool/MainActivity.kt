@@ -116,14 +116,15 @@ import usb.ui.filesystemUsageKey
 import usb.ui.needsFilesystemUsageRequest
 import usb.ui.fatChildPath
 import usb.ui.RawMeasureError
-import usb.partition.GptBackup
-import usb.partition.PartitionEditor
+import usb.ui.FilesDownloadBinding
 import usb.ui.PartitionBinding
 import usb.ui.PartitionRef
 import usb.ui.PartitionRole
-import usb.ui.matches
 import usb.ui.PartitionTab
+import usb.ui.matches
 import usb.ui.toTableScheme
+import usb.partition.GptBackup
+import usb.partition.PartitionEditor
 import usb.partition.PartitionTable
 import usb.partition.PartitionType
 import usb.partition.PartitionWriter
@@ -1495,7 +1496,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 uploadFile(effect.path, effect.uri)
             }
             is UiEffect.DownloadFile -> {
-                downloadFile(effect.path, effect.name, effect.uri)
+                downloadFile(effect.binding, effect.uri)
             }
             is UiEffect.StageUsbImageForRawWrite -> {
                 val binding = effect.binding
@@ -4956,25 +4957,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun downloadFile(path: String, name: String, uri: String) {
+    private fun downloadFile(binding: FilesDownloadBinding, uri: String) {
         val resolver = getApplication<Application>().contentResolver
-        withPartitionId { partitionId ->
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.DownloadEntry(name),
-                onSuccess = { onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(name)))) },
-            ) { operation ->
-                val target = fatChildPath(path, name)
-                val destination = Uri.parse(uri)
-                val volume = filesSession.volumeForLocked(pin, partitionId)
-                FilesOperations.download(
-                    resolver = resolver,
-                    target = target,
-                    destination = destination,
-                    volume = volume,
-                    operation = operation,
-                )
+        val pin = currentAttachmentPin()
+        submitFilesOperation(
+            title = OperationTitle.DownloadEntry(binding.name),
+            onSuccess = {
+                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(binding.name))))
+            },
+        ) { operation ->
+            require(FilesOperationPolicy.requireChildName(binding.name, "download") == binding.name) {
+                "download target name changed"
             }
+            require(binding.matches(state)) { "download target changed" }
+            val volume = filesSession.volumeForLocked(pin, binding.partitionId)
+            FilesOperations.download(
+                resolver = resolver,
+                target = binding.targetPath,
+                destination = Uri.parse(uri),
+                volume = volume,
+                operation = operation,
+            )
         }
     }
 
@@ -5821,19 +5824,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Entry name waiting for the SAF destination chosen in [downloadLauncher]. */
+    /** Exact source selected before SAF destination; stale callback is rejected, never retargeted. */
+    private var pendingDownloadBinding: FilesDownloadBinding? = null
     private var pendingUsbPermissionKey: String? = null
-    private var pendingDownloadName: String? = null
     private var selectedUsbDeviceKey: String? = null
 
     private val downloadLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri: Uri? ->
-        val name = pendingDownloadName
-        pendingDownloadName = null
-        if (uri != null && name != null) {
-            viewModel.onIntent(UiIntent.DownloadFile(name, uri.toString()))
+        val binding = pendingDownloadBinding
+        pendingDownloadBinding = null
+        if (uri == null) return@registerForActivityResult
+        if (binding == null) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return@registerForActivityResult
         }
+        if (!binding.matches(viewModel.state)) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return@registerForActivityResult
+        }
+        viewModel.onIntent(UiIntent.DownloadFile(binding, uri.toString()))
     }
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -5943,7 +5953,21 @@ class MainActivity : ComponentActivity() {
         ventoySettingsPickerIdentity = savedInstanceState?.getString(STATE_VENTOY_SETTINGS_IDENTITY)
         ventoySettingsPickerGeneration = savedInstanceState?.getLong(STATE_VENTOY_SETTINGS_ATTACH, Long.MIN_VALUE)
             ?.takeIf { it != Long.MIN_VALUE }
-        pendingDownloadName = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD)
+        pendingDownloadBinding = savedInstanceState?.let { saved ->
+            val directory = saved.getString(STATE_PENDING_DOWNLOAD_DIRECTORY)
+            val name = saved.getString(STATE_PENDING_DOWNLOAD_NAME)
+            val size = saved.getString(STATE_PENDING_DOWNLOAD_SIZE)?.toULongOrNull()
+            val identity = saved.getString(STATE_PENDING_DOWNLOAD_IDENTITY)
+            val partition = saved.getString(STATE_PENDING_DOWNLOAD_PARTITION)
+            val start = saved.getString(STATE_PENDING_DOWNLOAD_START)?.toULongOrNull()
+            val count = saved.getString(STATE_PENDING_DOWNLOAD_COUNT)?.toULongOrNull()
+            val generation = saved.getLong(STATE_PENDING_DOWNLOAD_ATTACH, Long.MIN_VALUE)
+            if (directory != null && name != null && size != null && identity != null &&
+                partition != null && generation != Long.MIN_VALUE
+            ) {
+                FilesDownloadBinding(directory, name, size, identity, generation, partition, start, count)
+            } else null
+        }
         // The document picker may recreate the activity; without these two the result would
         // arrive as an image bound for /ISO, so an XML chosen for /ventoy would be misfiled and
         // its marker scan skipped.
@@ -6028,9 +6052,9 @@ class MainActivity : ComponentActivity() {
                     // A raw image may be called anything; filtering by MIME hid real files.
                     imagePickerLauncher.launch(arrayOf("*/*"))
                 },
-                onRequestDownload = { name ->
-                    pendingDownloadName = name
-                    downloadLauncher.launch(name)
+                onRequestDownload = { binding ->
+                    pendingDownloadBinding = binding
+                    downloadLauncher.launch(binding.name)
                 },
                 onPickWindowsFile = { kind, directory ->
                     // Images and XML templates may have any name or MIME type; filtering hid
@@ -6131,7 +6155,16 @@ class MainActivity : ComponentActivity() {
         ventoySettingsPickerGeneration?.let {
             outState.putLong(STATE_VENTOY_SETTINGS_ATTACH, it)
         }
-        outState.putString(STATE_PENDING_DOWNLOAD, pendingDownloadName)
+        pendingDownloadBinding?.let { binding ->
+            outState.putString(STATE_PENDING_DOWNLOAD_DIRECTORY, binding.directory)
+            outState.putString(STATE_PENDING_DOWNLOAD_NAME, binding.name)
+            outState.putString(STATE_PENDING_DOWNLOAD_SIZE, binding.sizeBytes.toString())
+            outState.putString(STATE_PENDING_DOWNLOAD_IDENTITY, binding.identity)
+            outState.putLong(STATE_PENDING_DOWNLOAD_ATTACH, binding.attachGeneration)
+            outState.putString(STATE_PENDING_DOWNLOAD_PARTITION, binding.partitionId)
+            binding.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
+            binding.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
+        }
         backupFolderLaunches.pending?.let { pending ->
             outState.putString(STATE_PENDING_FOLDER_ACTION, pending.action.name)
             outState.putString(STATE_PENDING_FOLDER_IDENTITY, pending.identity)
@@ -6247,7 +6280,14 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
-        private const val STATE_PENDING_DOWNLOAD = "usb.multitool.PENDING_DOWNLOAD"
+        private const val STATE_PENDING_DOWNLOAD_DIRECTORY = "usb.multitool.PENDING_DOWNLOAD_DIRECTORY"
+        private const val STATE_PENDING_DOWNLOAD_NAME = "usb.multitool.PENDING_DOWNLOAD_NAME"
+        private const val STATE_PENDING_DOWNLOAD_SIZE = "usb.multitool.PENDING_DOWNLOAD_SIZE"
+        private const val STATE_PENDING_DOWNLOAD_IDENTITY = "usb.multitool.PENDING_DOWNLOAD_IDENTITY"
+        private const val STATE_PENDING_DOWNLOAD_ATTACH = "usb.multitool.PENDING_DOWNLOAD_ATTACH"
+        private const val STATE_PENDING_DOWNLOAD_PARTITION = "usb.multitool.PENDING_DOWNLOAD_PARTITION"
+        private const val STATE_PENDING_DOWNLOAD_START = "usb.multitool.PENDING_DOWNLOAD_START"
+        private const val STATE_PENDING_DOWNLOAD_COUNT = "usb.multitool.PENDING_DOWNLOAD_COUNT"
         private const val STATE_PENDING_FOLDER_ACTION = "usb.multitool.PENDING_FOLDER_ACTION"
         private const val STATE_PENDING_FOLDER_IDENTITY =
             "usb.multitool.PENDING_FOLDER_IDENTITY"
