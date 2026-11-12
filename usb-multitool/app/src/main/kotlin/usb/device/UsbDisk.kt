@@ -6,8 +6,8 @@ import java.nio.ByteOrder
 /**
  * Exclusive BOT/SCSI disk session.
  * Owns one [BotSession]; all reads/writes are serial at the caller (OperationExecutor).
- * Holds the [UsbExclusiveClaim.Lease] for its whole life and releases it in [close], so no
- * second session can claim the interface while this one is open.
+ * Holds one [UsbExclusiveClaim.Lease] until session close is confirmed. A close failure latches
+ * the disk closed, retains the lease, and is rethrown on later [close] calls.
  */
 open class UsbDisk(
     private val session: BotSession,
@@ -15,6 +15,7 @@ open class UsbDisk(
     private val lease: UsbExclusiveClaim.Lease? = null,
 ) : BlockDevice {
     private var closed = false
+    private var closeFailure: Throwable? = null
 
     final override val sectorSize: Int
     final override val sectorCount: ULong
@@ -99,8 +100,9 @@ open class UsbDisk(
                 }
                 CswStatus.PHASE_ERROR -> {
                     resetOrClose()
-                    closeSession()
-                    throw DiskException.IoFailure("phase error on SYNCHRONIZE CACHE(10)")
+                    val failure = DiskException.IoFailure("phase error on SYNCHRONIZE CACHE(10)")
+                    closeSessionPreserving(failure)
+                    throw failure
                 }
             }
         }
@@ -108,15 +110,7 @@ open class UsbDisk(
 
     @Synchronized
     fun close() {
-        if (closed) return
-        closed = true
-        try {
-            session.close()
-        } finally {
-            // Even an unconfirmed session close must free the process claim: the channel is
-            // gone, and the session latch (not the lease) is what blocks a remount.
-            lease?.close()
-        }
+        closeSession()
     }
 
     val isClosed: Boolean get() = closed
@@ -140,28 +134,29 @@ open class UsbDisk(
                 // completion is unknown. Recover the BOT pipe, then close without replaying it.
                 if (cdb.direction == ScsiDirection.OUT) {
                     resetOrClose()
-                    closeSession()
+                    closeSessionPreserving(e)
                     throw e
                 }
                 // IN commands are safe to replay after one BOT reset recovery.
                 if (attempt >= 1) {
-                    closeSession()
+                    closeSessionPreserving(e)
                     throw e
                 }
                 resetOrClose()
                 attempt++
                 continue
             } catch (e: DiskException.Disconnected) {
-                closeSession()
+                closeSessionPreserving(e)
                 throw e
             } finally {
                 buffer.limit(oldLimit)
             }
 
             if (result.status == CswStatus.PHASE_ERROR) {
+                val failure = DiskException.IoFailure("BOT phase error")
                 resetOrClose()
-                closeSession()
-                throw DiskException.IoFailure("BOT phase error")
+                closeSessionPreserving(failure)
+                throw failure
             }
             if (result.residue !in 0..cdb.transferLength) {
                 throw DiskException.IoFailure("phase error: invalid residue")
@@ -184,9 +179,8 @@ open class UsbDisk(
                     // CSW status 1: REQUEST SENSE, then surface without closing session.
                     val sense = requestSense()
                     if (sense.isUnitAttention && !uaRetried) {
-                        // Reset Recovery / media change leaves a one-shot UNIT
-                        // ATTENTION pending; REQUEST SENSE cleared it, so the
-                        // next identical attempt is expected to pass.
+                        // Reset Recovery / media change leaves a one-shot UNIT ATTENTION pending;
+                        // REQUEST SENSE cleared it, so the next identical attempt is expected to pass.
                         uaRetried = true
                         continue
                     }
@@ -206,7 +200,7 @@ open class UsbDisk(
         return try {
             session.transfer(cdb, data, timeoutMs)
         } catch (e: DiskException.Disconnected) {
-            closeSession()
+            closeSessionPreserving(e)
             throw e
         }
     }
@@ -219,16 +213,34 @@ open class UsbDisk(
 
     private fun ensureConnected() {
         if (!session.isConnected()) {
-            closeSession()
-            throw DiskException.Disconnected()
+            val failure = DiskException.Disconnected()
+            closeSessionPreserving(failure)
+            throw failure
         }
     }
 
     private fun closeSession() {
+        if (closed) {
+            closeFailure?.let { throw it }
+            return
+        }
         closed = true
-        runCatching { session.close() }
-        // Failure paths also own the lease; close() may return early after this latch.
+        try {
+            session.close()
+        } catch (t: Throwable) {
+            closeFailure = t
+            throw t
+        }
+        // Release ownership only after session close is confirmed.
         lease?.close()
+    }
+
+    private fun closeSessionPreserving(primary: Throwable) {
+        try {
+            closeSession()
+        } catch (closeError: Throwable) {
+            if (closeError !== primary) primary.addSuppressed(closeError)
+        }
     }
 
     /**
@@ -239,7 +251,7 @@ open class UsbDisk(
         try {
             session.bulkOnlyReset()
         } catch (e: Exception) {
-            closeSession()
+            closeSessionPreserving(e)
             throw e
         }
     }

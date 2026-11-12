@@ -5,9 +5,8 @@ package usb.device
  *
  * `AndroidUsbBulkChannel.open` claims the interface with `force = true`, so a second live
  * session silently steals the first one's endpoint instead of failing. Every disk open
- * therefore takes a [Lease]; the lease lives exactly as long as that [UsbDisk] and is
- * released by [UsbDisk.close], success or failure.
- *
+ * therefore takes a [Lease]; the lease stays held until [UsbDisk.close] confirms the
+ * underlying session close, including failure paths.
  * There is exactly one instance per process: [usb.service.DiskController.usbClaim] owns it,
  * and every [usb.files.FilesVolumeSession] (one per ViewModel) uses that instance, so two
  * Activity/ViewModel instances in one process cannot claim the stick at the same time.
@@ -26,8 +25,9 @@ class UsbExclusiveClaim {
 
     /**
      * Ownership token. [close] is idempotent and identity-checked, so a disk closed twice
-     * (or closed after a failed session close) can never free a successor's lease.
-     * The released check and the claim clear happen in one monitor hold: a concurrent
+     * can never free a successor's lease. A failed disk close retains this lease until the
+     * underlying session close is confirmed.
+     * The released check and claim clear happen in one monitor hold: a concurrent
      * [tryAcquire] sees either the old lease or no lease, never a half-released one.
      */
     inner class Lease : AutoCloseable {

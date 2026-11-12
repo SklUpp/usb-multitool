@@ -61,9 +61,23 @@ class UsbExclusiveClaimTest {
         second.close()
         assertFalse(claim.isHeld())
     }
+    @Test
+    fun staleDiskCloseCannotFreeLiveSuccessorLease() {
+        val claim = UsbExclusiveClaim()
+        val first = UsbDisk(FakeBotSession(), BlockGeometry(512, 8UL), claim.tryAcquire())
+        first.close()
+        val successor = claim.tryAcquire()
+
+        first.close()
+        assertTrue("stale disk close must not free successor lease", claim.isHeld())
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) { claim.tryAcquire() }
+
+        successor.close()
+        assertFalse(claim.isHeld())
+    }
 
     @Test
-    fun diskCloseReleasesLeaseEvenWhenSessionCloseFails() {
+    fun diskCloseFailureKeepsLeaseAndBlocksNextClaim() {
         val claim = UsbExclusiveClaim()
         val bot =
             object : FakeBotSession() {
@@ -73,7 +87,10 @@ class UsbExclusiveClaimTest {
             }
         val disk = UsbDisk(bot, BlockGeometry(512, 8UL), claim.tryAcquire())
         assertThrows(IOException::class.java) { disk.close() }
-        assertFalse("unconfirmed close must still free the claim", claim.isHeld())
+        assertTrue("unconfirmed close must retain claim", claim.isHeld())
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) { claim.tryAcquire() }
+        assertThrows(IOException::class.java) { disk.close() }
+        assertTrue("repeated close must stay fail-closed", claim.isHeld())
     }
     @Test
     fun uncertainWriteFailureReleasesLeaseForNextSession() {

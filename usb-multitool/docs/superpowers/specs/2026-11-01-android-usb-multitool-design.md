@@ -127,6 +127,7 @@ The review is a snapshot, not approval to refactor. Recheck anchors and behavior
 - A disconnect ends the operation with its last durable state. The application must not silently continue on a reconnected device.
 - `claimInterface(force = true)` is allowed, but it is not proof that Android has safely unmounted a filesystem. Raw access must still be explicit and confirmed.
 - A failed BOT transport during an OUT command has unknown completion: perform reset recovery for pipe safety, close the disk session, and never replay that WRITE. Callers that attempted the write retain `Partial` semantics; only a confirmed CSW `PASSED` permits normal completion. This rule does not depend on Android-specific error categories.
+- `UsbDisk` releases its exclusive lease only after `BotSession.close()` returns successfully. A close failure is latched and rethrown on repeated close calls; the lease remains held so higher-level volume/session code can retain its unconfirmed-close latch and refuse remount or destructive writes. Reset recovery alone never confirms close.
 - Target: if filesystem sync or close fails, retain the unconfirmed-close error and block destructive writes until the volume state has been confirmed again. A second close call alone must not turn a previous failure into success. FAT/exFAT unmount failures must propagate through JNI; do not claim this is implemented until verified.
 
 ## 7. Functional behavior
