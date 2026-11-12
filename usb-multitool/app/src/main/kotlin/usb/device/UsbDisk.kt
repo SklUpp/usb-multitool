@@ -12,7 +12,7 @@ import java.nio.ByteOrder
 open class UsbDisk(
     private val session: BotSession,
     geometry: BlockGeometry? = null,
-    private var lease: UsbExclusiveClaim.Lease? = lease
+    private var lease: UsbExclusiveClaim.Lease? = null
 ) : BlockDevice {
     private var closed = false
     private var closeFailure: Throwable? = null
