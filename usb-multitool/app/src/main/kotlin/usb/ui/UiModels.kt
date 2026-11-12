@@ -694,6 +694,11 @@ data class FileEntry(
         get() = !isDirectory && name.endsWith(".iso", ignoreCase = true)
 }
 
+/** SAF download is valid only for regular entries; directories must be navigated, not exported. */
+fun FileEntry.canDownload(): Boolean = !isDirectory
+fun downloadActionEnabled(canAct: Boolean, selection: FileEntry?): Boolean =
+    canAct && selection?.canDownload() == true
+
 /** Path shown relative to the root of a mounted volume, with both slashes: "/" or "/a/b/". */
 fun folderPathLabel(path: String): String {
     val trimmed = path.trim('/')

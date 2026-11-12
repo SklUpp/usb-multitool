@@ -231,7 +231,7 @@ fun FilesScreen(
                 onSaveToPhone = {
                     val device = state.device
                     val partition = state.selectedPartition()
-                    selection?.let { entry ->
+                    selection?.takeIf { it.canDownload() }?.let { entry ->
                         if (device != null && partition != null) {
                             onRequestDownload(
                                 FilesDownloadBinding(
@@ -920,7 +920,7 @@ private fun FolderSubblock(
                 FolderActionButton(
                     glyph = Glyph.Upload,
                     description = saveDescription,
-                    enabled = canAct && selection != null,
+                    enabled = downloadActionEnabled(canAct, selection),
                     onClick = onSaveToPhone,
                 )
                 FolderActionButton(

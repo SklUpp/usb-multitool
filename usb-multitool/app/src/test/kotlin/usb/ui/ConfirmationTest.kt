@@ -377,6 +377,12 @@ class UiStateMachineTest {
         assertTrue(result.effects.isEmpty())
         assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), result.state.statusMessage)
     }
+    @Test
+    fun downloadActionDisabledForDirectorySelection() {
+        assertTrue(downloadActionEnabled(true, FileEntry("file.bin", false, 1uL)))
+        assertFalse(downloadActionEnabled(true, FileEntry("folder", true, 0uL)))
+        assertFalse(downloadActionEnabled(false, FileEntry("file.bin", false, 1uL)))
+    }
 
     @Test
     fun fileEffectsAreSuppressedWhileBusy() {
