@@ -51,6 +51,7 @@ The UI has four tabs: Files, Ventoy, Partitions, Diagnostics. This section lists
 - "Download a new version and install" requests the latest GitHub release. The archive SHA-256 comes from GitHub asset metadata, and the app refuses a release without a `digest`. The code also pins the archive and member hashes for versions 1.1.05 and 1.1.18.
 - Windows options have three states. For Windows 11 checks (`VTOY_WIN11_BYPASS_CHECK`), choose keep, bypass all (TPM, RAM, Secure Boot, CPU), or require all. For the account (`VTOY_WIN11_BYPASS_NRO`), choose keep, local account, or Microsoft account. An explicit choice writes `1` or `0`. Keep leaves the existing value. Ventoy needs the network unplugged for a local account.
 - The XML template is minimal: it has no LabConfig or FirstLogonCommands. The app overwrites existing configuration only with explicit user consent.
+- The app preserves an existing XML byte-for-byte in a unique sibling backup before replacing it. When `imagePaths` changes `/ventoy/ventoy.json`, it first preserves the prior bytes as `/ventoy/ventoy_backup.json`, matching VentoyPlugson's startup backup name; if that name is occupied, it uses a unique sibling instead of overwriting it. With no `imagePaths`, `ventoy.json` is not rewritten or backed up.
 
 ### Partitions
 

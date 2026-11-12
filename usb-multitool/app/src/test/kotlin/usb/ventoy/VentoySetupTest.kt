@@ -152,4 +152,41 @@ class VentoySetupTest {
             }
         assertEquals(FolderReadProblem.NotDirectory, notDirectory.problem)
     }
+
+    @Test
+    fun xmlBackupKeepsExactPreviousBytesBeforeReplacement() {
+        val volume = InMemoryUsbVolume(
+            mapOf("/ventoy/autounattend.xml" to byteArrayOf(0, 1, 2, 3)),
+        )
+        val previous = requireNotNull(volume.fileBytes("/ventoy/autounattend.xml"))
+
+        VentoySetup.backupBeforeReplace(volume, "/ventoy/autounattend.xml", previous)
+        volume.putFile("/ventoy/autounattend.xml", byteArrayOf(9, 8, 7))
+
+        val backup = volume.paths().single { it.startsWith("/ventoy/autounattend.xml.bak-") }
+        assertTrue(previous.contentEquals(requireNotNull(volume.fileBytes(backup))))
+        assertTrue(
+            byteArrayOf(9, 8, 7).contentEquals(
+                requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")),
+            ),
+        )
+    }
+
+    @Test
+    fun jsonBackupUsesVentoyNameAndNeverOverwritesExistingCopy() {
+        val existingBackup = byteArrayOf(7, 7)
+        val previous = byteArrayOf(1, 2, 3)
+        val volume = InMemoryUsbVolume(
+            mapOf(
+                "/ventoy/ventoy.json" to previous,
+                VentoySetup.CONFIG_BACKUP_PATH to existingBackup,
+            ),
+        )
+
+        VentoySetup.backupBeforeReplace(volume, VentoySetup.CONFIG_PATH, previous)
+
+        assertTrue(existingBackup.contentEquals(requireNotNull(volume.fileBytes(VentoySetup.CONFIG_BACKUP_PATH))))
+        val fallback = volume.paths().single { it.startsWith("${VentoySetup.CONFIG_BACKUP_PATH}.bak-") }
+        assertTrue(previous.contentEquals(requireNotNull(volume.fileBytes(fallback))))
+    }
 }

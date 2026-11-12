@@ -19,6 +19,7 @@ object VentoySetup {
     const val ISO_DIR = "ISO"
     const val VENTOY_DIR = "ventoy"
     const val CONFIG_PATH = DEFAULT_VENTOY_CONFIG_PATH
+    const val CONFIG_BACKUP_PATH = "/ventoy/ventoy_backup.json"
 
     /** Refuse to load an unreasonably large template as text. */
     const val MAX_TEMPLATE_BYTES: Long = 2L * 1024 * 1024
@@ -553,7 +554,8 @@ object VentoySetup {
                     )
                 if (entry.isDirectory) throw NotOnVentoyPartitionException("\"$image\" is a directory")
             }
-            val existingJson = readText(volume, CONFIG_PATH)
+            val existingJsonBytes = readBytes(volume, CONFIG_PATH)
+            val existingJson = existingJsonBytes?.let { String(it, Charsets.UTF_8) }
             val mergedJson =
                 if (imagePaths.isEmpty()) {
                     existingJson
@@ -598,12 +600,14 @@ object VentoySetup {
             onMutation()
             ensureDirectory(volume, VENTOY_DIR)
             ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
-            if (existing != null && existing.isNotEmpty()) {
-                // Never overwrite a previous backup; pick an unused sibling name.
-                replaceFile(volume, uniqueBackupName(volume, path), existing)
+            if (existing != null) {
+                backupBeforeReplace(volume, path, existing)
             }
             replaceFile(volume, path, generated)
-            if (mergedJson != null) {
+            if (imagePaths.isNotEmpty() && mergedJson != null) {
+                existingJsonBytes?.let {
+                    backupBeforeReplace(volume, CONFIG_PATH, it)
+                }
                 replaceFile(volume, CONFIG_PATH, mergedJson.toByteArray(Charsets.UTF_8))
             }
             val links = WindowsSetup.parseLinks(mergedJson)
@@ -856,6 +860,25 @@ object VentoySetup {
     fun resolveXmlPath(xmlName: String): String = XmlPath.resolve(xmlName)
 
     private fun xmlTarget(input: String): String = XmlPath.resolve(input)
+
+    /** Preserve an existing target before replacement; never overwrite an earlier backup. */
+    internal fun backupBeforeReplace(volume: UsbFsVolume, path: String, bytes: ByteArray): String {
+        val backupPath =
+            if (path.equals(CONFIG_PATH, ignoreCase = true)) {
+                uniqueVentoyConfigBackupName(volume)
+            } else {
+                uniqueBackupName(volume, path)
+            }
+        replaceFile(volume, backupPath, bytes)
+        return backupPath
+    }
+
+    private fun uniqueVentoyConfigBackupName(volume: UsbFsVolume): String =
+        if (volume.statOrNull(CONFIG_BACKUP_PATH) == null) {
+            CONFIG_BACKUP_PATH
+        } else {
+            uniqueBackupName(volume, CONFIG_BACKUP_PATH)
+        }
 
     private fun uniqueBackupName(volume: UsbFsVolume, path: String): String {
         val nonce = "${System.currentTimeMillis()}-${System.nanoTime()}"
