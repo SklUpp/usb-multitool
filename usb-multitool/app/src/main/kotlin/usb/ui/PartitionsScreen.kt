@@ -736,51 +736,6 @@ fun PartitionsScreen(
             }
         }
 
-        SectionCard(
-            title = stringResource(R.string.efi_section_title),
-            trailing = {
-                InfoHelpButton(
-                    infoTitle = stringResource(R.string.efi_policy_info_title),
-                    infoText = stringResource(R.string.efi_policy_info_text),
-                )
-            },
-        ) {
-            val efis = state.efiPartitions.filter { it.startLba != null && it.sectorCount != null }
-            if (efis.isEmpty()) {
-                EmptyHint(stringResource(R.string.efi_missing))
-            } else {
-                var targetId by remember(
-                    state.device?.identity,
-                    state.device?.attachGeneration,
-                    state.partitions,
-                ) {
-                    mutableStateOf<String?>(null)
-                }
-                val target = efis.firstOrNull { it.id == targetId }
-                    ?: efis.firstOrNull { it.id == state.vtoyEfiWritePartitionId }
-                    ?: efis.firstOrNull { it.id == state.selectedPartitionId }
-                    ?: efis.first()
-                val unlocked = state.isEfiWriteAllowed(target)
-                if (efis.size > 1) {
-                    CompactChoice(
-                        options = efis.map { it.id to it.name },
-                        selected = target.id,
-                        onSelect = { targetId = it },
-                        label = stringResource(R.string.efi_partition_label),
-                        enabled = state.actionsEnabled,
-                    )
-                } else {
-                    InfoRow(stringResource(R.string.efi_partition_label), target.name)
-                }
-                SwitchRow(
-                    label = stringResource(R.string.efi_allow_writes),
-                    checked = unlocked,
-                    onCheckedChange = { onIntent(UiIntent.SetVtoyEfiWritable(target.id, it)) },
-                    enabled = state.actionsEnabled,
-                    hint = stringResource(R.string.efi_allow_hint),
-                )
-            }
-        }
 
         if (selected != null) {
             SectionCard(
