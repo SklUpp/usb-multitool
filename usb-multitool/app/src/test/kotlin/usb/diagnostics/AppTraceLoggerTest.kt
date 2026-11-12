@@ -58,6 +58,13 @@ class AppTraceLoggerTest {
             redactTrace("<Password><Value>pw</Value></Password>").contains("<redacted>"),
         )
         assertFalse(redactTrace("<Password><Value>pw</Value></Password>").contains("pw"))
+        assertFalse(
+            redactTrace("<Password><PlainText>true</PlainText><Value>pw2</Value></Password>")
+                .contains("pw2"),
+        )
+        assertFalse(
+            redactTrace("""<AdminPassword Value="pw3"/>""").contains("pw3"),
+        )
     }
 
     @Test

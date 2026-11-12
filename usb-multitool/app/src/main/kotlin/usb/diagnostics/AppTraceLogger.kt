@@ -18,8 +18,15 @@ private val CREDENTIAL = Regex(
 
 private val BEARER = Regex("""(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+""")
 
-/** Autounattend local-account password element. */
-private val XML_PASSWORD = Regex("""(?i)(<(?:password|adminpassword)>\s*<value>)[^<]*""")
+/** Autounattend local-account password element, any child order. */
+private val XML_PASSWORD = Regex(
+    """(?i)(<(?:password|adminpassword)\b[^>]*>(?:(?!</(?:password|adminpassword)>).)*?<value>)[^<]*""",
+)
+
+/** Attribute form: <Password Value="..."/> */
+private val XML_PASSWORD_ATTR = Regex(
+    """(?i)(<(?:password|adminpassword)\b[^>]*?\bvalue\s*=\s*)("[^"]*"|'[^']*')""",
+)
 
 /**
  * Removes secrets from a trace before it is written or exported: password/adminPassword
@@ -33,6 +40,7 @@ fun redactTrace(text: String): String =
         .replace(BEARER, "Bearer <redacted>")
         .replace(CREDENTIAL, "$1=<redacted>")
         .replace(XML_PASSWORD, "$1<redacted>")
+        .replace(XML_PASSWORD_ATTR, "$1<redacted>")
 
 /**
  * Structured on-device trace of app/lifecycle decisions: one redacted line per event,

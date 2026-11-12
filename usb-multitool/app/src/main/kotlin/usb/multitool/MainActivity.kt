@@ -2291,12 +2291,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (device != null && device.deviceId != attachedDevice?.deviceId) return
         val detachedKey = deviceKey(device ?: attachedDevice)
         val detachedGeneration = attachment.publish(null, bumpGeneration = true)
-        trace.log("usb.detach", "device" to detachedKey, "gen" to detachedGeneration)
-        onIntent(
-            UiIntent.AppendLog(
-                logLine("USB detached: $detachedKey · generation $detachedGeneration"),
-            ),
-        )
+        if (detachedKey != null) {
+            trace.log("usb.detach", "device" to detachedKey, "gen" to detachedGeneration)
+            onIntent(
+                UiIntent.AppendLog(
+                    logLine("USB detached: $detachedKey · generation $detachedGeneration"),
+                ),
+            )
+        }
         lastUsageKey = null
         usageInFlightKey = null
         cancelActiveInspection(cancelUsb = true)
@@ -4899,20 +4901,25 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.CreateDocument("text/plain"),
     ) { uri: Uri? ->
         if (uri == null) return@registerForActivityResult
-        val traceText = runCatching { AppTraceLogger(filesDir).snapshot() }.getOrDefault("")
-        val text = traceText.ifBlank {
-            redactTrace(viewModel.state.logLines.joinToString("\n"))
+        val fallbackLines = viewModel.state.logLines.toList()
+        pickerEventsScope.launch {
+            val written = withContext(Dispatchers.IO) {
+                runCatching {
+                    val traceText = AppTraceLogger(filesDir).snapshot()
+                    val text = traceText.ifBlank {
+                        redactTrace(fallbackLines.joinToString("\n"))
+                    }
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(text.toByteArray(Charsets.UTF_8))
+                    } ?: error("cannot open the export target")
+                }.isSuccess
+            }
+            Toast.makeText(
+                this@MainActivity,
+                if (written) R.string.msg_trace_exported else R.string.msg_trace_export_failed,
+                Toast.LENGTH_SHORT,
+            ).show()
         }
-        val written = runCatching {
-            contentResolver.openOutputStream(uri)?.use { out ->
-                out.write(text.toByteArray(Charsets.UTF_8))
-            } ?: error("cannot open the export target")
-        }.isSuccess
-        Toast.makeText(
-            this,
-            if (written) R.string.msg_trace_exported else R.string.msg_trace_export_failed,
-            Toast.LENGTH_SHORT,
-        ).show()
     }
 
     /** One pending SAF context per Activity; codes come from the process-wide allocator. */
