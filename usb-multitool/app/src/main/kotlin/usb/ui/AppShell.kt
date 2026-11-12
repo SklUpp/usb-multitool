@@ -89,6 +89,8 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
@@ -200,11 +202,13 @@ fun AppShell(
         }
         val logButtonFocus = remember { FocusRequester() }
         val logScreenFocus = remember { FocusRequester() }
+        val focusManager = LocalFocusManager.current
         var restoreLogFocus by remember { mutableStateOf(false) }
         LaunchedEffect(panels.journalScreenOpen) {
             if (panels.journalScreenOpen) {
-                // Enter the layer on its Back control: the covered tab is now invisible
-                // to accessibility, so focus must not be left on a hidden node.
+                // Clear focus before fencing the covered group, then focus the journal layer.
+                // Composition and remembered form state remain untouched.
+                focusManager.clearFocus(force = true)
                 logScreenFocus.requestFocusIfAttached("log screen")
             } else if (restoreLogFocus) {
                 restoreLogFocus = false
@@ -287,7 +291,15 @@ fun AppShell(
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
                         .fillMaxSize()
-                        .focusProperties { canFocus = !panels.journalScreenOpen }
+                        .focusGroup()
+                        .focusProperties {
+                            // A focus group boundary is the supported subtree gate: keyboard
+                            // traversal calls onEnter before choosing any descendant. Cancel
+                            // entry while opaque journal layer owns focus.
+                            if (panels.journalScreenOpen) {
+                                onEnter = { cancelFocusChange() }
+                            }
+                        }
                         .then(
                             if (panels.journalScreenOpen) {
                                 // Merging node: the whole covered tab is removed from the
@@ -1131,7 +1143,7 @@ private fun LogScreen(
     onExportTrace: () -> Unit,
 ) {
     val context = LocalContext.current
-    val logPaneTitle = stringResource(R.string.log_title_count, lines.size)
+    val logPaneTitle = stringResource(R.string.log_screen_title)
     var confirmCopy by remember { mutableStateOf(false) }
     val backText = stringResource(R.string.log_back)
     Column(
