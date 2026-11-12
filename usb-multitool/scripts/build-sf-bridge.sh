@@ -11,7 +11,7 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 TARGET="aarch64-linux-android"
 OUT="$ROOT/app/build/rust"
 
-CARGO_TARGET_DIR="$OUT" cargo build --release --target "$TARGET" \
+CARGO_TARGET_DIR="$OUT" cargo build --locked --release --target "$TARGET" \
   --manifest-path "$ROOT/app/src/main/rust/sf-bridge/Cargo.toml"
 
 LIB="$OUT/$TARGET/release/libsf_bridge.a"

@@ -13,6 +13,10 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 sf-core = { path = "../../../../../third_party/sectorforge/crates/sf-core" }
 
+# Cargo.lock generated with Cargo 1.99.1 in offline mode from pinned SectorForge
+# b292a299c18013706e81d670657ced6c43f200ca and the existing local registry cache.
+# Keep this package isolated; no network registry access is required with --locked --offline.
+
 # panics inside sf-core frame unwinding is how a run is aborted (cancellation and
 # transport failures); see docs in src/lib.rs. This must never become abort.
 [profile.release]

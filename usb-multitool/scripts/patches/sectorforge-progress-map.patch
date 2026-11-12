@@ -39,7 +39,7 @@ image looking like rescued data.
          }
          self.checkpoint(true)
      }
-
+ 
      /// Phase 1 run backwards: the same as [`run_copy_pass`](Self::run_copy_pass),
      /// but each chunk is read ending where the last one started.
 -    fn run_reverse_copy_pass(&mut self, mut on_progress: impl FnMut(Progress)) -> io::Result<()> {
@@ -72,7 +72,7 @@ image looking like rescued data.
 +        // Never size a retry read from that region: bound each attempt to the
 +        // sector-aligned first-pass chunk and come back for the rest.
 +        let max_len = align_chunk_len(self.config.initial_chunk, sector);
-
+ 
          loop {
              let Some((pos, len)) = self
 @@ -235,7 +253,7 @@
@@ -115,3 +115,4 @@ image looking like rescued data.
 +            on_progress(&self.map, self.progress());
              return Ok(());
          }
+ 

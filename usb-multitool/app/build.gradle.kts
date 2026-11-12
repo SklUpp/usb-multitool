@@ -16,7 +16,7 @@ val buildSfBridge =
         description = "Builds the SectorForge sf-core rescue bridge (Rust static library)"
         workingDir = sfBridgeDir.asFile
         environment("CARGO_TARGET_DIR", layout.buildDirectory.dir("rust").get().asFile.absolutePath)
-        commandLine("cargo", "build", "--release", "--target", sfBridgeTarget)
+        commandLine("cargo", "build", "--locked", "--release", "--target", sfBridgeTarget)
         inputs.dir(sfBridgeDir)
         inputs.dir(layout.projectDirectory.dir("../third_party/sectorforge/crates/sf-core/src"))
         inputs.file(layout.projectDirectory.file("../third_party/sectorforge/crates/sf-core/Cargo.toml"))

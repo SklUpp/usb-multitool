@@ -47,9 +47,9 @@ commit recorded in `UPSTREAM.md`.
 - Revision: commit `b292a299c18013706e81d670657ced6c43f200ca`
 - Unpack into: `third_party/sectorforge/`
 - Local patch: `scripts/patches/sectorforge-progress-map.patch`
-- Patch SHA-256: `0c3dccd3d62551605bb7dbbb333f8482f63033de3f3bc31b2b1fd335f739c203`
-- License: MIT (`app/src/main/assets/licenses/sectorforge-MIT.txt`)
-- The fetch script verifies both commit and patch SHA, then applies patch with a reverse-dry-run idempotency check.
+- Patch SHA-256: `0c3dccd3d62551605bb7dbbb333f8482f63033de3f3bc31b2b1fd335f739c203` (byte-verified against reviewed intended patch; trailing blank lines are significant)
+- Lockfile SHA-256: `6ce05fc79e2a4dd501c7cd87fea99796e05ef149566d81e9bfdf889b1b4e6364` (Cargo 1.99.1, offline registry cache)
+- `Cargo.lock` generated with `cargo generate-lockfile --offline`; `cargo metadata --locked --offline` passed in temporary pinned-source checkout.
 
 ## exfatprogs (exFAT fsck only)
 
