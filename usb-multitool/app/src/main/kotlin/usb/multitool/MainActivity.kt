@@ -5249,8 +5249,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          * USB claim is released and nothing is opened.
          */
         beforeOpen: ((AttachmentState.Snapshot<UsbDevice>) -> Unit)? = null,
-        body: (UsbDisk, DiskOperation, ReadOnlySink) -> String,
         onOpenFailure: (() -> Unit)? = null,
+        body: (UsbDisk, DiskOperation, ReadOnlySink) -> String,
     ) {
         val sink = ReadOnlySink()
         val label = title.logLabel
