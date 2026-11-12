@@ -703,8 +703,8 @@ class RawWriterTest {
                 overwrite = true,
                 range = wholeDisk(disk),
             )
-            fail("expected IllegalArgumentException")
-        } catch (_: IllegalArgumentException) {
+            fail("expected EmptyImageException")
+        } catch (_: EmptyImageException) {
         }
         assertEquals(0L, disk.writeCount)
         assertEquals(0L, disk.syncCount)

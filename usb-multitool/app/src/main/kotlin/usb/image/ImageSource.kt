@@ -610,7 +610,9 @@ class ImageSource private constructor(
 
         private fun prependPrefix(header: ByteArray, n: Int, rest: InputStream): InputStream {
             if (n <= 0) return rest
-            return java.io.SequenceInputStream(ByteArrayInputStream(header, 0, n), rest)
+            // SequenceInputStream treats a delegate's illegal zero-byte read as EOF; preserve
+            // it so measurement/write zero-read guards fail instead of truncating the source.
+            return java.io.PushbackInputStream(rest, n).apply { unread(header, 0, n) }
         }
 
 

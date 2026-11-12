@@ -249,13 +249,14 @@ class ImageSourceTest {
 
     @Test
     fun measurementHandleCancelDoesNotBlockOnSlowClose() {
+        awaitFreshCloseBudget()
         val release = java.util.concurrent.CountDownLatch(1)
         val closed = java.util.concurrent.CountDownLatch(1)
         try {
             val stream = object : InputStream() {
                 override fun read(): Int = -1
                 override fun close() {
-                    release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    release.await()
                     closed.countDown()
                 }
             }
@@ -268,13 +269,17 @@ class ImageSourceTest {
             }.start()
             assertTrue(returned.await(1, java.util.concurrent.TimeUnit.SECONDS))
             // cancel() returned before the blocked close completed.
-            assertEquals(0L, closed.count)
+            assertFalse(
+                "slow close must not finish before release",
+                closed.await(0, java.util.concurrent.TimeUnit.NANOSECONDS),
+            )
             release.countDown()
             assertTrue(closed.await(1, java.util.concurrent.TimeUnit.SECONDS))
         } finally {
             // A failed assertion must never leave the worker blocked on this latch.
             release.countDown()
         }
+        awaitFreshCloseBudget()
     }
 
     @Test
