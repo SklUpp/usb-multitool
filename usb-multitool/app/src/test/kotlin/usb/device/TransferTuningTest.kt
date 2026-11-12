@@ -1,6 +1,7 @@
 package usb.device
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TransferTuningTest {
@@ -48,8 +49,15 @@ class TransferTuningTest {
 
     @Test
     fun rescueChunkRoundsCapDownToWholeSectors() {
-        assertEquals(1_048_576, usb.diagnostics.rescueChunkBytes(1_048_575, 4096))
-        assertEquals(4096, usb.diagnostics.rescueChunkBytes(1024, 4096))
-        assertEquals(1_048_576, usb.diagnostics.rescueChunkBytes(1_048_576, 4096))
+        val cap = 1_048_575
+        val sector = 4096
+        val chunk = usb.diagnostics.rescueChunkBytes(cap, sector)
+        assertEquals(1_044_480, chunk)
+        assertTrue(chunk <= cap)
+        assertEquals(0, chunk % sector)
+
+        val minimum = usb.diagnostics.rescueChunkBytes(1024, sector)
+        assertEquals(sector, minimum)
+        assertEquals(sector, usb.diagnostics.rescueChunkBytes(sector, sector))
     }
 }
