@@ -363,6 +363,9 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
     // Backup-GPT repair preserves every partition; saying "cannot be undone" would be false.
     if (confirmation.action != DestructiveAction.GPT_REPAIR) {
         lines += stringResource(R.string.confirm_irreversible)
+        if (confirmation.action == DestructiveAction.FORMAT_PARTITION) {
+            lines += stringResource(R.string.confirm_format_not_cancelable)
+        }
     } else {
         lines += stringResource(R.string.confirm_repair_keeps)
         if (confirmation.initialPartitionNames.size == confirmation.initialPartitions.size) {

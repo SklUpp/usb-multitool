@@ -196,6 +196,7 @@
     <string name="confirm_link_new">Записывает связь autounattend.xml для %1$s.</string>
     <string name="confirm_link_overwrite">Перезаписывает существующую связь для %1$s.</string>
     <string name="confirm_action_format_as">форматирование %1$s в %2$s</string>
+    <string name="confirm_format_not_cancelable">Форматирование выполняет native-движок файловой системы. После начала отмена недоступна: дождитесь завершения движка. Если он завершится с ошибкой после записи, раздел может остаться частично отформатированным.</string>
     <string name="action_wipe">стирание устройства</string>
     <string name="action_ventoy_install">установку Ventoy с нуля</string>
     <string name="action_ventoy_update">обновление Ventoy</string>

@@ -60,7 +60,7 @@ The UI has four tabs: Files, Ventoy, Partitions, Diagnostics. This section lists
 - You can rename the GPT name of the selected partition and the volume label of a formatted partition. Renaming a protected EFI/VTOYEFI entry is refused. Labels are written only by engines that can: FAT/FAT32 (11 characters), exFAT (11 characters), NTFS (128 characters); EXT4 labels are written only while formatting.
 - A role change writes the partition type: EFI system or Linux data. The app does not restore the previous type automatically.
 - The boot flag is a separate operation. GPT stores it in partition attributes, MBR in the boot byte.
-- You can format the selected partition as FAT/FAT32, exFAT, NTFS, or EXT4. Real engines do the format.
+- Formatting uses a blocking native `mkfs` call. No cancel button is shown, and the app does not promise interruption after the engine starts. If the device disconnects or the engine fails after writing, the result is `Partial`, not `Cancelled`; after a successful final `sync`, a late internal cancel does not undo the physically committed result.
 - You can write an `.iso`, `.img`, `.gz`, or `.xz` from a local file. The app checks bounds and size before the write. Decompression runs on the fly. You can cancel the operation.
 - When the primary GPT is damaged, the app reads the table from the backup copy. Create, delete, role change, flag change, and GPT repair are blocked until a GPT restore from a saved copy succeeds.
 - A GPT write from the partition editor (create, delete, role, flag) publishes the backup structures first, then the primary. A disconnect leaves at least one complete copy with a valid CRC.

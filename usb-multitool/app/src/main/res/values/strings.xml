@@ -196,6 +196,7 @@
     <string name="confirm_link_new">Writes the autounattend.xml link for %1$s.</string>
     <string name="confirm_link_overwrite">Overwrites the existing link for %1$s.</string>
     <string name="confirm_action_format_as">formatting %1$s as %2$s</string>
+    <string name="confirm_format_not_cancelable">Formatting uses a native filesystem engine. Cancel is not available after it starts; wait for the engine to finish. If it fails after writing, the partition may be partially formatted.</string>
     <string name="action_wipe">wiping the device</string>
     <string name="action_ventoy_install">installing Ventoy from scratch</string>
     <string name="action_ventoy_update">updating Ventoy</string>

@@ -10,8 +10,9 @@ object Formatter {
     fun label(id: FilesystemId): String = FormatCatalog.label(id)
 
     /**
-     * Format [partition] with upstream engine selected by [id].
-     * Caller must release any [usb.files.MountedFilesVolume] on the disk first
+     * Format [partition] with upstream engine selected by [id]. Native mkfs calls are blocking
+     * and expose no cancellation callback; callers must not advertise interruption while this
+     * method runs. Caller must release any [usb.files.MountedFilesVolume] on the disk first
      * (ViewModel closeFilesVolume fail-closed). [label] is written by the same native
      * path as the format where the engine supports it (see [FormatCatalog.supportsVolumeLabel]).
      */

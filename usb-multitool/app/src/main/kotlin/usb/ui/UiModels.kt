@@ -323,7 +323,9 @@ enum class DestructiveAction {
 
     /**
      * True when the host may keep an [usb.service.OperationHandle] for cooperative cancel
-     * (progress loops that check isActive). Non-cooperative actions run to completion or fail.
+     * (progress loops that check isActive). Native filesystem formatting is deliberately
+     * excluded: mkfs engines expose blocking calls without a cancellation callback, so the UI
+     * must not promise interruption while they run.
      */
     val cooperative: Boolean
         get() =

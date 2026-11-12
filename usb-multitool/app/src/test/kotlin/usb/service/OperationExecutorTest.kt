@@ -18,6 +18,7 @@ import org.junit.Test
 import usb.device.DiskException
 import usb.operation.DiskOperation
 import usb.operation.OperationState
+import usb.operation.syncDestructiveDisk
 import usb.files.FilesOperations
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
@@ -77,6 +78,58 @@ class OperationExecutorTest {
         handle.cancel()
         release.complete(Unit)
         assertEquals(OperationState.Completed, handle.await())
+    }
+
+    @Test
+    fun cancelDuringNativeFormatWaitsForEngineAndReportsCommittedSync() = runTest {
+        val executor = OperationExecutor(this)
+        val disk = usb.testutil.RecordingDisk(sectorCount = 16UL)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation("Format partition") {
+            override suspend fun run() {
+                // Write tracking marks mutation before the blocking native mkfs call.
+                mutationAttempted = true
+                started.complete(Unit)
+                // Stand in for native mkfs: handle.cancel() cannot interrupt this call.
+                release.await()
+                syncDestructiveDisk(disk)
+            }
+        }
+        val handle = executor.submit(operation)
+        started.await()
+        handle.cancel()
+        val awaiting = launch { handle.await() }
+        advanceUntilIdle()
+        assertTrue("cancel cannot complete while native mkfs is blocked", awaiting.isActive)
+        release.complete(Unit)
+
+        assertEquals(OperationState.Completed, handle.await())
+        awaiting.join()
+        assertTrue(operation.commitReached)
+        assertEquals(1L, disk.syncCount)
+    }
+
+    @Test
+    fun cancelDuringNativeFormatFailureReportsPartialAfterMutation() = runTest {
+        val executor = OperationExecutor(this)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation("Format partition") {
+            override suspend fun run() {
+                mutationAttempted = true
+                started.complete(Unit)
+                release.await()
+                error("native mkfs failed after writing metadata")
+            }
+        }
+        val handle = executor.submit(operation)
+        started.await()
+        handle.cancel()
+        release.complete(Unit)
+
+        assertEquals(OperationState.Partial, handle.await())
+        assertFalse(operation.commitReached)
     }
 
     @Test fun disconnectWaitsForRunningWorkerAndPreservesPartial() = runTest {
