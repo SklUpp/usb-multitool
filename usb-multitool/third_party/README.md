@@ -14,11 +14,11 @@ commit recorded in `UPSTREAM.md`.
 - Patches (apply in order after unpack):
   1. https://elm-chan.org/fsw/ff/patches.html — patch-1 (Unicode tables / small-volume; 2025-08-03 / 2025-09-13 notes)
   2. Same page — patch-2 for CVE-2026-6682/6687/6683 (apply to `ff.c` with patch-1)
-  3. Local patch (via `scripts/fetch-third-party.sh`): `third_party/fatfs/patches/ff16p3-sync-volume.diff` — adds `f_sync_volume(FATFS*)`, a public wrapper over the static `sync_fs`, so the engine can flush the cached window, FAT32 FSInfo / exFAT PercInUse and `CTRL_SYNC` before `f_mount(NULL, path, 0)`. Upstream `f_mount(NULL, …)` only drops the volume object and never flushes.
-  4. Local patch: `third_party/fatfs/patches/ff16p4-sync-fs-errors.diff` — `sync_fs` now treats a failed FSInfo sector write or exFAT VBR read/write as `FR_DISK_ERR` and clears `fsi_flag` only after the sector reached the medium. Upstream cleared the flag first and ignored the write result, so a later flush reported success for metadata that never landed and could not retry.
+  3. `third_party/fatfs/patches/ff16p3-sync-volume.diff` — project patch exposing `f_sync_volume()` for explicit volume teardown flush
+  4. `third_party/fatfs/patches/ff16p4-sync-fs-errors.diff` — project patch propagating FSInfo/PercInUse write failures from `sync_fs()`
 - Unpack into: `third_party/fatfs/`
 - License: FatFs license (BSD-style; see archive `LICENSE.txt`)
-- Bridge: `fat_engine.c` / `fat_jni.cpp` — `disk_read` / `disk_write` / `disk_ioctl` go through the `usb_block.c` handle
+- Bridge: `disk_read` / `disk_write` / `disk_ioctl` → `usb_partition_*` in `fs_bridge.c`
 
 ## ntfs-3g
 
@@ -37,7 +37,7 @@ commit recorded in `UPSTREAM.md`.
 - Tag fallback: `v1.0.0` (`890484c72dbb321535127625c3686e51f1f424b9`) if the tip moves
 - Unpack into: `third_party/lwext4/`
 - License: GPL-2.0-or-later
-- Bridge: `ext_engine.c` — `ext4_blockdev` callbacks → `usb_block_read` / `usb_block_write`
+- Bridge: `ext4_blockdev` callbacks → `usb_partition_read` / `usb_partition_write`
 - Local patch (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
 
 ## exfatprogs (exFAT fsck only)
@@ -49,16 +49,27 @@ commit recorded in `UPSTREAM.md`.
 
 ## Fetch checklist
 
+`scripts/fetch-third-party.sh` is the only supported way to populate
+`third_party/`. It verifies every artifact before use:
+
+- FatFs: `ff16.zip`, both official diffs, and both project patches (`ff16p3`, `ff16p4`)
+  are checked against the SHA-256 pins in `third_party/fatfs/NOTICE` (same values live at the top of the script).
+- ntfs-3g, lwext4, F3: fetched through git and the checkout must satisfy
+  `git rev-parse HEAD` == the pinned commit below, so a moved tag or branch is
+  refused. lwext4 falls back to the pinned `v1.0.0` commit when the pinned
+  commit is no longer fetchable.
+- ddrescue: upstream publishes only a GPG signature, so there is no digest to
+  pin; the script skips the unpack unless a verified digest is supplied with
+  `DDRESCUE_SHA256=<64 hex> scripts/fetch-third-party.sh`.
+
 ```bash
 # From usb-multitool/
-mkdir -p third_party/fatfs third_party/ntfs-3g third_party/lwext4
-curl -L -o /tmp/ff16.zip https://elm-chan.org/fsw/ff/arc/ff16.zip
-unzip -d third_party/fatfs /tmp/ff16.zip
-curl -L https://github.com/tuxera/ntfs-3g/archive/refs/tags/2026.9.28.tar.gz \
-  | tar -xz --strip-components=1 -C third_party/ntfs-3g
-curl -L https://github.com/gkostka/lwext4/archive/58bcf89a121b72d4fb66334f1693d3b30e4cb9c5.tar.gz \
-  | tar -xz --strip-components=1 -C third_party/lwext4
+./scripts/fetch-third-party.sh
 ```
+
+The local patches under `scripts/patches/` and `third_party/fatfs/patches/` are applied idempotently: the script
+tries `patch --dry-run --reverse` first and only applies (then re-verifies with
+the same reverse check) when the patch is genuinely absent.
 
 Then enable `-DUSB_WITH_FATFS=ON -DUSB_WITH_NTFS=ON -DUSB_WITH_LWEXT4=ON` in the
 app `externalNativeBuild` CMake arguments.
@@ -85,5 +96,7 @@ app `externalNativeBuild` CMake arguments.
 - See `ddrescue/README.md`
 - URL: https://ftp.gnu.org/gnu/ddrescue/ddrescue-1.30.tar.lz
 - Revision: **1.30**
-- Bridge: none compiled. The rescue map is maintained in Kotlin (`RescueMap`) and
-  checkpointed by the app; no native ddrescue code is linked.
+- No pinned SHA-256: GNU publishes a GPG signature (`.sig`) for this tarball,
+  not a digest. `scripts/fetch-third-party.sh` therefore skips the unpack
+  unless a verified digest is provided via `DDRESCUE_SHA256=<64 hex>`.
+- Bridge: `app/src/main/cpp/ddrescue_bridge.c`
