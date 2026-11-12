@@ -88,6 +88,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
@@ -103,10 +104,17 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.CollectionItemInfo
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.collectionItemInfo
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -275,18 +283,11 @@ fun AppShell(
                     .padding(padding)
                     .fillMaxSize(),
             ) {
-                // Tabs stay composed while the log screen is open: form drafts held in
-                // `remember` survive the round trip, and Back only removes the layer.
-                // While the opaque journal covers them they are removed from the
-                // accessibility tree (composition and state untouched); the journal and
-                // the status block outside this column stay reachable. Hardware keyboard:
-                // no public Compose API deactivates focus for a whole subtree, so Tab can
-                // still reach these controls; input focus is moved into the layer on open
-                // and this remains the documented limitation of this version.
                 Column(
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
                         .fillMaxSize()
+                        .focusProperties { canFocus = !panels.journalScreenOpen }
                         .then(
                             if (panels.journalScreenOpen) {
                                 // Merging node: the whole covered tab is removed from the
@@ -846,6 +847,15 @@ internal fun StatusLogPanel(
         )
         else -> state.statusMessage?.localized() ?: state.logLines.lastOrNull()
     }
+    // Announce operation state and authored status once, not raw provider/error text, every
+    // progress tick, or every journal append. Polite live region avoids interrupting focus.
+    val statusAnnouncement = when {
+        op != null && op.state != OperationState.Running && op.state != OperationState.Queued -> title
+        op == null && state.statusMessage != null && state.statusMessage !is UiMessage.Raw -> {
+            state.statusMessage.localized()
+        }
+        else -> null
+    }
 
     // "Verified" is claimed only for Verified, and for a partial write only for the bytes that
     // were actually written.
@@ -937,6 +947,14 @@ internal fun StatusLogPanel(
                         color = content,
                         maxLines = if (collapsed) 1 else 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = if (statusAnnouncement != null) {
+                            Modifier.semantics {
+                                liveRegion = LiveRegionMode.Polite
+                                contentDescription = statusAnnouncement
+                            }
+                        } else {
+                            Modifier
+                        },
                     )
                     if (!collapsed) {
                         detail?.let { message ->
@@ -1070,13 +1088,27 @@ internal fun StatusLogPanel(
                     state = logList,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 180.dp),
+                        .heightIn(max = 180.dp)
+                        .semantics {
+                            collectionInfo = CollectionInfo(
+                                rowCount = state.logLines.size,
+                                columnCount = 1,
+                            )
+                        },
                 ) {
                     items(state.logLines.size) { index ->
                         Text(
                             text = state.logLines[index],
                             style = MaterialTheme.typography.labelSmall,
                             color = content,
+                            modifier = Modifier.semantics {
+                                collectionItemInfo = CollectionItemInfo(
+                                    rowIndex = index,
+                                    rowSpan = 1,
+                                    columnIndex = 0,
+                                    columnSpan = 1,
+                                )
+                            },
                         )
                     }
                 }
@@ -1099,12 +1131,16 @@ private fun LogScreen(
     onExportTrace: () -> Unit,
 ) {
     val context = LocalContext.current
+    val logPaneTitle = stringResource(R.string.log_title_count, lines.size)
     var confirmCopy by remember { mutableStateOf(false) }
     val backText = stringResource(R.string.log_back)
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .semantics {
+                paneTitle = logPaneTitle
+            },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
@@ -1172,13 +1208,27 @@ private fun LogScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .semantics {
+                        collectionInfo = CollectionInfo(
+                            rowCount = lines.size,
+                            columnCount = 1,
+                        )
+                    },
             ) {
                 items(lines.size) { index ->
                     Text(
                         text = lines[index],
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.semantics {
+                            collectionItemInfo = CollectionItemInfo(
+                                rowIndex = index,
+                                rowSpan = 1,
+                                columnIndex = 0,
+                                columnSpan = 1,
+                            )
+                        },
                     )
                 }
             }

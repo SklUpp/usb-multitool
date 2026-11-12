@@ -161,7 +161,8 @@ Download starts by capturing source directory, entry name and size, attachment i
 - Target: section headings and related controls share one surface; warnings may use an inset surface. Remove duplicate headings. The main device title has its own surface and top inset, while language, theme, and log controls remain outside it. Add space between the bottom status block and four-tab navigation.
 - The partition map strip and the header usage strip are absent when the disk has no partitions; an empty bar was indistinguishable from a clipped control.
 - Target: the bottom status expands to show the log within the same continuous surface; also provide a separate full log screen opened from a button beside language and theme, returning to the previous tab on Back. Copy all entries only on explicit user action, with a visible warning that paths and USB serials may be present. Clear the in-app log immediately without confirmation, including during operations; new entries may appear immediately. Clearing does not clear Android logcat.
-- New UI target: the bottom status can collapse to a thin header attached to the bottom navigation and expand independently of the nested log. The log has its own expand/collapse control within the expanded status; retain a way to expand the collapsed status again.
+- Accessibility: opening the full journal keeps covered tabs composed so drafts survive Back, but removes their focus targets from hardware-keyboard traversal and hides them from the accessibility tree. The journal is exposed as a titled pane and one-column collection with stable entry positions. Only terminal or authored status changes use a polite live announcement; individual journal appends are not live regions, preventing rapid operation output from interrupting focus.
+- New UI target: the bottom status can collapse to a thin header attached to the bottom navigation and expand independently of the nested log; the log has its own expand/collapse control within the expanded status; retain a way to expand the collapsed status again.
 - Touch targets stay at least 48 dp; dialogs cap their width and scroll in landscape.
 - All authored UI text comes from string resources (English default, Russian), including statuses, errors that the app authors, hints, and destructive confirmations. The in-app language switch is persisted and applied through a localized context, so the reducer stays Android-free (`UiMessage` keys, resolved in Compose).
 - Engine and OS error text and raw log lines remain unlocalized technical data on purpose. User-facing operation titles are localized; the log keeps the raw label.
@@ -255,6 +256,7 @@ Required verification:
 - One controlled physical USB test for files, Ventoy installation, raw write, backup, and restore.
 - Native library and APK page-size verification.
 - Ventoy boot and Windows installation checks on a PC are separate acceptance tests. Android tests cannot claim those results.
+- Hardware keyboard/TalkBack manual check: focus Log, verify Tab and Shift+Tab stay within visible journal controls and entries; close with Back and verify focus returns to Log opener. Expand inline journal and verify entries announce as one-column positions without repeated live interruptions; trigger terminal status and verify one polite announcement. Rotate after opening/closing journal and confirm panel flags and tab drafts persist.
 
 ## 10. Documentation and source obligations
 
