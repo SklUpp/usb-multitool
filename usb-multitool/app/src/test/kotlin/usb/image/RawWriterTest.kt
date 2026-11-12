@@ -159,15 +159,15 @@ class RawWriterTest {
     }
 
     @Test fun gzipFooterIsNeverTakenAsDecodedSize() {
-        // A bogus ISIZE must not reject a valid image before any write.
+        // Trailing non-gzip bytes whose last 4 bytes look like 0xFFFFFFFF must not be
+        // mistaken for a 4 GiB ISIZE on preflight; GZIPInputStream stops cleanly after the
+        // member trailer when the next bytes do not start with GZIP_MAGIC.
         val payload = ByteArray(1024) { 5 }
-        val broken = gzip(payload)
-        // Claim 0xFFFFFFFF decoded bytes in the trailer.
-        for (i in 0 until 4) broken[broken.size - 4 + i] = 0xFF.toByte()
+        val padded = gzip(payload) + byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())
         val disk = RecordingDisk(sectorCount = 4UL, sectorSize = 512)
         val op = DiskOperation("raw-gzip-footer")
         val result = RawWriter.write(
-            ImageSource.fromBytes(broken),
+            ImageSource.fromBytes(padded),
             disk,
             identity,
             conf(disk),
