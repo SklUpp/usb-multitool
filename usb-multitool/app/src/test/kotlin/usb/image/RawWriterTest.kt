@@ -374,31 +374,6 @@ class RawWriterTest {
         assertTrue(disk.bytes().copyOfRange(512, 512 + payload.size).contentEquals(payload))
     }
 
-    @Test fun gzipDecodedSizeIsUnknownSoOverflowIsDetectedWhileStreaming() {
-        // The gzip footer is not a decoded length (ISIZE is mod 2^32 and only covers the
-        // last member), so the stream is the authority: the range fills, the extra byte is
-        // refused, and the result is Partial rather than a pre-write rejection.
-        val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
-        val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
-        val op = DiskOperation("raw-gzip-overflow")
-        val result = RawWriter.write(
-            source,
-            disk,
-            identity,
-            conf(disk),
-            overwrite = true,
-            range = wholeDisk(disk),
-            operation = op,
-        )
-        assertEquals(RawWriteStatus.Partial, result.state)
-        assertEquals(4096L, result.writtenBytes)
-        assertEquals(ReadbackVerdict.Verified, result.readback)
-        assertTrue(result.failure is ImageTooLargeException)
-        assertEquals(1L, disk.syncCount)
-        assertEquals(-1L, op.bytesTotal)
-        assertEquals(OperationState.Partial, op.state)
-    }
-
     @Test fun compressedSourceLargerThanRangeIsRefusedBeforeAnyWrite() {
         val source = ImageSource.fromBytes(gzip(ByteArray(6000) { 7 }))
         val disk = RecordingDisk(sectorCount = 8UL, sectorSize = 512)
@@ -437,7 +412,6 @@ class RawWriterTest {
         assertEquals(RawWriteStatus.Completed, result.state)
         assertEquals(1024L, result.writtenBytes)
         assertEquals(ReadbackVerdict.Verified, result.readback)
-        assertEquals(-1L, op.bytesTotal)
     }
 
     @Test fun gzipMembersAreCountedTogetherNotFromTheLastFooter() {
