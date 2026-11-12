@@ -25,6 +25,15 @@ import usb.operation.OperationState
  * - identity, `Partial`, and the refusal to publish COPIED for untouched sectors
  *   stay exactly as before.
  */
+internal fun rescueChunkBytes(jniCapBytes: Int, sectorSize: Int): Int {
+    require(jniCapBytes > 0 && sectorSize > 0)
+    val cap = jniCapBytes.toLong().coerceAtLeast(sectorSize.toLong())
+    return (cap - cap % sectorSize)
+        .coerceAtLeast(sectorSize.toLong())
+        .coerceAtMost(Int.MAX_VALUE.toLong())
+        .toInt()
+}
+
 internal object SectorForgeEngine {
     /** Attempts per sector; sf-core defaults to 3, the app keeps one attempt. */
     private const val MAX_RETRIES = 1
@@ -73,13 +82,11 @@ internal object SectorForgeEngine {
                 maxRetries,
                 writerUncertainWrites,
             )
-        val chunkBytes = TransferTuning.jniCapBytes.toLong()
-            .coerceAtLeast(sectorSize.toLong())
-        val chunk = (chunkBytes - chunkBytes % sectorSize).coerceAtLeast(sectorSize.toLong())
-            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        val chunk = rescueChunkBytes(TransferTuning.jniCapBytes, sectorSize)
         val checkpointBytes =
             (checkpointEverySectors * sectorSize.toULong()).toLong().coerceAtLeast(1L)
         var failure: Throwable? = null
+        var handle = 0L
         try {
             prepareResume(map, inheritedFailed, destination, sizeBytes.toLong(), checkpoint)
             handle =

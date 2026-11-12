@@ -157,4 +157,17 @@ class SafAvailableBytesTest {
         val failure = owned.cleanup()
         assertEquals("SAF provider refused deletion of operation-owned document content://tree/run", failure?.message)
     }
+
+    @Test
+    fun exclusiveCreateCleanupFalsePreservesOriginalFailureAndAddsDiagnostic() {
+        val original = IllegalStateException("metadata mismatch")
+        val created = android.net.Uri.parse("content://tree/new-file")
+        deleteCreatedDocument({ false }, created, original)
+        assertEquals("metadata mismatch", original.message)
+        assertEquals(1, original.suppressed.size)
+        assertEquals(
+            "SAF provider refused deletion of operation-owned document $created",
+            original.suppressed.single().message,
+        )
+    }
 }

@@ -45,4 +45,11 @@ class TransferTuningTest {
             )
         }
     }
+
+    @Test
+    fun rescueChunkRoundsCapDownToWholeSectors() {
+        assertEquals(1_048_576, usb.diagnostics.rescueChunkBytes(1_048_575, 4096))
+        assertEquals(4096, usb.diagnostics.rescueChunkBytes(1024, 4096))
+        assertEquals(1_048_576, usb.diagnostics.rescueChunkBytes(1_048_576, 4096))
+    }
 }

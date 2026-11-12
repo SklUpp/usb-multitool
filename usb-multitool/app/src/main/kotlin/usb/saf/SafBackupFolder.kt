@@ -27,6 +27,21 @@ data class SafDocument(
     val sizeBytes: Long?,
 )
 
+internal fun deleteCreatedDocument(
+    delete: (Uri) -> Boolean,
+    created: Uri,
+    originalFailure: Throwable,
+) {
+    try {
+        if (!delete(created)) {
+            originalFailure.addSuppressed(
+                IOException("SAF provider refused deletion of operation-owned document $created"),
+            )
+        }
+    } catch (cleanupFailure: Throwable) {
+        originalFailure.addSuppressed(cleanupFailure)
+    }
+}
 /** Tracks exact URIs returned by this operation; display names never authorize cleanup. */
 internal class SafOperationDocuments(private val delete: (Uri) -> Boolean) {
     private val owned = LinkedHashSet<Uri>()
@@ -165,7 +180,7 @@ class SafBackupFolder(
             ) { "SAF provider did not create a new folder: $name" }
             created
         } catch (failure: Throwable) {
-            runCatching { deleteDocument(created) }.onFailure(failure::addSuppressed)
+            deleteCreatedDocument(::deleteDocument, created, failure)
             throw failure
         }
     }
@@ -183,7 +198,7 @@ class SafBackupFolder(
             ) { "SAF provider did not create a new empty file: $name" }
             created
         } catch (failure: Throwable) {
-            runCatching { deleteDocument(created) }.onFailure(failure::addSuppressed)
+            deleteCreatedDocument(::deleteDocument, created, failure)
             throw failure
         }
     }
