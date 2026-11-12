@@ -227,6 +227,8 @@ open class UsbDisk(
     private fun closeSession() {
         closed = true
         runCatching { session.close() }
+        // Failure paths also own the lease; close() may return early after this latch.
+        lease?.close()
     }
 
     /**

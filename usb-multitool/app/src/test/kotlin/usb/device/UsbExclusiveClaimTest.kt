@@ -1,6 +1,7 @@
 package usb.device
 
 import java.io.IOException
+import java.nio.ByteBuffer
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -73,5 +74,24 @@ class UsbExclusiveClaimTest {
         val disk = UsbDisk(bot, BlockGeometry(512, 8UL), claim.tryAcquire())
         assertThrows(IOException::class.java) { disk.close() }
         assertFalse("unconfirmed close must still free the claim", claim.isHeld())
+    }
+    @Test
+    fun uncertainWriteFailureReleasesLeaseForNextSession() {
+        val claim = UsbExclusiveClaim()
+        val first = UsbDisk(
+            FakeBotSession(writeIoFailureAfterData = true),
+            BlockGeometry(512, 8UL),
+            claim.tryAcquire(),
+        )
+        assertThrows(DiskException.IoFailure::class.java) {
+            first.write(0UL, ByteBuffer.allocate(512))
+        }
+        assertTrue(first.isClosed)
+        assertFalse("uncertain write close must release claim", claim.isHeld())
+
+        val secondLease = claim.tryAcquire()
+        secondLease.close()
+        first.close()
+        assertFalse(claim.isHeld())
     }
 }
