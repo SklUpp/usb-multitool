@@ -1,5 +1,6 @@
 package usb.diagnostics
 
+import java.io.IOException
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import usb.device.DiskException
@@ -188,6 +189,20 @@ object Diagnostics {
 fun interface RescueSink {
     fun writeSector(lba: ULong, sector: ByteArray)
 
+    /**
+     * True when the sink can write any LBA out of order, i.e. a seekable image file.
+     * sf-core retries damaged sectors by seeking back in the image, so a run that can
+     * revisit sectors (retries, or a resume with FAILED ranges) needs this. A fresh
+     * single-pass archive copy may append monotonically (see [asRescueSink]).
+     */
+    val positional: Boolean get() = false
+
+    /** Grow seekable destination before publishing map checkpoints. */
+    fun ensureLength(bytes: Long) {}
+
+    /** Finish dense image after engine stops; append sinks pad an unread tail with zeros. */
+    fun completeLength(bytes: Long) = ensureLength(bytes)
+
     fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
         for (offset in 0 until length step sectorSize) {
             writeSector(lba + (offset / sectorSize).toULong(), bytes.copyOfRange(offset, offset + sectorSize))
@@ -196,28 +211,68 @@ fun interface RescueSink {
 }
 
 /**
- * Adapt an appending [OutputStream] whose first byte is LBA 0.
- * A skipped LBA would shift every later sector, so a gap is rejected instead.
+ * Adapt an append-only [OutputStream] to a monotonic [RescueSink]: writes at or after
+ * the current cursor are accepted, a forward gap is zero-filled, and a write behind the
+ * cursor fails. Single-pass archive copies therefore work on providers that only append
+ * (SAF), while the first backward seek from the engine aborts the run as Partial.
  */
 fun OutputStream.asRescueSink(sectorSize: Int): RescueSink {
-    var next = 0UL
+    // Zero-fill a forward gap without allocating the whole gap at once.
+    val zeroFillChunk = 4096
+    var cursor = 0L
+    fun padUntil(offset: Long) {
+        if (offset <= cursor) return
+        val zeros = ByteArray(minOf(zeroFillChunk.toLong(), offset - cursor).toInt())
+        var remaining = offset - cursor
+        while (remaining > 0) {
+            val n = minOf(remaining, zeros.size.toLong()).toInt()
+            write(zeros, 0, n)
+            remaining -= n
+        }
+        cursor = offset
+    }
     return object : RescueSink {
-        override fun writeSector(lba: ULong, sector: ByteArray) = writeBatch(lba, sector, sector.size, sectorSize)
+        override fun writeSector(lba: ULong, sector: ByteArray) =
+            writeBatch(lba, sector, sector.size, sectorSize)
+
         override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
             require(length > 0 && length <= bytes.size && length % sectorSize == 0)
-            check(lba == next) { "rescue image is positional: expected LBA $next, got $lba" }
+            val offset = lba * sectorSize.toULong()
+            check(offset <= Long.MAX_VALUE.toULong()) { "rescue offset exceeds the signed range" }
+            val target = offset.toLong()
+            if (target < cursor) throw IOException("Sequential rescue sink cannot seek backwards")
+            padUntil(target)
             write(bytes, 0, length)
-            next += (length / sectorSize).toULong()
+            cursor += length
+        }
+
+        // An append-only stream cannot preallocate: padding here would move the
+        // cursor past unwritten sectors and turn the next forward write into a
+        // backward seek.
+        override fun ensureLength(bytes: Long) = Unit
+
+        override fun completeLength(bytes: Long) {
+            require(bytes >= 0)
+            check(bytes >= cursor) { "dense image length moved behind stream cursor" }
+            padUntil(bytes)
         }
     }
 }
 
 object Rescue {
     /**
-     * Disk → dense positional image. Only [DiskException.SenseError.isMediumError]
-     * marks a sector FAILED (zero-filled gap). Disconnect / transport / sink errors
-     * abort immediately without marking FAILED. [checkpoint] runs only after the
-     * caller has synced image data for the painted sectors (see MainActivity).
+     * Disk → dense positional image through the real SectorForge `sf-core` engine
+     * ([SectorForgeEngine], MIT). The engine copies healthy chunks first, parking
+     * damaged ones, then binary-splits them down to single sectors.
+     * Only [DiskException.SenseError.isMediumError] marks a sector FAILED (zero-filled
+     * gap). Disconnect / transport / sink errors abort immediately without marking
+     * FAILED. [checkpoint] runs only after the caller has synced image data for the
+     * painted sectors (see MainActivity).
+     *
+     * A seekable [destination] is required when the engine may revisit damaged
+     * sectors ([maxRetries] > 0, or a resume with FAILED ranges). A fresh single-pass
+     * archive copy ([maxRetries] = 0) may append monotonically through [asRescueSink];
+     * its first backward seek fails the run as Partial.
      */
     fun copy(
         disk: UsbDisk,
@@ -226,6 +281,7 @@ object Rescue {
         checkpointEverySectors: ULong = 4096UL,
         checkpoint: (RescueMap) -> Unit = {},
         operation: DiskOperation = DiskOperation("rescue-copy"),
+        maxRetries: Int = 1,
     ): RescueMap {
         require(map.kind == MapKind.COPY) { "rescue copy needs a COPY map" }
         require(map.sectorCount == disk.geometry.sectorCount) {
@@ -237,99 +293,15 @@ object Rescue {
                 "COPY map sectorSize ${map.sectorSize} != disk $sectorSize"
             }
         }
-        val chunkSectors = maxOf(1, Diagnostics.SCAN_CHUNK_BYTES / sectorSize)
-        val buf = ByteBuffer.allocate(chunkSectors * sectorSize)
-        val zeros = ByteArray(sectorSize)
-        var sinceCheckpoint = 0UL
-        var aborted: Throwable? = null
-        try {
-            for (range in map.nonTried + map.failed) {
-                var lba = range.first
-                var fallbackUntil = 0UL
-                while (lba <= range.last) {
-                    if (!operation.isActive()) {
-                        aborted = ImageCancelledException("rescue copy cancelled")
-                        return map
-                    }
-                    try {
-                        val count = minOf(chunkSectors.toULong(), range.last - lba + 1UL).toInt()
-                        buf.clear()
-                        buf.limit(count * sectorSize)
-                        val batchOk = if (lba < fallbackUntil) {
-                            false
-                        } else try {
-                            disk.read(lba, buf)
-                            true
-                        } catch (e: DiskException.SenseError) {
-                            if (!e.isMediumError) throw e
-                            fallbackUntil = lba + count.toULong()
-                            false
-                        }
-                        if (batchOk) {
-                            destination.writeBatch(lba, buf.array(), count * sectorSize, sectorSize)
-                            map.markCopied(lba, count.toULong())
-                            lba += count.toULong()
-                            sinceCheckpoint += count.toULong()
-                        } else {
-                            buf.clear()
-                            buf.limit(sectorSize)
-                            val sectorOk = try {
-                                disk.read(lba, buf)
-                                true
-                            } catch (e: DiskException.SenseError) {
-                                if (!e.isMediumError) throw e
-                                false
-                            }
-                            if (sectorOk) {
-                                destination.writeBatch(lba, buf.array(), sectorSize, sectorSize)
-                                map.markCopied(lba, 1UL)
-                            } else {
-                                destination.writeSector(lba, zeros)
-                                map.markFailed(lba, 1UL)
-                            }
-                            lba++
-                            sinceCheckpoint++
-                        }
-                    } catch (e: Exception) {
-                        aborted = e
-                        throw e
-                    }
-                    operation.report((lba * sectorSize.toULong()).toLong())
-                    if (sinceCheckpoint >= checkpointEverySectors) {
-                        checkpoint(map.snapshot())
-                        sinceCheckpoint = 0UL
-                    }
-                }
-            }
-        } finally {
-            // Final checkpoint even on cancel/abort so Partial retains a usable map.
-            try {
-                checkpoint(map.snapshot())
-            } catch (cp: Exception) {
-                if (aborted != null) aborted.addSuppressed(cp)
-                else if (operation.isActive()) throw cp
-                else operation.failureCause = mergeAbort(operation.failureCause, cp)
-            }
-            if (operation.state == OperationState.Queued || operation.state == OperationState.Running) {
-                when {
-                    aborted is ImageCancelledException || !operation.isActive() -> {
-                        operation.state = OperationState.Partial
-                        operation.failureCause =
-                            mergeAbort(operation.failureCause, aborted ?: ImageCancelledException("rescue copy cancelled"))
-                    }
-                    aborted != null -> {
-                        operation.state = OperationState.Partial
-                        operation.failureCause = mergeAbort(operation.failureCause, aborted)
-                    }
-                    map.failed.isNotEmpty() || map.partial -> operation.state = OperationState.Partial
-                    else -> {
-                        // Durable commit (sync/close/checkpoint) is owned by RescueBackupOperations.
-                        operation.state = OperationState.Completed
-                    }
-                }
-            }
-        }
-        return map
+        return SectorForgeEngine.run(
+            disk,
+            destination,
+            map,
+            checkpointEverySectors,
+            checkpoint,
+            operation,
+            maxRetries,
+        )
     }
 
     /**
@@ -720,7 +692,7 @@ object Rescue {
         return true
     }
 
-    private fun mergeAbort(existing: Throwable?, next: Throwable): Throwable {
+    internal fun mergeAbort(existing: Throwable?, next: Throwable): Throwable {
         if (existing == null) return next
         if (existing !== next) existing.addSuppressed(next)
         return existing

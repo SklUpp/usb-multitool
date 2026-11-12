@@ -1,0 +1,117 @@
+Expose the live MapFile to the imager progress callbacks (additive; the
+existing run_copy_pass/run_retry_pass signatures and upstream tests stay
+unchanged).
+
+An embedder that keeps its own map format (the Android app writes
+usb-rescue-map 2, not ddrescue's) can then checkpoint exactly what a pass has
+already recorded instead of only at pass boundaries.
+
+The retry pass also bounds every attempt to the sector-aligned initial_chunk:
+adjacent failed chunks merge into one NonTrimmed region, so a contiguous
+damaged area would otherwise size a single read buffer from the whole region.
+
+A sector that exhausts its retries is zero-filled in the image before the map
+marks it BadSector, so a resumed run never leaves stale bytes from an earlier
+image looking like rescued data.
+
+--- a/crates/sf-core/src/imager.rs
++++ b/crates/sf-core/src/imager.rs
+@@ -136,6 +136,13 @@
+     /// into *why* a chunk failed. This is what gets the bulk of a failing
+     /// drive's data off quickly, before the drive gets any worse.
+     pub fn run_copy_pass(&mut self, mut on_progress: impl FnMut(Progress)) -> io::Result<()> {
++        self.run_copy_pass_with_map(|_, progress| on_progress(progress))
++    }
++
++    /// Same as [`run_copy_pass`](Self::run_copy_pass), but hands the current
++    /// [`MapFile`] to `on_progress` as well, so an embedder that keeps its own
++    /// on-disk map format can checkpoint exactly what this pass has recorded.
++    pub fn run_copy_pass_with_map(&mut self, mut on_progress: impl FnMut(&MapFile, Progress)) -> io::Result<()> {
+         if self.config.reverse {
+             return self.run_reverse_copy_pass(on_progress);
+         }
+@@ -174,14 +181,14 @@
+             self.map.current_pos = pos;
+             self.map.current_status = Status::NonTried;
+             self.checkpoint(false)?;
+-            on_progress(self.progress());
++            on_progress(&self.map, self.progress());
+         }
+         self.checkpoint(true)
+     }
+
+     /// Phase 1 run backwards: the same as [`run_copy_pass`](Self::run_copy_pass),
+     /// but each chunk is read ending where the last one started.
+-    fn run_reverse_copy_pass(&mut self, mut on_progress: impl FnMut(Progress)) -> io::Result<()> {
++    fn run_reverse_copy_pass(&mut self, mut on_progress: impl FnMut(&MapFile, Progress)) -> io::Result<()> {
+         let sector = self.device.sector_size();
+         let size = self.map.size();
+         // current_pos is the lowest point a reverse run reached; 0 means a fresh map.
+@@ -216,7 +223,7 @@
+             self.map.current_pos = end;
+             self.map.current_status = Status::NonTried;
+             self.checkpoint(false)?;
+-            on_progress(self.progress());
++            on_progress(&self.map, self.progress());
+         }
+         self.checkpoint(true)
+     }
+@@ -226,7 +233,18 @@
+     /// unreadable end up marked [`Status::BadSector`] — everything else in
+     /// that chunk still gets rescued.
+     pub fn run_retry_pass(&mut self, mut on_progress: impl FnMut(Progress)) -> io::Result<()> {
++        self.run_retry_pass_with_map(|_, progress| on_progress(progress))
++    }
++
++    /// Same as [`run_retry_pass`](Self::run_retry_pass), but hands the current
++    /// [`MapFile`] to `on_progress` as well (see [`run_copy_pass_with_map`](Self::run_copy_pass_with_map)).
++    pub fn run_retry_pass_with_map(&mut self, mut on_progress: impl FnMut(&MapFile, Progress)) -> io::Result<()> {
+         let sector = self.device.sector_size();
++        // A first pass parks every failed chunk as NonTrimmed, and adjacent
++        // ones merge, so a contiguous bad region can span the whole drive.
++        // Never size a retry read from that region: bound each attempt to the
++        // sector-aligned first-pass chunk and come back for the rest.
++        let max_len = align_chunk_len(self.config.initial_chunk, sector);
+
+         loop {
+             let Some((pos, len)) = self
+@@ -235,7 +253,7 @@
+             else {
+                 break;
+             };
+-            self.split_and_retry(pos, len, sector, 0, &mut on_progress)?;
++            self.split_and_retry(pos, len.min(max_len), sector, 0, &mut on_progress)?;
+         }
+         self.checkpoint(true)
+     }
+@@ -246,7 +264,7 @@
+         len: u64,
+         sector: u64,
+         attempt: u32,
+-        on_progress: &mut dyn FnMut(Progress),
++        on_progress: &mut dyn FnMut(&MapFile, Progress),
+     ) -> io::Result<()> {
+         let mut buf = AlignedBuf::new(len as usize, sector as usize);
+         let outcome = match self.device.read_at(pos, &mut buf) {
+@@ -258,6 +276,13 @@
+                 if attempt + 1 < self.config.max_retries {
+                     return self.split_and_retry(pos, len, sector, attempt + 1, on_progress);
+                 }
++                // The image can hold bytes from an earlier run for a sector
++                // this one can never read. The map is about to call it bad,
++                // so overwrite them with zeros first: a bad sector must never
++                // leave stale data looking rescued. This write lands before
++                // the checkpoint that publishes the BadSector status.
++                buf.fill(0);
++                self.write_chunk(pos, &buf)?;
+                 Some(Status::BadSector)
+             }
+             Err(_) => None,
+@@ -270,7 +295,7 @@
+             // damaged region can run for hours — checkpoint and report
+             // inside it, not just between regions.
+             self.checkpoint(false)?;
+-            on_progress(self.progress());
++            on_progress(&self.map, self.progress());
+             return Ok(());
+         }

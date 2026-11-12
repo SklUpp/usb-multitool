@@ -1,0 +1,22 @@
+[package]
+name = "sf-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "JNI bridge from the Android USB Multitool to SectorForge's sf-core imager"
+
+[lib]
+name = "sf_bridge"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+sf-core = { path = "../../../../../third_party/sectorforge/crates/sf-core" }
+
+# panics inside sf-core frame unwinding is how a run is aborted (cancellation and
+# transport failures); see docs in src/lib.rs. This must never become abort.
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = true
+codegen-units = 1

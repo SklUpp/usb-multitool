@@ -132,6 +132,7 @@ Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-d
 
 ```bash
 ./scripts/fetch-third-party.sh
+./scripts/build-sf-bridge.sh    # requires: rustup target add aarch64-linux-android
 ./scripts/run-exfat-fsck-host-test.sh
 ./scripts/run-ntfs-host-test.sh
 ./scripts/run-ext-host-test.sh

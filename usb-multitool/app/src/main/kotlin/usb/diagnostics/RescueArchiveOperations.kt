@@ -50,6 +50,9 @@ object RescueArchiveOperations {
      * Folder/document placement around the existing backup engine. Same durable order as
      * [RescueBackupOperations.copy] for files; a failure after the first image byte is
      * Partial, never a silent Completed.
+     *
+     * [engine] is a host test seam; `null` keeps production engine. Append-only SAF
+     * images disable retries; positional images retain retries for recovery.
      */
     fun copy(
         disk: UsbDisk,
@@ -57,6 +60,9 @@ object RescueArchiveOperations {
         map: RescueMap,
         operation: DiskOperation,
         checkpointTargetBytes: Long = SAF_CHECKPOINT_TARGET_BYTES,
+        engine: (
+            (UsbDisk, RescueSink, RescueMap, (RescueMap) -> Unit, DiskOperation) -> RescueMap
+        )? = null,
     ): RescueMap =
         RescueBackupOperations.copy(
             disk = disk,
@@ -72,5 +78,7 @@ object RescueArchiveOperations {
             onFinalClose = target::closeArchive,
             onPublishCanonical = target::publishCanonical,
             checkpointEverySectors = checkpointEverySectors(disk.sectorSize, checkpointTargetBytes),
+            maxRetries = if (target.sink.positional) 1 else 0,
+            engine = engine,
         )
 }

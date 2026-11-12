@@ -39,12 +39,14 @@ option(USB_REQUIRE_ENGINES "Fail configure when third_party engines are missing"
 option(USB_WITH_NTFS "Build NTFS engine (requires third_party/ntfs-3g)" ON)
 option(USB_WITH_LWEXT4 "Build EXT engine (requires third_party/lwext4)" ON)
 option(USB_WITH_FATFS "Build FatFs engine (requires third_party/fatfs)" ON)
+option(USB_WITH_SECTORFORGE "Build the SectorForge sf-core rescue engine (requires app/src/main/rust/sf-bridge)" ON)
 
 # REQUIRE implies every WITH flag: configure must fail if any engine source is absent.
 if(USB_REQUIRE_ENGINES)
     set(USB_WITH_NTFS ON CACHE BOOL "Build NTFS engine (requires third_party/ntfs-3g)" FORCE)
     set(USB_WITH_LWEXT4 ON CACHE BOOL "Build EXT engine (requires third_party/lwext4)" FORCE)
     set(USB_WITH_FATFS ON CACHE BOOL "Build FatFs engine (requires third_party/fatfs)" FORCE)
+    set(USB_WITH_SECTORFORGE ON CACHE BOOL "Build the SectorForge sf-core rescue engine" FORCE)
 endif()
 
 if(NOT EXISTS "${FATFS_DIR}/ff.c")
@@ -87,6 +89,25 @@ set(USB_NATIVE_DEFS
     _GNU_SOURCE
     _FILE_OFFSET_BITS=64
 )
+set(USB_NATIVE_LIBS "")
+
+# SectorForge sf-core rescue engine: the Rust bridge is built by cargo (Gradle task
+# buildSfBridge) and linked in; without it the Kotlin side reports "engine
+# unavailable" instead of falling back to a different implementation.
+if(USB_WITH_SECTORFORGE)
+    if(EXISTS "${SF_BRIDGE_LIB}")
+        list(APPEND USB_NATIVE_SOURCES sf_bridge_jni.cpp)
+        list(APPEND USB_NATIVE_DEFS USB_WITH_SECTORFORGE=1)
+        list(APPEND USB_NATIVE_LIBS "${SF_BRIDGE_LIB}")
+    elseif(ANDROID)
+        message(FATAL_ERROR
+            "SectorForge bridge static library missing at '${SF_BRIDGE_LIB}' — "
+            "run scripts/build-sf-bridge.sh or let Gradle's buildSfBridge task run cargo")
+    else()
+        message(STATUS
+            "SF_BRIDGE_LIB not provided; this host build has no rescue engine")
+    endif()
+endif()
 
 if(USB_WITH_FATFS)
     list(APPEND USB_NATIVE_SOURCES
@@ -157,12 +178,16 @@ if(ANDROID)
         exfatprogs_fsck
         ${log-lib}
         Threads::Threads
+        dl
+        m
+        ${USB_NATIVE_LIBS}
     )
     target_link_options(usb_native PRIVATE "-Wl,-z,max-page-size=16384")
 else()
     target_link_libraries(usb_native
         exfatprogs_fsck
         Threads::Threads
+        ${USB_NATIVE_LIBS}
     )
 endif()
 

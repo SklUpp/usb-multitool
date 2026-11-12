@@ -4,6 +4,30 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+// SectorForge sf-core rescue engine: the Rust bridge is a static library built by
+// cargo and linked into libusb_native.so (see src/main/cpp/CMakeLists.txt).
+val sfBridgeTarget = "aarch64-linux-android"
+val sfBridgeDir = layout.projectDirectory.dir("src/main/rust/sf-bridge")
+val sfBridgeLib = layout.buildDirectory.file("rust/$sfBridgeTarget/release/libsf_bridge.a")
+
+val buildSfBridge =
+    tasks.register<Exec>("buildSfBridge") {
+        group = "build"
+        description = "Builds the SectorForge sf-core rescue bridge (Rust static library)"
+        workingDir = sfBridgeDir.asFile
+        environment("CARGO_TARGET_DIR", layout.buildDirectory.dir("rust").get().asFile.absolutePath)
+        commandLine("cargo", "build", "--release", "--target", sfBridgeTarget)
+        inputs.dir(sfBridgeDir)
+        inputs.dir(layout.projectDirectory.dir("../third_party/sectorforge/crates/sf-core/src"))
+        inputs.file(layout.projectDirectory.file("../third_party/sectorforge/crates/sf-core/Cargo.toml"))
+        inputs.file(layout.projectDirectory.file("../scripts/patches/sectorforge-progress-map.patch"))
+        inputs.file(layout.projectDirectory.file("../third_party/sectorforge/Cargo.toml"))
+        outputs.file(sfBridgeLib)
+    }
+
+tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("buildCMake") }
+    .configureEach { dependsOn(buildSfBridge) }
+
 android {
     namespace = "usb.multitool"
     compileSdk = 36
@@ -25,6 +49,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
+                arguments += listOf("-DSF_BRIDGE_LIB=${sfBridgeLib.get().asFile.absolutePath}")
                 fun flag(prop: String, cmake: String) {
                     if (project.findProperty(prop) == "true") {
                         arguments += "-D$cmake=ON"

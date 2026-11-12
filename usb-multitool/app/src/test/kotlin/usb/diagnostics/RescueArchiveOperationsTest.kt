@@ -2,12 +2,14 @@ package usb.diagnostics
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import usb.device.DiskException
+import usb.device.UsbDisk
 import usb.operation.DiskOperation
 import usb.operation.OperationState
 import usb.testutil.RecordingDisk
@@ -70,6 +72,41 @@ class RescueArchiveOperationsTest {
         assertEquals(4096L, (1024L * 1024 * 1024 * 1024) / (interval512.toLong() * 512))
     }
 
+    /**
+     * Host replacement for the native engine: reads the real disk in LBA order, writes
+     * through the real sink/checkpoint callbacks, and stops on cancellation. `null` in
+     * production keeps [Rescue.copy]; the SAF sink gate is exercised for real.
+     */
+    private fun hostEngine(
+        disk: RecordingDisk,
+    ): (UsbDisk, RescueSink, RescueMap, (RescueMap) -> Unit, DiskOperation) -> RescueMap =
+        { _, sink, map, checkpoint, operation ->
+            val sectorSize = disk.geometry.sectorSize
+            val buffer = ByteBuffer.allocate(sectorSize)
+            var wrote = false
+            try {
+                for (i in 0 until disk.geometry.sectorCount.toInt()) {
+                    if (!operation.isActive()) {
+                        operation.state = OperationState.Partial
+                        break
+                    }
+                    buffer.clear()
+                    disk.read(i.toULong(), buffer)
+                    sink.writeBatch(i.toULong(), buffer.array(), sectorSize, sectorSize)
+                    wrote = true
+                    map.markCopied(i.toULong(), 1UL)
+                    checkpoint(map.snapshot())
+                }
+            } finally {
+                // Only an image that already has bytes is grown; a pre-image abort
+                // must not fabricate a durable side-effect.
+                if (wrote) sink.ensureLength(disk.geometry.capacityBytes.toLong())
+            }
+            // Production engine always publishes a final checkpoint, even on cancel.
+            checkpoint(map.snapshot())
+            map
+        }
+
     private fun tinyMap(disk: RecordingDisk): RescueMap =
         RescueMap.forCopy(
             sectorCount = disk.geometry.sectorCount,
@@ -83,7 +120,7 @@ class RescueArchiveOperationsTest {
         val target = FakeTarget(512)
         val op = DiskOperation(name = "rescue-archive")
 
-        RescueArchiveOperations.copy(disk, target, tinyMap(disk), op)
+        RescueArchiveOperations.copy(disk, target, tinyMap(disk), op, engine = hostEngine(disk))
 
         assertEquals(OperationState.Completed, op.state)
         assertTrue(op.commitReached)
@@ -106,7 +143,7 @@ class RescueArchiveOperationsTest {
         val op = DiskOperation(name = "rescue-archive")
 
         try {
-            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op)
+            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op, engine = hostEngine(disk))
             fail("expected checkpoint failure")
         } catch (expected: IOException) {
             assertEquals("checkpoint publish failed", expected.message)
@@ -126,7 +163,7 @@ class RescueArchiveOperationsTest {
         val op = DiskOperation(name = "rescue-archive")
 
         try {
-            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op)
+            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op, engine = hostEngine(disk))
             fail("expected close failure")
         } catch (expected: IOException) {
             assertEquals("archive close failed", expected.message)
@@ -144,7 +181,7 @@ class RescueArchiveOperationsTest {
         val target = FakeTarget(512)
         val op = DiskOperation(name = "rescue-archive", active = { false })
 
-        val map = RescueArchiveOperations.copy(disk, target, tinyMap(disk), op)
+        val map = RescueArchiveOperations.copy(disk, target, tinyMap(disk), op, engine = hostEngine(disk))
 
         assertTrue(map.partial)
         assertEquals(OperationState.Partial, op.state)
@@ -160,7 +197,7 @@ class RescueArchiveOperationsTest {
         val op = DiskOperation(name = "rescue-archive")
 
         try {
-            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op)
+            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op, engine = hostEngine(disk))
             fail("expected canonical failure")
         } catch (expected: IOException) {
             assertEquals("canonical publish failed", expected.message)
@@ -183,7 +220,7 @@ class RescueArchiveOperationsTest {
         val op = DiskOperation(name = "rescue-archive")
 
         try {
-            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op)
+            RescueArchiveOperations.copy(disk, target, tinyMap(disk), op, engine = hostEngine(disk))
         } catch (_: DiskException.Disconnected) {
             // Expected: no image byte reached the folder.
         }

@@ -9,13 +9,15 @@ import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import android.system.Os
+import android.system.ErrnoException
+import android.system.OsConstants
+
 import usb.diagnostics.CheckpointPublisher
 import usb.diagnostics.CheckpointStore
 import usb.diagnostics.RescueArchiveTarget
-import usb.diagnostics.probeWriteSupport
 import usb.diagnostics.RescueMap
 import usb.diagnostics.RescueSink
-import usb.diagnostics.asRescueSink
 
 /** One document from a SAF tree; no platform type escapes into the UI/reducer. */
 data class SafDocument(
@@ -30,8 +32,8 @@ data class SafDocument(
  * byte sync only; rescue naming, validation and the durable engine boundary live in
  * [usb.diagnostics.BackupArchive] and [usb.diagnostics.RescueArchiveOperations].
  *
- * New documents are opened append-only (`w`) and never rewound: checkpoint maps are
- * published as fresh files, so a failed write cannot truncate the previous valid map.
+ * New documents are opened read-write only after the provider's createDocument contract
+ * verifies a newly generated ID and empty regular file. Checkpoint maps remain append-only.
  */
 class SafBackupFolder(
     private val resolver: ContentResolver,
@@ -124,11 +126,53 @@ class SafBackupFolder(
             DocumentsContract.createDocument(resolver, parentUri, mimeType, name),
         ) { "the provider refused to create file '$name'" }
     }
+    /**
+     * DocumentsProvider contract guarantees createDocument returns a newly generated,
+     * immutable document ID. Verify returned metadata before any write probe; do not
+     * infer ownership from display-name uniqueness.
+     */
+    fun createExclusiveSubfolder(name: String): Uri {
+        val created = createSubfolder(name)
+        return try {
+            val createdId = DocumentsContract.getDocumentId(created)
+            val document = queryDocument(created)
+            require(
+                document != null &&
+                    DocumentsContract.getDocumentId(document.uri) == createdId &&
+                    document.isDirectory,
+            ) { "SAF provider did not create a new folder: $name" }
+            created
+        } catch (failure: Throwable) {
+            runCatching { deleteDocument(created) }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+    }
+
+    fun createExclusiveFile(parent: Uri, name: String, mimeType: String): Uri {
+        val created = createFile(parent, name, mimeType)
+        return try {
+            val createdId = DocumentsContract.getDocumentId(created)
+            val document = queryDocument(created)
+            require(
+                document != null &&
+                    DocumentsContract.getDocumentId(document.uri) == createdId &&
+                    !document.isDirectory &&
+                    document.sizeBytes == 0L,
+            ) { "SAF provider did not create a new empty file: $name" }
+            created
+        } catch (failure: Throwable) {
+            runCatching { deleteDocument(created) }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+    }
 
     fun openSyncedOutput(document: Uri): SafSyncedOutput =
         SafSyncedOutput(resolver, documentUri(DocumentsContract.getDocumentId(document)))
 
-    /** Sequential write + fsync + close. Used for map generations and the probe. */
+    fun openPositionalImage(document: Uri): SafPositionalImage =
+        SafPositionalImage(resolver, documentUri(DocumentsContract.getDocumentId(document)))
+
+    /** Sequential write + fsync + close for checkpoint map documents. */
     fun writeTextAndSync(document: Uri, text: String) {
         val output = openSyncedOutput(document)
         var closed = false
@@ -163,16 +207,6 @@ class SafBackupFolder(
             }
             text.toString()
         }
-    }
-
-    /**
-     * Fail closed before the image starts. A provider that cannot write, fsync and read
-     * back a small document cannot host a trustworthy rescue archive. The probe name is
-     * a dotfile, so a failed cleanup cannot break restore-folder selection.
-     */
-    fun probeWriteSupport(parent: Uri) {
-        SafCheckpointStore(this, parent)
-            .probeWriteSupport(".usb-write-probe-${System.nanoTime()}")
     }
 
     fun deleteDocument(document: Uri): Boolean =
@@ -268,13 +302,104 @@ class SafSyncedOutput(
     }
 }
 
+/** Random-access image document; only use on a newly created, operation-owned image. */
+class SafPositionalImage(resolver: ContentResolver, document: Uri) : Closeable {
+    private val descriptor = resolver.openFileDescriptor(document, "rw")
+        ?: throw IOException("cannot open $document for random-access writing")
+    private val fd = descriptor.fileDescriptor
+    private var closed = false
+
+    init {
+        try {
+            check(OsConstants.S_ISREG(Os.fstat(fd).st_mode)) { "SAF image is not a regular seekable file" }
+            Os.lseek(fd, 0L, OsConstants.SEEK_CUR)
+            probe()
+        } catch (failure: Throwable) {
+            runCatching { descriptor.close() }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+    }
+
+    private fun probe() {
+        val first = byteArrayOf(0x31, 0x32, 0x33)
+        val second = byteArrayOf(0x61, 0x62)
+        writeFully(first, 0)
+        writeFully(second, 4096)
+        check(readFully(first.size, 0).contentEquals(first)) { "SAF image failed positional-write probe" }
+        check(readFully(second.size, 4096).contentEquals(second)) { "SAF image failed random-access probe" }
+        Os.ftruncate(fd, 0)
+        Os.fsync(fd)
+    }
+
+    private fun readFully(length: Int, offset: Long): ByteArray {
+        val bytes = ByteArray(length)
+        var done = 0
+        while (done < length) {
+            val count = try {
+                Os.pread(fd, bytes, done, length - done, offset + done)
+            } catch (e: ErrnoException) {
+                if (e.errno == OsConstants.EINTR) continue
+                throw e
+            }
+            if (count <= 0) throw IOException("SAF image positional read made no progress")
+            done += count
+        }
+        return bytes
+    }
+
+    private fun writeFully(bytes: ByteArray, offset: Long) =
+        writeFully(bytes, 0, bytes.size, offset)
+
+    private fun writeFully(bytes: ByteArray, start: Int, length: Int, offset: Long) {
+        var done = 0
+        while (done < length) {
+            val count = try {
+                Os.pwrite(fd, bytes, start + done, length - done, offset + done)
+            } catch (e: ErrnoException) {
+                if (e.errno == OsConstants.EINTR) continue
+                throw e
+            }
+            if (count <= 0) throw IOException("SAF image positional write made no progress")
+            done += count
+        }
+    }
+
+    val sink: RescueSink = object : RescueSink {
+        override val positional = true
+
+        override fun writeSector(lba: ULong, sector: ByteArray) = writeBatch(lba, sector, sector.size, sector.size)
+
+        override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
+            require(sectorSize > 0 && length > 0 && length <= bytes.size && length % sectorSize == 0)
+            val offset = lba * sectorSize.toULong()
+            check(offset <= Long.MAX_VALUE.toULong() && length.toULong() <= Long.MAX_VALUE.toULong() - offset) {
+                "rescue offset exceeds signed range"
+            }
+            writeFully(bytes, 0, length, offset.toLong())
+        }
+
+        override fun ensureLength(bytes: Long) {
+            require(bytes >= 0)
+            if (Os.fstat(fd).st_size < bytes) Os.ftruncate(fd, bytes)
+        }
+    }
+
+    fun sync() = Os.fsync(fd)
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        descriptor.close()
+    }
+}
+
 /** SAF placement for [CheckpointPublisher]; all publication semantics stay in the pure class. */
 class SafCheckpointStore(
     private val folder: SafBackupFolder,
     private val parent: Uri,
 ) : CheckpointStore {
     override fun create(name: String): String =
-        folder.createFile(parent, name, "text/plain").toString()
+        folder.createExclusiveFile(parent, name, "text/plain").toString()
 
     override fun writeAndSync(document: String, text: String) =
         folder.writeTextAndSync(Uri.parse(document), text)
@@ -293,11 +418,10 @@ class SafCheckpointStore(
  * publication and close.
  */
 class SafArchiveTarget(
-    private val image: SafSyncedOutput,
+    private val image: SafPositionalImage,
     private val checkpoints: CheckpointPublisher,
-    sectorSize: Int,
 ) : RescueArchiveTarget {
-    override val sink: RescueSink = image.output.asRescueSink(sectorSize)
+    override val sink: RescueSink = image.sink
     private var closed = false
 
     override fun syncImage() = image.sync()

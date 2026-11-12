@@ -134,6 +134,7 @@ APK подписан debug-ключом и предназначен для те�
 
 ```bash
 ./scripts/fetch-third-party.sh
+./scripts/build-sf-bridge.sh    # нужен target: rustup target add aarch64-linux-android
 ./scripts/run-exfat-fsck-host-test.sh
 ./scripts/run-ntfs-host-test.sh
 ./scripts/run-ext-host-test.sh

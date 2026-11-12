@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 TP="$ROOT/third_party"
-mkdir -p "$TP/fatfs" "$TP/ntfs-3g" "$TP/lwext4" "$TP/f3" "$TP/ddrescue"
+mkdir -p "$TP/fatfs" "$TP/ntfs-3g" "$TP/lwext4" "$TP/f3" "$TP/ddrescue" "$TP/sectorforge"
 
 have_marker() {
   local path="$1"
@@ -29,6 +29,8 @@ LWEXT4_COMMIT=58bcf89a121b72d4fb66334f1693d3b30e4cb9c5
 LWEXT4_TAG=v1.0.0
 LWEXT4_TAG_COMMIT=890484c72dbb321535127625c3686e51f1f424b9
 F3_COMMIT=67b8a5d546cbe41b0072c2e62aefe165e4675b61
+SF_COMMIT=b292a299c18013706e81d670657ced6c43f200ca
+SF_PROGRESS_PATCH_SHA256=0c3dccd3d62551605bb7dbbb333f8482f63033de3f3bc31b2b1fd335f739c203
 # Upstream publishes only a GPG signature for this tarball, so there is no
 # digest to pin here. The fetch is skipped (not silently trusted) until a
 # verified digest is supplied: DDRESCUE_SHA256=<64 hex> scripts/fetch-third-party.sh
@@ -207,6 +209,22 @@ if ! have_marker "$TP/f3/src/f3probe.c"; then
     || { echo "F3 fetch failed"; exit 1; }
   have_marker "$TP/f3/src/f3probe.c" || { echo "F3 fetch failed"; exit 1; }
 fi
+
+echo "Fetching SectorForge sf-core (pinned b292a299)..."
+if ! have_marker "$TP/sectorforge/crates/sf-core/src/imager.rs"; then
+  fetch_pinned_git sectorforge https://github.com/terraseraph/sectorforge \
+    "$SF_COMMIT" "$SF_COMMIT" "$TP/sectorforge" \
+    || { echo "SectorForge fetch failed" >&2; exit 1; }
+fi
+have_marker "$TP/sectorforge/crates/sf-core/src/imager.rs" \
+  || { echo "SectorForge fetch failed" >&2; exit 1; }
+
+# Applied outside the fetch gate so existing trees receive the pinned patch too.
+SF_PROGRESS_PATCH="$ROOT/scripts/patches/sectorforge-progress-map.patch"
+[[ -f "$SF_PROGRESS_PATCH" ]] \
+  || { echo "SectorForge progress patch missing at $SF_PROGRESS_PATCH" >&2; exit 1; }
+require_sha256 "$SF_PROGRESS_PATCH" "$SF_PROGRESS_PATCH_SHA256" "sectorforge-progress-map.patch"
+apply_patch_idempotent "$SF_PROGRESS_PATCH" "$TP/sectorforge" -p1
 
 echo "Fetching GNU ddrescue 1.30..."
 if ! have_marker "$TP/ddrescue/mapfile.cc"; then

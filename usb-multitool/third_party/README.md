@@ -38,7 +38,18 @@ commit recorded in `UPSTREAM.md`.
 - Unpack into: `third_party/lwext4/`
 - License: GPL-2.0-or-later
 - Bridge: `ext4_blockdev` callbacks → `usb_partition_read` / `usb_partition_write`
+
 - Local patch (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
+
+## SectorForge (`sf-core` rescue engine)
+
+- URL: https://github.com/terraseraph/sectorforge
+- Revision: commit `b292a299c18013706e81d670657ced6c43f200ca`
+- Unpack into: `third_party/sectorforge/`
+- Local patch: `scripts/patches/sectorforge-progress-map.patch`
+- Patch SHA-256: `0c3dccd3d62551605bb7dbbb333f8482f63033de3f3bc31b2b1fd335f739c203`
+- License: MIT (`app/src/main/assets/licenses/sectorforge-MIT.txt`)
+- The fetch script verifies both commit and patch SHA, then applies patch with a reverse-dry-run idempotency check.
 
 ## exfatprogs (exFAT fsck only)
 

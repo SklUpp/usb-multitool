@@ -1,12 +1,13 @@
 package usb.diagnostics
 
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -14,6 +15,7 @@ import usb.device.DiskException
 import usb.image.ImageFormat
 import usb.image.ImageSource
 import usb.operation.DiskOperation
+import usb.testutil.ImageBufferSink
 import usb.testutil.RecordingDisk
 
 class RescueMapTest {
@@ -164,24 +166,82 @@ class RescueMapTest {
         assertTrue(report.failed.isEmpty())
     }
 
-    @Test fun rescueCopyStreamsToSinkNotByteArray() {
-        val payload = ByteArray(4 * 512) { i -> (i % 251).toByte() }
-        val disk = RecordingDisk.fromBytes(payload)
-        val map = RescueMap.whole(4UL)
-        val out = ByteArrayOutputStream()
-        val sink = out.asRescueSink(512)
-        Rescue.copy(disk, sink, map)
-        assertFalse(map.partial)
-        assertTrue(out.toByteArray().contentEquals(payload))
+    /**
+     * The engine itself needs `libusb_native.so`, which a host JVM cannot load; its
+     * copy passes have Rust fault tests in app/src/main/rust/sf-bridge/tests/engine.rs.
+     * These tests exercise the real Kotlin adapters without a native library: the
+     * sink gate, LBA addressing, and failure classification.
+     */
+    @Test fun rescueCopyRefusesAppendOnlySinkBeforeReadingTheDisk() {
+        val disk = RecordingDisk(sectorCount = 4UL)
+        val map = RescueMap.forCopy(4UL)
+        try {
+            Rescue.copy(disk, RescueSink { _, _ -> }, map)
+            fail("expected an append-only sink to be refused")
+        } catch (e: IllegalStateException) {
+            assertTrue("unexpected message: ${e.message}", e.message!!.contains("seekable"))
+        }
+        assertEquals(0L, disk.readCount)
+        assertTrue(map.copied.isEmpty())
+        assertTrue(map.failed.isEmpty())
+        assertEquals(listOf(0UL until 4UL), map.nonTried)
     }
 
-    @Test fun rescueCopyReadsContiguousSectorsInBatches() {
-        val payload = ByteArray(128 * 512) { (it % 251).toByte() }
-        val disk = RecordingDisk.fromBytes(payload)
-        val image = ByteArrayOutputStream()
-        Rescue.copy(disk, image.asRescueSink(512))
-        assertTrue(image.toByteArray().contentEquals(payload))
-        assertTrue("healthy disk should use fewer reads than sectors", disk.readCount < 128)
+    @Test fun appendSinkZeroFillsForwardGapAndRejectsBackwardWrite() {
+        val out = java.io.ByteArrayOutputStream()
+        val sink = out.asRescueSink(512)
+        sink.writeSector(2UL, ByteArray(512) { 7 })
+        assertEquals(1024, out.size())
+        assertTrue(out.toByteArray().copyOfRange(0, 1024).take(1024 - 512).all { it == 0.toByte() })
+        try {
+            sink.writeSector(0UL, ByteArray(512))
+            fail("expected backward seek rejection")
+        } catch (e: java.io.IOException) {
+            assertTrue(e.message!!.contains("backwards"))
+        }
+    }
+
+    @Test fun appendSinkCompletesZeroFilledTailAfterForwardOnlyRun() {
+        val out = java.io.ByteArrayOutputStream()
+        val sink = out.asRescueSink(512)
+        sink.writeSector(1UL, ByteArray(512) { 7 })
+        sink.completeLength(3L * 512L)
+        assertEquals(3 * 512, out.size())
+        assertTrue(out.toByteArray().copyOfRange(0, 512).all { it == 0.toByte() })
+        assertTrue(out.toByteArray().copyOfRange(512, 1024).all { it == 7.toByte() })
+        assertTrue(out.toByteArray().copyOfRange(1024, 1536).all { it == 0.toByte() })
+    }
+
+    @Test fun appendSinkPreservesPrefixWhenLaterWriteFails() {
+        val out = object : java.io.ByteArrayOutputStream() {
+            var writes = 0
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                if (++writes == 2) throw java.io.IOException("sink failed")
+                super.write(bytes, offset, length)
+            }
+        }
+        val sink = out.asRescueSink(512)
+        try {
+            sink.writeSector(2UL, ByteArray(512) { 7 })
+            fail("expected sink failure")
+        } catch (e: java.io.IOException) {
+            assertEquals("sink failed", e.message)
+        }
+        assertTrue(out.toByteArray().all { it == 0.toByte() })
+    }
+
+    @Test fun writerWritesAtTheChunkLbaAndReportsFatal() {
+        val image = ImageBufferSink(512, 4UL)
+        val writer = SectorForgeEngine.Writer(image.sink, 512)
+        val chunk = ByteArray(1024) { (it % 251).toByte() }
+        assertEquals(0, writer.writeAt(2 * 512L, ByteBuffer.wrap(chunk)))
+        assertTrue(image.bytes().copyOfRange(2 * 512, 4 * 512).contentEquals(chunk))
+        assertTrue(image.bytes().copyOfRange(0, 2 * 512).all { it == 0.toByte() })
+
+        val failure = java.io.IOException("sink gone")
+        val broken = SectorForgeEngine.Writer(RescueSink { _, _ -> throw failure }, 512)
+        assertEquals(SectorForgeNative.STATUS_FATAL, broken.writeAt(0L, ByteBuffer.wrap(chunk)))
+        assertSame(failure, broken.failure)
     }
 
     @Test fun restoreEndsCleanlyOnShortEofWithoutZeroFill() {
@@ -329,64 +389,38 @@ class RescueMapTest {
     }
 
     /**
-     * One unreadable sector in the middle must not shift the sectors after it:
-     * the image stays dense with a zero gap, the map records the failure, and
-     * restore puts every good sector back at its own LBA.
+     * A failed sector is a zero gap at its own LBA, so restore must not shift the
+     * sectors after it. The copy half that writes the gap is engine-owned; this pins
+     * the restore contract that the engine's zero fill feeds into, on the host.
      */
-    @Test fun rescueCopyThenRestoreRoundTripsPastOneFailedSector() {
+    @Test fun restoreKeepsDenseZeroGapAtItsLba() {
         val sectorSize = 512
         val sectorCount = 8
-        val badLba = 3UL
+        val badLba = 3
         val payload = ByteArray(sectorCount * sectorSize) { i -> ((i / sectorSize) + 1).toByte() }
-        val source = OneBadSectorDisk(sectorCount.toULong(), sectorSize, badLba)
-        for (i in 0 until sectorCount) {
-            source.bytes[i.toULong()] = payload.copyOfRange(i * sectorSize, (i + 1) * sectorSize)
-        }
-
-        val copyMap = RescueMap.forCopy(sectorCount.toULong(), sectorSize = sectorSize)
-        val image = ByteArrayOutputStream()
-        val op = DiskOperation("rescue-copy")
-        Rescue.copy(source, image.asRescueSink(sectorSize), copyMap, operation = op)
-        assertEquals(usb.operation.OperationState.Partial, op.state)
-        val imageBytes = image.toByteArray()
-        assertEquals(sectorCount * sectorSize, imageBytes.size)
-        assertEquals(listOf(3UL until 4UL), copyMap.failed)
-        assertEquals(listOf(0UL until 3UL, 4UL until 8UL), copyMap.copied)
-        assertTrue(copyMap.partial)
-
-        for (i in 0 until sectorCount) {
-            val slice = imageBytes.copyOfRange(i * sectorSize, (i + 1) * sectorSize)
-            if (i.toULong() == badLba) {
-                assertTrue("failed sector must be a zero gap", slice.all { it == 0.toByte() })
-            } else {
-                assertTrue(
-                    "sector $i shifted in the rescue image",
-                    slice.contentEquals(payload.copyOfRange(i * sectorSize, (i + 1) * sectorSize)),
-                )
-            }
-        }
+        val imageBytes = payload.copyOf()
+        imageBytes.fill(0, badLba * sectorSize, (badLba + 1) * sectorSize)
 
         val target = RecordingDisk(sectorCount = sectorCount.toULong(), sectorSize = sectorSize)
         val restoreMap = RescueMap.forRestore(sectorCount.toULong(), sectorSize = sectorSize)
-        val restoreSource = ImageSource.fromBytes(
-            imageBytes,
-            format = ImageFormat.IMG,
-            decodedSize = imageBytes.size.toLong(),
-        )
         Rescue.restore(
-            restoreSource, target, restoreMap,
+            ImageSource.fromBytes(
+                imageBytes,
+                format = ImageFormat.IMG,
+                decodedSize = imageBytes.size.toLong(),
+            ),
+            target, restoreMap,
             identity = "TEST-DISK",
             confirmation = confirm(target),
         )
 
-        assertEquals(listOf(0UL), target.writes)
         assertEquals(listOf(0L to sectorCount), target.writtenRanges)
         assertEquals(listOf(0UL until sectorCount.toULong()), restoreMap.copied)
         val targetBytes = target.bytes()
         for (i in 0 until sectorCount) {
             val slice = targetBytes.copyOfRange(i * sectorSize, (i + 1) * sectorSize)
-            if (i.toULong() == badLba) {
-                assertTrue(slice.all { it == 0.toByte() })
+            if (i == badLba) {
+                assertTrue("failed sector must stay a zero gap", slice.all { it == 0.toByte() })
             } else {
                 assertTrue(
                     "restored sector $i landed at the wrong LBA",
@@ -396,58 +430,47 @@ class RescueMapTest {
         }
     }
 
-    @Test fun rescueSinkRejectsGapInsteadOfShifting() {
-        val sink = ByteArrayOutputStream().asRescueSink(512)
-        sink.writeSector(0UL, ByteArray(512))
-        try {
-            sink.writeSector(2UL, ByteArray(512))
-            fail("expected IllegalStateException for a skipped LBA")
-        } catch (_: IllegalStateException) {
-        }
+    @Test fun readerClassifiesDisconnectAsFatalNotBadSector() {
+        val disk =
+            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
+                override fun read(lba: ULong, destination: ByteBuffer) {
+                    throw DiskException.Disconnected()
+                }
+            }
+        val reader = SectorForgeEngine.Reader(disk, 512)
+        assertEquals(SectorForgeNative.STATUS_FATAL, reader.readAt(0L, ByteBuffer.allocate(512)))
+        assertTrue(reader.failure is DiskException.Disconnected)
     }
 
-    private class OneBadSectorDisk(
-        sectorCount: ULong,
-        sectorSize: Int,
-        private val badLba: ULong,
-    ) : RecordingDisk(sectorCount = sectorCount, sectorSize = sectorSize) {
-        override fun read(lba: ULong, destination: ByteBuffer) {
-            if (badLba >= lba && badLba - lba < (destination.remaining() / sectorSize).toULong()) {
-                throw DiskException.SenseError(
-                    responseCode = 0x70,
-                    senseKey = 0x03, // medium error
-                    asc = 0x11,
-                    ascq = 0x00,
-                )
+    @Test fun readerReportsOnlyMediumErrorsAsBadSectors() {
+        val medium =
+            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
+                override fun read(lba: ULong, destination: ByteBuffer) {
+                    throw DiskException.SenseError(
+                        responseCode = 0x70,
+                        senseKey = 0x03, // medium error
+                        asc = 0x11,
+                        ascq = 0x00,
+                    )
+                }
             }
-            super.read(lba, destination)
-        }
+        val mediumReader = SectorForgeEngine.Reader(medium, 512)
+        assertEquals(SectorForgeNative.READ_MEDIUM, mediumReader.readAt(0L, ByteBuffer.allocate(512)))
+        assertNull(mediumReader.failure)
+
+        val cancelled =
+            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
+                override fun read(lba: ULong, destination: ByteBuffer) {
+                    throw java.util.concurrent.CancellationException("stop")
+                }
+            }
+        val cancelReader = SectorForgeEngine.Reader(cancelled, 512)
+        assertEquals(SectorForgeNative.READ_CANCELLED, cancelReader.readAt(0L, ByteBuffer.allocate(512)))
+        assertTrue(cancelReader.failure is java.util.concurrent.CancellationException)
     }
 
     private fun confirm(disk: RecordingDisk, identity: String = "TEST-DISK") =
         DestructiveConfirmation(identity, disk.geometry.capacityBytes)
-
-    @Test fun copyDoesNotMarkFailedOnDisconnect() {
-        val disk =
-            object : RecordingDisk(sectorCount = 4UL, sectorSize = 512) {
-                override fun read(lba: ULong, destination: ByteBuffer) {
-                    if (lba <= 1UL && 1UL - lba < (destination.remaining() / sectorSize).toULong()) throw DiskException.Disconnected()
-                    super.read(lba, destination)
-                }
-            }
-        val map = RescueMap.forCopy(4UL)
-        val image = ByteArrayOutputStream()
-        val op = DiskOperation("rescue-copy-disc")
-        try {
-            Rescue.copy(disk, image.asRescueSink(512), map, operation = op)
-            fail("expected Disconnected")
-        } catch (_: DiskException.Disconnected) {
-        }
-        assertTrue(map.copied.isEmpty())
-        assertTrue(map.failed.isEmpty())
-        assertEquals(usb.operation.OperationState.Partial, op.state)
-        assertTrue(op.failureCause is DiskException.Disconnected)
-    }
 
     @Test fun restoreRejectsCopyMap() {
         val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)

@@ -69,6 +69,58 @@ class RescueMap private constructor(
         return runAt(lba).status
     }
 
+    /**
+     * One run of a complete replacement snapshot. A caller must describe the
+     * whole map: ordered, contiguous runs covering `[0, sectorCount)`.
+     */
+    internal data class Span(val start: ULong, val count: ULong, val status: RescueStatus)
+
+    /**
+     * Atomically replace every run with [spans] after validating full coverage.
+     * All checks run before the first mutation, so an invalid snapshot leaves the
+     * map exactly as it was. The result must stay encodable (≤ [MAX_RUN_LINES]).
+     */
+    internal fun replaceRuns(spans: List<Span>) {
+        require(spans.size <= MAX_RUN_LINES) {
+            "rescue map snapshot has ${spans.size} runs; max $MAX_RUN_LINES"
+        }
+        var next = 0UL
+        for (span in spans) {
+            require(span.count > 0UL) { "empty rescue map run at ${span.start}" }
+            require(span.start == next) {
+                "rescue map runs are not contiguous and ordered: expected $next, got ${span.start}"
+            }
+            next = span.start + span.count
+            require(next > span.start) { "rescue map run at ${span.start} overflows" }
+        }
+        require(next == sectorCount) {
+            "rescue map runs cover $next sectors, expected $sectorCount"
+        }
+        runs.clear()
+        for (span in spans) runs += Run(span.start, span.count, span.status)
+    }
+
+    /**
+     * Atomically demote every FAILED run to NON_TRIED, coalescing with neighbours.
+     * One linear rebuild and a single swap, so a resume can never observe or pay
+     * quadratic repainting for a map with many failed ranges.
+     */
+    internal fun demoteFailedToNonTried() {
+        val rebuilt = ArrayList<Run>(runs.size)
+        for (run in runs) {
+            val status =
+                if (run.status == RescueStatus.FAILED) RescueStatus.NON_TRIED else run.status
+            val last = rebuilt.lastOrNull()
+            if (last != null && last.status == status) {
+                last.count += run.count
+            } else {
+                rebuilt += Run(run.start, run.count, status)
+            }
+        }
+        runs.clear()
+        runs += rebuilt
+    }
+
     /** Immutable snapshot for a checkpoint writer (runs copied). */
     fun snapshot(): RescueMap =
         RescueMap(
