@@ -291,7 +291,6 @@ fun AppShell(
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
                         .fillMaxSize()
-                        .focusGroup()
                         .focusProperties {
                             // A focus group boundary is the supported subtree gate: keyboard
                             // traversal calls onEnter before choosing any descendant. Cancel
@@ -300,6 +299,7 @@ fun AppShell(
                                 onEnter = { cancelFocusChange() }
                             }
                         }
+                        .focusGroup()
                         .then(
                             if (panels.journalScreenOpen) {
                                 // Merging node: the whole covered tab is removed from the
