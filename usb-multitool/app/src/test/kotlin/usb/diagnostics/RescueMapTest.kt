@@ -176,7 +176,9 @@ class RescueMapTest {
         val disk = RecordingDisk(sectorCount = 4UL)
         val map = RescueMap.forCopy(4UL)
         try {
-            Rescue.copy(disk, RescueSink { _, _ -> }, map)
+            Rescue.copy(disk, object : RescueSink {
+                override fun writeSector(lba: ULong, sector: ByteArray) = Unit
+            }, map)
             fail("expected an append-only sink to be refused")
         } catch (e: IllegalStateException) {
             assertTrue("unexpected message: ${e.message}", e.message!!.contains("seekable"))
@@ -232,14 +234,16 @@ class RescueMapTest {
 
     @Test fun writerWritesAtTheChunkLbaAndReportsFatal() {
         val image = ImageBufferSink(512, 4UL)
-        val writer = SectorForgeEngine.Writer(image.sink, 512)
+        val writer = SectorForgeEngine.Writer(image.sink, 512, mutableListOf())
         val chunk = ByteArray(1024) { (it % 251).toByte() }
         assertEquals(0, writer.writeAt(2 * 512L, ByteBuffer.wrap(chunk)))
         assertTrue(image.bytes().copyOfRange(2 * 512, 4 * 512).contentEquals(chunk))
         assertTrue(image.bytes().copyOfRange(0, 2 * 512).all { it == 0.toByte() })
 
         val failure = java.io.IOException("sink gone")
-        val broken = SectorForgeEngine.Writer(RescueSink { _, _ -> throw failure }, 512)
+        val broken = SectorForgeEngine.Writer(object : RescueSink {
+            override fun writeSector(lba: ULong, sector: ByteArray) { throw failure }
+        }, 512, mutableListOf())
         assertEquals(SectorForgeNative.STATUS_FATAL, broken.writeAt(0L, ByteBuffer.wrap(chunk)))
         assertSame(failure, broken.failure)
     }

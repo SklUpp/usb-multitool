@@ -2,7 +2,7 @@ package usb.diagnostics
 import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import java.io.IOException
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
 import org.junit.Test
 import usb.operation.DiskOperation
@@ -11,14 +11,16 @@ class SectorForgeProgressTest {
     @Test fun checkpointFailureIsRetainedInsteadOfCancellation() {
         val failure = IOException("checkpoint sync failed")
         val map = RescueMap.forCopy(2UL, sectorSize = 512)
-        val progress = SectorForgeEngine.Progress(map, DiskOperation("copy"), 512, emptyList(), { throw failure }, RescueSink { _, _ -> }, 1024)
+        val idleSink = object : RescueSink { override fun writeSector(lba: ULong, sector: ByteArray) = Unit }
+        val progress = SectorForgeEngine.Progress(map, DiskOperation("copy"), 512, emptyList(), { throw failure }, idleSink, 1024)
         assertFalse(progress.onProgress(512, 0, 512, 512, longArrayOf(0, 512, 4, 512, 512, 0)))
         assertSame(failure, progress.failure)
     }
 
     @Test fun malformedSnapshotFailureIsRetained() {
         val map = RescueMap.forCopy(2UL, sectorSize = 512)
-        val progress = SectorForgeEngine.Progress(map, DiskOperation("copy"), 512, emptyList(), {}, RescueSink { _, _ -> }, 1024)
+        val idleSink = object : RescueSink { override fun writeSector(lba: ULong, sector: ByteArray) = Unit }
+        val progress = SectorForgeEngine.Progress(map, DiskOperation("copy"), 512, emptyList(), {}, idleSink, 1024)
         assertFalse(progress.onProgress(0, 0, 1024, 0, longArrayOf(1, 512, 4)))
         org.junit.Assert.assertTrue(progress.failure is IllegalArgumentException)
     }
@@ -45,7 +47,7 @@ class SectorForgeProgressTest {
         val map = RescueMap.forCopy(2UL, sectorSize = 512)
         map.markFailed(1UL, 1UL)
         val failure = IOException("sync failed")
-        val sink = RescueSink { _, _ -> error("unexpected write") }
+        val sink = object : RescueSink { override fun writeSector(lba: ULong, sector: ByteArray) { error("unexpected write") } }
         try {
             SectorForgeEngine.prepareResume(map, map.failed, sink, 1024) { throw failure }
             org.junit.Assert.fail("expected checkpoint failure")
@@ -58,6 +60,9 @@ class SectorForgeProgressTest {
     @Test fun writerFailureMarksEntirePossiblyPartialRangeUncertain() {
         val uncertain = mutableListOf<ULongRange>()
         val sink = object : RescueSink {
+            override fun writeSector(lba: ULong, sector: ByteArray) {
+                throw IOException("short write after first sector")
+            }
             override val positional = true
             override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
                 throw IOException("short write after first sector")
@@ -72,7 +77,10 @@ class SectorForgeProgressTest {
     @Test fun cancelSnapshotKeepsUnreadRangesNonTried() {
         val map = RescueMap.forCopy(4UL, sectorSize = 512)
         val op = DiskOperation(name = "copy", active = { false })
-        val progress = SectorForgeEngine.Progress(map, op, 512, emptyList(), {}, RescueSink { _, _ -> }, 2048)
+        val sink = object : RescueSink {
+            override fun writeSector(lba: ULong, sector: ByteArray) = Unit
+        }
+        val progress = SectorForgeEngine.Progress(map, op, 512, emptyList(), {}, sink, 2048)
         assertFalse(progress.onProgress(512, 0, 1536, 512, longArrayOf(0, 512, 4, 512, 1536, 0)))
         assertEquals(listOf(0UL until 4UL), map.nonTried)
         assertTrue(map.failed.isEmpty())
@@ -88,7 +96,9 @@ class SectorForgeProgressTest {
             512,
             emptyList(),
             { checkpoints++ },
-            RescueSink { _, _ -> },
+            object : RescueSink {
+                override fun writeSector(lba: ULong, sector: ByteArray) = Unit
+            },
             2048,
         )
         assertFalse(progress.onProgress(0, 0, 2048, 0, longArrayOf(1, 512, SectorForgeBlocks.COPIED)))
