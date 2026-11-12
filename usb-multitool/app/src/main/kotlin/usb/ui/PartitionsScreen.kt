@@ -1540,22 +1540,6 @@ fun PartitionsScreen(
             }
         }
 
-        if (rawPickerOpen) {
-            RawSourceDialog(
-                candidates = state.rawSourceCandidates,
-                truncated = state.rawSourceCandidatesTruncated,
-                enabled = state.actionsEnabled,
-                onRefresh = { onIntent(UiIntent.LoadRawSourceCandidates) },
-                onPick = { candidate ->
-                    onIntent(UiIntent.SelectRawSource(candidate.path, candidate.name))
-                    rawPickerOpen = false
-                },
-                onDismiss = {
-                    rawPickerOpen = false
-                    onIntent(UiIntent.CancelRawSourceLoad)
-                },
-            )
-        }
     }
 }
 

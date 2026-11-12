@@ -300,6 +300,10 @@
     <string name="partitions_raw_write_subtitle">Writes to the medium itself, not into a filesystem.</string>
     <string name="partitions_delete_staged">Delete staged file</string>
     <string name="partitions_gpt_repair">Fix backup GPT…</string>
+    <string name="partitions_repair_title">Repair</string>
+    <string name="partitions_repair_subtitle">Repair the backup GPT without changing partition contents.</string>
+    <string name="partitions_repair_info_title">Backup GPT repair</string>
+    <string name="partitions_repair_info_text">This repairs the backup GPT from the valid primary GPT. It does not format, create, delete, or rewrite partition contents. Repair is unavailable when the primary GPT is damaged or the table is ambiguous.</string>
     <string name="ventoy_section_title">Ventoy</string>
     <string name="ventoy_help_title">Ventoy install and update</string>
     <string name="ventoy_help_text">Update rewrites the boot files and keeps all files on the data partition. Clean install erases every partition and file, writes a fresh layout and formats the data partition; it asks for confirmation first. The version shown is bundled with this app; the version already on the stick is not read.</string>

@@ -300,6 +300,10 @@
     <string name="partitions_raw_write_subtitle">Пишет на сам носитель, не в файловую систему.</string>
     <string name="partitions_delete_staged">Удалить подготовленный файл</string>
     <string name="partitions_gpt_repair">Исправить резервную GPT…</string>
+    <string name="partitions_repair_title">Восстановление</string>
+    <string name="partitions_repair_subtitle">Исправляет резервную GPT, не меняя содержимое разделов.</string>
+    <string name="partitions_repair_info_title">Исправление резервной GPT</string>
+    <string name="partitions_repair_info_text">Резервная GPT восстанавливается по исправной основной GPT. Операция не форматирует, не создаёт, не удаляет и не перезаписывает содержимое разделов. Исправление недоступно, если основная GPT повреждена или таблица неоднозначна.</string>
     <string name="ventoy_section_title">Ventoy</string>
     <string name="ventoy_help_title">Установка и обновление Ventoy</string>
     <string name="ventoy_help_text">Обновление перезаписывает загрузочные файлы и сохраняет все файлы на разделе данных. Чистая установка стирает все разделы и файлы, пишет свежую разметку и форматирует раздел данных; сначала она запрашивает подтверждение. Показана версия, встроенная в приложение; версия, уже установленная на флешке, не читается.</string>
