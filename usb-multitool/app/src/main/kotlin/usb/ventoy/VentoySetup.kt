@@ -115,8 +115,8 @@ object VentoySetup {
         disk: BlockDevice,
         requestedPath: String,
         defaultPath: Boolean,
-    ): VentoyGlobalSettings =
-        try {
+    ): VentoyGlobalSettings {
+        return try {
             withVolume(disk) { volume ->
                 readSettingsFile(volume, requestedPath, defaultPath)
             }
@@ -126,8 +126,6 @@ object VentoySetup {
                     "the Ventoy data partition is not available; cannot read $requestedPath",
                 )
             }
-            // No provable Ventoy layout is the honest "no ventoy.json yet" state. A damaged
-            // layout that still carries Ventoy signatures is a read error, not empty/missing.
             val damaged =
                 try {
                     VentoyLayout.looksLikeVentoyLayout(disk)
@@ -148,6 +146,7 @@ object VentoySetup {
                 VentoyGlobalSettings.Missing
             }
         }
+    }
 
     private fun readSettingsFile(
         volume: UsbFsVolume,

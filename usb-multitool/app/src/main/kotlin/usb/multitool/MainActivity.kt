@@ -4163,7 +4163,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * can reuse exactly what was checked. Failure leaves the previous release untouched.
      */
     private fun downloadVentoyRelease(requestToken: Long, upstreamVersion: String?) {
-        val app = application
+        val app = getApplication<Application>()
         val filesDir = app.filesDir
         scope.launch {
             val outcome = runCatching {
@@ -4209,7 +4209,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         archiveSha256 = stored.archiveSha256,
                                         sourceUrl = stored.sourceUrl,
                                     ),
-                                    message = application.getString(
+                                    message = getApplication<Application>().getString(
                                         R.string.ventoy_promotion_unconfirmed,
                                         failure.requestedRelease,
                                         stored.assets.release,
@@ -4228,7 +4228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         archiveSha256 = stored.archiveSha256,
                                         sourceUrl = stored.sourceUrl,
                                     ),
-                                    message = application.getString(
+                                    message = getApplication<Application>().getString(
                                         R.string.ventoy_download_unconfirmed,
                                         stored.assets.release,
                                     ),
@@ -4240,7 +4240,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             onIntent(
                                 UiIntent.VentoyReleaseStoreUnknown(
                                     requestToken = requestToken,
-                                    message = application.getString(
+                                    message = getApplication<Application>().getString(
                                         R.string.ventoy_download_unknown,
                                         failure.requestedRelease,
                                     ),
@@ -4258,7 +4258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         archiveSha256 = stored.archiveSha256,
                                         sourceUrl = stored.sourceUrl,
                                     ),
-                                    message = application.getString(
+                                    message = getApplication<Application>().getString(
                                         R.string.ventoy_download_recovered,
                                         failure.requestedRelease,
                                         stored.assets.release,
@@ -4281,7 +4281,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Makes a directory-entry change durable; failures abort the download, not hidden. */
     private fun fsyncDirectory(dir: File) {
-        val fd = android.system.Os.open(dir.path, android.system.OsConstants.O_RDONLY)
+        val fd = android.system.Os.open(
+            dir.path,
+            android.system.OsConstants.O_RDONLY,
+            0,
+        )
         try {
             android.system.Os.fsync(fd)
         } catch (failure: android.system.ErrnoException) {
@@ -4298,7 +4302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * bundled fallback is allowed: a missing/changed store aborts before any write.
      */
     private fun ventoyAssetsForInstall(source: usb.ventoy.VentoyReleaseSource?): VentoyAssets {
-        val app = application
+        val app = getApplication<Application>()
         return usb.ventoy.VentoyInstallAssets.resolve(
             source = source,
             loadBundled = { VentoyAssets.loadFromAssets(app.assets, strict = true) },
@@ -4764,7 +4768,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 val failure = outcome.failure
                 if (failure != null) {
-                    state = OperationState.Partial
+                    state = usb.operation.OperationState.Partial
                     val cause =
                         usb.ventoy.VentoySettingsDocumentException(
                             "selected settings document may have been truncated; it was not " +
