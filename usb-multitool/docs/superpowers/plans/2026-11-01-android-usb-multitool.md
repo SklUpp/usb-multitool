@@ -186,10 +186,7 @@ git commit -m "feat: define SCSI width and transfer planning"
 Run: `./gradlew :app:testDebugUnitTest --tests usb.device.UsbDiskTest`
 Expected: FAIL with unresolved disk types.
 
-- [ ] **Step 3: Write minimal implementation**
-
-Implement BOT command, data, and status phases over the transport boundary. On STALL, clear endpoint halt, read sense, run Bulk-Only Mass Storage Reset once, and retry once. A second failure or a transport disconnect throws `DiskException` and marks the session closed.
-
+Implement BOT command, data, and status phases over the transport boundary. On STALL or another IoFailure during an IN command, clear endpoint halt through Mass Storage Reset once and retry once. An OUT command may have reached the medium before transport failure: recover the pipe, close the session, and never replay the WRITE. A second IN failure or transport disconnect throws `DiskException` and marks the session closed.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run the same Gradle command.

@@ -136,7 +136,14 @@ open class UsbDisk(
                 buffer.limit(oldLimit)
                 res
             } catch (e: DiskException.IoFailure) {
-                // STALL / short-pipe: Mass Storage Reset once, then retry once.
+                // An OUT command may have reached the medium before transport failure, so its
+                // completion is unknown. Recover the BOT pipe, then close without replaying it.
+                if (cdb.direction == ScsiDirection.OUT) {
+                    resetOrClose()
+                    closeSession()
+                    throw e
+                }
+                // IN commands are safe to replay after one BOT reset recovery.
                 if (attempt >= 1) {
                     closeSession()
                     throw e

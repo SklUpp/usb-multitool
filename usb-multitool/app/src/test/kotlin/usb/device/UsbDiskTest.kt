@@ -62,14 +62,37 @@ class UsbDiskTest {
     }
 
     @Test
-    fun writeFillsDataAndRecoversStall() {
+    fun writeTransportFailureResetsAndClosesWithoutRetry() {
         val session = FakeBotSession(stallsBeforeSuccess = 1)
         val disk = UsbDisk(session, BlockGeometry(512, 100UL))
         val src = ByteBuffer.allocate(512)
         for (i in 0 until 512) src.put(0x55.toByte())
         src.flip()
-        disk.write(2UL, src)
+
+        val ex = assertThrows(DiskException.IoFailure::class.java) {
+            disk.write(2UL, src)
+        }
+
+        assertEquals("simulated STALL", ex.message)
         assertEquals(1, session.resetCount)
+        assertEquals(1, session.commands.count { it == ScsiCommand.OP_WRITE10 })
+        assertTrue(disk.isClosed)
+        assertEquals(0, src.position())
+    }
+
+    @Test
+    fun writeAcceptedBeforeCswFailureIsNotRetried() {
+        val session = FakeBotSession(writeIoFailureAfterData = true)
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+        val src = ByteBuffer.wrap(ByteArray(512) { 0x55.toByte() })
+
+        assertThrows(DiskException.IoFailure::class.java) {
+            disk.write(2UL, src)
+        }
+
+        assertEquals(1, session.resetCount)
+        assertEquals(1, session.commands.count { it == ScsiCommand.OP_WRITE10 })
+        assertTrue(disk.isClosed)
         assertEquals(512, src.position())
     }
 

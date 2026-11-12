@@ -79,9 +79,9 @@ open class FakeBotSession(
     private val unitAttentionBeforeSuccess: Int = 0,
     private val unitAttentionOnOps: Set<Int> = emptySet(),
     private val stickyUnitAttention: Boolean = false,
-    private val requestSenseError: DiskException.SenseError? = null,
     private val residue: Int = 0,
     private val shortReadBytes: Int? = null,
+    private val writeIoFailureAfterData: Boolean = false,
 ) : BotSession {
     var resetCount: Int = 0
         private set
@@ -187,6 +187,9 @@ open class FakeBotSession(
             ScsiCommand.OP_WRITE10, ScsiCommand.OP_WRITE16 -> {
                 val (lba, blocks) = decodeLbaBlocks(cdb)
                 drainWrite(requireNotNull(data), lba, blocks)
+                if (writeIoFailureAfterData) {
+                    throw DiskException.IoFailure("simulated CSW failure after write")
+                }
                 CswResult(CswStatus.PASSED, 0, residue)
             }
             else -> CswResult(CswStatus.PASSED, 0, residue)
