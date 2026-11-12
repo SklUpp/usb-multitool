@@ -18,7 +18,7 @@ commit recorded in `UPSTREAM.md`.
   4. `third_party/fatfs/patches/ff16p4-sync-fs-errors.diff` — project patch propagating FSInfo/PercInUse write failures from `sync_fs()`
 - Unpack into: `third_party/fatfs/`
 - License: FatFs license (BSD-style; see archive `LICENSE.txt`)
-- Bridge: `disk_read` / `disk_write` / `disk_ioctl` → `usb_partition_*` in `fs_bridge.c`
+- Bridge: `disk_read` / `disk_write` / `disk_ioctl` → `usb_block_*` in `third_party/fatfs/source/diskio.c` and `fat_engine.c`
 
 ## ntfs-3g
 
@@ -99,4 +99,4 @@ app `externalNativeBuild` CMake arguments.
 - No pinned SHA-256: GNU publishes a GPG signature (`.sig`) for this tarball,
   not a digest. `scripts/fetch-third-party.sh` therefore skips the unpack
   unless a verified digest is provided via `DDRESCUE_SHA256=<64 hex>`.
-- Bridge: `app/src/main/cpp/ddrescue_bridge.c`
+- Rescue implementation: native Rust `sf-core` (`rust/sf-core` + `sf_jni.cpp`) and `RescueOperations.kt`
