@@ -81,6 +81,7 @@ open class FakeBotSession(
     private val stickyUnitAttention: Boolean = false,
     private val residue: Int = 0,
     private val shortReadBytes: Int? = null,
+    private val requestSenseError: DiskException.SenseError? = null,
     private val writeIoFailureAfterData: Boolean = false,
 ) : BotSession {
     var resetCount: Int = 0
