@@ -30,6 +30,22 @@ internal object VentoyTransitions {
                 }
             !state.actionsEnabled ->
                 ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            state.partitionTableAmbiguous ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.PartitionTableAmbiguous),
+                    ),
+                )
+            state.partitionTableDamaged ->
+                ReduceResult(
+                    state.copy(
+                        statusMessage = UiMessage.Key(UiMessageKey.GptPrimaryDamaged),
+                    ),
+                )
+            !state.tableValid ->
+                ReduceResult(
+                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.TableDamaged)),
+                )
             else -> {
                 val target = state.partitions.firstOrNull {
                     it.id == intent.partitionId && it.readOnly

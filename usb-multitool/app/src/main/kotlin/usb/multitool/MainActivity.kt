@@ -702,6 +702,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 DestructiveAction.GPT_REPAIR -> {
                                     // Moves the backup entries + header to the current disk end,
                                     // fixes backupLba/lastUsable and recomputes both CRCs.
+                                    val expected = confirmed.initialScheme
+                                        ?: throw IllegalStateException(
+                                            "initial scheme not confirmed for GPT repair",
+                                        )
+                                    val current = table
+                                        ?: throw IllegalStateException("no partition table")
+                                    if (current.scheme != expected.toTableScheme()) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "partition scheme changed since the confirmation " +
+                                                "(${current.scheme} != ${expected.toTableScheme()})",
+                                        )
+                                    }
+                                    val liveSnapshot = current.partitions.map {
+                                        PartitionRef(it.startLba, it.sectorCount)
+                                    }
+                                    if (liveSnapshot != confirmed.initialPartitions) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "partition layout changed since the confirmation",
+                                        )
+                                    }
                                     val repaired = GptBackup.relocateBackup(partitionDisk, disk.geometry.sectorCount)
                                     result = "GPT backup relocated to LBA ${disk.geometry.sectorCount - 1UL}: " +
                                         "${repaired.partitions.size} partitions kept"

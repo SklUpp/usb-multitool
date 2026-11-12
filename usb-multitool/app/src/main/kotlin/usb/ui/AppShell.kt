@@ -6,20 +6,30 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -78,10 +88,17 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -108,12 +125,20 @@ import java.util.Locale
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
  *
  * Layout contract:
+ * - safe drawing insets bound the whole shell (targetSdk 36 draws edge to edge), so neither
+ *   the header, the tabs, the status strip nor the log layer touches the system bars;
  * - top: one compact device header whose title/subtitle surface is separate from the
  *   language, theme and log controls (no max-height clipping);
- * - middle: the active tab (weight 1, own scroll), always composed; the full log screen
- *   is an opaque layer above it and the system bottom inset is guarded while it shows;
- *   the covered tab is marked invisible to accessibility but keeps its state;
- * - bottom: one continuous status/log surface plus the navigation bar.
+ * - middle: the active tab (weight 1, own scroll), always composed; a horizontal swipe
+ *   selects the adjacent tab through the reducer and the content slides in the tab
+ *   direction (RTL included). A child that consumes the drag keeps it; once the shell
+ *   qualifies its own gesture it consumes the drag so a clickable row is not tapped, and
+ *   a gesture starting in a system back edge is ignored. The full log screen is an opaque
+ *   layer above it and the system bottom inset is guarded while it shows; the covered tab
+ *   is marked invisible to accessibility but keeps its state;
+ * - bottom: one status surface that folds to a thin title strip attached to the navigation
+ *   bar (fold only hides it visually, never clears the operation) and, independently, an
+ *   inline journal list; plus the navigation bar.
  */
 @Composable
 fun AppShell(
@@ -123,6 +148,7 @@ fun AppShell(
     onPickImage: () -> Unit = {},
     /** Opens the system file picker for a phone-to-stick import of [WindowsImportKind]. */
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
+    /** Opens the phone picker for the pinned Files pick session (directory, session id). */
     onPickWindowsImage: (String, String) -> Unit = { _, _ -> },
     onRequestDownload: (String) -> Unit = {},
     onPickBackup: () -> Unit = {},
@@ -139,21 +165,34 @@ fun AppShell(
     val localizedContext = remember(baseContext, state.language) {
         createLocalizedContext(baseContext, state.language)
     }
+    // A deliberate swipe is measured in dp so it feels the same at every density.
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val swipeThreshold = with(density) {
+        ShellSwipePolicy.THRESHOLD_DP.dp.toPx()
+    }
+    // Gestures starting in these physical edges perform system Back, not a tab swipe.
+    val systemGestures = WindowInsets.systemGestures
+    val leftBackEdge = systemGestures.getLeft(density, layoutDirection).toFloat()
+    val rightBackEdge = systemGestures.getRight(density, layoutDirection).toFloat()
     CompositionLocalProvider(
         LocalContext provides localizedContext,
         LocalResources provides localizedContext.resources,
     ) {
     MaterialTheme(colorScheme = colors, shapes = AppShapes) {
-        var logExpanded by remember { mutableStateOf(false) }
-        // The full log is a layer above the tabs: Back closes the layer, the tab stays in
-        // composition with its drafts, and [AppUiState.tab] is never changed.
-        var logScreenOpen by remember { mutableStateOf(false) }
-        BackHandler(enabled = logScreenOpen) { logScreenOpen = false }
+        // Presentation-only state, saved across rotation and restored back-stack entry:
+        // collapsing the status or closing the journal never destroys a running operation.
+        var panels by rememberSaveable(stateSaver = ShellPanelStateSaver) {
+            mutableStateOf(ShellPanelState())
+        }
+        BackHandler(enabled = panels.journalScreenOpen) {
+            panels = panels.closeJournalScreen()
+        }
         val logButtonFocus = remember { FocusRequester() }
         val logScreenFocus = remember { FocusRequester() }
         var restoreLogFocus by remember { mutableStateOf(false) }
-        LaunchedEffect(logScreenOpen) {
-            if (logScreenOpen) {
+        LaunchedEffect(panels.journalScreenOpen) {
+            if (panels.journalScreenOpen) {
                 // Enter the layer on its Back control: the covered tab is now invisible
                 // to accessibility, so focus must not be left on a hidden node.
                 logScreenFocus.requestFocusIfAttached("log screen")
@@ -166,27 +205,39 @@ fun AppShell(
             }
         }
         LaunchedEffect(state.logLines.isEmpty()) {
-            if (state.logLines.isEmpty()) logExpanded = false
+            if (state.logLines.isEmpty()) panels = panels.journalCleared()
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
+            // targetSdk 36 draws edge to edge: the header, the tab content and the log
+            // layer must stay inside the status/navigation bars and any display cutout.
+            contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 Column(
                     // The navigation bar normally supplies the system bottom inset. While
                     // the log screen covers it, the guard adds that inset here so neither
                     // the status block nor the log content touches the system nav bar —
                     // and it still applies when the status block has nothing to show.
-                    modifier = if (logScreenOpen) Modifier.navigationBarsPadding() else Modifier,
+                    modifier = if (panels.journalScreenOpen) {
+                        // Bottom only: the status surface already applies horizontal safe
+                        // insets, and applying both would double the side padding.
+                        Modifier.windowInsetsPadding(
+                            WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+                        )
+                    } else {
+                        Modifier
+                    },
                 ) {
                     // The operation status stays reachable on the log screen too: a running
                     // operation must keep its progress and cancel action visible.
                     StatusLogPanel(
                         state = state,
                         onIntent = onIntent,
-                        logExpanded = logExpanded,
-                        onToggleLog = { logExpanded = !logExpanded },
+                        panels = panels,
+                        onCollapseStatus = { panels = panels.collapseStatus() },
+                        onToggleJournal = { panels = panels.toggleJournal() },
                     )
-                    if (!logScreenOpen) {
+                    if (!panels.journalScreenOpen) {
                         NavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             tonalElevation = 0.dp,
@@ -235,7 +286,7 @@ fun AppShell(
                         .padding(horizontal = 16.dp)
                         .fillMaxSize()
                         .then(
-                            if (logScreenOpen) {
+                            if (panels.journalScreenOpen) {
                                 // Merging node: the whole covered tab is removed from the
                                 // accessibility tree in one step, including every child.
                                 Modifier.semantics(mergeDescendants = true) {
@@ -253,52 +304,96 @@ fun AppShell(
                         logButtonFocus = logButtonFocus,
                         onOpenLog = {
                             restoreLogFocus = true
-                            logScreenOpen = true
+                            panels = panels.openJournalScreen()
                         },
                     )
-                    AnimatedContent(
-                        targetState = state.tab,
-                        modifier = Modifier.weight(1f),
-                        transitionSpec = {
-                            fadeIn(tween(140)) togetherWith fadeOut(tween(140))
-                        },
-                        label = "tab",
-                    ) { tab ->
-                        when (tab) {
-                            ShellTab.Files -> FilesScreen(
-                                state = state,
-                                onIntent = onIntent,
-                                modifier = Modifier.fillMaxSize(),
-                                onRequestDownload = onRequestDownload,
-                                onRequestDeviceImage = onPickWindowsImage,
-                            )
-                            ShellTab.Ventoy -> VentoyScreen(
-                                state = state,
-                                onIntent = onIntent,
-                                modifier = Modifier.fillMaxSize(),
-                                onPickWindowsFile = onPickWindowsFile,
-                            )
-                            ShellTab.Partitions -> PartitionsScreen(
-                                state = state,
-                                onIntent = onIntent,
-                                modifier = Modifier.fillMaxSize(),
-                                onPickImage = onPickImage,
-                            )
-                            ShellTab.Diagnostics -> DiagnosticsScreen(
-                                state = state,
-                                onIntent = onIntent,
-                                modifier = Modifier.fillMaxSize(),
-                                onPickBackup = onPickBackup,
-                                onPickBackupFolder = onPickBackupFolder,
-                                onStartRescueBackup = onStartRescueBackup,
-                                onCreateGptCopy = onCreateGptCopy,
-                                onPickRestoreFolder = onPickRestoreFolder,
-                            )
+                    // Horizontal tab swipe: the parent only watches pointers that no child
+                    // consumed, so a range slider, a horizontally scrolled row or a vertical
+                    // list keeps its own gesture. A committed swipe goes through the reducer
+                    // exactly like a navigation-bar tap.
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .pointerInput(
+                                state.tab,
+                                swipeThreshold,
+                                layoutDirection,
+                                leftBackEdge,
+                                rightBackEdge,
+                            ) {
+                                detectShellSwipe(
+                                    thresholdPx = swipeThreshold,
+                                    isRtl = layoutDirection == LayoutDirection.Rtl,
+                                    leftBackEdgePx = leftBackEdge,
+                                    rightBackEdgePx = rightBackEdge,
+                                ) { direction ->
+                                    val target = ShellSwipePolicy.target(state.tab, direction)
+                                    if (target != null && target != state.tab) {
+                                        onIntent(UiIntent.SelectTab(target))
+                                    }
+                                }
+                            },
+                    ) {
+                        AnimatedContent(
+                            targetState = state.tab,
+                            modifier = Modifier.fillMaxSize(),
+                            transitionSpec = {
+                                // Slide in the reading direction of the tab order; both taps
+                                // and swipes animate the same way. RTL mirrors the sides.
+                                val forward = targetState.ordinal >= initialState.ordinal
+                                val base = if (forward) 1 else -1
+                                val enterFrom = if (layoutDirection == LayoutDirection.Rtl) {
+                                    -base
+                                } else {
+                                    base
+                                }
+                                val enter = slideInHorizontally(tween(220)) { width ->
+                                    enterFrom * width / 3
+                                } + fadeIn(tween(180))
+                                val exit = slideOutHorizontally(tween(220)) { width ->
+                                    -enterFrom * width / 3
+                                } + fadeOut(tween(160))
+                                enter.togetherWith(exit)
+                            },
+                            label = "tab",
+                        ) { tab ->
+                            when (tab) {
+                                ShellTab.Files -> FilesScreen(
+                                    state = state,
+                                    onIntent = onIntent,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onRequestDownload = onRequestDownload,
+                                    onRequestDeviceImage = onPickWindowsImage,
+                                )
+                                ShellTab.Ventoy -> VentoyScreen(
+                                    state = state,
+                                    onIntent = onIntent,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onPickWindowsFile = onPickWindowsFile,
+                                )
+                                ShellTab.Partitions -> PartitionsScreen(
+                                    state = state,
+                                    onIntent = onIntent,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onPickImage = onPickImage,
+                                )
+                                ShellTab.Diagnostics -> DiagnosticsScreen(
+                                    state = state,
+                                    onIntent = onIntent,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onPickBackup = onPickBackup,
+                                    onPickBackupFolder = onPickBackupFolder,
+                                    onStartRescueBackup = onStartRescueBackup,
+                                    onCreateGptCopy = onCreateGptCopy,
+                                    onPickRestoreFolder = onPickRestoreFolder,
+                                )
+                            }
                         }
                     }
                 }
 
-                if (logScreenOpen) {
+                if (panels.journalScreenOpen) {
                     // Opaque layer, not a replacement: it covers the tab, swallows taps
                     // that miss its own controls so nothing underneath reacts, and Back
                     // closes it. Compose keeps the tab (and its drafts) alive below.
@@ -311,7 +406,7 @@ fun AppShell(
                         LogScreen(
                             lines = state.logLines,
                             focusRequester = logScreenFocus,
-                            onBack = { logScreenOpen = false },
+                            onBack = { panels = panels.closeJournalScreen() },
                             onIntent = onIntent,
                             onExportTrace = onExportTrace,
                         )
@@ -373,7 +468,13 @@ fun AppShell(
                         ) {
                             Checkbox(checked = acknowledged, onCheckedChange = null)
                             Text(
-                                text = stringResource(R.string.confirm_ack),
+                                text = stringResource(
+                                    if (confirmation.action == DestructiveAction.GPT_REPAIR) {
+                                        R.string.confirm_ack_repair
+                                    } else {
+                                        R.string.confirm_ack
+                                    },
+                                ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f),
                             )
@@ -406,6 +507,24 @@ fun AppShell(
     }
     }
 }
+
+/**
+ * Saves the shell presentation flags across rotation and activity recreation. They are
+ * plain booleans, so a list saver is enough; nothing here belongs to the reducer or to
+ * the running operation.
+ */
+private val ShellPanelStateSaver = listSaver<ShellPanelState, Boolean>(
+    save = {
+        listOf(it.statusCollapsed, it.journalExpanded, it.journalScreenOpen)
+    },
+    restore = {
+        ShellPanelState(
+            statusCollapsed = it[0],
+            journalExpanded = it[1],
+            journalScreenOpen = it[2],
+        )
+    },
+)
 
 @Composable
 fun RememberedAppShell(
@@ -590,6 +709,55 @@ private fun FocusRequester.requestFocusIfAttached(target: String) {
     }
 }
 
+/**
+ * Arbiter between the shell swipe and the active tab. Children receive the Main pass first.
+ * A consumed down proves nothing: Compose `clickable` consumes every down, so only a
+ * consumed move (range slider, horizontally scrolled row, vertical list) aborts the swipe
+ * before it can qualify. Once qualified, every change is consumed: that cancels a clickable
+ * row's tap before its up. A terminal up still claimed by another handler counts as a
+ * cancellation, never as a second action. A pointer that vanishes or a gesture starting in
+ * a system back edge dispatches nothing.
+ */
+private suspend fun PointerInputScope.detectShellSwipe(
+    thresholdPx: Float,
+    isRtl: Boolean,
+    leftBackEdgePx: Float,
+    rightBackEdgePx: Float,
+    onSwipe: (ShellSwipeDirection) -> Unit,
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        if (
+            ShellSwipePolicy.startsInSystemBackEdge(
+                xPx = down.position.x,
+                widthPx = size.width.toFloat(),
+                leftInsetPx = leftBackEdgePx,
+                rightInsetPx = rightBackEdgePx,
+            )
+        ) {
+            return@awaitEachGesture
+        }
+        val recognizer = ShellSwipeRecognizer(thresholdPx, isRtl)
+        recognizer.down(down.position.x, down.position.y, down.isConsumed)
+        var endedConsumed = false
+        while (!recognizer.isFinished) {
+            val event = awaitPointerEvent(PointerEventPass.Main)
+            val change = event.changes.firstOrNull { it.id == down.id }
+            if (change == null) {
+                // The system cancelled the stream (back gesture, window change).
+                recognizer.cancel()
+                break
+            }
+            endedConsumed = change.isConsumed
+            if (recognizer.move(change.position.x, change.position.y, change.isConsumed)) {
+                change.consume()
+            }
+            if (!change.pressed) break
+        }
+        recognizer.up(consumed = endedConsumed)?.let(onSwipe)
+    }
+}
+
 /** 48 dp entry to the full log screen, beside the language and theme controls. */
 @Composable
 private fun LogOpenButton(
@@ -614,36 +782,41 @@ private fun LogOpenButton(
 }
 
 /**
- * Collapsed status/operation line above the navigation bar. Expanding it adds the log
- * lines inside the same surface — one continuous block, no floating overlay — and the
- * whole list is capped so the active tab keeps usable height.
+ * Status/operation line above the navigation bar.
+ *
+ * Two independent folds, as approved:
+ * - the cross folds the whole status into a thin title line attached to the navigation
+ *   bar; the operation, its progress, its cancel action, the overwrite prompt and the
+ *   readback verdict all stay in state and come back unchanged;
+ * - the arrow on the title line unfolds the journal list inside the same surface (never
+ *   a floating overlay), and while the status is folded it unfolds both at once.
+ *
+ * The panel never clears anything through the reducer: folding is presentation only.
  */
 @Composable
 internal fun StatusLogPanel(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
-    logExpanded: Boolean,
-    onToggleLog: () -> Unit,
+    panels: ShellPanelState,
+    onCollapseStatus: () -> Unit,
+    onToggleJournal: () -> Unit,
 ) {
     val op = state.operation
     val overwrite = state.linkOverwriteCandidate
     val hasLog = state.logLines.isNotEmpty()
     if (op == null && state.statusMessage == null && !hasLog && overwrite == null) return
+    val collapsed = panels.statusCollapsed
+    val journalExpanded = panels.journalExpanded && !collapsed && hasLog
     val logList = rememberLazyListState()
-    LaunchedEffect(logExpanded, state.logLines.size) {
-        if (logExpanded && state.logLines.isNotEmpty()) {
+    LaunchedEffect(journalExpanded, state.logLines.size) {
+        if (journalExpanded && state.logLines.isNotEmpty()) {
             logList.animateScrollToItem(state.logLines.lastIndex)
         }
     }
 
     val failed = op?.state == OperationState.Failed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
-    // Actions live on their own row: keeping them beside a two-line title squeezed the
-    // operation name to roughly twenty characters on a 360 dp screen.
-    val hasAction = hasLog || overwrite != null ||
-        (op != null && !running) ||
-        (op == null && state.statusMessage != null) ||
-        (op != null && op.state == OperationState.Running && op.cancelable)
+    val cancelable = op != null && op.state == OperationState.Running && op.cancelable
     // A failure must stay readable: error-on-inverseSurface is ~1.5:1 in both themes.
     val container = if (failed) {
         MaterialTheme.colorScheme.errorContainer
@@ -707,26 +880,51 @@ internal fun StatusLogPanel(
         }
     }
 
+    val journalDescription = when {
+        collapsed -> stringResource(R.string.status_expand)
+        journalExpanded -> stringResource(R.string.log_collapse)
+        else -> stringResource(R.string.log_expand)
+    }
+    val collapseDescription = stringResource(R.string.status_collapse)
+    val cancelDescription = stringResource(R.string.action_cancel)
+
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        // Folded, the surface becomes a flat strip whose bottom edge meets the navigation
+        // bar; unfolded, it keeps the rounded card above it.
+        shape = if (collapsed) {
+            RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+        } else {
+            RoundedCornerShape(8.dp)
+        },
         color = container,
         modifier = Modifier
             .fillMaxWidth()
-            // Bottom inset keeps the status block off the navigation bar; the top one
-            // only separates it from the tab content.
-            .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp)
+            // The bottom bar is outside Scaffold's content insets: in landscape a side
+            // navigation bar or cutout must not cover the title, percent or action icons.
+            .windowInsetsPadding(
+                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+            )
+            .then(
+                if (collapsed) {
+                    Modifier.padding(top = 4.dp)
+                } else {
+                    // Top spacing separates the block from the tab content; when folded the
+                    // strip sits directly on the navigation bar.
+                    Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp)
+                },
+            )
             .heightIn(min = 48.dp),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = if (collapsed) 12.dp else 16.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -734,26 +932,28 @@ internal fun StatusLogPanel(
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = content,
-                        maxLines = 2,
+                        maxLines = if (collapsed) 1 else 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    detail?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.85f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    readbackNote?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    if (!collapsed) {
+                        detail?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = content.copy(alpha = 0.85f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        readbackNote?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = content,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
 
@@ -765,14 +965,55 @@ internal fun StatusLogPanel(
                         color = content,
                     )
                 }
+                // Folded, the cancel action stays on the title line as a stop glyph so the
+                // strip remains one row high and the operation can still be stopped.
+                if (collapsed && cancelable) {
+                    IconButton(
+                        onClick = { onIntent(UiIntent.CancelOperation) },
+                        modifier = Modifier.semantics {
+                            contentDescription = cancelDescription
+                        },
+                    ) {
+                        GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
+                    }
+                }
+                // Up while the journal is hidden (or the status is folded), down while it
+                // is open. The glyph, not a text label, so the title keeps its width.
+                // Without log lines the arrow would toggle nothing, so the fold is left to
+                // the cross; while folded it is the way back out.
+                if (collapsed || hasLog) {
+                    IconButton(
+                        onClick = onToggleJournal,
+                        modifier = Modifier.semantics { contentDescription = journalDescription },
+                    ) {
+                        GlyphIcon(
+                            glyph = if (journalExpanded) Glyph.ChevronDown else Glyph.ChevronUp,
+                            size = 20.dp,
+                            tint = content,
+                        )
+                    }
+                }
+                if (!collapsed) {
+                    IconButton(
+                        onClick = onCollapseStatus,
+                        modifier = Modifier.semantics {
+                            contentDescription = collapseDescription
+                        },
+                    ) {
+                        GlyphIcon(glyph = Glyph.Close, size = 20.dp, tint = content)
+                    }
+                }
             }
-            if (hasAction) {
+
+            // Cancel (when unfolded) and the overwrite prompt stay reachable while folded:
+            // folding must never hide an action needed to stop or resolve a live operation.
+            if ((cancelable && !collapsed) || overwrite != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
                 ) {
-                    if (op != null && op.state == OperationState.Running && op.cancelable) {
+                    if (cancelable) {
                         TextButton(
                             onClick = { onIntent(UiIntent.CancelOperation) },
                             modifier = Modifier.heightIn(min = 48.dp),
@@ -780,48 +1021,6 @@ internal fun StatusLogPanel(
                         ) {
                             Text(
                                 text = stringResource(R.string.action_cancel),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                            )
-                        }
-                    }
-                    if (hasLog) {
-                        TextButton(
-                            onClick = onToggleLog,
-                            modifier = Modifier.heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                text = stringResource(
-                                    if (logExpanded) R.string.log_collapse else R.string.log_open,
-                                ),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = content,
-                            )
-                        }
-                    }
-                    if (op != null && !running) {
-                        TextButton(
-                            onClick = { onIntent(UiIntent.OperationUpdated(null)) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.status_hide),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                            )
-                        }
-                    } else if (op == null && state.statusMessage != null) {
-                        TextButton(
-                            onClick = { onIntent(UiIntent.Status(null)) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.status_hide),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = content,
@@ -859,7 +1058,7 @@ internal fun StatusLogPanel(
 
             // Expanded: the same surface continues into the log. No second card appears
             // behind or above it, so the block reads as one piece.
-            if (logExpanded && hasLog) {
+            if (journalExpanded) {
                 HorizontalDivider(
                     modifier = Modifier.padding(top = 4.dp),
                     color = content.copy(alpha = 0.25f),
@@ -1531,10 +1730,13 @@ internal enum class Glyph {
     Download,
     Pencil,
     Trash,
-    Close,
     ChevronDown,
     ChevronUp,
     ChevronLeft,
+    /** Two crossing strokes: folding the status block without clearing it. */
+    Close,
+    /** Filled square: compact cancel while the status is folded. */
+    Stop,
     /** Three stacked lines: the in-app operation log. */
     Log,
     /** Reveal a masked value. */
@@ -1756,10 +1958,6 @@ internal fun GlyphIcon(
                     drawLine(tint, androidx.compose.ui.geometry.Offset(10f, 10f), androidx.compose.ui.geometry.Offset(10f, 17f), 1.6f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(14f, 10f), androidx.compose.ui.geometry.Offset(14f, 17f), 1.6f)
                 }
-                Glyph.Close -> {
-                    drawLine(tint, androidx.compose.ui.geometry.Offset(6f, 6f), androidx.compose.ui.geometry.Offset(18f, 18f), 1.8f)
-                    drawLine(tint, androidx.compose.ui.geometry.Offset(18f, 6f), androidx.compose.ui.geometry.Offset(6f, 18f), 1.8f)
-                }
                 Glyph.ChevronDown -> drawPath(
                     Path().apply { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) },
                     tint,
@@ -1774,6 +1972,15 @@ internal fun GlyphIcon(
                     Path().apply { moveTo(15f, 6f); lineTo(9f, 12f); lineTo(15f, 18f) },
                     tint,
                     style = stroke,
+                )
+                Glyph.Close -> {
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(7f, 7f), androidx.compose.ui.geometry.Offset(17f, 17f), 1.8f)
+                    drawLine(tint, androidx.compose.ui.geometry.Offset(17f, 7f), androidx.compose.ui.geometry.Offset(7f, 17f), 1.8f)
+                }
+                Glyph.Stop -> drawRect(
+                    tint,
+                    topLeft = androidx.compose.ui.geometry.Offset(7f, 7f),
+                    size = androidx.compose.ui.geometry.Size(10f, 10f),
                 )
                 Glyph.Log -> {
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 7f), androidx.compose.ui.geometry.Offset(19f, 7f), 1.8f)

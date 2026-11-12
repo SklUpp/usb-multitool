@@ -180,6 +180,11 @@ object UiStateHostCheck {
         val gptFormatted =
             ready.copy(
                 partitionScheme = TableScheme.GPT,
+                rawGeometry = usb.partition.RawRangeGeometry(
+                    diskSectorCount = device.capacityBytes / 512UL,
+                    sectorSize = 512,
+                    trust = usb.partition.SchemeTrust.Confirmed(TableScheme.GPT),
+                ),
                 partitions = ready.partitions.map {
                     if (it.id == "1") it.copy(filesystemId = FilesystemId.NTFS) else it
                 },

@@ -251,6 +251,9 @@ enum class UiMessageKey {
     FilesystemUnknown,
     SchemeAlreadyCurrent,
     SchemeUnknown,
+    GptRepairRequiresGpt,
+    SchemeBackupMetadataUnknown,
+    SchemeBackupUnverified,
     SchemeMbrTooLarge,
     CannotReadUsb,
     CannotReadPartitionTable,
@@ -409,6 +412,11 @@ data class DestructiveConfirmation(
     val targetScheme: PartitionScheme? = null,
     /** Exact partition geometries of the table being replaced. */
     val initialPartitions: List<PartitionRef> = emptyList(),
+    /**
+     * Display names aligned with [initialPartitions] for the confirmation text only.
+     * Never used for revalidation: identity stays the start/count snapshot.
+     */
+    val initialPartitionNames: List<String> = emptyList(),
     /** Multiple image paths for one VENTOY_LINK_XML confirmation. */
     val imagePaths: List<String> = emptyList(),
     /** Existing XML template path on the Ventoy data partition (never rewritten). */

@@ -179,6 +179,12 @@ fun UiMessage.localized(): String =
             UiMessageKey.SchemeAlreadyCurrent ->
                 stringResource(R.string.msg_scheme_already_current)
             UiMessageKey.SchemeUnknown -> stringResource(R.string.msg_scheme_unknown)
+            UiMessageKey.GptRepairRequiresGpt ->
+                stringResource(R.string.msg_gpt_repair_requires_gpt)
+            UiMessageKey.SchemeBackupMetadataUnknown ->
+                stringResource(R.string.msg_scheme_backup_metadata_unknown)
+            UiMessageKey.SchemeBackupUnverified ->
+                stringResource(R.string.msg_scheme_backup_unverified)
             UiMessageKey.SchemeMbrTooLarge -> stringResource(R.string.msg_scheme_mbr_too_large)
             UiMessageKey.Success -> stringResource(R.string.msg_success)
             UiMessageKey.CancelledStatus -> stringResource(R.string.msg_cancelled)
@@ -347,8 +353,18 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             confirmation.identity.identity,
             confirmation.identity.capacityLabel,
         ),
-        stringResource(R.string.confirm_irreversible),
     )
+    // Backup-GPT repair preserves every partition; saying "cannot be undone" would be false.
+    if (confirmation.action != DestructiveAction.GPT_REPAIR) {
+        lines += stringResource(R.string.confirm_irreversible)
+    } else {
+        lines += stringResource(R.string.confirm_repair_keeps)
+        if (confirmation.initialPartitionNames.size == confirmation.initialPartitions.size) {
+            confirmation.initialPartitionNames.forEach { name ->
+                lines += stringResource(R.string.confirm_repair_kept_partition, name)
+            }
+        }
+    }
     confirmation.targetPartitionName?.let {
         lines += stringResource(R.string.confirm_target_partition, it)
     }
@@ -412,10 +428,16 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             )
         }
         if (confirmation.initialPartitions.isNotEmpty()) {
-            lines += stringResource(
-                R.string.confirm_initialize_partitions,
-                confirmation.initialPartitions.size,
-            )
+            if (confirmation.initialPartitionNames.size == confirmation.initialPartitions.size) {
+                confirmation.initialPartitionNames.forEach { name ->
+                    lines += stringResource(R.string.confirm_erase_partition, name)
+                }
+            } else {
+                lines += stringResource(
+                    R.string.confirm_initialize_partitions,
+                    confirmation.initialPartitions.size,
+                )
+            }
         }
     }
     if (confirmation.action == DestructiveAction.RAW_WRITE) {

@@ -53,6 +53,7 @@ class SchemeInitUiTest {
             listOf(PartitionRef(2048uL, 4096uL), PartitionRef(8192uL, 1024uL)),
             confirmation.initialPartitions,
         )
+        assertEquals(listOf("DATA", "SECOND"), confirmation.initialPartitionNames)
     }
 
     @Test

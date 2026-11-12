@@ -7,6 +7,7 @@ import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageSnapshot
 import usb.fs.FormatCatalog
+import usb.partition.RawSchemeProblem
 import usb.partition.TableScheme
 import usb.ventoy.Autounattend
 import usb.ventoy.AutounattendBinding
@@ -915,14 +916,26 @@ object UiReducer {
                 // refresh keeps it only with a trusted identity match.
                 val sameAttachment = intent.presence == DevicePresence.Ready && sameStick
                 val retainPrivileged = trustedStick && (sameAttachment || probingRetain)
-                val retainedEfi = state.vtoyEfiWritePartitionId?.takeIf { retainPrivileged }?.let { id ->
-                    partitions.firstOrNull {
-                        it.id == id &&
-                            it.readOnly &&
-                            it.startLba == state.vtoyEfiWriteStartLba &&
-                            it.sectorCount == state.vtoyEfiWriteSectorCount
+                val tableTrusted =
+                    if (probingRetain && intent.partitions.isEmpty()) {
+                        state.tableValid &&
+                            !state.partitionTableDamaged &&
+                            !state.partitionTableAmbiguous
+                    } else {
+                        intent.tableValid &&
+                            !intent.partitionTableDamaged &&
+                            !intent.partitionTableAmbiguous
                     }
-                }
+                val retainedEfi = state.vtoyEfiWritePartitionId
+                    ?.takeIf { retainPrivileged && tableTrusted }
+                    ?.let { id ->
+                        partitions.firstOrNull {
+                            it.id == id &&
+                                it.readOnly &&
+                                it.startLba == state.vtoyEfiWriteStartLba &&
+                                it.sectorCount == state.vtoyEfiWriteSectorCount
+                        }
+                    }
                 // Keep the open folder on the same stick while the previously selected
                 // partition is still known. Detach / other stick / missing id → root.
                 val keepPath =
@@ -1376,6 +1389,11 @@ object UiReducer {
                             gptRestoreInspectionProblem(state)
                         intent.action == DestructiveAction.RESCUE_RESTORE ->
                             rescueRestoreInspectionProblem(state)
+                        intent.action == DestructiveAction.GPT_REPAIR &&
+                            state.partitionScheme?.toPartitionScheme() != PartitionScheme.Gpt ->
+                            UiMessage.Key(UiMessageKey.GptRepairRequiresGpt)
+                        intent.action == DestructiveAction.GPT_REPAIR && !state.tableValid ->
+                            UiMessage.Key(UiMessageKey.TableDamaged)
                         (intent.action == DestructiveAction.DELETE_PARTITION || intent.action == DestructiveAction.FORMAT_PARTITION) &&
                             state.selectedPartitionId == null ->
                             UiMessage.Key(UiMessageKey.SelectPartitionFirst)
@@ -1490,7 +1508,36 @@ object UiReducer {
                                     // Snapshot now: later edits on screen cannot change what
                                     // the confirmed install/update will write.
                                     ventoyControls = state.pendingVentoyControls,
-                                ),
+                                ).let { base ->
+                                    if (intent.action == DestructiveAction.GPT_REPAIR) {
+                                        val snapshot = state.partitions.mapNotNull { tab ->
+                                            val start = tab.startLba
+                                            val count = tab.sectorCount
+                                            if (start == null || count == null) {
+                                                null
+                                            } else {
+                                                PartitionRef(start, count)
+                                            }
+                                        }
+                                        val names = state.partitions.mapNotNull { tab ->
+                                            val start = tab.startLba
+                                            val count = tab.sectorCount
+                                            if (start == null || count == null) {
+                                                null
+                                            } else {
+                                                tab.name.ifBlank { tab.id }
+                                            }
+                                        }
+                                        base.copy(
+                                            initialScheme =
+                                                state.partitionScheme?.toPartitionScheme(),
+                                            initialPartitions = snapshot,
+                                            initialPartitionNames = names,
+                                        )
+                                    } else {
+                                        base
+                                    }
+                                },
                         ),
                     )
                 }
@@ -1539,7 +1586,24 @@ object UiReducer {
                             pending.initialScheme == null ||
                             pending.targetScheme == pending.initialScheme ||
                             state.partitionScheme?.toPartitionScheme() != pending.initialScheme ||
-                            !state.tableValid) -> true
+                            !state.tableValid ||
+                            state.rawGeometry?.metadataProblem ==
+                            RawSchemeProblem.GptBackupMetadataUnknown ||
+                            (state.partitionScheme?.toPartitionScheme() ==
+                                PartitionScheme.Gpt && state.rawGeometry == null)) -> true
+                    action == DestructiveAction.GPT_REPAIR &&
+                        (pending.initialScheme != PartitionScheme.Gpt ||
+                            state.partitionScheme?.toPartitionScheme() != PartitionScheme.Gpt ||
+                            !state.tableValid ||
+                            state.partitions.mapNotNull { tab ->
+                                val start = tab.startLba
+                                val count = tab.sectorCount
+                                if (start == null || count == null) {
+                                    null
+                                } else {
+                                    PartitionRef(start, count)
+                                }
+                            } != pending.initialPartitions) -> true
                     action == DestructiveAction.RENAME_PARTITION &&
                         (pending.partitionName.isNullOrBlank() ||
                             state.partitionScheme != TableScheme.GPT ||
@@ -3769,6 +3833,9 @@ object UiReducer {
     /** Small builder for keyed messages with format arguments. */
     fun message(key: UiMessageKey, vararg args: Any): UiMessage =
         UiMessage.Key(key, args.toList())
+
+    /** MBR addresses at most 2^32-1 sectors. */
+    internal fun mbrAddressLimitSectors(): ULong = 0xFFFF_FFFFUL
 
 
     private fun UiMessage.isDefaultStateStatus(): Boolean =

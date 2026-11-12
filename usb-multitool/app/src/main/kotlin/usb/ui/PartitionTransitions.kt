@@ -3,6 +3,7 @@ package usb.ui
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
+import usb.partition.RawSchemeProblem
 import usb.partition.TableScheme
 
 /**
@@ -173,17 +174,29 @@ internal object PartitionTransitions {
             val count = tab.sectorCount
             if (start == null || count == null) null else PartitionRef(start, count)
         }
+        val snapshotNames = state.partitions.mapNotNull { tab ->
+            val start = tab.startLba
+            val count = tab.sectorCount
+            if (start == null || count == null) null else tab.name.ifBlank { tab.id }
+        }
         val problem = when {
             device == null || !state.actionsEnabled -> UiReducer.presenceMessage(state.presence)
             state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
             state.partitionTableDamaged -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
             !state.tableValid -> UiMessage.Key(UiMessageKey.TableDamaged)
+            state.rawGeometry?.metadataProblem ==
+                RawSchemeProblem.GptBackupMetadataUnknown ->
+                UiMessage.Key(UiMessageKey.SchemeBackupMetadataUnknown)
             currentScheme == null -> UiMessage.Key(UiMessageKey.SchemeUnknown)
             currentScheme == intent.scheme -> UiMessage.Key(UiMessageKey.SchemeAlreadyCurrent)
             snapshot.any { it == null } -> UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
             intent.scheme == PartitionScheme.Mbr &&
-                device.capacityBytes > mbrAddressLimitBytes(state.diskSectorSize) ->
+                device.capacityBytes /
+                state.diskSectorSize.coerceAtLeast(1).toULong() >
+                UiReducer.mbrAddressLimitSectors() ->
                 UiMessage.Key(UiMessageKey.SchemeMbrTooLarge)
+            currentScheme == PartitionScheme.Gpt && state.rawGeometry == null ->
+                UiMessage.Key(UiMessageKey.SchemeBackupUnverified)
             else -> null
         }
         return if (problem != null || device == null) {
@@ -199,6 +212,7 @@ internal object PartitionTransitions {
                         initialScheme = currentScheme,
                         targetScheme = intent.scheme,
                         initialPartitions = snapshot.filterNotNull(),
+                        initialPartitionNames = snapshotNames,
                     ),
                 ),
             )
@@ -224,10 +238,6 @@ internal object PartitionTransitions {
             DestructiveAction.SET_PARTITION_BOOTABLE,
             bootable = intent.bootable,
         )
-
-    /** MBR addresses at most 2^32-1 sectors of [sectorSize] bytes. */
-    private fun mbrAddressLimitBytes(sectorSize: Int): ULong =
-        0xFFFF_FFFFUL * sectorSize.coerceAtLeast(1).toULong()
 
     /**
      * Build a confirmation for a partition-table edit. The payload pins the selected

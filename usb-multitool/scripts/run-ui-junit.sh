@@ -28,6 +28,7 @@ done
 for suite in \
   FormatPickerTest \
   PartitionRenameUiTest \
+  PartitionRepairUiTest \
   SchemeInitUiTest \
   ConfirmationTest \
   BackupFolderUiTest \
@@ -36,6 +37,7 @@ for suite in \
   OperationProgressMapperTest \
   StringResourceParityTest \
   ShellLogBehaviorTest \
+  ShellPanelBehaviorTest \
   FilesystemUsageUiTest \
   FilesScreenModelTest \
   RawRangeUiStateTest \
@@ -128,6 +130,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/service/DiskController.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FormatPickerTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRenameUiTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/PartitionRepairUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/SchemeInitUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ConfirmationTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/BackupFolderUiTest.kt" \
@@ -138,6 +141,8 @@ set -- \
   "$ROOT/app/src/test/kotlin/usb/ui/OperationProgressMapperTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/StringResourceParityTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/ShellLogBehaviorTest.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/ShellInteractionModels.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/ShellPanelBehaviorTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/RawRangeUiStateTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FilesystemUsageUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FilesScreenModelTest.kt" \
@@ -180,6 +185,7 @@ cd "$ROOT"
 java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.FormatPickerTest \
   usb.ui.PartitionRenameUiTest \
+  usb.ui.PartitionRepairUiTest \
   usb.ui.SchemeInitUiTest \
   usb.ui.ConfirmationTest \
   usb.ui.BackupFolderUiTest \
@@ -189,6 +195,7 @@ java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.UiStateMachineTest \
   usb.ui.StringResourceParityTest \
   usb.ui.ShellLogBehaviorTest \
+  usb.ui.ShellPanelBehaviorTest \
   usb.ui.RawRangeUiStateTest \
   usb.ui.FilesystemUsageUiTest \
   usb.ui.FilesScreenModelTest \
