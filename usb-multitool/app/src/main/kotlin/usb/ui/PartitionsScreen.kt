@@ -1329,6 +1329,17 @@ fun PartitionsScreen(
                     ) {
                         Text(stringResource(R.string.raw_write_cancel_measure))
                     }
+                } else if (state.rawMeasurementWaitingForPrevious) {
+                    Text(
+                        text = stringResource(R.string.raw_write_size_waiting_previous),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(
+                        onClick = { onIntent(UiIntent.CancelRawSourceMeasurement) },
+                    ) {
+                        Text(stringResource(R.string.raw_write_cancel_measure))
+                    }
                 } else if (state.rawMeasurementPending) {
                     Text(
                         text = stringResource(R.string.raw_write_size_waiting),

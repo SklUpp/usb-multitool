@@ -116,6 +116,7 @@ import usb.ui.filesystemUsageKey
 import usb.ui.needsFilesystemUsageRequest
 import usb.ui.fatChildPath
 import usb.ui.RawMeasureError
+import usb.ui.rawSourceKey
 import usb.ui.FilesDownloadBinding
 import usb.ui.PartitionBinding
 import usb.ui.PartitionRef
@@ -198,6 +199,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var rawMeasureJob: Job? = null
     private var rawMeasureHandle: MeasurementHandle? = null
     private var rawMeasureRunning = false
+    /** Latest source waiting for a blocked provider pass to return; never starts in parallel. */
+    private var pendingRawMeasureEffect: UiEffect.MeasureRawSource? = null
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
     /**
@@ -2989,15 +2992,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun measureRawSource(effect: UiEffect.MeasureRawSource) {
         MeasurementHandle.retryDeferredCloses()
         if (rawMeasureRunning) {
-            // Never start an unbounded second read while the previous provider read is
-            // still blocked. Close best-effort and report an honest localized busy error;
-            // the guard clears only when the background read actually returns.
+            // Keep newest source pending. The old provider read remains guarded until its
+            // coroutine returns; cancellation only asks the provider stream to close.
+            pendingRawMeasureEffect = effect
+            onIntent(
+                UiIntent.RawSourceMeasurementWaiting(
+                    generation = effect.generation,
+                    source = effect.source,
+                ),
+            )
             rawMeasureHandle?.cancel()
-            rawMeasureHandle = null
             rawMeasureJob?.cancel()
-            onIntent(measureError(effect, RawMeasureError.Busy))
             return
         }
+        startRawMeasurement(effect)
+    }
+
+    private fun startPendingRawMeasurement() {
+        val effect = pendingRawMeasureEffect ?: return
+        pendingRawMeasureEffect = null
+        // A newer pick/cancel may have superseded this request while the provider was
+        // blocked. Never revive a stale URI or generation.
+        if (state.rawSizeGeneration != effect.generation || state.rawSourceKey != effect.source) {
+            return
+        }
+        onIntent(
+            UiIntent.RawSourceMeasurementStarted(
+                generation = effect.generation,
+                source = effect.source,
+            ),
+        )
         startRawMeasurement(effect)
     }
 
@@ -3069,6 +3093,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 rawMeasureRunning = false
                 if (rawMeasureJob === job) rawMeasureJob = null
                 if (rawMeasureHandle === handle) rawMeasureHandle = null
+                startPendingRawMeasurement()
             }
         }
     }
@@ -3086,12 +3111,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Close the tracked provider stream, if any. No new pass is queued. */
     private fun cancelRawMeasurement() {
+        pendingRawMeasureEffect = null
         rawMeasureHandle?.cancel()
         rawMeasureHandle = null
         rawMeasureJob?.cancel()
         rawMeasureJob = null
     }
-
     private fun loadRawSourceCandidates(binding: PartitionBinding, generation: Long) {
         val pin = currentAttachmentPin()
         val identity = state.device?.identity

@@ -272,6 +272,7 @@
     <string name="raw_write_size_measure_failed">Could not measure the decoded image size: %1$s</string>
     <string name="raw_write_cancel_measure">Cancel size check</string>
     <string name="raw_write_size_waiting">Waiting for disk capacity before checking the image size…</string>
+    <string name="raw_write_size_waiting_previous">Waiting for previous source read to finish before checking this image…</string>
     <string name="raw_write_error_busy">The previous size check is still running or blocked. Wait for it to end, then select the source again.</string>
     <string name="raw_write_error_close_capacity">Too many blocked provider streams to close safely. Select the source again after they finish.</string>
     <string name="raw_write_warning_unaligned">Start LBA %1$d is not aligned to %2$d sectors.</string>

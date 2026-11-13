@@ -1355,6 +1355,8 @@ data class AppUiState(
     val rawSizeMeasuring: Boolean = false,
     /** Waiting for a positive capacity/geometry before a bounded pass may start. */
     val rawMeasurementPending: Boolean = false,
+    /** Waiting for the previous provider read to return; never means size is measured. */
+    val rawMeasurementWaitingForPrevious: Boolean = false,
     /** Monotonic id so a late measurement cannot describe a newer source. */
     val rawSizeGeneration: Long = 0L,
     val backupUri: String? = null,

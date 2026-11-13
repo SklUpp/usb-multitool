@@ -180,6 +180,17 @@ sealed class UiIntent {
         val error: String? = null,
         val errorKind: RawMeasureError? = null,
     ) : UiIntent()
+    /** Previous provider read is still closing or blocked; keep current source waiting. */
+    data class RawSourceMeasurementWaiting(
+        val generation: Long,
+        val source: String?,
+    ) : UiIntent()
+
+    /** Queued source may start only after previous provider read has actually completed. */
+    data class RawSourceMeasurementStarted(
+        val generation: Long,
+        val source: String?,
+    ) : UiIntent()
 
     /** User explicitly stops a stuck decode-count pass. */
     data object CancelRawSourceMeasurement : UiIntent()
@@ -2082,6 +2093,8 @@ object UiReducer {
                             rawDecodedSha256 = state.rawDecodedSha256.takeIf { key != null },
                             rawSizeMeasuring = false,
                             rawMeasurementPending = state.rawMeasurementPending && key != null,
+                            rawMeasurementWaitingForPrevious =
+                                state.rawMeasurementWaitingForPrevious && key != null,
                         ),
                         effects =
                             if (key == null) {
@@ -2113,6 +2126,7 @@ object UiReducer {
                             rawDecodedSha256 = null,
                             rawSizeMeasuring = limit != null,
                             rawMeasurementPending = limit == null,
+                            rawMeasurementWaitingForPrevious = false,
                             rawSizeGeneration = generation,
                             statusMessage = UiMessage.Key(
                                 UiMessageKey.ImageReady,
@@ -2142,6 +2156,10 @@ object UiReducer {
                 RawTransitions.clearStagedRawImage(state, intent)
             is UiIntent.RawSourceMeasured ->
                 RawTransitions.rawSourceMeasured(state, intent)
+            is UiIntent.RawSourceMeasurementWaiting ->
+                RawTransitions.rawSourceMeasurementWaiting(state, intent)
+            is UiIntent.RawSourceMeasurementStarted ->
+                RawTransitions.rawSourceMeasurementStarted(state, intent)
             is UiIntent.CancelRawSourceMeasurement ->
                 RawTransitions.cancelRawSourceMeasurement(state)
             is UiIntent.LoadRawSourceCandidates ->

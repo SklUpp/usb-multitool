@@ -141,6 +141,70 @@ class RawRangeUiStateTest {
         assertEquals(4096L * 512L, confirmed.state.pendingConfirmation!!.rawDecodedBytes)
         assertEquals("measured-digest", confirmed.state.pendingConfirmation!!.rawSourceSha256)
     }
+    @Test
+    fun replacementMeasurementWaitsWithoutAcceptingStaleProviderResult() {
+        val first =
+            ready().copy(
+                imageName = "old.iso",
+                imageUri = "content://images/old.iso",
+                rawDecodedSizeBytes = null,
+                rawDecodedSizeSource = "content://images/old.iso",
+                rawSizeMeasuring = true,
+                rawSizeGeneration = 10L,
+            )
+        val replacement =
+            first.copy(
+                imageName = "new.iso",
+                imageUri = "content://images/new.iso",
+                rawDecodedSizeSource = "content://images/new.iso",
+                rawSizeMeasuring = true,
+                rawSizeGeneration = 11L,
+            )
+        val waiting =
+            UiReducer.reduce(
+                replacement,
+                UiIntent.RawSourceMeasurementWaiting(11L, "content://images/new.iso"),
+            )
+        assertTrue(waiting.state.rawMeasurementWaitingForPrevious)
+        assertFalse(waiting.state.rawMeasurementPending)
+        val stale =
+            UiReducer.reduce(
+                waiting.state,
+                UiIntent.RawSourceMeasured(
+                    generation = 10L,
+                    source = "content://images/old.iso",
+                    bytes = 512L,
+                    sha256 = "stale",
+                ),
+            )
+        assertNull(stale.state.rawDecodedSizeBytes)
+        assertTrue(stale.state.rawMeasurementWaitingForPrevious)
+        val started =
+            UiReducer.reduce(
+                stale.state,
+                UiIntent.RawSourceMeasurementStarted(11L, "content://images/new.iso"),
+            )
+        assertTrue(started.state.rawSizeMeasuring)
+        assertFalse(started.state.rawMeasurementWaitingForPrevious)
+    }
+
+    @Test
+    fun queuedMeasurementTokenCannotReviveAfterSourceCancel() {
+        val waiting =
+            ready().copy(
+                rawSizeGeneration = 4L,
+                rawMeasurementPending = true,
+            )
+        val cancelled = UiReducer.reduce(waiting, UiIntent.CancelRawSourceMeasurement)
+        val lateStart =
+            UiReducer.reduce(
+                cancelled.state,
+                UiIntent.RawSourceMeasurementStarted(4L, waiting.imageUri),
+            )
+        assertFalse(lateStart.state.rawSizeMeasuring)
+        assertFalse(lateStart.state.rawMeasurementPending)
+        assertNull(lateStart.state.rawDecodedSizeBytes)
+    }
 
     @Test
     fun unnamedUnknownSourceIsMeasuredRatherThanRejectedByName() {

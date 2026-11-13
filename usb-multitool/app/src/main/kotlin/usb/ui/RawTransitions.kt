@@ -173,6 +173,7 @@ internal object RawTransitions {
                     rawDecodedSha256 = null,
                     rawSizeMeasuring = cheap == null && limit != null,
                     rawMeasurementPending = cheap == null && limit == null,
+                    rawMeasurementWaitingForPrevious = false,
                     rawSizeGeneration = generation,
                     statusMessage = UiReducer.message(UiMessageKey.StagedImageReady, intent.label),
                 ),
@@ -210,6 +211,7 @@ internal object RawTransitions {
                     rawDecodedSha256 = null,
                     rawSizeMeasuring = false,
                     rawMeasurementPending = false,
+                    rawMeasurementWaitingForPrevious = false,
                     rawSizeGeneration = state.rawSizeGeneration + 1L,
                     statusMessage = UiMessage.Key(UiMessageKey.StagedCleared),
                 ),
@@ -217,7 +219,57 @@ internal object RawTransitions {
             )
         }
 
-    fun rawSourceMeasured(state: AppUiState, intent: UiIntent.RawSourceMeasured): ReduceResult {
+    fun rawSourceMeasurementWaiting(
+        state: AppUiState,
+        intent: UiIntent.RawSourceMeasurementWaiting,
+    ): ReduceResult {
+        val key = state.rawSourceKey
+        return if (intent.generation != state.rawSizeGeneration ||
+            key == null ||
+            intent.source != key
+        ) {
+            ReduceResult(state)
+        } else {
+            ReduceResult(
+                state.copy(
+                    rawDecodedSizeBytes = null,
+                    rawDecodedSizeError = null,
+                    rawDecodedErrorKind = null,
+                    rawDecodedSha256 = null,
+                    rawSizeMeasuring = false,
+                    rawMeasurementPending = false,
+                    rawMeasurementWaitingForPrevious = true,
+                ),
+            )
+        }
+    }
+
+    fun rawSourceMeasurementStarted(
+        state: AppUiState,
+        intent: UiIntent.RawSourceMeasurementStarted,
+    ): ReduceResult {
+        val key = state.rawSourceKey
+        return if (intent.generation != state.rawSizeGeneration ||
+            key == null ||
+            intent.source != key
+        ) {
+            ReduceResult(state)
+        } else {
+            ReduceResult(
+                state.copy(
+                    rawDecodedSizeBytes = null,
+                    rawDecodedSizeError = null,
+                    rawDecodedErrorKind = null,
+                    rawDecodedSha256 = null,
+                    rawSizeMeasuring = true,
+                    rawMeasurementPending = false,
+                    rawMeasurementWaitingForPrevious = false,
+                ),
+            )
+        }
+    }
+
+     fun rawSourceMeasured(state: AppUiState, intent: UiIntent.RawSourceMeasured): ReduceResult {
         val key = state.rawSourceKey
         return if (intent.generation != state.rawSizeGeneration ||
             key == null ||
@@ -235,6 +287,7 @@ internal object RawTransitions {
                     rawDecodedSha256 = intent.sha256,
                     rawSizeMeasuring = false,
                     rawMeasurementPending = false,
+                    rawMeasurementWaitingForPrevious = false,
                 ),
             )
         } else {
@@ -248,6 +301,7 @@ internal object RawTransitions {
                     rawDecodedSha256 = null,
                     rawSizeMeasuring = false,
                     rawMeasurementPending = false,
+                    rawMeasurementWaitingForPrevious = false,
                 ),
             )
         }
@@ -262,6 +316,7 @@ internal object RawTransitions {
                 rawDecodedSha256 = null,
                 rawSizeMeasuring = false,
                 rawMeasurementPending = false,
+                rawMeasurementWaitingForPrevious = false,
                 rawSizeGeneration = state.rawSizeGeneration + 1L,
             ),
             effects = listOf(UiEffect.CancelRawSourceMeasure),

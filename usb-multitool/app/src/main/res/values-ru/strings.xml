@@ -272,6 +272,7 @@
     <string name="raw_write_size_measure_failed">Не удалось измерить декодированный размер образа: %1$s</string>
     <string name="raw_write_cancel_measure">Отменить проверку размера</string>
     <string name="raw_write_size_waiting">Ожидание ёмкости диска для проверки размера образа…</string>
+    <string name="raw_write_size_waiting_previous">Ожидание завершения чтения предыдущего источника перед проверкой этого образа…</string>
     <string name="raw_write_error_busy">Предыдущая проверка размера всё ещё выполняется или заблокирована. Дождитесь её завершения и выберите источник снова.</string>
     <string name="raw_write_error_close_capacity">Слишком много заблокированных потоков провайдера для безопасного закрытия. Выберите источник снова после их завершения.</string>
     <string name="raw_write_warning_unaligned">Начальный LBA %1$d не выровнен по %2$d секторам.</string>
