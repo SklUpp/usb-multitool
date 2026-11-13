@@ -15,21 +15,20 @@ const val DEFAULT_VENTOY_CONFIG_PATH = "/ventoy/ventoy.json"
  * Which file the global-settings block reads and edits.
  *
  * [Default] is Ventoy's own `/ventoy/ventoy.json` on the stick. [UsbFile] is another file
- * on the same Ventoy data partition, chosen through the shared Files picker. [Document] is
- * a phone document chosen with the Android picker; it is updated through its content URI
- * and is never copied onto the stick.
- *
- * Only [Default] may create a missing file. A chosen file must still exist and be a regular
- * file at write time; absence or a directory fails closed.
+ * on the same Ventoy data partition, chosen through the shared Files picker. [Document] is a
+ * phone document chosen with the Android picker; it is read as an import source and is never
+ * written. Applying it copies its validated JSON to the stick's `/ventoy/ventoy.json`.
  */
 sealed interface VentoySettingsSource {
     data object Default : VentoySettingsSource
 
-    data class UsbFile(val path: String) : VentoySettingsSource
+    data class UsbFile(val path: String, val snapshotSha256: String? = null) : VentoySettingsSource
 
     data class Document(
         val uri: String,
         val displayName: String? = null,
+        /** SHA-256 of bytes read during validation; changed phone content is stale. */
+        val snapshotSha256: String? = null,
     ) : VentoySettingsSource
 
     /** A non-default path is highlighted and warned about in the UI. */
@@ -167,7 +166,7 @@ object VentoyControlCatalog {
             else -> null
         }
 
-    /** Null when [value] is writable for [key]; unknown keys accept any bounded text. */
+    /** Null when [value] is writable for [key]; unknown and cleared values stay bounded text. */
     fun valueProblem(key: String, value: String?): String? {
         if (value == null) return null
         val knownControl = known(key)

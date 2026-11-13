@@ -89,7 +89,15 @@ internal object VentoyTransitions {
         ReduceResult(state.copy(vtoyLocalAccount = intent.enabled))
 
     fun loadVentoyGlobalSettings(state: AppUiState): ReduceResult =
-        if (!state.settingsSourceGeometryMatches()) {
+        if (state.ventoySettingsSourceStartLba == null ||
+            state.ventoySettingsSourceSectorCount == null
+        ) {
+            startSettingsSourceRead(
+                state = state,
+                source = state.ventoySettingsSource,
+                device = state.device,
+            )
+        } else if (!state.settingsSourceGeometryMatches()) {
             ReduceResult(
                 state.copy(
                     ventoySettingsSourceLoading = false,
@@ -263,8 +271,12 @@ internal object VentoyTransitions {
         partitionStartLba: ULong? = null,
         partitionSectorCount: ULong? = null,
     ): ReduceResult {
+        val dataPartition = state.ventoyDataPartition()
+            ?: return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.VentoyDataPartitionMissing)))
         val token = state.ventoyGlobalSettingsRequest + 1L
-        val pinGeometry = source is VentoySettingsSource.UsbFile && !source.isDefaultPath()
+        val pinnedPartitionId = partitionId ?: dataPartition.id
+        val pinnedStart = partitionStartLba ?: dataPartition.startLba
+        val pinnedCount = partitionSectorCount ?: dataPartition.sectorCount
         return ReduceResult(
             state.copy(
                 ventoyGlobalSettingsRequest = token,
@@ -273,10 +285,9 @@ internal object VentoyTransitions {
                 ventoySettingsSourceLoading = true,
                 ventoySettingsSourceIdentity = device?.identity,
                 ventoySettingsSourceAttachGeneration = device?.attachGeneration,
-                ventoySettingsSourcePartitionId = if (pinGeometry) partitionId else null,
-                ventoySettingsSourceStartLba = if (pinGeometry) partitionStartLba else null,
-                ventoySettingsSourceSectorCount =
-                    if (pinGeometry) partitionSectorCount else null,
+                ventoySettingsSourcePartitionId = pinnedPartitionId,
+                ventoySettingsSourceStartLba = pinnedStart,
+                ventoySettingsSourceSectorCount = pinnedCount,
                 pendingVentoyControls =
                     if (state.ventoySettingsSource.sameTarget(source)) {
                         // Re-selecting the same target (URI, or the same stick path) must not
@@ -378,19 +389,12 @@ internal object VentoyTransitions {
             ReduceResult(
                 state.copy(
                     ventoyGlobalSettings = intent.settings,
+                    ventoySettingsSource = intent.source,
                     ventoySettingsSourceLoading = false,
-                    // Only fires while Ventoy tab open (or manual refresh); surface
-                    // a real read/parse failure without turning it into "empty".
                     statusMessage =
                         when (val loaded = intent.settings) {
                             is VentoyGlobalSettings.ReadError ->
-                                if (loaded.damagedLayout) {
-                                    // The card has a localized explanation; do not leak
-                                    // an English technical string into the status bar.
-                                    state.statusMessage
-                                } else {
-                                    UiMessage.Raw(loaded.message)
-                                }
+                                if (loaded.damagedLayout) state.statusMessage else UiMessage.Raw(loaded.message)
                             else -> state.statusMessage
                         },
                 ),
@@ -438,42 +442,49 @@ internal object VentoyTransitions {
         when {
             !state.actionsEnabled ->
                 ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
-            state.pendingVentoyControls.isEmpty() ->
-                ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Raw("No Ventoy setting changes to apply"),
-                    ),
-                )
             !state.settingsSourceGeometryMatches() ->
-                ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                    ),
-                )
+                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale)))
             !state.ventoySettingsSource.isDefaultPath() &&
+                state.ventoySettingsSource !is VentoySettingsSource.Document &&
                 state.ventoyGlobalSettings !is VentoyGlobalSettings.Present &&
                 state.ventoyGlobalSettings !is VentoyGlobalSettings.Empty ->
-                // A chosen file must be read and valid now. Missing, a directory, or a
-                // parse error is never turned into a create/overwrite attempt.
+                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceUnavailable)))
+            (state.ventoySettingsSource is VentoySettingsSource.Document ||
+                state.ventoySettingsSource is VentoySettingsSource.UsbFile) &&
+                (state.ventoyGlobalSettings is VentoyGlobalSettings.Present ||
+                    state.ventoyGlobalSettings is VentoyGlobalSettings.Empty) ->
+                // A validated phone or USB JSON is an import source. Apply copies its whole
+                // document to the stick's standard config; pending rows remain optional edits.
                 ReduceResult(
-                    state.copy(
-                        statusMessage =
-                            UiMessage.Key(UiMessageKey.SettingsSourceUnavailable),
+                    state,
+                    effects = listOf(
+                        UiEffect.ApplyVentoyControls(
+                            settings = state.pendingVentoyControls,
+                            source = state.ventoySettingsSource,
+                            identity = state.ventoySettingsSourceIdentity,
+                            attachGeneration = state.ventoySettingsSourceAttachGeneration,
+                            partitionId = state.ventoySettingsSourcePartitionId ?: state.ventoyDataPartition()?.id,
+                            partitionStartLba = state.ventoySettingsSourceStartLba ?: state.ventoyDataPartition()?.startLba,
+                            partitionSectorCount = state.ventoySettingsSourceSectorCount ?: state.ventoyDataPartition()?.sectorCount,
+                        )
                     ),
                 )
+            state.pendingVentoyControls.isEmpty() ->
+                ReduceResult(state.copy(statusMessage = UiMessage.Raw("No Ventoy setting changes to apply")))
             else ->
                 ReduceResult(
                     state,
-                    effects =
-                        listOf(
-                            UiEffect.ApplyVentoyControls(
-                                settings = state.pendingVentoyControls,
-                                source = state.ventoySettingsSource,
-                                identity = state.ventoySettingsSourceIdentity,
-                                attachGeneration =
-                                    state.ventoySettingsSourceAttachGeneration,
-                            ),
-                        ),
+                    effects = listOf(
+                        UiEffect.ApplyVentoyControls(
+                            settings = state.pendingVentoyControls,
+                            source = state.ventoySettingsSource,
+                            identity = state.ventoySettingsSourceIdentity,
+                            attachGeneration = state.ventoySettingsSourceAttachGeneration,
+                            partitionId = state.ventoySettingsSourcePartitionId ?: state.ventoyDataPartition()?.id,
+                            partitionStartLba = state.ventoySettingsSourceStartLba ?: state.ventoyDataPartition()?.startLba,
+                            partitionSectorCount = state.ventoySettingsSourceSectorCount ?: state.ventoyDataPartition()?.sectorCount,
+                        )
+                    ),
                 )
         }
 }

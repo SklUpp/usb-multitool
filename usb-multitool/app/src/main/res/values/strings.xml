@@ -694,7 +694,7 @@
     <string name="settings_valid">Valid</string>
     <string name="settings_file_label">File</string>
     <string name="settings_not_loaded">Global settings have not been read yet.</string>
-    <string name="settings_applies_note">Edits are staged. Update writes them into the selected file in place; a confirmed Ventoy install or update writes the standard file. Unknown JSON sections are preserved.</string>
+    <string name="settings_applies_note">Edits are staged. Apply writes the imported document to /ventoy/ventoy.json on the stick with a non-overwriting backup; the phone original is never written. Unknown JSON sections are preserved.</string>
     <string name="settings_win11_hint">1 bypasses the Windows 11 hardware checks (TPM, RAM, Secure Boot, CPU); 0 requires them; remove leaves Ventoy\'s default.</string>
     <string name="settings_win11_nro_hint">1 skips the Windows 11 online-account requirement and allows a local account; 0 requires a Microsoft account; remove leaves Ventoy\'s default.</string>
     <string name="settings_help_title">Global Ventoy settings</string>
@@ -710,7 +710,7 @@
     <string name="settings_value_label">Value</string>
     <string name="settings_add">Add to staged changes</string>
     <string name="settings_staged">Staged settings</string>
-    <string name="settings_staged_hint">Update writes them into the selected file in place. Unknown JSON sections are preserved.</string>
+    <string name="settings_staged_hint">Apply writes staged controls into /ventoy/ventoy.json on the stick; imported phone/USB documents are never overwritten. Unknown JSON sections are preserved.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
     <string name="settings_current">Current: %1$s</string>
     <string name="settings_not_set">not set</string>
@@ -819,8 +819,13 @@
     <string name="settings_source_choose_stick">On the stick</string>
     <string name="settings_source_choose_phone">On the phone</string>
     <string name="settings_source_use_default">Use the standard ventoy.json</string>
-    <string name="settings_source_custom_path">Non-standard path. Ventoy reads /ventoy/ventoy.json; this file is changed only when you press Update here.</string>
-    <string name="settings_source_phone_note">The phone document is updated in place; it is never copied to the stick.</string>
+    <string name="settings_source_custom_path">Non-standard source path. Apply imports this file into /ventoy/ventoy.json with a non-overwriting backup.</string>
+    <string name="settings_source_phone_note">Phone JSON is read-only import input; Apply copies it to /ventoy/ventoy.json and never writes the phone original.</string>
+    <string name="settings_open_editor">Open editor</string>
+    <string name="settings_editor_title">Global Ventoy settings</string>
+    <string name="settings_editor_help">Edit known controls and every key/value pair. Clear values with ×, delete non-empty rows with the trash icon, add rows with +. Apply writes the imported document to /ventoy/ventoy.json; Cancel discards draft changes.</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_apply">Apply</string>
     <string name="settings_source_status_reading">Reading…</string>
     <string name="settings_source_status_unread">Not read yet</string>
     <string name="settings_source_status_valid">Valid JSON · %1$d settings</string>

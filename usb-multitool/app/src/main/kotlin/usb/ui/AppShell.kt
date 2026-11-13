@@ -159,7 +159,7 @@ fun AppShell(
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
     /** Opens the phone picker for the pinned Files pick session (directory, session id). */
     onPickWindowsImage: (String, String) -> Unit = { _, _ -> },
-    /** Opens OpenDocument for a phone-side Ventoy settings JSON edited in place. */
+    /** Opens OpenDocument for a read-only phone-side Ventoy settings import. */
     onPickVentoySettingsFile: () -> Unit = {},
     onRequestDownload: (FilesDownloadBinding) -> Unit = {},
     onPickBackup: () -> Unit = {},

@@ -6,6 +6,7 @@ import usb.fs.BlockDeviceFatCallback
 import usb.fs.FatFs
 import usb.fs.UsbFsVolume
 import usb.partition.VirtualPartition
+import java.security.MessageDigest
 
 /**
  * Windows setup bindings on the real Ventoy data partition (partition 1).
@@ -252,6 +253,20 @@ object VentoySetup {
             VentoyGlobalSettings.Present(entries)
         }
     }
+    data class SettingsSnapshot(val settings: VentoyGlobalSettings, val sha256: String)
+
+    /** Read one bounded USB file snapshot; parsed settings and hash share identical bytes. */
+    fun readGlobalSettingsSnapshotAt(disk: BlockDevice, path: String): SettingsSnapshot {
+        val normalized = normalizeVentoyFilePath(path)
+        return withVolume(disk) { volume ->
+            val entry = volume.statOrNull(normalized)
+                ?: throw IllegalStateException("$normalized no longer exists")
+            require(!entry.isDirectory) { "$normalized is a directory, not a file" }
+            require(entry.size <= MAX_SETTINGS_BYTES) { "$normalized exceeds $MAX_SETTINGS_BYTES bytes" }
+            val bytes = if (entry.size == 0L) ByteArray(0) else volume.read(normalized, 0L, entry.size.toInt())
+            SettingsSnapshot(parseGlobalSettings(strictUtf8(bytes)), sha256(bytes))
+        }
+    }
 
     /**
      * Write explicitly chosen control values in one read-merge-write. Unknown JSON sections
@@ -332,6 +347,99 @@ object VentoySetup {
                 true
             }
         // The FAT volume is closed; flush the block device so the reported success is durable.
+        if (changed) disk.sync()
+        return changed
+    }
+    /**
+     * Publish validated phone-imported JSON to standard config. Existing config is copied to
+     * a unique backup first; an existing backup is never overwritten. Phone URI is never opened.
+     */
+    fun applyImportedDocument(
+        disk: BlockDevice,
+        importedJson: String,
+        settings: List<VentoyControlSetting> = emptyList(),
+        onMutation: () -> Unit = {},
+    ): Boolean {
+        require(importedJson.isNotBlank()) {
+            "imported settings document is empty or whitespace-only"
+        }
+        require(importedJson.toByteArray(Charsets.UTF_8).size <= MAX_SETTINGS_BYTES) {
+            "imported settings exceed $MAX_SETTINGS_BYTES bytes"
+        }
+        val parsed = parseGlobalSettings(importedJson)
+        require(parsed !is VentoyGlobalSettings.ReadError) {
+            (parsed as VentoyGlobalSettings.ReadError).message
+        }
+        val finalJson =
+            if (settings.isEmpty()) {
+                importedJson
+            } else {
+                WindowsSetup.applyControls(importedJson, settings) ?: importedJson
+            }
+        val changed = withVolume(disk) { volume ->
+            val target = volume.statOrNull(CONFIG_PATH)
+            if (target?.isDirectory == true) {
+                throw IllegalStateException("$CONFIG_PATH is a directory; refusing to overwrite it")
+            }
+            val previous = target?.let { entry ->
+                require(entry.size <= MAX_SETTINGS_BYTES) {
+                    "$CONFIG_PATH is ${entry.size} bytes; limit is $MAX_SETTINGS_BYTES"
+                }
+                if (entry.size == 0L) ByteArray(0) else volume.read(CONFIG_PATH, 0L, entry.size.toInt())
+            }
+            if (previous != null && previous.contentEquals(finalJson.toByteArray(Charsets.UTF_8))) {
+                false
+            } else {
+                onMutation()
+                ensureDirectory(volume, VENTOY_DIR)
+                previous?.let { backupBeforeReplace(volume, CONFIG_PATH, it) }
+                replaceFile(volume, CONFIG_PATH, finalJson.toByteArray(Charsets.UTF_8))
+                true
+            }
+        }
+        if (changed) disk.sync()
+        return changed
+    }
+    fun applyImportedFile(
+        disk: BlockDevice,
+        sourcePath: String,
+        expectedSha256: String? = null,
+        settings: List<VentoyControlSetting> = emptyList(),
+        onMutation: () -> Unit = {},
+    ): Boolean {
+        val changed = withVolume(disk) { volume ->
+            val source = normalizeVentoyFilePath(sourcePath)
+            val sourceEntry = volume.statOrNull(source)
+                ?: throw IllegalStateException("$source no longer exists; choose it again")
+            require(!sourceEntry.isDirectory) { "$source is a directory, not a file" }
+            require(sourceEntry.size <= MAX_SETTINGS_BYTES) { "$source exceeds $MAX_SETTINGS_BYTES bytes" }
+            val bytes = if (sourceEntry.size == 0L) ByteArray(0) else volume.read(source, 0L, sourceEntry.size.toInt())
+            val imported = strictUtf8(bytes)
+            require(imported.isNotBlank()) { "$source is empty or whitespace-only" }
+            require(expectedSha256 == null || expectedSha256 == sha256(bytes)) {
+                "$source changed after validation; choose it again"
+            }
+            val parsed = parseGlobalSettings(imported)
+            require(parsed !is VentoyGlobalSettings.ReadError) {
+                (parsed as VentoyGlobalSettings.ReadError).message
+            }
+            val finalJson = if (settings.isEmpty()) imported else {
+                WindowsSetup.applyControls(imported, settings) ?: imported
+            }
+            val target = volume.statOrNull(CONFIG_PATH)
+            require(target?.isDirectory != true) { "$CONFIG_PATH is a directory" }
+            val previous = target?.let {
+                require(it.size <= MAX_SETTINGS_BYTES) { "$CONFIG_PATH exceeds $MAX_SETTINGS_BYTES bytes" }
+                if (it.size == 0L) ByteArray(0) else volume.read(CONFIG_PATH, 0L, it.size.toInt())
+            }
+            val outputBytes = finalJson.toByteArray(Charsets.UTF_8)
+            if (previous != null && previous.contentEquals(outputBytes)) return@withVolume false
+            onMutation()
+            ensureDirectory(volume, VENTOY_DIR)
+            previous?.let { backupBeforeReplace(volume, CONFIG_PATH, it) }
+            replaceFile(volume, CONFIG_PATH, bytes)
+            true
+        }
         if (changed) disk.sync()
         return changed
     }
@@ -950,6 +1058,17 @@ object VentoySetup {
 
     private fun readText(volume: UsbFsVolume, path: String): String? {
         val bytes = readTextBytes(volume, path) ?: return null
-        return String(bytes, Charsets.UTF_8)
+        return strictUtf8(bytes)
     }
+    private fun strictUtf8(bytes: ByteArray): String =
+        try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+        } catch (failure: java.nio.charset.CharacterCodingException) {
+            throw IllegalArgumentException("settings document is not valid UTF-8", failure)
+        }
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }

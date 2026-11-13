@@ -25,6 +25,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.window.Dialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -493,8 +499,17 @@ private fun GlobalSettingsCard(
     onPickVentoySettingsFile: () -> Unit,
 ) {
     var sourceMenuOpen by remember { mutableStateOf(false) }
-    // The shared Files picker is the only USB navigation. Its result is pinned to the
-    // attachment and partition; adopt it once, then clear the hand-off entry so a later
+    var editorOpen by remember { mutableStateOf(false) }
+    var editorBaseline by remember { mutableStateOf<List<VentoyControlSetting>?>(null) }
+    LaunchedEffect(state.operation?.state, state.operation?.title) {
+        if (editorOpen &&
+            state.operation?.title == OperationTitle.SetVentoyGlobalSetting &&
+            state.operation?.state == OperationState.Completed
+        ) {
+            editorOpen = false
+            editorBaseline = null
+        }
+    }
     // unrelated selection cannot re-apply here.
     LaunchedEffect(state.filesPickSelections) {
         val picked = state.filesPickSelections[FilesPickPurpose.VentoyConfig] ?: return@LaunchedEffect
@@ -662,41 +677,26 @@ private fun GlobalSettingsCard(
             }
             is VentoyGlobalSettings.Present -> Unit
         }
-
-        Text(
-            text = stringResource(R.string.settings_known_header),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        VentoyControlCatalog.known.forEach { known ->
-            KnownControlRow(
-                known = known,
-                entries = entries,
-                pending = state.pendingVentoyControls,
-                actionsEnabled = state.actionsEnabled,
+        OutlinedButton(
+            onClick = {
+                editorBaseline = state.pendingVentoyControls
+                editorOpen = true
+            },
+            enabled = state.actionsEnabled && settings != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(stringResource(R.string.settings_open_editor)) }
+        if (editorOpen) {
+            GlobalSettingsEditorDialog(
+                state = state,
                 onIntent = onIntent,
+                onCancel = {
+                    editorBaseline?.let { onIntent(UiIntent.RestoreVentoyControls(it)) }
+                    editorOpen = false
+                    editorBaseline = null
+                },
             )
         }
 
-        val extra = entries.filter { VentoyControlCatalog.known(it.key) == null }
-        if (extra.isNotEmpty()) {
-            Text(
-                text = stringResource(R.string.settings_extra_header),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            extra.forEach { entry ->
-                ExtraControlRow(
-                    entry = entry,
-                    pending = state.pendingVentoyControls.firstOrNull { it.key == entry.key },
-                    actionsEnabled = state.actionsEnabled,
-                    onIntent = onIntent,
-                )
-            }
-        }
-
-        AddControlRow(actionsEnabled = state.actionsEnabled, onIntent = onIntent)
-        StagedControls(state = state, onIntent = onIntent)
         Text(
             text = stringResource(R.string.settings_applies_note),
             style = MaterialTheme.typography.labelSmall,
@@ -729,6 +729,174 @@ private fun GlobalSettingsCard(
             },
             onDismiss = { sourceMenuOpen = false },
         )
+    }
+}
+
+private data class EditorPairDraft(
+    val id: String,
+    val originalKey: String?,
+    val key: String,
+    val originalValue: String,
+    val value: String,
+)
+
+@Composable
+private fun GlobalSettingsEditorDialog(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val entries = (state.ventoyGlobalSettings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
+    var applyProblem by remember { mutableStateOf<String?>(null) }
+    // Pending changes seed a new dialog session, but must not reset local rows while editing.
+    val drafts = remember(entries) {
+        mutableStateListOf<EditorPairDraft>().apply {
+            entries.forEachIndexed { index, entry ->
+                if (VentoyControlCatalog.known(entry.key) == null ||
+                    entries.indexOfFirst { it.key == entry.key } != index
+                ) add(EditorPairDraft("entry:$index", entry.key, entry.key, entry.rawValue, entry.rawValue))
+            }
+            state.pendingVentoyControls.forEach { pending ->
+                if (VentoyControlCatalog.known(pending.key) != null) return@forEach
+                val existing = firstOrNull { it.key == pending.key && it.originalKey != null }
+                if (pending.value == null) {
+                    removeAll { it.originalKey == pending.key }
+                } else if (existing != null) {
+                    val index = indexOf(existing)
+                    this[index] = existing.copy(value = pending.value)
+                } else {
+                    add(EditorPairDraft("pending:${pending.key}", null, pending.key, "", pending.value))
+                }
+            }
+        }
+    }
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.settings_editor_title), style = MaterialTheme.typography.headlineSmall)
+                applyProblem?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(stringResource(R.string.settings_editor_help), style = MaterialTheme.typography.bodySmall)
+                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VentoyControlCatalog.known.forEach { known ->
+                        KnownControlRow(known, entries, state.pendingVentoyControls, state.actionsEnabled, onIntent)
+                    }
+                    drafts.forEachIndexed { index, draft ->
+                        EditablePairRow(
+                            draft = draft,
+                            actionsEnabled = state.actionsEnabled,
+                            onChange = { changed -> drafts[index] = changed },
+                            onDelete = { drafts.removeAt(index) },
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            drafts.add(EditorPairDraft("new:${drafts.size}", null, "", "", ""))
+                        },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.settings_add)) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.settings_cancel)) }
+                    Button(
+                        onClick = {
+                            val rawOriginalCounts = entries.groupingBy { it.key }.eachCount()
+                            val duplicateOriginalCounts = rawOriginalCounts.filterValues { it > 1 }
+                            val draftOriginalCounts = drafts.mapNotNull { it.originalKey }.groupingBy { it }.eachCount()
+                            val rawOriginalKeys = rawOriginalCounts.keys.filter { key ->
+                                VentoyControlCatalog.known(key) == null || rawOriginalCounts[key]!! > 1
+                            }.toSet()
+                            val blankNewKey = drafts.any { it.originalKey == null && it.key.isBlank() && it.value.isNotEmpty() }
+                            val blankExistingKey = drafts.any { it.originalKey != null && it.key.isBlank() }
+                            val rawSettings = drafts
+                                .filter { it.originalKey == null || it.key != it.originalKey || it.value != it.originalValue }
+                                .filter { it.key.isNotBlank() }
+                                .map { VentoyControlSetting(it.key, it.value) }
+                            val renamedOrDeleted = (rawOriginalKeys - drafts.mapNotNull { it.originalKey }.toSet()) +
+                                drafts.mapNotNull { draft -> draft.originalKey?.takeIf { draft.key.isNotBlank() && it != draft.key } }
+                            val knownSettings = VentoyControlCatalog.known.mapNotNull { known ->
+                                state.pendingVentoyControls.firstOrNull { it.key == known.key && it.value != null }
+                            }
+                            val knownRemoved = state.pendingVentoyControls
+                                .filter { it.value == null && VentoyControlCatalog.known(it.key) != null }
+                                .map { it.key }
+                                .toSet()
+                            val settings = rawSettings + knownSettings
+                            val duplicateKeys = duplicateOriginalCounts.keys.filter { key ->
+                                val expectedDraftCount = duplicateOriginalCounts[key]!! -
+                                    (if (VentoyControlCatalog.known(key) != null) 1 else 0)
+                                expectedDraftCount != (draftOriginalCounts[key] ?: 0) ||
+                                    renamedOrDeleted.contains(key) ||
+                                    knownRemoved.contains(key) ||
+                                    settings.any { it.key == key }
+                            }.toSet()
+                            val merged = (renamedOrDeleted + knownRemoved).map { VentoyControlSetting(it, null) } + settings
+                            val validation = when {
+                                blankExistingKey || blankNewKey -> "Key cannot be empty"
+                                duplicateKeys.isNotEmpty() -> "Cannot edit duplicate Ventoy keys safely: ${duplicateKeys.joinToString()}"
+                                else -> VentoyControlCatalog.problem(merged)
+                            }
+                            if (validation != null) {
+                                applyProblem = validation
+                            } else if (state.ventoySettingsSource.isDefaultPath() &&
+                                settings.isEmpty() && renamedOrDeleted.isEmpty() && knownRemoved.isEmpty()
+                            ) {
+                                applyProblem = "No Ventoy setting changes to apply"
+                            } else {
+                                applyProblem = null
+                                onIntent(UiIntent.CommitAndApplyVentoyControls(
+                                    removedKeys = renamedOrDeleted + knownRemoved,
+                                    settings = settings,
+                                    duplicateKeys = duplicateKeys,
+                                ))
+                            }
+                        },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.settings_apply)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditablePairRow(
+    draft: EditorPairDraft,
+    actionsEnabled: Boolean,
+    onChange: (EditorPairDraft) -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = draft.key,
+            onValueChange = { onChange(draft.copy(key = it)) },
+            label = { Text(stringResource(R.string.settings_key_label)) },
+            singleLine = true,
+            enabled = actionsEnabled,
+            modifier = Modifier.weight(1f),
+            trailingIcon = {
+                if (draft.key.isNotEmpty()) IconButton(onClick = { onChange(draft.copy(key = "")) }) {
+                    GlyphIcon(Glyph.Close, size = 18.dp)
+                }
+            },
+        )
+        OutlinedTextField(
+            value = draft.value,
+            onValueChange = { onChange(draft.copy(value = it)) },
+            label = { Text(stringResource(R.string.settings_value_label)) },
+            singleLine = true,
+            enabled = actionsEnabled,
+            modifier = Modifier.weight(1f),
+            trailingIcon = {
+                if (draft.value.isNotEmpty()) IconButton(onClick = { onChange(draft.copy(value = "")) }) {
+                    GlyphIcon(Glyph.Close, size = 18.dp)
+                }
+            },
+        )
+        IconButton(onClick = onDelete, enabled = actionsEnabled) { GlyphIcon(Glyph.Trash, size = 18.dp) }
     }
 }
 

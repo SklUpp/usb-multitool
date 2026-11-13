@@ -695,7 +695,7 @@
     <string name="settings_valid">Допустимо</string>
     <string name="settings_file_label">Файл</string>
     <string name="settings_not_loaded">Глобальные настройки ещё не прочитаны.</string>
-    <string name="settings_applies_note">Изменения подготовлены. «Обновить» записывает их в выбранный файл на месте; подтверждённая установка или обновление Ventoy записывает стандартный файл. Неизвестные разделы JSON сохраняются.</string>
+    <string name="settings_applies_note">Изменения подготавливаются. Применить записывает импортированный документ в /ventoy/ventoy.json на флешке с backup без перезаписи старого backup; оригинал телефона не изменяется. Другие разделы JSON сохраняются.</string>
     <string name="settings_win11_hint">1 обходит аппаратные проверки Windows 11 (TPM, RAM, Secure Boot, CPU); 0 требует их; удаление оставляет значение Ventoy по умолчанию.</string>
     <string name="settings_win11_nro_hint">1 пропускает требование онлайн-аккаунта Windows 11 и разрешает локальную учётную запись; 0 требует учётную запись Microsoft; удаление оставляет значение Ventoy по умолчанию.</string>
     <string name="settings_help_title">Глобальные настройки Ventoy</string>
@@ -711,7 +711,7 @@
     <string name="settings_value_label">Значение</string>
     <string name="settings_add">Добавить в очередь</string>
     <string name="settings_staged">Подготовленные настройки</string>
-    <string name="settings_staged_hint">«Обновить» записывает их в выбранный файл на месте. Неизвестные разделы JSON сохраняются.</string>
+    <string name="settings_staged_hint">Применить записывает подготовленные настройки в /ventoy/ventoy.json на флешке; импортированные документы телефона и USB не перезаписываются. Другие разделы JSON сохраняются.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
     <string name="settings_current">Сейчас: %1$s</string>
     <string name="settings_not_set">не задано</string>
@@ -820,8 +820,13 @@
     <string name="settings_source_choose_stick">На флешке</string>
     <string name="settings_source_choose_phone">На телефоне</string>
     <string name="settings_source_use_default">Вернуть стандартный ventoy.json</string>
-    <string name="settings_source_custom_path">Нестандартный путь. Ventoy читает /ventoy/ventoy.json; этот файл изменяется только по кнопке «Обновить» здесь.</string>
-    <string name="settings_source_phone_note">Документ на телефоне изменяется на месте и никогда не копируется на флешку.</string>
+    <string name="settings_source_custom_path">Нестандартный источник. Применить импортирует файл в /ventoy/ventoy.json с backup без перезаписи старого backup.</string>
+    <string name="settings_source_phone_note">JSON телефона — только источник импорта; Применить копирует его в /ventoy/ventoy.json и не изменяет оригинал телефона.</string>
+    <string name="settings_open_editor">Открыть редактор</string>
+    <string name="settings_editor_title">Глобальные настройки Ventoy</string>
+    <string name="settings_editor_help">Редактируйте известные ключи и все пары key/value. Очищайте значения крестиком, удаляйте непустые строки корзиной, добавляйте строки плюсом. Применить записывает импортированный документ в /ventoy/ventoy.json; Отмена отменяет черновик.</string>
+    <string name="settings_cancel">Отмена</string>
+    <string name="settings_apply">Применить</string>
     <string name="settings_source_status_reading">Чтение…</string>
     <string name="settings_source_status_unread">Ещё не прочитано</string>
     <string name="settings_source_status_valid">JSON допустим · настроек: %1$d</string>

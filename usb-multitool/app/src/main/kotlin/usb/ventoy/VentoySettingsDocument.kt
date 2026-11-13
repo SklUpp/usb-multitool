@@ -23,12 +23,12 @@ object VentoySettingsDocument {
 
     data class MergeOutcome(val text: String, val changed: Boolean)
 
-    /** Read at most [maxBytes]; a provider-reported size must match exactly when positive. */
-    fun read(
+    /** Read bounded bytes without decoding; caller hashes exact source bytes. */
+    fun readBytes(
         input: InputStream,
         expectedBytes: Long? = null,
         maxBytes: Long = MAX_BYTES,
-    ): String {
+    ): ByteArray {
         require(maxBytes > 0) { "maxBytes must be positive" }
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8192)
@@ -38,18 +38,27 @@ object VentoySettingsDocument {
             if (read < 0) break
             total += read
             if (total > maxBytes) {
-                throw VentoySettingsDocumentException(
-                    "document exceeds $maxBytes bytes; refusing to load it",
-                )
+                throw VentoySettingsDocumentException("document exceeds $maxBytes bytes; refusing to load it")
             }
             output.write(buffer, 0, read)
         }
         if (expectedBytes != null && expectedBytes > 0 && total != expectedBytes) {
-            throw VentoySettingsDocumentException(
-                "document size is $total bytes; provider reported $expectedBytes",
-            )
+            throw VentoySettingsDocumentException("document size is $total bytes; provider reported $expectedBytes")
         }
-        return output.toString(Charsets.UTF_8.name())
+        return output.toByteArray()
+    }
+
+    /** Read strict UTF-8; malformed source bytes are rejected before JSON validation/mutation. */
+    fun read(input: InputStream, expectedBytes: Long? = null, maxBytes: Long = MAX_BYTES): String {
+        val bytes = readBytes(input, expectedBytes, maxBytes)
+        return try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+        } catch (failure: java.nio.charset.CharacterCodingException) {
+            throw VentoySettingsDocumentException("document is not valid UTF-8", failure)
+        }
     }
 
     /**

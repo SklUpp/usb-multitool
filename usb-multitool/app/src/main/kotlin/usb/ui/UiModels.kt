@@ -1250,13 +1250,12 @@ data class AppUiState(
     /** Real `control` read result; null = not loaded. Missing/Empty/ReadError stay distinct. */
     val ventoyGlobalSettings: VentoyGlobalSettings? = null,
     /**
-     * Explicit control writes chosen by the user. They are written after a confirmed
-     * install/update, or by [UiIntent.RequestApplyVentoyControls] against an existing stick.
-     * A null value removes the key. Empty = nothing chosen; update leaves the file untouched.
+     * Explicit control writes chosen by the user. Default applies merge in place; selected USB
+     * or phone sources are imported into `/ventoy/ventoy.json` after identity/source checks.
+     * A null value removes one key. Empty means no row override for a whole-document import.
      */
     val pendingVentoyControls: List<VentoyControlSetting> = emptyList(),
-    /**
-     * Folder the lazy browser currently shows. Always normalized and absolute; `/` is the
+    /** Folder the lazy browser currently shows. Always normalized and absolute; `/` is the
      * data-partition root. Reset to the root when the attachment or the stick changes.
      */
     val ventoyFolderPath: String = "/",

@@ -141,12 +141,14 @@ import usb.image.RawWriter
 import usb.ventoy.VentoyAssets
 import usb.ventoy.VentoyDownloader
 import usb.ventoy.VentoyOperations
+import usb.ventoy.VentoyLayout
 import usb.ventoy.VentoySetup
 import java.io.File
 import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.security.MessageDigest
 import usb.ui.DestructiveAction
 
 private const val WINDOWS_IMPORT_PREFS = "usb.multitool.windows_import"
@@ -4413,14 +4415,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
                 try {
-                    val settings =
-                        when (source) {
-                            VentoySettingsSource.Default ->
-                                usb.ventoy.VentoySetup.readGlobalSettings(disk)
-                            is VentoySettingsSource.UsbFile ->
-                                usb.ventoy.VentoySetup.readGlobalSettingsAt(disk, source.path)
-                            is VentoySettingsSource.Document -> error("handled before disk open")
-                        }
+                    val snapshot =
+                        if (source is VentoySettingsSource.UsbFile) {
+                            VentoySetup.readGlobalSettingsSnapshotAt(disk, source.path)
+                        } else null
+                    val settings = snapshot?.settings ?: VentoySetup.readGlobalSettings(disk)
+                    val pinnedSource =
+                        if (source is VentoySettingsSource.UsbFile) source.copy(snapshotSha256 = snapshot!!.sha256)
+                        else source
                     if (attachmentMatches(expectedAttach, expectedKey) &&
                         this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
                         isActive()
@@ -4430,7 +4432,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 settings,
                                 epoch = expectedEpoch,
                                 requestToken = requestToken,
-                                source = source,
+                                source = pinnedSource,
                             ),
                         )
                     }
@@ -4474,10 +4476,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Phone document: read and parse the exact URI chosen with OpenDocument. The document is
-     * never copied; a provider-reported size mismatch and an oversized document fail closed.
-     */
+    /** Phone document is read-only import source; validated bytes are pinned by hash. */
     private fun loadVentoySettingsDocument(
         requestToken: Long,
         source: VentoySettingsSource.Document,
@@ -4487,7 +4486,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
             override suspend fun run() {
-                val settings = readSettingsDocument(source)
+                val bytes = readSettingsDocumentBytes(source)
+                val text = strictUtf8(bytes)
+                val settings =
+                    try {
+                        VentoySetup.parseGlobalSettings(text)
+                    } catch (failure: Exception) {
+                        VentoyGlobalSettings.ReadError(
+                            failure.message ?: failure.javaClass.simpleName,
+                        )
+                    }
+                val pinned = source.copy(snapshotSha256 = sha256(bytes))
                 if (attachGeneration == expectedAttach &&
                     deviceKey(attachedDevice) == expectedKey &&
                     this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
@@ -4498,7 +4507,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             settings,
                             epoch = expectedEpoch,
                             requestToken = requestToken,
-                            source = source,
+                            source = pinned,
                         ),
                     )
                 }
@@ -4515,10 +4524,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     this@MainViewModel.state.ventoySettingsSource.sameTarget(source) &&
                     outcome.cause !is kotlinx.coroutines.CancellationException
                 ) {
-                    val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
                         UiIntent.VentoyGlobalSettingsLoaded(
-                            VentoyGlobalSettings.ReadError(message),
+                            VentoyGlobalSettings.ReadError(
+                                outcome.cause.message ?: outcome.cause.javaClass.simpleName,
+                            ),
                             epoch = expectedEpoch,
                             requestToken = requestToken,
                             source = source,
@@ -4634,6 +4644,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
     }
+    private fun readSettingsDocumentBytes(source: VentoySettingsSource.Document): ByteArray {
+        val resolver = getApplication<Application>().contentResolver
+        val uri = Uri.parse(source.uri)
+        val expectedBytes = resolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
+            } else null
+        }
+        if (expectedBytes != null && expectedBytes > VentoySettingsDocument.MAX_BYTES) {
+            throw VentoySettingsDocumentException("selected settings document exceeds ${VentoySettingsDocument.MAX_BYTES} bytes")
+        }
+        return resolver.openInputStream(uri)?.use {
+            VentoySettingsDocument.readBytes(it, expectedBytes)
+        } ?: throw VentoySettingsDocumentException("selected settings document could not be opened")
+    }
 
     private fun loadVentoyFolders(requestToken: Long, path: String) {
         val expected = attachment.snapshot()
@@ -4719,8 +4751,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
+                require(effect.attachGeneration == null || effect.attachGeneration == expectedAttach) {
+                    "USB attach generation changed"
+                }
                 require(effect.identity == null || expectedIdentity == effect.identity) {
                     "settings source belongs to another attachment"
+                }
+                require(effect.partitionId == null || effect.partitionId == "1") {
+                    "Ventoy data partition changed"
                 }
                 require(this@MainViewModel.state.ventoySettingsSource.sameTarget(source)) {
                     "settings source changed"
@@ -4732,22 +4770,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
                 try {
+                    val probe = VentoyLayout.probe(disk)
+                        ?: throw IllegalStateException("Ventoy data partition is unavailable")
+                    require(effect.partitionStartLba == null || effect.partitionStartLba == probe.part1StartLba) {
+                        "Ventoy data partition start changed"
+                    }
+                    require(effect.partitionSectorCount == null || effect.partitionSectorCount == probe.part1SectorCount) {
+                        "Ventoy data partition size changed"
+                    }
                     val changed =
                         when (source) {
                             VentoySettingsSource.Default ->
-                                usb.ventoy.VentoySetup.applyGlobalControls(
+                                VentoySetup.applyGlobalControls(
                                     disk = disk,
                                     settings = effect.settings,
                                     onMutation = { mutationAttempted = true },
                                 )
                             is VentoySettingsSource.UsbFile ->
-                                usb.ventoy.VentoySetup.applyGlobalControlsAt(
+                                VentoySetup.applyImportedFile(
                                     disk = disk,
-                                    path = source.path,
+                                    sourcePath = source.path,
+                                    expectedSha256 = source.snapshotSha256,
                                     settings = effect.settings,
                                     onMutation = { mutationAttempted = true },
                                 )
-                            is VentoySettingsSource.Document -> error("handled by the SAF path")
+                            is VentoySettingsSource.Document -> error("handled by import path")
                         }
                     if (mutationAttempted) commitReached = true
                     result =
@@ -4798,18 +4845,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Update the exact SAF document in place. The existing bytes are read and merged before
-     * the provider stream is opened for writing; there is deliberately no temporary file and
-     * no rollback promise. Once `"wt"` is opened the provider may truncate, so any failure
-     * after that point is reported as Partial, not as an untouched file.
-     */
+    /** Import validated phone JSON into the stick default config; never writes phone URI. */
     private fun applyVentoyControlsDocument(
         effect: UiEffect.ApplyVentoyControls,
         source: VentoySettingsSource.Document,
     ) {
-        val expectedAttach = attachGeneration
-        val expectedKey = deviceKey(attachedDevice)
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
         val expectedIdentity = state.ventoySettingsSourceIdentity
         if (!state.ventoySettingsSource.sameTarget(source)) {
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
@@ -4820,60 +4863,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             @Volatile var result: String? = null
 
             override suspend fun run() {
-                require(attachGeneration == expectedAttach) { "USB attach generation changed" }
-                require(deviceKey(attachedDevice) == expectedKey) { "USB device changed" }
+                require(effect.attachGeneration == null || effect.attachGeneration == expectedAttach) {
+                    "USB attach generation changed"
+                }
                 require(effect.identity == null || expectedIdentity == effect.identity) {
                     "settings source belongs to another attachment"
                 }
-                require(this@MainViewModel.state.ventoySettingsSource.sameTarget(source)) { "settings source changed" }
-                val existing = readSettingsDocumentText(source)
-                val merge = VentoySettingsDocument.merge(existing, effect.settings)
-                if (!merge.changed) {
-                    result = "No Ventoy setting changed"
-                    return
+                require(effect.partitionId == null || effect.partitionId == "1") {
+                    "Ventoy data partition changed"
                 }
-                // A canceled request must not open a truncating stream.
-                if (!isActive()) return
-                val resolver = getApplication<Application>().contentResolver
-                val uri = Uri.parse(source.uri)
-                mutationAttempted = true
-                val outcome =
-                    VentoySettingsDocument.writeTruncating(
-                        open = {
-                            resolver.openOutputStream(uri, "wt")
-                                ?: throw usb.ventoy.VentoySettingsDocumentException(
-                                    "provider did not open the selected settings document " +
-                                        "for writing; its current content is unknown",
-                                )
-                        },
-                        text = merge.text,
+                val importedBytes = readSettingsDocumentBytes(source)
+                val imported = strictUtf8(importedBytes)
+                val actualHash = sha256(importedBytes)
+                require(source.snapshotSha256 == null || source.snapshotSha256 == actualHash) {
+                    "phone settings changed after validation; choose the file again"
+                }
+                require(attachmentMatches(expectedAttach, expectedKey)) {
+                    "USB device changed"
+                }
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
+                try {
+                    val probe = VentoyLayout.probe(disk)
+                        ?: throw IllegalStateException("Ventoy data partition is unavailable")
+                    require(effect.partitionStartLba == null || effect.partitionStartLba == probe.part1StartLba) {
+                        "Ventoy data partition start changed"
+                    }
+                    require(effect.partitionSectorCount == null || effect.partitionSectorCount == probe.part1SectorCount) {
+                        "Ventoy data partition size changed"
+                    }
+                    val changed = VentoySetup.applyImportedDocument(
+                        disk = disk,
+                        importedJson = imported,
+                        settings = effect.settings,
+                        onMutation = { mutationAttempted = true },
                     )
-                val failure = outcome.failure
-                if (failure != null) {
-                    state = usb.operation.OperationState.Partial
-                    val cause =
-                        usb.ventoy.VentoySettingsDocumentException(
-                            "selected settings document may have been truncated; it was not " +
-                                "updated and no rollback is possible: " +
-                                (failure.message ?: failure.javaClass.simpleName),
-                            failure,
-                        )
-                    failureCause = cause
-                    throw cause
+                    if (mutationAttempted) commitReached = true
+                    result = if (changed) {
+                        "Imported Ventoy global settings to ${VentoySetup.CONFIG_PATH}"
+                    } else {
+                        "No Ventoy setting changed"
+                    }
+                } finally {
+                    disk.close()
                 }
-                commitReached = true
-                result =
-                    "Applied ${effect.settings.size} Ventoy global setting" +
-                        if (effect.settings.size == 1) "" else "s"
             }
         }
         onIntent(
             UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Running,
-                    title = title,
-                    cancelable = false,
-                ),
+                OperationProgress(state = OperationState.Running, title = title, cancelable = false),
             ),
         )
         val handle = DiskController.get().submit(op)
@@ -5478,6 +5520,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun strictUtf8(bytes: ByteArray): String =
+        try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+        } catch (failure: java.nio.charset.CharacterCodingException) {
+            throw VentoySettingsDocumentException("selected settings document is not valid UTF-8", failure)
+        }
+
 private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
         val resolver = getApplication<Application>().contentResolver
         val input = resolver.openInputStream(Uri.parse(uri))
@@ -5510,6 +5562,8 @@ private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
     private fun post(intent: UiIntent) {
         scope.launch { onIntent(intent) }
     }
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     private fun UsbFsDirEntry.toFileEntry(): FileEntry =
         FileEntry(
@@ -5557,8 +5611,7 @@ class MainActivity : ComponentActivity() {
     private var ventoySettingsPickerGeneration: Long? = null
 
     /**
-     * SAF document chosen as the live Ventoy settings source. It is read and updated through
-     * this URI in place; nothing is imported onto the stick.
+     * SAF document chosen as read-only Ventoy settings import input; Apply writes USB target.
      */
     private val ventoySettingsPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),

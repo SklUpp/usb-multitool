@@ -374,7 +374,7 @@ sealed class UiIntent {
         val partitionStartLba: ULong? = null,
         val partitionSectorCount: ULong? = null,
     ) : UiIntent()
-    /** Phone document chosen with OpenDocument; it is edited through this URI in place. */
+    /** Phone document chosen with OpenDocument as read-only import input. */
     data class SelectVentoySettingsDocument(
         val uri: String,
         val displayName: String? = null,
@@ -419,9 +419,20 @@ sealed class UiIntent {
     data class StageVentoyControl(val key: String, val value: String?) : UiIntent()
     /** Forget one staged change without touching the stick. */
     data class DiscardStagedVentoyControl(val key: String) : UiIntent()
-    /** Write the staged controls to an existing Ventoy stick, or retry after a Partial. */
+    /** Restore editor draft on Cancel without touching the selected source. */
+    data class RestoreVentoyControls(val settings: List<VentoyControlSetting>) : UiIntent()
+    data class CommitVentoyControls(
+        val removedKeys: Set<String>,
+        val settings: List<VentoyControlSetting>,
+        val duplicateKeys: Set<String> = emptySet(),
+    ) : UiIntent()
+    data class CommitAndApplyVentoyControls(
+        val removedKeys: Set<String>,
+        val settings: List<VentoyControlSetting>,
+        val duplicateKeys: Set<String> = emptySet(),
+    ) : UiIntent()
+    /** Legacy direct apply path retained for retry/partial operation callers. */
     data object RequestApplyVentoyControls : UiIntent()
-    /** Read-only GitHub release check; never touches the stick. */
     data object CheckVentoyUpstream : UiIntent()
     /**
      * Answer to [CheckVentoyUpstream]. An older [requestToken] is stale, and the attach
@@ -807,16 +818,18 @@ sealed interface UiEffect {
     data class LoadVentoyFolders(val requestToken: Long, val path: String = "/") : UiEffect
 
     /**
-     * Write the pinned source in place. Identity/generation are checked again by the host;
-     * a phone document is updated through its own URI, a USB file at its own path.
+     * Apply staged controls. Default edits merge in place; USB/phone selected files are imported
+     * into the standard `/ventoy/ventoy.json`, with host-side identity and source checks.
      */
     data class ApplyVentoyControls(
         val settings: List<VentoyControlSetting>,
         val source: VentoySettingsSource = VentoySettingsSource.Default,
         val identity: String? = null,
         val attachGeneration: Long? = null,
+        val partitionId: String? = null,
+        val partitionStartLba: ULong? = null,
+        val partitionSectorCount: ULong? = null,
     ) : UiEffect
-
     data class BindAutounattend(
         val xmlName: String,
         val imagePaths: List<String>,
@@ -3345,6 +3358,26 @@ object UiReducer {
                 VentoyTransitions.stageVentoyControl(state, intent)
             is UiIntent.DiscardStagedVentoyControl ->
                 VentoyTransitions.discardStagedVentoyControl(state, intent)
+            is UiIntent.CommitAndApplyVentoyControls -> {
+                if (intent.duplicateKeys.isNotEmpty()) {
+                    ReduceResult(state.copy(statusMessage = UiMessage.Raw("Cannot edit duplicate Ventoy keys safely: ${intent.duplicateKeys.joinToString()}")))
+                } else {
+                    val merged = intent.removedKeys.map { VentoyControlSetting(it, null) } + intent.settings
+                    VentoyControlCatalog.problem(merged)?.let { problem ->
+                        ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
+                    } ?: VentoyTransitions.requestApplyVentoyControls(
+                        state.copy(pendingVentoyControls = merged, statusMessage = null),
+                    )
+                }
+            }
+            is UiIntent.CommitVentoyControls -> {
+                val merged = intent.removedKeys.map { VentoyControlSetting(it, null) } + intent.settings
+                VentoyControlCatalog.problem(merged)?.let { problem ->
+                    ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
+                } ?: ReduceResult(state.copy(pendingVentoyControls = merged, statusMessage = null))
+            }
+             is UiIntent.RestoreVentoyControls ->
+                 ReduceResult(state.copy(pendingVentoyControls = intent.settings, statusMessage = null))
             UiIntent.RequestApplyVentoyControls -> VentoyTransitions.requestApplyVentoyControls(state)
 
             UiIntent.CheckVentoyUpstream -> {

@@ -1616,6 +1616,17 @@ object WindowsSetup {
 }
 
 internal object MiniJson {
+    /** Number token retained verbatim so unrelated sections round-trip without precision loss. */
+    private class RawNumber(private val token: String) : Number() {
+        override fun toByte(): Byte = token.toDouble().toInt().toByte()
+        override fun toShort(): Short = token.toDouble().toInt().toShort()
+        override fun toDouble(): Double = token.toDouble()
+        override fun toFloat(): Float = token.toFloat()
+        override fun toInt(): Int = token.toDouble().toInt()
+        override fun toLong(): Long = token.toDouble().toLong()
+        override fun toString(): String = token
+    }
+
     fun parse(input: String): Any? {
         val parser = Parser(input.trim())
         val value = parser.parseValue()
@@ -1625,7 +1636,6 @@ internal object MiniJson {
         }
         return value
     }
-
     private class Parser(private val s: String) {
         private var pos = 0
 
@@ -1769,9 +1779,8 @@ internal object MiniJson {
                         }
                     }
                     val token = s.substring(start, pos)
-                    // Integers stay Long so stringify→parse keeps 42L as Long (not Int).
-                    // Callers that need numeric equality must compare via Number.toLong().
-                    if (isFloat) token.toDouble() else token.toLong()
+                    // Preserve exact token; scalar callers still receive a Number API.
+                    RawNumber(token)
                 }
             }
         }
