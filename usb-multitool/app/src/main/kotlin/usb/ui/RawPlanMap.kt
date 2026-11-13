@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,7 +14,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,6 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -30,14 +35,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
 import usb.multitool.R
 import usb.partition.RawObjectKind
+import usb.partition.RawRangeObject
+import androidx.compose.ui.unit.dp
 import usb.partition.RawSchemeProblem
 import usb.partition.RawRangeGeometry
 import usb.partition.SchemeTrust
@@ -66,16 +75,10 @@ internal fun RawPlanMap(
     if (disk == 0UL) return
     val confirmed = geometry.trust is SchemeTrust.Confirmed
     val count = sectorCount?.takeIf { it in 1UL..disk }
-    val overlaps = count?.let { geometry.overlaps(startLba, it) }.orEmpty()
     val density = LocalDensity.current
-    val snapTolerance = SNAP_TOLERANCE_DP.dp
-
-    var widthPx by remember { mutableStateOf(0) }
-    val currentConfirmed by rememberUpdatedState(confirmed)
-    val currentSnapPoints by rememberUpdatedState(geometry.snapPoints)
     val currentOnChange by rememberUpdatedState(onStartChange)
-    val currentCount by rememberUpdatedState(count)
-
+    val maxStart = if (count == null || count >= disk) 0UL else disk - count
+    val overlaps = count?.let { geometry.overlaps(startLba, it) }.orEmpty()
     val rangeColor = MaterialTheme.colorScheme.primary
     // Three tones of one muted hue over the track: secondaryContainer and tertiaryContainer
     // resolve to the track colour itself in both themes, so every existing object vanished.
@@ -90,27 +93,6 @@ internal fun RawPlanMap(
         parts.withIndex().associate { (index, obj) -> obj to (index + 1) }
     }
 
-    fun fractionOf(lba: ULong): Float = (lba.toDouble() / disk.toDouble()).toFloat()
-
-    fun maxStart(): ULong {
-        val needed = currentCount ?: return disk - 1UL
-        return if (needed >= disk) 0UL else disk - needed
-    }
-
-    fun snapAndClamp(rawLba: ULong): ULong {
-        val limit = maxStart()
-        val bounded = rawLba.coerceIn(0UL, limit)
-        if (!currentConfirmed || widthPx == 0) return bounded
-        val tolerance = with(density) {
-            (snapTolerance.toPx() / widthPx * disk.toDouble()).roundToLong()
-        }.coerceAtLeast(1L)
-        val nearest = currentSnapPoints
-            .asSequence()
-            .filter { it <= limit }
-            .minByOrNull { abs(it.toLong() - bounded.toLong()) }
-            ?: return bounded
-        return if (abs(nearest.toLong() - bounded.toLong()) <= tolerance) nearest else bounded
-    }
 
     val derivedEnd = count?.let { startLba + it - 1UL }
     val spoken = if (derivedEnd != null) {
@@ -132,7 +114,7 @@ internal fun RawPlanMap(
                 R.string.raw_map_snap_state,
                 startLba.toLong(),
                 derivedEnd.toLong(),
-                geometry.snapPoints.count { it <= maxStart() },
+                geometry.snapPoints.count { it <= maxStart },
             )
         } else {
             stringResource(R.string.raw_map_snap_state_start, startLba.toLong())
@@ -142,75 +124,21 @@ internal fun RawPlanMap(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .onSizeChanged { widthPx = it.width }
-                .semantics {
-                    contentDescription = spokenWithSnap
-                    if (snapState != null) stateDescription = snapState
-                }
-                .pointerInput(geometry, widthPx, count) {
-                    detectDragGestures(
-                        onDrag = { change, _ ->
-                            val lba = snapAndClamp(
-                                (change.position.x / widthPx.coerceAtLeast(1) * disk.toDouble())
-                                    .roundToLong()
-                                    .coerceIn(0L, disk.toLong())
-                                    .toULong(),
-                            )
-                            currentOnChange(lba)
-                        },
-                    )
-                },
-        ) {
-            drawRect(color = trackColor, topLeft = Offset.Zero, size = size)
-            geometry.objects.forEach { obj ->
-                val x = fractionOf(obj.startLba) * size.width
-                val w = (fractionOf(obj.sectorCount) * size.width).coerceAtLeast(1f)
-                val color = when (obj.kind) {
-                    RawObjectKind.Partition -> partitionColor
-                    RawObjectKind.BootArea -> bootColor
-                    RawObjectKind.TableArea -> tableColor
-                }
-                drawRect(color = color, topLeft = Offset(x, 0f), size = Size(w, size.height))
-            }
-            val rx = fractionOf(startLba) * size.width
-            if (count != null) {
-                // Display-only minimum so a small image on a huge medium stays visible;
-                // the exact sector count is shown as text and is what gets written.
-                val exact = fractionOf(count) * size.width
-                val rw = exact.coerceAtLeast(MIN_RANGE_WIDTH_DP.dp.toPx())
-                    .coerceAtMost((size.width - rx).coerceAtLeast(1f))
-                drawRect(
-                    color = rangeColor.copy(alpha = 0.22f),
-                    topLeft = Offset(rx, 0f),
-                    size = Size(rw, size.height),
-                )
-                drawRect(
-                    color = rangeColor,
-                    topLeft = Offset(rx, 0f),
-                    size = Size(rw, size.height),
-                    style = Stroke(width = 2.dp.toPx()),
-                )
-            }
-            val handleWidth = 6.dp.toPx()
-            drawRect(rangeColor, Offset(rx - handleWidth / 2f, 0f), Size(handleWidth, size.height))
-            if (confirmed) {
-                // Visible boundary marks that dragging snaps to; the numeric field stays exact.
-                geometry.snapPoints.filter { it <= maxStart() }.forEach { point ->
-                    val x = fractionOf(point) * size.width
-                    drawLine(
-                        color = snapTickColor,
-                        start = Offset(x, 0f),
-                        end = Offset(x, size.height),
-                        strokeWidth = 2.dp.toPx(),
-                    )
-                }
-            }
-        }
-
+        RawUnifiedMap(
+            geometry = geometry,
+            segments = remember(geometry) { rawMapSegments(geometry.objects, disk) },
+            startLba = startLba,
+            sectorCount = count,
+            spoken = spokenWithSnap,
+            snapState = snapState,
+            onStartChange = currentOnChange,
+            partitionColor = partitionColor,
+            bootColor = bootColor,
+            tableColor = tableColor,
+            trackColor = trackColor,
+            rangeColor = rangeColor,
+            snapTickColor = snapTickColor,
+        )
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
@@ -294,9 +222,170 @@ internal fun RawPlanMap(
     }
 }
 
-private const val SNAP_TOLERANCE_DP = 12
-private const val MIN_RANGE_WIDTH_DP = 4
+@Composable
+private fun RawUnifiedMap(
+    geometry: RawRangeGeometry,
+    segments: List<RawMapSegment>,
+    startLba: ULong,
+    sectorCount: ULong?,
+    spoken: String,
+    snapState: String?,
+    onStartChange: (ULong) -> Unit,
+    partitionColor: Color,
+    bootColor: Color,
+    tableColor: Color,
+    trackColor: Color,
+    rangeColor: Color,
+    snapTickColor: Color,
+) {
+    val density = LocalDensity.current
+    val disk = geometry.diskSectorCount
+    val confirmed = geometry.trust is SchemeTrust.Confirmed
+    val maxStart = if (sectorCount == null || sectorCount >= disk) 0UL else disk - sectorCount
+    if (disk == 0UL) return
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val minPx = with(density) { 48.dp.toPx() }
+        val availablePx = with(density) { maxWidth.toPx() }
+        val gapPx = with(density) { 4.dp.toPx() }
+        val widthsPx = segments.map { segment ->
+            maxOf(
+                (segment.sectorCount.toDouble() / disk.toDouble() * availablePx.toDouble()).toFloat(),
+                minPx,
+            )
+        }
+        val contentPx = maxOf(availablePx, widthsPx.sum() + gapPx * (segments.size - 1).coerceAtLeast(0))
+        val contentWidth = with(density) { contentPx.toDp() }
+        fun lbaAtX(rawX: Float): ULong {
+            var offset = 0f
+            val x = rawX.coerceIn(0f, contentPx)
+            segments.forEachIndexed { index, segment ->
+                val end = offset + widthsPx[index]
+                if (x <= end) {
+                    val fraction = ((x - offset) / widthsPx[index]).coerceIn(0f, 1f)
+                    return segment.startLba + (segment.sectorCount.toDouble() * fraction).toULong()
+                }
+                offset = end + gapPx
+            }
+            return disk
+        }
+        fun xForLba(lba: ULong): Float {
+            var offset = 0f
+            segments.forEachIndexed { index, segment ->
+                val end = segment.startLba + segment.sectorCount
+                if (lba <= end) {
+                    val fraction = ((lba - segment.startLba).toDouble() / segment.sectorCount.toDouble()).toFloat()
+                    return offset + widthsPx[index] * fraction.coerceIn(0f, 1f)
+                }
+                offset += widthsPx[index] + gapPx
+            }
+            return contentPx
+        }
+        fun chooseStart(candidate: ULong): ULong {
+            if (candidate > maxStart) return candidate
+            if (!confirmed) return candidate
+            val tolerancePx = with(density) { SNAP_TOLERANCE_DP.dp.toPx() }
+            val nearest = geometry.snapPoints
+                .asSequence()
+                .filter { it <= maxStart }
+                .minByOrNull { abs(xForLba(it) - xForLba(candidate)) }
+            return nearest?.takeIf { abs(xForLba(it) - xForLba(candidate)) <= tolerancePx } ?: candidate
+        }
+        val mapScroll = rememberScrollState()
+        Box(Modifier.fillMaxWidth().horizontalScroll(mapScroll)) {
+            Box(Modifier.width(contentWidth).height(104.dp)) {
+                Canvas(
+                    Modifier.fillMaxWidth().height(56.dp).semantics {
+                        contentDescription = spoken
+                        if (snapState != null) stateDescription = snapState
+                    }.pointerInput(geometry, contentPx, sectorCount) {
+                        detectDragGestures { change, _ ->
+                            onStartChange(chooseStart(lbaAtX(change.position.x)))
+                        }
+                    },
+                ) {
+                    drawRect(trackColor, Offset.Zero, size)
+                    segments.forEachIndexed { index, segment ->
+                        val x = widthsPx.take(index).sum() + gapPx * index
+                        val w = widthsPx[index]
+                        val color = when {
+                            segment.rawObjects.any { it.kind == RawObjectKind.BootArea } -> bootColor
+                            segment.rawObjects.any { it.kind == RawObjectKind.TableArea } -> tableColor
+                            segment.rawObjects.any { it.kind == RawObjectKind.Partition } -> partitionColor
+                            else -> trackColor
+                        }
+                        drawRect(color, Offset(x, 0f), Size(w, size.height))
+                    }
+                    val rx = xForLba(startLba)
+                    sectorCount?.let { count ->
+                        val end = if (startLba <= disk - count) startLba + count else disk
+                        val rw = (xForLba(end) - rx).coerceAtLeast(MIN_SEGMENT_WIDTH_DP.dp.toPx())
+                        drawRect(rangeColor.copy(alpha = 0.22f), Offset(rx, 0f), Size(rw, size.height))
+                        drawRect(rangeColor, Offset(rx, 0f), Size(rw, size.height), style = Stroke(2.dp.toPx()))
+                    }
+                    drawRect(rangeColor, Offset(rx - 3.dp.toPx(), 0f), Size(6.dp.toPx(), size.height))
+                    geometry.snapPoints.forEach { point ->
+                        val x = xForLba(point)
+                        drawLine(snapTickColor, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().height(48.dp).align(Alignment.BottomStart),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    segments.forEachIndexed { index, segment ->
+                        val label = segment.rawObjects.joinToString(" / ") { objectInSegment ->
+                            objectInSegment.name ?: when (objectInSegment.kind) {
+                                RawObjectKind.Partition -> "Partition"
+                                RawObjectKind.BootArea -> "Boot area"
+                                RawObjectKind.TableArea -> "Table metadata"
+                            }
+                        }.ifEmpty { "Free space" }
+                        Box(
+                            Modifier.width(with(density) { widthsPx[index].toDp() }).height(48.dp)
+                                .clickable { onStartChange(segment.startLba) }
+                                .semantics {
+                                    contentDescription = "$label, LBA ${segment.startLba}, ${segment.sectorCount} sectors"
+                                },
+                        ) { Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 2) }
+                    }
+                }
+            }
+        }
+    }
+}
 
+private data class RawMapSegment(
+    val startLba: ULong,
+    val sectorCount: ULong,
+    val rawObjects: List<RawRangeObject>,
+)
+
+private fun rawMapSegments(objects: List<RawRangeObject>, disk: ULong): List<RawMapSegment> {
+    if (disk == 0UL) return emptyList()
+    val clipped = objects.asSequence()
+        .filter { it.startLba < disk && it.sectorCount > 0UL }
+        .map { objectInDisk -> objectInDisk to minOf(objectInDisk.endLbaExclusive, disk) }
+        .filter { (objectInDisk, end) -> end > objectInDisk.startLba }
+        .toList()
+    val boundaries = sortedSetOf<ULong>().apply {
+        add(0UL)
+        add(disk)
+        clipped.forEach { (objectInDisk, end) ->
+            add(objectInDisk.startLba)
+            add(end)
+        }
+    }.toList()
+    return boundaries.zipWithNext().mapNotNull { (start, end) ->
+        if (end <= start) return@mapNotNull null
+        val covered = clipped
+            .filter { (objectInDisk, objectEnd) -> objectInDisk.startLba < end && objectEnd > start }
+            .map { it.first }
+        RawMapSegment(start, end - start, covered)
+    }
+}
+
+private const val MIN_SEGMENT_WIDTH_DP = 4
+private const val SNAP_TOLERANCE_DP = 12
 @Composable
 private fun LegendItem(color: Color, label: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

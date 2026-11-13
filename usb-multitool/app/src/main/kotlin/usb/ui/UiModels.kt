@@ -1068,10 +1068,11 @@ data class AppUiState(
     val language: AppLanguage = AppLanguage.System,
     val partitions: List<PartitionTab> = emptyList(),
     val freeRegions: List<FreeRegionUi> = emptyList(),
+    /** True after this attachment has produced an explicit partition result. */
+    val partitionSelectionInitialized: Boolean = false,
     val diskSectorSize: Int = 512,
     val selectedPartitionId: String? = null,
-    /**
-     * Partition ID of the one EFI system partition whose write protection is lifted for
+    /** Partition ID of the one EFI system partition whose write protection is lifted.
      * the current attachment. Null means every EFI partition stays protected.
      * Not a mount mode: it never changes how a volume is opened or mounted.
      * Cleared when the device is replaced, re-attached, detached, or the partition list
@@ -1446,8 +1447,9 @@ data class AppUiState(
     val isRunning: Boolean
         get() = operation?.state == OperationState.Running
 
+    /** Selected target only; missing selection never falls back to another partition. */
     fun selectedPartition(): PartitionTab? =
-        partitions.firstOrNull { it.id == selectedPartitionId } ?: partitions.firstOrNull()
+        selectedPartitionId?.let { id -> partitions.firstOrNull { it.id == id } }
 
     /**
      * Ventoy data partition: fixed part1 of the Ventoy layout, never the EFI part. Geometry

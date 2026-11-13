@@ -84,22 +84,26 @@ internal object PartitionTransitions {
         intent: UiIntent.RequestRenamePartition,
     ): ReduceResult {
         val device = state.device
-        val target = state.selectedPartition()
+        val target = when {
+            intent.target == null -> state.selectedPartition()
+            intent.target.matches(state) -> state.partitions.firstOrNull { it.id == intent.target.partitionId }
+            else -> null
+        }
+        val targetStale = intent.target != null && target == null
         val normalized = PartitionName.normalize(intent.name)
         val problem = when {
+            targetStale -> UiMessage.Key(UiMessageKey.TargetChanged)
             device == null || !state.actionsEnabled -> UiReducer.presenceMessage(state.presence)
             target == null -> UiMessage.Key(UiMessageKey.SelectPartitionFirst)
             state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
             state.partitionTableDamaged -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
             !state.tableValid -> UiMessage.Key(UiMessageKey.TableDamaged)
             // Unknown or MBR scheme cannot store a GPT name; never drop it silently.
-            state.partitionScheme != TableScheme.GPT ->
-                UiMessage.Key(UiMessageKey.PartitionNameUnsupported)
+            state.partitionScheme != TableScheme.GPT -> UiMessage.Key(UiMessageKey.PartitionNameUnsupported)
             // Renaming a protected ESP/VTOYEFI entry would drop the name-based write
             // protection, so the EFI override does not lift this refusal.
             target.readOnly -> UiReducer.message(UiMessageKey.ReadOnlyPartition, target.name)
-            target.startLba == null || target.sectorCount == null ->
-                UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
+            target.startLba == null || target.sectorCount == null -> UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
             normalized.isEmpty() -> UiMessage.Key(UiMessageKey.InvalidPartitionName)
             else -> PartitionName.problem(normalized)?.let {
                 UiMessage.Key(UiMessageKey.InvalidPartitionName)
@@ -129,11 +133,23 @@ internal object PartitionTransitions {
         intent: UiIntent.RequestRenameVolumeLabel,
     ): ReduceResult {
         val device = state.device
-        val target = state.selectedPartition()
+        val target = when {
+            intent.target == null -> state.selectedPartition()
+            intent.target.matches(state) -> state.partitions.firstOrNull { it.id == intent.target.partitionId }
+            else -> null
+        }
+        val targetStale = intent.target != null && target == null
         val filesystemId = target?.filesystemId
         val normalized = VolumeLabel.normalize(intent.label)
-        val writeBlock = if (state.partitionTableAmbiguous) null else UiReducer.writeBlockMessage(state)
+        val writeBlock = if (state.partitionTableAmbiguous || target == null) {
+            null
+        } else if (!state.isEfiWriteAllowed(target)) {
+            UiReducer.message(UiMessageKey.ReadOnlyPartition, target.name)
+        } else {
+            null
+        }
         val problem = when {
+            targetStale -> UiMessage.Key(UiMessageKey.TargetChanged)
             device == null || !state.actionsEnabled -> UiReducer.presenceMessage(state.presence)
             target == null -> UiMessage.Key(UiMessageKey.SelectPartitionFirst)
             state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
@@ -222,22 +238,12 @@ internal object PartitionTransitions {
     fun requestSetPartitionRole(
         state: AppUiState,
         intent: UiIntent.RequestSetPartitionRole,
-    ): ReduceResult =
-        requestPartitionEdit(
-            state,
-            DestructiveAction.SET_PARTITION_ROLE,
-            role = intent.role,
-        )
+    ): ReduceResult = requestPartitionEdit(state, DestructiveAction.SET_PARTITION_ROLE, role = intent.role, targetBinding = intent.target)
 
     fun requestSetPartitionBootable(
         state: AppUiState,
         intent: UiIntent.RequestSetPartitionBootable,
-    ): ReduceResult =
-        requestPartitionEdit(
-            state,
-            DestructiveAction.SET_PARTITION_BOOTABLE,
-            bootable = intent.bootable,
-        )
+    ): ReduceResult = requestPartitionEdit(state, DestructiveAction.SET_PARTITION_BOOTABLE, bootable = intent.bootable, targetBinding = intent.target)
 
     /**
      * Build a confirmation for a partition-table edit. The payload pins the selected
@@ -248,19 +254,23 @@ internal object PartitionTransitions {
         action: DestructiveAction,
         role: PartitionRole? = null,
         bootable: Boolean? = null,
+        targetBinding: PartitionBinding? = null,
     ): ReduceResult {
         val device = state.device
-        val target = state.selectedPartition()
+        val target = when {
+            targetBinding == null -> state.selectedPartition()
+            targetBinding.matches(state) -> state.partitions.firstOrNull { it.id == targetBinding.partitionId }
+            else -> null
+        }
         val problem = when {
+            targetBinding != null && target == null -> UiMessage.Key(UiMessageKey.TargetChanged)
             device == null || !state.actionsEnabled -> UiReducer.presenceMessage(state.presence)
             target == null -> UiMessage.Key(UiMessageKey.SelectPartitionFirst)
             state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
             state.partitionTableDamaged -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
             !state.tableValid -> UiMessage.Key(UiMessageKey.TableDamaged)
-            target.startLba == null || target.sectorCount == null ->
-                UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
-            !state.isEfiWriteAllowed(target) ->
-                UiReducer.message(UiMessageKey.ReadOnlyPartition, target.name)
+            target.startLba == null || target.sectorCount == null -> UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
+            !state.isEfiWriteAllowed(target) -> UiReducer.message(UiMessageKey.ReadOnlyPartition, target.name)
             else -> null
         }
         if (problem != null || device == null || target == null) {

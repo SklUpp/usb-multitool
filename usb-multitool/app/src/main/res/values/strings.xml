@@ -67,7 +67,7 @@
     <string name="partitions_disk_usage">Used %1$s of %2$s (%3$.1f%%)</string>
     <string name="partitions_disk_sectors">Used %1$d of %2$d sectors</string>
     <string name="partitions_strip_item_a11y">Partition %1$d: %2$s, %3$s</string>
-    <string name="partitions_strip_scale_note">Not to scale: each partition is an equal block and taps only select it. Exact LBA and size are in the list.</string>
+    <string name="partitions_strip_scale_note">Relative to disk LBA; each partition and free region keeps a 48 dp minimum and scrolls horizontally when needed. Exact LBA and size are in the list.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Partition information</string>
     <string name="partitions_info_help_text">Name is the table entry name; the volume label comes from the filesystem and can be unknown. RO means guaranteed EFI write protection; a dash means the write state is not verified because browsing mounts volumes read-only and a writable mount exists only per mutation. Free space is measured inside the filesystem, not the table free region.</string>
@@ -278,7 +278,8 @@
     <string name="partitions_corrupt">Partition table is damaged</string>
     <string name="partitions_create_blocked_corrupt">Cannot create: repair or wipe the table first.</string>
     <string name="partitions_create_first">No partitions. Create the first one with Create partition.</string>
-    <string name="partitions_layout_title">Device partitions</string>
+    <string name="partitions_layout_title">Layout</string>
+    <string name="partitions_strip_free">Free space</string>
     <string name="partitions_no_image">No image selected</string>
     <string name="filesystem_usage_label">Free in filesystem</string>
     <string name="filesystem_usage_known">Free %1$s of %2$s</string>

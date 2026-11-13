@@ -142,7 +142,7 @@ data class RawRangeGeometry(
                 val entrySectors = GptTable.entrySectors(header, sectorSize)
                 // A table recovered from the backup does not know where the primary
                 // entries live; the whole [0, firstUsable) window is the honest bound.
-                val primaryEnd = table.gptPrimaryEntryLba?.let { it + entrySectors } ?: header.firstUsable
+                val primaryEnd = table.gptPrimaryEntryLba?.let { safeAdd(it, entrySectors) } ?: header.firstUsable
                 addZone(objects, 0UL, primaryEnd, RawObjectKind.TableArea, diskSectorCount)
                 val backupHeaderLba = table.gptBackupHeaderLba
                 val backupEntriesLba = table.gptBackupEntriesLba
@@ -160,11 +160,11 @@ data class RawRangeGeometry(
                         // A displaced array is legal. The envelope from the array start to
                         // the later of the array end and the header covers both, so no
                         // real backup metadata sector can fall outside the reported zone.
-                        val arrayEnd = backupEntriesLba + entrySectors
+                        val arrayEnd = safeAdd(backupEntriesLba, entrySectors)
                         addZone(
                             objects,
                             backupEntriesLba,
-                            maxOf(backupHeaderLba + 1UL, arrayEnd),
+                            maxOf(safeAdd(backupHeaderLba, 1UL), arrayEnd),
                             RawObjectKind.TableArea,
                             diskSectorCount,
                         )
@@ -220,6 +220,8 @@ data class RawRangeGeometry(
                 kind = kind,
             )
         }
+        private fun safeAdd(left: ULong, right: ULong): ULong =
+            if (left > ULong.MAX_VALUE - right) ULong.MAX_VALUE else left + right
     }
 }
 
@@ -316,9 +318,13 @@ object RawRangePlan {
         val sectorSize = geometry.sectorSize
         require(sectorSize > 0) { "sector size must be positive" }
         val bytes = sourceBytes.toULong()
-        val whole = bytes / sectorSize.toULong()
-        val sectorCount = whole + if (bytes % sectorSize.toULong() == 0UL) 0UL else 1UL
-
+        val sectorSizeU = sectorSize.toULong()
+        val whole = bytes / sectorSizeU
+        val hasPartialSector = bytes % sectorSizeU != 0UL
+        if (hasPartialSector && whole == ULong.MAX_VALUE) {
+            return RawWritePlan.Rejected(setOf(RawRangeProblem.SourceSizeOverflow))
+        }
+        val sectorCount = whole + if (hasPartialSector) 1UL else 0UL
         val problems = linkedSetOf<RawRangeProblem>()
         if (sectorCount > maxRepresentableSectors(sectorSize)) {
             problems += RawRangeProblem.RangeTooLarge

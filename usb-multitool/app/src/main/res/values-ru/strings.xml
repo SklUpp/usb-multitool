@@ -67,7 +67,7 @@
     <string name="partitions_disk_usage">Занято %1$s из %2$s (%3$.1f%%)</string>
     <string name="partitions_disk_sectors">Занято %1$d из %2$d секторов</string>
     <string name="partitions_strip_item_a11y">Раздел %1$d: %2$s, %3$s</string>
-    <string name="partitions_strip_scale_note">Не в масштабе: каждый раздел — равный блок, нажатие только выбирает его. Точные LBA и размер — в списке.</string>
+    <string name="partitions_strip_scale_note">Относительно LBA диска: для каждого раздела и свободной области сохраняется минимум 48 dp; при нехватке места полоса прокручивается по горизонтали. Точные LBA и размер — в списке.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Информация о разделе</string>
     <string name="partitions_info_help_text">Имя — это имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна. RO означает гарантированную защиту EFI от записи; прочерк — состояние записи не проверено, потому что просмотр монтирует тома только для чтения, а записываемый том создаётся лишь на время операции. Свободное место измеряется внутри файловой системы, а не в свободной области таблицы.</string>
@@ -278,7 +278,8 @@
     <string name="partitions_corrupt">Таблица разделов повреждена</string>
     <string name="partitions_create_blocked_corrupt">Создание невозможно: сначала восстановите или сотрите таблицу.</string>
     <string name="partitions_create_first">Разделов нет. Создайте первый раздел кнопкой «Создать раздел».</string>
-    <string name="partitions_layout_title">Разделы устройства</string>
+    <string name="partitions_layout_title">Разметка</string>
+    <string name="partitions_strip_free">Свободное место</string>
     <string name="partitions_no_image">Образ не выбран</string>
     <string name="filesystem_usage_label">Свободно в ФС</string>
     <string name="filesystem_usage_known">Свободно %1$s из %2$s</string>

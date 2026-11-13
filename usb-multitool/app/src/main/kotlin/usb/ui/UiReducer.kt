@@ -113,11 +113,17 @@ sealed class UiIntent {
         val volumeLabel: String = "",
     ) : UiIntent()
 
-    /** Rename the GPT entry of the selected partition (MBR has no name field). */
-    data class RequestRenamePartition(val name: String) : UiIntent()
+    /** Rename GPT entry against the dialog's pinned device and geometry. */
+    data class RequestRenamePartition(
+        val name: String,
+        val target: PartitionBinding? = null,
+    ) : UiIntent()
 
-    /** Rename the filesystem label of the selected, already formatted partition. */
-    data class RequestRenameVolumeLabel(val label: String) : UiIntent()
+    /** Rename filesystem label against the dialog's pinned device and geometry. */
+    data class RequestRenameVolumeLabel(
+        val label: String,
+        val target: PartitionBinding? = null,
+    ) : UiIntent()
 
     /**
      * Write an empty MBR or GPT table, replacing the current one. The confirmation pins the
@@ -578,11 +584,17 @@ sealed class UiIntent {
         val binding: PartitionBinding,
     ) : UiIntent()
 
-    /** Request confirmation to change the selected partition's on-disk type (ESP or data). */
-    data class RequestSetPartitionRole(val role: PartitionRole) : UiIntent()
+    /** Request confirmation to change selected partition type, with optional exact target. */
+    data class RequestSetPartitionRole(
+        val role: PartitionRole,
+        val target: PartitionBinding? = null,
+    ) : UiIntent()
 
-    /** Request confirmation to change the selected partition's legacy bootable flag. */
-    data class RequestSetPartitionBootable(val bootable: Boolean) : UiIntent()
+    /** Request confirmation to change selected partition bootable flag, with optional target. */
+    data class RequestSetPartitionBootable(
+        val bootable: Boolean,
+        val target: PartitionBinding? = null,
+    ) : UiIntent()
 
     /** Stream the SAF [uri] into [AppUiState.currentPath] in chunks. */
     data class UploadFile(val uri: String) : UiIntent()
@@ -1020,11 +1032,32 @@ object UiReducer {
                     } else {
                         intent.partitions
                     }
-                val selected =
-                    partitions
-                        .firstOrNull { it.id == state.selectedPartitionId }
-                        ?.id
-                        ?: partitions.firstOrNull()?.id
+                // A refresh on the same attachment may not silently retarget actions. Keep
+                // selection only when stable ID and exact geometry both match; a new attachment
+                // starts with the first partition as its initial, explicit screen target.
+                val retainedSelection = state.selectedPartitionId?.let { id ->
+                    val previousPartition = state.partitions.firstOrNull { it.id == id }
+                    val refreshedPartition = partitions.firstOrNull { it.id == id }
+                    refreshedPartition?.takeIf {
+                        previousPartition?.startLba != null &&
+                            previousPartition.sectorCount != null &&
+                            it.startLba == previousPartition.startLba &&
+                            it.sectorCount == previousPartition.sectorCount
+                    }?.id
+                }
+                val initialSelection =
+                    intent.presence == DevicePresence.Ready &&
+                        partitions.isNotEmpty() &&
+                        (!sameStick ||
+                            (!state.partitionSelectionInitialized && state.selectedPartitionId == null))
+                val selected = when {
+                    probingRetain -> state.selectedPartitionId?.takeIf { id ->
+                        partitions.any { it.id == id }
+                    }
+                    initialSelection -> partitions.firstOrNull()?.id
+                    sameStick -> retainedSelection
+                    else -> null
+                }
                 val candidateMatchesDevice =
                     intent.presence == DevicePresence.Ready &&
                         trustedStick &&
@@ -1146,6 +1179,11 @@ object UiReducer {
                         vtoyEfiWritePartitionId = retainedEfi?.id,
                         vtoyEfiWriteStartLba = retainedEfi?.startLba,
                         vtoyEfiWriteSectorCount = retainedEfi?.sectorCount,
+                        partitionSelectionInitialized = when {
+                            intent.presence == DevicePresence.Ready && !probingRetain -> true
+                            !sameStick -> false
+                            else -> state.partitionSelectionInitialized
+                        },
                         partitions = partitions,
                         freeRegions =
                             if (probingRetain && intent.partitions.isEmpty()) {

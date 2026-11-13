@@ -111,11 +111,26 @@ class FilesListFreshnessTest {
                 ),
             )
 
-        assertEquals(other.id, onlyOther.state.selectedPartitionId)
+        // Missing selected partition must stay unselected; never retarget to another entry.
+        assertNull(onlyOther.state.selectedPartitionId)
         assertEquals("/", onlyOther.state.currentPath)
-        assertTrue(onlyOther.state.filesPending)
-        val onlyOtherFiles = onlyOther.effects.single() as UiEffect.LoadFiles
-        assertEquals("/", onlyOtherFiles.path)
+        assertFalse(onlyOther.state.filesPending)
+        assertTrue(onlyOther.effects.none { it is UiEffect.LoadFiles })
+    }
+    @Test
+    fun deviceChangedDropsSelectionWhenGeometryChanged() {
+        val base = ready()
+        val changed = UiReducer.reduce(
+            base,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Ready,
+                device = device,
+                partitions = listOf(data.copy(startLba = 4096uL), other),
+            ),
+        )
+        assertNull(changed.state.selectedPartitionId)
+        assertFalse(changed.state.filesPending)
+        assertTrue(changed.effects.none { it is UiEffect.LoadFiles })
     }
 
     @Test
