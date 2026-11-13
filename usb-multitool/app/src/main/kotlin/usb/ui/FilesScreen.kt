@@ -981,6 +981,7 @@ private fun FolderStatusArea(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(min = 48.dp)
                 .clickable(
                     onClickLabel = title,
                     role = Role.Button,
