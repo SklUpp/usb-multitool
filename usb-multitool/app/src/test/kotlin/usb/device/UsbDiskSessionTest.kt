@@ -2,6 +2,7 @@ package usb.device
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UsbDiskSessionTest {
@@ -48,21 +49,23 @@ class UsbDiskSessionTest {
         assertEquals(listOf(ScsiCommand.OP_TEST_UNIT_READY, ScsiCommand.OP_REQUEST_SENSE), session.commands)
     }
 
-    @Test
-    fun becomingReadySenseClassification() {
-        val sense = DiskException.SenseError(0x70, 0x02, 0x04, 0x01)
-        assertEquals(false, sense.isUnitAttention)
-        assertEquals(0x04, sense.asc)
-    }
 
     @Test
-    fun becomingReadySenseAllowsInitialization() {
+    fun becomingReadySenseIsNotReady() {
+        val sense = DiskException.SenseError(0x70, 0x02, 0x04, 0x01)
+        assertEquals(false, sense.isUnitAttention)
+        assertTrue(sense.isNotReady)
+    }
+
+
+    @Test
+    fun notReadyDoesNotCountAsReady() {
         val session = FakeBotSession(
             failOnOps = setOf(ScsiCommand.OP_TEST_UNIT_READY),
             requestSenseError = DiskException.SenseError(0x70, 0x02, 0x04, 0x01),
         )
-        UsbDiskSession.initialize(session)
-        assertEquals(listOf(ScsiCommand.OP_TEST_UNIT_READY, ScsiCommand.OP_REQUEST_SENSE), session.commands)
+        assertThrows(DiskException.SenseError::class.java) {
+            UsbDiskSession.initialize(session)
+        }
     }
-
 }

@@ -7,13 +7,22 @@ sealed class DiskException(message: String, cause: Throwable? = null) : Exceptio
         override fun hashCode() = javaClass.hashCode()
     }
 
-    class IoFailure(message: String, cause: Throwable? = null) :
+    open class IoFailure(message: String, cause: Throwable? = null) :
         DiskException(message, cause) {
         override fun equals(other: Any?) =
             other is IoFailure && other.message == message
 
         override fun hashCode() = message.hashCode()
     }
+
+    /** CSW read failed after CBW/data; command outcome is untrusted. */
+    class CswReadFailure(message: String, cause: Throwable? = null) : IoFailure(message, cause)
+
+    /** CSW shape, signature, tag, or status is invalid; BOT reset recovery is required. */
+    class InvalidCsw(message: String, cause: Throwable? = null) : IoFailure(message, cause)
+
+    /** Status 0/1 CSW has residue outside the command transfer length. */
+    class NonMeaningfulCsw(message: String, cause: Throwable? = null) : IoFailure(message, cause)
 
     class Closed : DiskException("disk session closed") {
         override fun equals(other: Any?) = other is Closed
@@ -37,7 +46,7 @@ sealed class DiskException(message: String, cause: Throwable? = null) : Exceptio
     ) {
         val isIllegalRequest: Boolean get() = senseKey == 0x05
         val isUnitAttention: Boolean get() = senseKey == 0x06
-        /** Medium error / unrecovered read — the only class Rescue marks FAILED. */
+        val isNotReady: Boolean get() = senseKey == 0x02
         val isMediumError: Boolean
             get() = senseKey == 0x03 || (senseKey == 0x01 && asc == 0x11)
 

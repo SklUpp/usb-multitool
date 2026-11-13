@@ -57,7 +57,6 @@
     <string name="cancel_operation_title">Cancel operation?</string>
     <string name="cancel_operation_body">Cancel %1$s? Only confirmation stops this operation.</string>
     <string name="cancel_operation_confirm">Confirm cancellation</string>
-    <string name="action_cancel">Cancel</string>
 
     <string name="partitions_selected_title">Partition information</string>
     <string name="partitions_none_selected">none selected</string>
@@ -125,14 +124,6 @@
     <string name="partitions_volume_label_support">The filesystem sets the length limit and allowed characters.</string>
     <string name="files_no_partitions_cta">Open Partitions</string>
 
-    <string name="confirm_ventoy_unpinned">No independent trusted SHA is available for this release. Archive/member structure and checksums were validated, but authenticity is not independently verified. Source: %1$s</string>
-    <string name="ventoy_badge_pinned">Pinned %1$s</string>
-    <string name="ventoy_download_failed">Ventoy download/store warning: %1$s</string>
-    <string name="ventoy_upstream_check_failed">Upstream version check failed: %1$s</string>
-    <string name="ventoy_download_unpinned_warning_title">Download without an independent trusted SHA?</string>
-    <string name="ventoy_download_already_latest_title">Ventoy is already latest</string>
-    <string name="ventoy_download_already_latest_body">Installed app target %1$s matches upstream %2$s. No newer release is available to download.</string>
-    <string name="ventoy_download_unpinned_warning_body">No independent trusted SHA is available for upstream %1$s. Structural validation is incomplete. The unpinned hash is computed from the same downloaded files, not an independent trust anchor; a damaged or substituted release can make the stick unbootable. During a normal update the data partition is preserved, but the operation is not atomic; a clean install erases data. Download only if you accept this risk; writing starts only after a separate install/update confirmation.</string>
     <string name="diagnostics_checks_title">Checks</string>
     <string name="diagnostics_checks_subtitle">Read-only. It does not change data.</string>
     <string name="diagnostics_perf_title">Performance</string>
@@ -329,17 +320,25 @@
     <string name="ventoy_version_error">read error</string>
     <string name="confirm_ventoy_release">Ventoy release: %1$s</string>
     <string name="confirm_ventoy_provenance">Pinned archive SHA-256: %1$s\nSource: %2$s</string>
+    <string name="confirm_ventoy_unpinned">No independent trusted SHA is available for this release. Archive/member structure and checksums were validated, but authenticity is not independently verified. Source: %1$s</string>
     <string name="ventoy_check_version">Check upstream version</string>
     <string name="ventoy_badge_downloaded">Downloaded %1$s</string>
+    <string name="ventoy_badge_pinned">Pinned %1$s</string>
+    <string name="ventoy_download_failed">Ventoy download/store warning: %1$s</string>
+    <string name="ventoy_upstream_check_failed">Upstream version check failed: %1$s</string>
     <string name="ventoy_install">Install</string>
     <string name="ventoy_update">Update</string>
     <string name="ventoy_update_from_to">Update · %1$s → %2$s</string>
-    <string name="ventoy_update_current">Update · %1$s (current)</string>
     <string name="ventoy_update_to">Update · %1$s</string>
-    <string name="ventoy_download">Download release</string>
+    <string name="ventoy_update_current">Update · %1$s (current)</string>
     <string name="ventoy_download_warning_title">Download this Ventoy release?</string>
-    <string name="ventoy_download_warning_body">The app fetches the official archive over HTTPS. Nothing is written to the stick; installing or updating stays a separate confirmed action.</string>
+    <string name="ventoy_download_unpinned_warning_title">Download without an independent trusted SHA?</string>
+    <string name="ventoy_download_already_latest_title">Ventoy is already latest</string>
+    <string name="ventoy_download_already_latest_body">Installed app target %1$s matches upstream %2$s. No newer release is available to download.</string>
     <string name="ventoy_download_warning_confirm">Download</string>
+    <string name="ventoy_download">Download release</string>
+    <string name="ventoy_download_warning_body">The app fetches the official archive over HTTPS. Nothing is written to the stick; installing or updating stays a separate confirmed action.</string>
+    <string name="ventoy_download_unpinned_warning_body">No independent trusted SHA is available for upstream %1$s. Structural validation is incomplete. The unpinned hash is computed from the same downloaded files, not an independent trust anchor; a damaged or substituted release can make the stick unbootable. During a normal update the data partition is preserved, but the operation is not atomic; a clean install erases data. Download only if you accept this risk; writing starts only after a separate install/update confirmation.</string>
     <string name="ventoy_download_warning_cancel">Cancel</string>
     <string name="ventoy_download_unconfirmed">%1$s is published but the directory could not be confirmed durable; it may not survive a restart.</string>
     <string name="ventoy_download_recovered">%1$s was not saved; stored %2$s remains available.</string>
@@ -669,7 +668,7 @@
     <string name="settings_valid">Valid</string>
     <string name="settings_file_label">File</string>
     <string name="settings_not_loaded">Global settings have not been read yet.</string>
-    <string name="settings_applies_note">Edits are staged. Apply writes the imported document to /ventoy/ventoy.json on the stick with a non-overwriting backup; the phone original is never written. Unknown JSON sections are preserved.</string>
+    <string name="settings_applies_note">Edits are staged. Update writes them into the selected file in place; a confirmed Ventoy install or update writes the standard file. Unknown JSON sections are preserved.</string>
     <string name="settings_win11_hint">1 bypasses the Windows 11 hardware checks (TPM, RAM, Secure Boot, CPU); 0 requires them; remove leaves Ventoy\'s default.</string>
     <string name="settings_win11_nro_hint">1 skips the Windows 11 online-account requirement and allows a local account; 0 requires a Microsoft account; remove leaves Ventoy\'s default.</string>
     <string name="settings_help_title">Global Ventoy settings</string>
@@ -685,7 +684,7 @@
     <string name="settings_value_label">Value</string>
     <string name="settings_add">Add to staged changes</string>
     <string name="settings_staged">Staged settings</string>
-    <string name="settings_staged_hint">Apply writes staged controls into /ventoy/ventoy.json on the stick; imported phone/USB documents are never overwritten. Unknown JSON sections are preserved.</string>
+    <string name="settings_staged_hint">Update writes them into the selected file in place. Unknown JSON sections are preserved.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
     <string name="settings_current">Current: %1$s</string>
     <string name="settings_not_set">not set</string>
@@ -794,13 +793,8 @@
     <string name="settings_source_choose_stick">On the stick</string>
     <string name="settings_source_choose_phone">On the phone</string>
     <string name="settings_source_use_default">Use the standard ventoy.json</string>
-    <string name="settings_source_custom_path">Non-standard source path. Apply imports this file into /ventoy/ventoy.json with a non-overwriting backup.</string>
-    <string name="settings_source_phone_note">Phone JSON is read-only import input; Apply copies it to /ventoy/ventoy.json and never writes the phone original.</string>
-    <string name="settings_open_editor">Open editor</string>
-    <string name="settings_editor_title">Global Ventoy settings</string>
-    <string name="settings_editor_help">Edit known controls and every key/value pair. Clear values with ×, delete non-empty rows with the trash icon, add rows with +. Apply writes the imported document to /ventoy/ventoy.json; Cancel discards draft changes.</string>
-    <string name="settings_cancel">Cancel</string>
-    <string name="settings_apply">Apply</string>
+    <string name="settings_source_custom_path">Non-standard path. Ventoy reads /ventoy/ventoy.json; this file is changed only when you press Update here.</string>
+    <string name="settings_source_phone_note">The phone document is updated in place; it is never copied to the stick.</string>
     <string name="settings_source_status_reading">Reading…</string>
     <string name="settings_source_status_unread">Not read yet</string>
     <string name="settings_source_status_valid">Valid JSON · %1$d settings</string>

@@ -97,6 +97,21 @@ class UsbDiskTest {
     }
 
     @Test
+    fun writeUnitAttentionDoesNotReplayAndCloses() {
+        val session = FakeBotSession(
+            unitAttentionBeforeSuccess = 1,
+            unitAttentionOnOps = setOf(ScsiCommand.OP_WRITE10),
+        )
+        val disk = UsbDisk(session, BlockGeometry(512, 100UL))
+
+        assertThrows(DiskException.SenseError::class.java) {
+            disk.write(2UL, ByteBuffer.wrap(ByteArray(512)))
+        }
+        assertEquals(1, session.commands.count { it == ScsiCommand.OP_WRITE10 })
+        assertTrue(disk.isClosed)
+    }
+
+    @Test
     fun botFailPreservesSessionAfterSense() {
         val sense = DiskException.SenseError(0x70, 0x03, 0x11, 0x00)
         val session = FakeBotSession(failAlways = true, syncSense = sense)
@@ -232,26 +247,29 @@ class UsbDiskTest {
     }
 
     @Test
-    fun cswResidueGreaterThanTransferLengthThrowsPhaseError() {
+    fun cswResidueGreaterThanTransferLengthClosesSession() {
         val session = FakeBotSession(residue = 1024)
         val disk = UsbDisk(session, BlockGeometry(512, 100UL))
         val out = ByteBuffer.allocate(512)
-        val ex = assertThrows(DiskException.IoFailure::class.java) {
+        val ex = assertThrows(DiskException.NonMeaningfulCsw::class.java) {
             disk.read(0UL, out)
         }
-        assertEquals("phase error: invalid residue", ex.message)
+        assertEquals("CSW residue 1024 outside transfer length 512", ex.message)
+        assertTrue(disk.isClosed)
     }
 
     @Test
-    fun cswNegativeResidueThrowsPhaseError() {
+    fun cswNegativeResidueClosesSession() {
         val session = FakeBotSession(residue = -1)
         val disk = UsbDisk(session, BlockGeometry(512, 100UL))
         val out = ByteBuffer.allocate(512)
-        val ex = assertThrows(DiskException.IoFailure::class.java) {
+        val ex = assertThrows(DiskException.NonMeaningfulCsw::class.java) {
             disk.read(0UL, out)
         }
-        assertEquals("phase error: invalid residue", ex.message)
+        assertEquals("CSW residue -1 outside transfer length 512", ex.message)
+        assertTrue(disk.isClosed)
     }
+
 
     @Test
     fun boundaryLbaWrapAroundAvoidsCdb10() {
@@ -482,8 +500,8 @@ class UsbDiskTest {
 
         val thrown = assertThrows(DiskException.IoFailure::class.java) { disk.read(0UL, out) }
 
-        assertEquals("reset failed", thrown.message)
-        assertTrue(disk.isClosed)
+        assertEquals("BOT phase error", thrown.message)
+        assertEquals("reset failed", thrown.suppressed.single().message)
         assertFalse(session.isConnected())
         assertThrows(DiskException.Closed::class.java) { disk.read(0UL, out) }
     }
@@ -500,8 +518,8 @@ class UsbDiskTest {
 
         val thrown = assertThrows(DiskException.IoFailure::class.java) { disk.read(0UL, out) }
 
-        assertEquals("reset failed", thrown.message)
-        assertTrue(disk.isClosed)
+        assertEquals("simulated STALL", thrown.message)
+        assertEquals("reset failed", thrown.suppressed.single().message)
         assertFalse(session.isConnected())
         assertEquals(1, session.commands.count { it == ScsiCommand.OP_READ10 })
     }

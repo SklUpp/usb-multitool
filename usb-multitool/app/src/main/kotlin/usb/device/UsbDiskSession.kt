@@ -38,19 +38,36 @@ object UsbDiskSession {
     }
 
     internal fun initialize(session: BotSession) {
-        // TUR may report UNIT ATTENTION while media settles; clear it once.
-        val tur = session.transfer(ScsiCommand.testUnitReady(), null)
+        val tur = try {
+            session.transfer(ScsiCommand.testUnitReady(), null)
+        } catch (e: DiskException.CswReadFailure) {
+            recoverAfterInvalidCsw(session, e)
+        } catch (e: DiskException.InvalidCsw) {
+            recoverAfterInvalidCsw(session, e)
+        } catch (e: DiskException.NonMeaningfulCsw) {
+            recoverAfterInvalidCsw(session, e)
+        }
         when (tur.status) {
             CswStatus.PASSED -> Unit
             CswStatus.FAILED -> {
                 val senseBuffer = java.nio.ByteBuffer.allocate(18)
-                val sense = session.transfer(ScsiCommand.requestSense(18), senseBuffer)
+                val sense = try {
+                    session.transfer(ScsiCommand.requestSense(18), senseBuffer)
+                } catch (e: DiskException.CswReadFailure) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.InvalidCsw) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.NonMeaningfulCsw) {
+                    recoverAfterInvalidCsw(session, e)
+                }
                 if (sense.status != CswStatus.PASSED) {
-                    throw DiskException.IoFailure("REQUEST SENSE failed during USB initialization: ${sense.status}")
+                    throw DiskException.IoFailure(
+                        "REQUEST SENSE failed during USB initialization: ${sense.status}",
+                    )
                 }
                 senseBuffer.flip()
                 val parsed = UsbDisk.parseSense(senseBuffer)
-                if (!parsed.isUnitAttention && !(parsed.senseKey == 0x02 && parsed.asc == 0x04)) throw parsed
+                if (parsed.isUnitAttention) Unit else throw parsed
             }
             CswStatus.PHASE_ERROR -> {
                 session.bulkOnlyReset()

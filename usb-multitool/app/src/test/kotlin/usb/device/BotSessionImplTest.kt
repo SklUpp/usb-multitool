@@ -173,6 +173,29 @@ class BotSessionImplTest {
     }
 
     @Test
+    fun invalidCswReportsTypedFailureWithoutOwningClose() {
+        val channel = ScriptedBulkChannel()
+        val session = BotSessionImpl(channel)
+        channel.queueIn(ByteArray(BotConstants.CSW_SIZE))
+
+        assertThrows(DiskException.InvalidCsw::class.java) {
+            session.transfer(ScsiCommand.testUnitReady(), null)
+        }
+        assertTrue(session.isConnected())
+    }
+
+    @Test
+    fun residueOutsideCommandLengthReportsTypedFailureWithoutOwningClose() {
+        val channel = ScriptedBulkChannel()
+        val session = BotSessionImpl(channel)
+        channel.queueCsw(tag = 1, residue = 1)
+
+        assertThrows(DiskException.NonMeaningfulCsw::class.java) {
+            session.transfer(ScsiCommand.testUnitReady(), null)
+        }
+        assertTrue(session.isConnected())
+    }
+    @Test
     fun disconnectedChannelThrowsDisconnected() {
         val channel = ScriptedBulkChannel(connected = false)
         val session = BotSessionImpl(channel)

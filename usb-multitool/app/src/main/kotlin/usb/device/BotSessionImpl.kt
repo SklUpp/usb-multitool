@@ -64,7 +64,7 @@ class BotSessionImpl(
             ScsiDirection.NONE -> Unit
         }
 
-        return readCsw(tag, timeoutMs)
+        return readCsw(tag, cdb.transferLength, timeoutMs)
     }
 
     @Synchronized
@@ -100,20 +100,29 @@ class BotSessionImpl(
         transferExactOut(cbwBuffer, BotConstants.CBW_SIZE, timeoutMs)
     }
 
-    private fun readCsw(expectedTag: Int, timeoutMs: Int): CswResult {
+    private fun readCsw(expectedTag: Int, transferLength: Int, timeoutMs: Int): CswResult {
         cswBuffer.clear()
-        transferExactIn(cswBuffer, BotConstants.CSW_SIZE, timeoutMs)
+        try {
+            transferExactIn(cswBuffer, BotConstants.CSW_SIZE, timeoutMs)
+        } catch (e: DiskException.IoFailure) {
+            throw DiskException.CswReadFailure("CSW read failed", e)
+        }
         cswBuffer.flip()
         cswBuffer.order(ByteOrder.LITTLE_ENDIAN)
         val signature = cswBuffer.int
         if (signature != BotConstants.CSW_SIGNATURE) {
-            throw DiskException.IoFailure("bad CSW signature 0x${signature.toString(16)}")
+            throw DiskException.InvalidCsw("bad CSW signature 0x${signature.toString(16)}")
         }
         val tag = cswBuffer.int
         val residue = cswBuffer.int
         val status = CswStatus.from(cswBuffer.get().toInt() and 0xFF)
         if (tag != expectedTag) {
-            throw DiskException.IoFailure("CSW tag mismatch: got $tag expected $expectedTag")
+            throw DiskException.InvalidCsw("CSW tag mismatch: got $tag expected $expectedTag")
+        }
+        if (status != CswStatus.PHASE_ERROR && residue !in 0..transferLength) {
+            throw DiskException.NonMeaningfulCsw(
+                "CSW residue $residue outside transfer length $transferLength",
+            )
         }
         return CswResult(status, tag, residue)
     }

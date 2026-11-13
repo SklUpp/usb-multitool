@@ -6,11 +6,7 @@ Application license: `GPL-3.0-or-later` (`usb.BuildFacts.LICENSE`).
 
 ## Where builds run
 
-Gradle, NDK, emulator, and instrumentation commands run **only in GitHub Actions**.
-
-Local checks are file, script, and static validation only. Do not run `./gradlew` with any task on developer phones.
-
-Host FatFs image tests may run locally with plain `gcc`/`make` (no Android SDK).
+Locally and in github actions
 
 ## GitHub Actions verification commands
 

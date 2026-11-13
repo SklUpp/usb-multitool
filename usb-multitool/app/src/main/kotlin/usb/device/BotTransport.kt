@@ -51,7 +51,7 @@ enum class CswStatus(val code: Int) {
     companion object {
         fun from(code: Int): CswStatus =
             entries.firstOrNull { it.code == code }
-                ?: throw DiskException.IoFailure("illegal CSW status $code")
+                ?: throw DiskException.NonMeaningfulCsw("reserved CSW status $code")
     }
 }
 
@@ -103,4 +103,17 @@ object Recovery {
         channel.clearHaltIn()
         channel.clearHaltOut()
     }
+}
+
+
+/** Recover untrusted CSW without owning session lifetime; caller propagates for outer cleanup. */
+fun recoverAfterInvalidCsw(session: BotSession, primary: Throwable): Nothing {
+    if (session.isConnected()) {
+        try {
+            session.bulkOnlyReset()
+        } catch (recovery: Throwable) {
+            if (recovery !== primary) primary.addSuppressed(recovery)
+        }
+    }
+    throw primary
 }

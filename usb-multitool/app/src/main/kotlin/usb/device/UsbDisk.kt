@@ -100,8 +100,8 @@ open class UsbDisk(
                     throw sense
                 }
                 CswStatus.PHASE_ERROR -> {
-                    resetOrClose()
                     val failure = DiskException.IoFailure("phase error on SYNCHRONIZE CACHE(10)")
+                    resetOrClose(failure)
                     closeSessionPreserving(failure)
                     throw failure
                 }
@@ -130,37 +130,43 @@ open class UsbDisk(
                 val res = session.transfer(cdb, buffer)
                 buffer.limit(oldLimit)
                 res
+            } catch (e: DiskException.CswReadFailure) {
+                closeAfterUntrustedReply(e)
+            } catch (e: DiskException.InvalidCsw) {
+                closeAfterUntrustedReply(e)
+            } catch (e: DiskException.NonMeaningfulCsw) {
+                closeAfterUntrustedReply(e)
+            } catch (e: DiskException.Disconnected) {
+                closeSessionPreserving(e)
+                throw e
             } catch (e: DiskException.IoFailure) {
-                // An OUT command may have reached the medium before transport failure, so its
-                // completion is unknown. Recover the BOT pipe, then close without replaying it.
                 if (cdb.direction == ScsiDirection.OUT) {
-                    resetOrClose()
+                    resetOrClose(e)
                     closeSessionPreserving(e)
                     throw e
                 }
-                // IN commands are safe to replay after one BOT reset recovery.
                 if (attempt >= 1) {
                     closeSessionPreserving(e)
                     throw e
                 }
-                resetOrClose()
+                resetOrClose(e)
                 attempt++
                 continue
-            } catch (e: DiskException.Disconnected) {
-                closeSessionPreserving(e)
-                throw e
             } finally {
                 buffer.limit(oldLimit)
             }
 
             if (result.status == CswStatus.PHASE_ERROR) {
                 val failure = DiskException.IoFailure("BOT phase error")
-                resetOrClose()
+                resetOrClose(failure)
                 closeSessionPreserving(failure)
                 throw failure
             }
             if (result.residue !in 0..cdb.transferLength) {
-                throw DiskException.IoFailure("phase error: invalid residue")
+                val failure = DiskException.NonMeaningfulCsw(
+                    "CSW residue ${result.residue} outside transfer length ${cdb.transferLength}",
+                )
+                closeAfterUntrustedReply(failure)
             }
             when (result.status) {
                 CswStatus.PASSED -> {
@@ -169,19 +175,24 @@ open class UsbDisk(
                     // advance LBA by the full part while the buffer only holds delivered.
                     val delivered = buffer.position() - mark
                     if (delivered != length || result.residue != 0) {
-                        throw DiskException.IoFailure(
+                        val failure = DiskException.NonMeaningfulCsw(
                             "data phase mismatch: $delivered of $length bytes, " +
                                 "residue=${result.residue}",
                         )
+                        closeAfterUntrustedReply(failure)
                     }
                     return
                 }
                 CswStatus.FAILED -> {
-                    // CSW status 1: REQUEST SENSE, then surface without closing session.
+                    // REQUEST SENSE is required before surfacing command failure.
                     val sense = requestSense()
+                    if (sense.isUnitAttention && cdb.direction == ScsiDirection.OUT) {
+                        // Target identity/media may have changed. Do not replay unknown OUT;
+                        // close so caller must re-probe and revalidate before any write.
+                        closeSessionPreserving(sense)
+                        throw sense
+                    }
                     if (sense.isUnitAttention && !uaRetried) {
-                        // Reset Recovery / media change leaves a one-shot UNIT ATTENTION pending;
-                        // REQUEST SENSE cleared it, so the next identical attempt is expected to pass.
                         uaRetried = true
                         continue
                     }
@@ -200,14 +211,34 @@ open class UsbDisk(
         ensureConnected()
         return try {
             session.transfer(cdb, data, timeoutMs)
+        } catch (e: DiskException.CswReadFailure) {
+            closeAfterUntrustedReply(e)
+        } catch (e: DiskException.InvalidCsw) {
+            closeAfterUntrustedReply(e)
+        } catch (e: DiskException.NonMeaningfulCsw) {
+            closeAfterUntrustedReply(e)
         } catch (e: DiskException.Disconnected) {
             closeSessionPreserving(e)
             throw e
+        } catch (e: DiskException.IoFailure) {
+            closeAfterUntrustedReply(e)
         }
     }
 
-    private fun requestSense(): DiskException.SenseError = senseOf(session)
-
+    private fun requestSense(): DiskException.SenseError = try {
+        senseOf(session)
+    } catch (e: DiskException.CswReadFailure) {
+        closeAfterUntrustedReply(e)
+    } catch (e: DiskException.InvalidCsw) {
+        closeAfterUntrustedReply(e)
+    } catch (e: DiskException.NonMeaningfulCsw) {
+        closeAfterUntrustedReply(e)
+    } catch (e: DiskException.Disconnected) {
+        closeSessionPreserving(e)
+        throw e
+    } catch (e: DiskException.IoFailure) {
+        closeAfterUntrustedReply(e)
+    }
     private fun ensureOpen() {
         if (closed) throw DiskException.Closed()
     }
@@ -257,16 +288,33 @@ open class UsbDisk(
         }
     }
 
+    private fun closeAfterUntrustedReply(primary: Throwable): Nothing {
+        if (session.isConnected()) {
+            try {
+                session.bulkOnlyReset()
+            } catch (recovery: Throwable) {
+                if (recovery !== primary) primary.addSuppressed(recovery)
+            }
+        }
+        closeSessionPreserving(primary)
+        throw primary
+    }
+
     /**
      * BOT reset recovery. If the reset itself fails the pipe is untrustworthy:
      * close the session, then rethrow the reset failure unaltered.
      */
-    private fun resetOrClose() {
+    private fun resetOrClose(primary: Throwable? = null) {
         try {
             session.bulkOnlyReset()
-        } catch (e: Exception) {
-            closeSessionPreserving(e)
-            throw e
+        } catch (recovery: Throwable) {
+            if (primary != null) {
+                primary.addSuppressed(recovery)
+                closeSessionPreserving(primary)
+                throw primary
+            }
+            closeSessionPreserving(recovery)
+            throw recovery
         }
     }
 
@@ -306,8 +354,15 @@ open class UsbDisk(
             val buf10 = ByteBuffer.allocate(8)
             var uaRetried = false
             while (true) {
+                buf10.clear()
                 val status10 = try {
                     session.transfer(ScsiCommand.readCapacity10(), buf10)
+                } catch (e: DiskException.CswReadFailure) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.InvalidCsw) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.NonMeaningfulCsw) {
+                    recoverAfterInvalidCsw(session, e)
                 } catch (e: DiskException.IoFailure) {
                     resetOrClose(session)
                     return readCapacity16(session)
@@ -317,7 +372,7 @@ open class UsbDisk(
                     throw DiskException.IoFailure("phase error on READ CAPACITY(10)")
                 }
                 if (status10.status == CswStatus.FAILED) {
-                    val sense = senseOf(session)
+                    val sense = probeSenseOf(session)
                     if (sense.isUnitAttention && !uaRetried) {
                         // Stale UNIT ATTENTION from an earlier reset recovery.
                         uaRetried = true
@@ -344,7 +399,17 @@ open class UsbDisk(
             var uaRetried = false
             while (true) {
                 val buf = ByteBuffer.allocate(32)
-                val status = session.transfer(ScsiCommand.readCapacity16(32), buf)
+                val status = try {
+                    session.transfer(ScsiCommand.readCapacity16(32), buf)
+                } catch (e: DiskException.CswReadFailure) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.InvalidCsw) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.NonMeaningfulCsw) {
+                    recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.Disconnected) {
+                    throw e
+                }
                 when (status.status) {
                     CswStatus.PASSED -> {
                         buf.flip()
@@ -360,7 +425,7 @@ open class UsbDisk(
                         return BlockGeometry(blockLength, lastLba + 1UL)
                     }
                     CswStatus.FAILED -> {
-                        val sense = senseOf(session)
+                        val sense = probeSenseOf(session)
                         if (sense.isUnitAttention && !uaRetried) {
                             uaRetried = true
                             continue
@@ -383,6 +448,12 @@ open class UsbDisk(
             }
             buf.flip()
             return parseSense(buf)
+        }
+
+        private fun probeSenseOf(session: BotSession): DiskException.SenseError = try {
+            senseOf(session)
+        } catch (e: DiskException.IoFailure) {
+            recoverAfterInvalidCsw(session, e)
         }
 
         fun parseSense(buffer: ByteBuffer): DiskException.SenseError {
