@@ -1,6 +1,9 @@
 package usb.ventoy
 
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import org.tukaani.xz.LZMA2Options
+import org.tukaani.xz.XZOutputStream
 
 /**
  * Test-only synthetic Ventoy assets: self-consistent digests so layout code can be
@@ -18,21 +21,20 @@ fun syntheticVentoyAssets(
     boot[510] = 0x55.toByte()
     boot[511] = 0xAA.toByte()
 
-    val core = if (coreBytes != null) {
-        coreBytes
-    } else {
-        ByteArray(2048) { 0xCC.toByte() }.also { it[500] = 1 }
-    }
+    val rawCore = coreBytes ?: ByteArray(2048) { 0xCC.toByte() }.also { it[500] = 1 }
 
     // Minimal EFI image structure with a FAT boot sector
-    val efi = ByteArray(efiPartSectors * 512)
-    efi[0] = 0xEB.toByte()
-    efi[1] = 0x3C.toByte()
-    efi[2] = 0x90.toByte()
-    "MSDOS5.0".toByteArray().copyInto(efi, 3)
-    efi[510] = 0x55.toByte()
-    efi[511] = 0xAA.toByte()
-    "VENTOY_VERSION=\"$release\"".toByteArray().copyInto(efi, 1024)
+    val rawEfi = ByteArray(efiPartSectors * 512)
+    rawEfi[0] = 0xEB.toByte()
+    rawEfi[1] = 0x3C.toByte()
+    rawEfi[2] = 0x90.toByte()
+    "MSDOS5.0".toByteArray().copyInto(rawEfi, 3)
+    rawEfi[510] = 0x55.toByte()
+    rawEfi[511] = 0xAA.toByte()
+    "VENTOY_VERSION=\"$release\"".toByteArray().copyInto(rawEfi, 1024)
+
+    val core = compressXz(rawCore)
+    val efi = compressXz(rawEfi)
 
     return VentoyAssets(
         release = release,
@@ -46,6 +48,12 @@ fun syntheticVentoyAssets(
         diskImgSha256 = efi.sha256Hex(),
     )
 }
+
+private fun compressXz(data: ByteArray): ByteArray =
+    ByteArrayOutputStream().also { out ->
+        XZOutputStream(out, LZMA2Options()).use { it.write(data) }
+    }.toByteArray()
+
 
 /** Writes [syntheticVentoyAssets] into [dir] as the on-disk release layout. */
 fun writeSyntheticRelease(

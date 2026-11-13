@@ -637,7 +637,7 @@ object Autounattend {
     private fun isEditableComponentChild(element: Element, component: Element): Boolean {
         val pass = (component.parentNode as? Element)?.getAttribute("pass")
         return when (component.getAttribute("name") to pass) {
-            "Microsoft-Windows-Setup" to "windowsPE" -> element.localName == "DiskConfiguration"
+            "Microsoft-Windows-Setup" to "windowsPE" -> element.localName in setOf("DiskConfiguration", "ImageInstall")
             "Microsoft-Windows-Shell-Setup" to "specialize" -> element.localName == "ComputerName"
             "Microsoft-Windows-Shell-Setup" to "oobeSystem" -> element.localName == "UserAccounts"
             "Microsoft-Windows-International-Core" to "oobeSystem" ->

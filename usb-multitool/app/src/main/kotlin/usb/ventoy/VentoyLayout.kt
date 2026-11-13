@@ -3,6 +3,7 @@ package usb.ventoy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.CRC32
+import java.math.BigDecimal
 import usb.EngineMissingException
 import usb.device.BlockDevice
 import usb.requireLinkedEngine
@@ -1618,12 +1619,13 @@ object WindowsSetup {
 internal object MiniJson {
     /** Number token retained verbatim so unrelated sections round-trip without precision loss. */
     private class RawNumber(private val token: String) : Number() {
-        override fun toByte(): Byte = token.toDouble().toInt().toByte()
-        override fun toShort(): Short = token.toDouble().toInt().toShort()
-        override fun toDouble(): Double = token.toDouble()
-        override fun toFloat(): Float = token.toFloat()
-        override fun toInt(): Int = token.toDouble().toInt()
-        override fun toLong(): Long = token.toDouble().toLong()
+        private val decimal by lazy { BigDecimal(token) }
+        override fun toByte(): Byte = decimal.toBigInteger().byteValueExact()
+        override fun toShort(): Short = decimal.toBigInteger().shortValueExact()
+        override fun toDouble(): Double = decimal.toDouble()
+        override fun toFloat(): Float = decimal.toFloat()
+        override fun toInt(): Int = decimal.toBigInteger().intValueExact()
+        override fun toLong(): Long = decimal.toBigInteger().longValueExact()
         override fun toString(): String = token
     }
 
@@ -1779,9 +1781,16 @@ internal object MiniJson {
                         }
                     }
                     val token = s.substring(start, pos)
-                    // Preserve exact token; scalar callers still receive a Number API.
-                    RawNumber(token)
-                }
+                    if (!isFloat) {
+                        if (token == "-0") RawNumber(token) else token.toLongOrNull() ?: RawNumber(token)
+                    } else {
+                        val double = token.toDoubleOrNull()
+                        if (double != null && double.isFinite() && double.toString() == token) {
+                            double
+                        } else {
+                            RawNumber(token)
+                        }
+                    }
             }
         }
     }
