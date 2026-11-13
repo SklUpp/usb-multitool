@@ -57,6 +57,7 @@
     <string name="cancel_operation_title">Отменить операцию?</string>
     <string name="cancel_operation_body">Отменить «%1$s»? Только подтверждение остановит операцию.</string>
     <string name="cancel_operation_confirm">Подтвердить отмену</string>
+    <string name="action_cancel">Отмена</string>
 
     <string name="partitions_selected_title">Информация о разделе</string>
     <string name="partitions_none_selected">не выбран</string>
@@ -783,6 +784,11 @@
     <string name="settings_source_use_default">Вернуть стандартный ventoy.json</string>
     <string name="settings_source_custom_path">Нестандартный путь. Ventoy читает /ventoy/ventoy.json; этот файл изменяется только по кнопке «Обновить» здесь.</string>
     <string name="settings_source_phone_note">Документ на телефоне изменяется на месте и никогда не копируется на флешку.</string>
+    <string name="settings_open_editor">Открыть редактор</string>
+    <string name="settings_editor_title">Глобальные настройки Ventoy</string>
+    <string name="settings_editor_help">Редактируйте известные ключи и все пары key/value. Очищайте значения крестиком, удаляйте непустые строки корзиной, добавляйте строки плюсом. Применить записывает импортированный документ в /ventoy/ventoy.json; Отмена отменяет черновик.</string>
+    <string name="settings_cancel">Отмена</string>
+    <string name="settings_apply">Применить</string>
     <string name="settings_source_status_reading">Чтение…</string>
     <string name="settings_source_status_unread">Ещё не прочитано</string>
     <string name="settings_source_status_valid">JSON допустим · настроек: %1$d</string>

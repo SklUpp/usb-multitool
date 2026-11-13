@@ -57,6 +57,7 @@
     <string name="cancel_operation_title">Cancel operation?</string>
     <string name="cancel_operation_body">Cancel %1$s? Only confirmation stops this operation.</string>
     <string name="cancel_operation_confirm">Confirm cancellation</string>
+    <string name="action_cancel">Cancel</string>
 
     <string name="partitions_selected_title">Partition information</string>
     <string name="partitions_none_selected">none selected</string>
@@ -795,6 +796,11 @@
     <string name="settings_source_use_default">Use the standard ventoy.json</string>
     <string name="settings_source_custom_path">Non-standard path. Ventoy reads /ventoy/ventoy.json; this file is changed only when you press Update here.</string>
     <string name="settings_source_phone_note">The phone document is updated in place; it is never copied to the stick.</string>
+    <string name="settings_open_editor">Open editor</string>
+    <string name="settings_editor_title">Global Ventoy settings</string>
+    <string name="settings_editor_help">Edit known controls and every key/value pair. Clear values with ×, delete non-empty rows with the trash icon, add rows with +. Apply writes the imported document to /ventoy/ventoy.json; Cancel discards draft changes.</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_apply">Apply</string>
     <string name="settings_source_status_reading">Reading…</string>
     <string name="settings_source_status_unread">Not read yet</string>
     <string name="settings_source_status_valid">Valid JSON · %1$d settings</string>

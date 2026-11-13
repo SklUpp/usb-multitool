@@ -1794,6 +1794,7 @@ internal object MiniJson {
             }
         }
     }
+    }
 
     fun stringify(value: Any?, indent: Int = 0): String {
         val spaces = "  ".repeat(indent)
