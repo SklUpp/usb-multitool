@@ -14,6 +14,7 @@ import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendParams
 import usb.ventoy.AutounattendProblem
 import usb.ventoy.AutounattendState
+import usb.ventoy.XmlFieldIntent
 import usb.ventoy.DiskLayout
 import usb.ventoy.FolderReadProblem
 import usb.ventoy.UnreadableProblem
@@ -1887,7 +1888,7 @@ object UiReducer {
                     } else {
                         val layout = pendingGen.params.diskLayout
                         val layoutProblems =
-                            if (layout != null && layout.writeLayout) {
+                            if (layout != null && layout.writeLayout && pendingGen.params.intents.diskLayout == XmlFieldIntent.Set) {
                                 targetLayoutProblems(layout)
                             } else {
                                 emptyList()
@@ -1900,7 +1901,7 @@ object UiReducer {
                                     statusMessage = layoutProblemMessage(layoutProblems),
                                 ),
                             )
-                        } else if (layout != null && layout.writeLayout) {
+                        } else if (layout != null && layout.writeLayout && pendingGen.params.intents.diskLayout == XmlFieldIntent.Set) {
                             // Overwrite acknowledged; still need separate target-PC layout ack.
                             val plan =
                                 pendingGen.expectedPlanSha256
@@ -3077,7 +3078,9 @@ object UiReducer {
                     autounattendPlanSha256(intent.xmlName, intent.params, intent.imagePaths)
                 val planMatches = intent.planSha256 == null || intent.planSha256 == planSha256
                 val layoutProblems =
-                    if (layout != null && layout.writeLayout) targetLayoutProblems(layout) else emptyList()
+                    if (layout != null && layout.writeLayout && intent.params.intents.diskLayout == XmlFieldIntent.Set) {
+                        targetLayoutProblems(layout)
+                    } else emptyList()
                 when {
                     device == null ->
                         ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
@@ -3212,7 +3215,7 @@ object UiReducer {
                     else -> {
                         val layout = pending.params.diskLayout
                         val layoutProblems =
-                            if (layout != null && layout.writeLayout) {
+                            if (layout != null && layout.writeLayout && pending.params.intents.diskLayout == XmlFieldIntent.Set) {
                                 targetLayoutProblems(layout)
                             } else {
                                 emptyList()

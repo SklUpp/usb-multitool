@@ -59,10 +59,26 @@ fun diskLayoutRemainingMb(layout: DiskLayout): Long? {
     return declared - total
 }
 
+enum class XmlFieldIntent { Preserve, Set, Remove }
+
+data class AutounattendIntents(
+    val language: XmlFieldIntent = XmlFieldIntent.Set,
+    val locale: XmlFieldIntent = XmlFieldIntent.Set,
+    val computerName: XmlFieldIntent = XmlFieldIntent.Set,
+    val localAccount: XmlFieldIntent = XmlFieldIntent.Set,
+    val diskLayout: XmlFieldIntent = XmlFieldIntent.Set,
+)
+
 data class LocalAccount(
     val name: String? = null,
     val password: String? = null,
     val inAdministrators: Boolean? = null,
+    /** Existing non-Administrators group retained unless caller explicitly supplies a new account. */
+    val preservedGroup: String? = null,
+    /** Existing Password/PlainText value; null means newly authored password. */
+    val passwordPlainText: Boolean? = null,
+    val passwordIntent: XmlFieldIntent = XmlFieldIntent.Set,
+    val groupIntent: XmlFieldIntent = XmlFieldIntent.Set,
 ) {
     /** Never let a data-class dump carry the plaintext password into logs or traces. */
     override fun toString(): String =
@@ -77,6 +93,15 @@ data class AutounattendParams(
     val computerName: String? = null,
     val localAccount: LocalAccount? = null,
     val diskLayout: DiskLayout? = null,
+    val intents: AutounattendIntents = AutounattendIntents(
+        language = XmlFieldIntent.Set,
+        locale = XmlFieldIntent.Set,
+        computerName = XmlFieldIntent.Set,
+        localAccount = XmlFieldIntent.Set,
+        diskLayout = XmlFieldIntent.Set,
+    ),
+    /** Imported source layout used only to prove replacement preserves original XML. */
+    val originalDiskLayout: DiskLayout? = null,
 )
 
 data class AutounattendDefaults(
@@ -87,7 +112,14 @@ data class AutounattendDefaults(
     val note: String = "",
 )
 
-data class UnknownElement(val name: String, val path: String?)
+data class UnknownElement(
+    val name: String,
+    val path: String?,
+    /** Unsupported attributes retained as names; unknown values are never logged. */
+    val attributes: List<String> = emptyList(),
+    /** Optional structural reason, never includes element text or secret values. */
+    val detail: String? = null,
+)
 
 data class AutounattendDocument(
     val existing: AutounattendParams?,
@@ -169,17 +201,29 @@ fun autounattendPlanSha256(
     val account = params.localAccount
     val canonical =
         buildString {
-            append("xml=").append(xmlName.trim()).append('\n')
-            append("lang=").append(params.languageTag).append('\n')
-            append("locale=").append(params.localeId).append('\n')
-            append("computer=").append(params.computerName).append('\n')
-            append("account.name=").append(account?.name).append('\n')
+            append("xml=").appendField(xmlName.trim()).append('\n')
+            append("intent.language=").append(params.intents.language).append('\n')
+            append("intent.locale=").append(params.intents.locale).append('\n')
+            append("intent.computer=").append(params.intents.computerName).append('\n')
+            append("intent.account=").append(params.intents.localAccount).append('\n')
+            append("intent.layout=").append(params.intents.diskLayout).append('\n')
+            append("lang=").appendNullable(params.languageTag).append('\n')
+            append("locale=").appendNullable(params.localeId).append('\n')
+            append("computer=").appendNullable(params.computerName).append('\n')
+            append("account.name=").appendNullable(account?.name).append('\n')
             // Bind the password into the plan without carrying plaintext through the
             // digest input (it would otherwise sit in any string dump of the plan).
             append("account.passwordSha256=")
-                .append(account?.password?.let { sha256Hex(it) })
+                .appendNullable(account?.password?.let { sha256Hex(it) })
                 .append('\n')
             append("account.admin=").append(account?.inAdministrators).append('\n')
+            append("account.groupIntent=").append(account?.groupIntent).append('\n')
+            append("account.passwordIntent=").append(account?.passwordIntent).append('\n')
+            append("account.preservedGroup=").appendNullable(account?.preservedGroup).append('\n')
+            append("account.passwordPlainText=").append(account?.passwordPlainText).append('\n')
+            append("layout.original=")
+            appendLayout(params.originalDiskLayout)
+            append('\n')
             append("layout.write=").append(layout?.writeLayout).append('\n')
             append("layout.diskId=").append(layout?.diskId).append('\n')
             append("layout.wipe=").append(layout?.wipe).append('\n')
@@ -188,9 +232,10 @@ fun autounattendPlanSha256(
                 append("partition=")
                     .append(partition.role.name).append(',')
                     .append(partition.sizeMb).append(',')
-                    .append(partition.label).append('\n')
+                    .appendNullable(partition.label).append('\n')
             }
-            imagePaths.sorted().forEach { append("image=").append(it).append('\n') }
+            append("images=").append(imagePaths.size).append('\n')
+            imagePaths.sorted().forEach { append("image=").appendField(it).append('\n') }
         }
     val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
     return digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
@@ -199,3 +244,29 @@ fun autounattendPlanSha256(
 private fun sha256Hex(value: String): String =
     MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+private fun StringBuilder.appendNullable(value: String?): StringBuilder {
+    if (value == null) append("N:") else append("V").append(value.length).append(':').append(value)
+    return this
+}
+
+private fun StringBuilder.appendField(value: String): StringBuilder =
+    append(value.length).append(':').append(value)
+
+private fun StringBuilder.appendLayout(layout: DiskLayout?) {
+    if (layout == null) {
+        append("N")
+        return
+    }
+    append("V{")
+        .append("write=").append(layout.writeLayout)
+        .append(";diskId=").appendNullable(layout.diskId?.toString())
+        .append(";wipe=").append(layout.wipe)
+        .append(";declared=").appendNullable(layout.declaredSizeMb?.toString())
+        .append(";partitions=").append(layout.partitions.size).append(':')
+    layout.partitions.forEach { partition ->
+        append(partition.role.name).append(',').append(partition.sizeMb).append(',')
+            .appendNullable(partition.label).append(';')
+    }
+    append('}')
+}

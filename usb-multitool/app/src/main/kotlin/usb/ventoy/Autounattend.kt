@@ -34,11 +34,21 @@ object Autounattend {
             "DiskConfiguration", "Disk", "WillWipeDisk", "CreatePartitions", "CreatePartition",
             "Order", "Type", "Size", "Label", "ModifyPartitions", "ModifyPartition",
             "PartitionID", "Format", "PartitionType", "Active", "Extend", "ImageInstall",
-            "TypeID",
-            "OSImage", "InstallFrom", "MetaData", "Key", "InstallTo", "DiskID", "WillShowUI",
-            "DataImage", "InstallToAvailablePartition",
-            "Credentials", "Username", "Domain", "Path", "File", "DoNotResize", "Letter",
+            "TypeID", "OSImage", "InstallFrom", "MetaData", "Key", "InstallTo", "DiskID",
+            "WillShowUI", "DataImage", "InstallToAvailablePartition", "Credentials", "Username",
+            "Domain", "Path", "File", "DoNotResize", "Letter",
         )
+
+    private val knownPasses = setOf("windowsPE", "specialize", "oobeSystem", "auditSystem", "generalize")
+    private val knownComponents =
+        setOf("Microsoft-Windows-Setup", "Microsoft-Windows-Shell-Setup", "Microsoft-Windows-International-Core")
+    private val allowedAttributes =
+        mapOf(
+            "settings" to setOf("pass"),
+            "component" to setOf("name", "processorArchitecture", "publicKeyToken", "language", "versionScope"),
+        )
+    private const val XMLNS = "http://www.w3.org/2000/xmlns/"
+    private const val WCM = "http://schemas.microsoft.com/WMIConfig/2002/State"
 
     fun read(sourcePath: String, bytes: ByteArray?): AutounattendState {
         if (bytes == null) return AutounattendState.Missing
@@ -70,7 +80,7 @@ object Autounattend {
                 sourcePath,
             )
         val unknown = ArrayList<UnknownElement>()
-        collectUnknown(root, "", unknown::add)
+        collectUnknown(root, "", null, unknown::add)
         val existing = readParams(root)
         val markers = WindowsTemplate.inspect(bytes).destructiveMarkers
         return AutounattendState.Parsed(
@@ -110,32 +120,40 @@ object Autounattend {
         requireDeclaredDiskSize: Boolean = false,
     ): AutounattendValidation {
         val problems = linkedSetOf<AutounattendProblem>()
-        params.languageTag?.let {
-            if (!it.matches(Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"))) {
-                problems.add(AutounattendProblem.BadLanguageTag)
+        if (params.intents.language == XmlFieldIntent.Set) {
+            params.languageTag?.let {
+                if (!it.matches(Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"))) {
+                    problems.add(AutounattendProblem.BadLanguageTag)
+                }
             }
         }
-        params.localeId?.let {
-            if (!it.matches(Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"))) {
-                problems.add(AutounattendProblem.BadLanguageTag)
+        if (params.intents.locale == XmlFieldIntent.Set) {
+            params.localeId?.let {
+                if (!it.matches(Regex("^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"))) {
+                    problems.add(AutounattendProblem.BadLanguageTag)
+                }
             }
         }
-        params.computerName?.let {
-            if (it.isEmpty() || it.length > 15 || !it.matches(Regex("^[A-Za-z0-9-]+$"))) {
-                problems.add(AutounattendProblem.BadComputerName)
+        if (params.intents.computerName == XmlFieldIntent.Set) {
+            params.computerName?.let {
+                if (it.isEmpty() || it.length > 15 || !it.matches(Regex("^[A-Za-z0-9-]+$"))) {
+                    problems.add(AutounattendProblem.BadComputerName)
+                }
             }
         }
-        params.localAccount?.let { account ->
-            account.name?.let {
-                if (it.isEmpty() || it.length > 20 || it.any { c -> c in "\"\\/[]:;|=,+*?<>@" }) {
+        if (params.intents.localAccount == XmlFieldIntent.Set) {
+            params.localAccount?.let { account ->
+                account.name?.let {
+                    if (it.isEmpty() || it.length > 20 || it.any { c -> c in "\"\\/[]:;|=,+*?<>@" }) {
+                        problems.add(AutounattendProblem.BadAccountName)
+                    }
+                }
+                if (account.name == null && (account.password != null || account.inAdministrators != null)) {
                     problems.add(AutounattendProblem.BadAccountName)
                 }
             }
-            if (account.name == null && (account.password != null || account.inAdministrators != null)) {
-                problems.add(AutounattendProblem.BadAccountName)
-            }
         }
-        params.diskLayout?.let { layout ->
+        if (params.intents.diskLayout == XmlFieldIntent.Set) params.diskLayout?.let { layout ->
             if (layout.writeLayout) {
                 if (layout.diskId == null || layout.diskId < 0) {
                     problems.add(AutounattendProblem.LayoutIncomplete)
@@ -200,25 +218,59 @@ object Autounattend {
                 parse(baseXml)
             }
         val root = document.documentElement
-        if (params.languageTag != null || params.localeId != null) {
-            val component = ensureComponent(document, root, "oobeSystem", "Microsoft-Windows-International-Core")
-            params.languageTag?.let { setText(document, component, "UILanguage", it) }
-            params.localeId?.let {
-                setText(document, component, "UserLocale", it)
-                setText(document, component, "SystemLocale", it)
+        if (params.intents.language != XmlFieldIntent.Preserve || params.intents.locale != XmlFieldIntent.Preserve) {
+            if (params.intents.language == XmlFieldIntent.Set && params.languageTag != null) {
+                val component = ensureComponent(document, root, "oobeSystem", "Microsoft-Windows-International-Core")
+                setText(document, component, "UILanguage", params.languageTag)
+            } else if (params.intents.language == XmlFieldIntent.Remove) {
+                findComponent(root, "oobeSystem", "Microsoft-Windows-International-Core")?.let {
+                    removeChild(it, "UILanguage")
+                }
+            }
+            if (params.intents.locale == XmlFieldIntent.Set && params.localeId != null) {
+                val component = ensureComponent(document, root, "oobeSystem", "Microsoft-Windows-International-Core")
+                setText(document, component, "UserLocale", params.localeId)
+                setText(document, component, "SystemLocale", params.localeId)
+            } else if (params.intents.locale == XmlFieldIntent.Remove) {
+                findComponent(root, "oobeSystem", "Microsoft-Windows-International-Core")?.let {
+                    removeChild(it, "UserLocale")
+                    removeChild(it, "SystemLocale")
+                }
             }
         }
-        params.computerName?.let { name ->
-            val component = ensureComponent(document, root, "specialize", "Microsoft-Windows-Shell-Setup")
-            setText(document, component, "ComputerName", name)
-        }
-        params.localAccount?.let { account ->
-            if (!account.name.isNullOrBlank()) {
-                applyLocalAccount(document, root, account)
+        when (params.intents.computerName) {
+            XmlFieldIntent.Set -> params.computerName?.let { name ->
+                val component = ensureComponent(document, root, "specialize", "Microsoft-Windows-Shell-Setup")
+                setText(document, component, "ComputerName", name)
             }
+            XmlFieldIntent.Remove -> findComponent(root, "specialize", "Microsoft-Windows-Shell-Setup")?.let {
+                removeChild(it, "ComputerName")
+            }
+            XmlFieldIntent.Preserve -> Unit
         }
-        params.diskLayout?.let { layout ->
-            if (layout.writeLayout) applyDiskLayout(document, root, layout)
+        when (params.intents.localAccount) {
+            XmlFieldIntent.Set -> params.localAccount?.takeIf { !it.name.isNullOrBlank() }?.let {
+                applyLocalAccount(document, root, it)
+            }
+            XmlFieldIntent.Remove -> findComponent(root, "oobeSystem", "Microsoft-Windows-Shell-Setup")?.let { shell ->
+                requireAtMostOne(shell, "UserAccounts", "oobeSystem/UserAccounts")
+                childOrNull(shell, "UserAccounts")?.let { userAccounts ->
+                    removeChild(userAccounts, "LocalAccounts")
+                    if (elementChildren(userAccounts).isEmpty()) {
+                        removeChild(shell, "UserAccounts")
+                    }
+                }
+            }
+            XmlFieldIntent.Preserve -> Unit
+        }
+        when (params.intents.diskLayout) {
+            XmlFieldIntent.Set -> params.diskLayout?.takeIf { it.writeLayout }?.let {
+                applyDiskLayout(document, root, it, params.originalDiskLayout)
+            }
+            XmlFieldIntent.Remove -> findComponent(root, "windowsPE", "Microsoft-Windows-Setup")?.let {
+                removeChild(it, "DiskConfiguration")
+            }
+            XmlFieldIntent.Preserve -> Unit
         }
         return serialize(document)
     }
@@ -240,7 +292,9 @@ object Autounattend {
             staleAccounts.forEach { shell.removeChild(it) }
         }
         val shell = ensureComponent(document, root, "oobeSystem", "Microsoft-Windows-Shell-Setup")
+        requireAtMostOne(shell, "UserAccounts", "oobeSystem/UserAccounts")
         val userAccounts = child(document, shell, "UserAccounts")
+        requireAtMostOne(userAccounts, "LocalAccounts", "oobeSystem/UserAccounts/LocalAccounts")
         val localAccounts = child(document, userAccounts, "LocalAccounts")
         val existing = childElements(localAccounts, "LocalAccount")
         if (existing.size > 1) {
@@ -251,20 +305,57 @@ object Autounattend {
         val localAccount = existing.firstOrNull() ?: document.createElementNS(namespace(root), "LocalAccount").also {
             localAccounts.appendChild(it)
         }
+        val currentAdministrators = directText(localAccount, "Group")?.equals("Administrators", true) == true
+        val inferredGroupChange =
+            account.groupIntent == XmlFieldIntent.Preserve &&
+                account.inAdministrators != null && account.inAdministrators != currentAdministrators
+        val nameChanged = account.name != directText(localAccount, "Name")
+        if (!nameChanged && !inferredGroupChange && account.groupIntent == XmlFieldIntent.Preserve && account.passwordIntent == XmlFieldIntent.Preserve) return
         setText(document, localAccount, "Name", account.name ?: return)
-        account.password?.let { password ->
-            val passwordElement = child(document, localAccount, "Password")
-            setText(document, passwordElement, "Value", password)
-            setText(document, passwordElement, "PlainText", "true")
+        if (account.passwordIntent != XmlFieldIntent.Preserve) {
+            when (account.passwordIntent) {
+                XmlFieldIntent.Set -> account.password?.let { password ->
+                    requireAtMostOne(localAccount, "Password", "oobeSystem/UserAccounts/LocalAccount/Password")
+                    val passwordElement = child(document, localAccount, "Password")
+                    val existingPlainText = directText(passwordElement, "PlainText")?.toBooleanStrictOrNull()
+                    if (account.passwordPlainText == false || existingPlainText == false) {
+                        throw IllegalStateException("${pathOf(passwordElement)} uses encoded password format")
+                    }
+                    setText(document, passwordElement, "Value", password)
+                    setText(document, passwordElement, "PlainText", "true")
+                }
+                XmlFieldIntent.Remove -> {
+                    requireAtMostOne(localAccount, "Password", "oobeSystem/UserAccounts/LocalAccount/Password")
+                    removeChild(localAccount, "Password")
+                }
+                XmlFieldIntent.Preserve -> Unit
+            }
         }
-        when (account.inAdministrators) {
-            true -> setText(document, localAccount, "Group", "Administrators")
-            false -> removeChild(localAccount, "Group")
-            null -> Unit
+        val requestedGroupIntent = if (inferredGroupChange) XmlFieldIntent.Set else account.groupIntent
+        val requestedGroup = if (inferredGroupChange) null else account.preservedGroup
+        if (requestedGroupIntent != XmlFieldIntent.Preserve) {
+            when (requestedGroupIntent) {
+                XmlFieldIntent.Set -> when {
+                    requestedGroup != null -> setText(document, localAccount, "Group", requestedGroup)
+                    account.inAdministrators == true -> setText(document, localAccount, "Group", "Administrators")
+                    account.inAdministrators == false -> removeChild(localAccount, "Group")
+                    else -> Unit
+                }
+                XmlFieldIntent.Remove -> {
+                    requireAtMostOne(localAccount, "Group", "oobeSystem/UserAccounts/LocalAccount/Group")
+                    removeChild(localAccount, "Group")
+                }
+                XmlFieldIntent.Preserve -> Unit
+            }
         }
     }
 
-    private fun applyDiskLayout(document: Document, root: Element, layout: DiskLayout) {
+    private fun applyDiskLayout(
+        document: Document,
+        root: Element,
+        layout: DiskLayout,
+        original: DiskLayout?,
+    ) {
         val setup = ensureComponent(document, root, "windowsPE", "Microsoft-Windows-Setup")
         val oldConfiguration = childOrNull(setup, "DiskConfiguration")
         if (childElements(setup, "DiskConfiguration").size > 1) {
@@ -275,7 +366,8 @@ object Autounattend {
         }
         val willShowUi = oldConfiguration?.let { directText(it, "WillShowUI") }
         oldConfiguration?.let { configuration ->
-            requireSupportedSubtree(configuration, "DiskConfiguration")
+            requireSupportedSubtree(configuration, "DiskConfiguration", replacing = true)
+            requireLayoutReplacementPreserves(configuration, layout, original)
             val disks = childElements(configuration, "Disk")
             if (disks.size > 1) {
                 throw IllegalStateException(
@@ -376,72 +468,53 @@ object Autounattend {
         }
 
     private fun readParams(root: Element): AutounattendParams? {
-        var language: String? = null
-        var locale: String? = null
-        var computer: String? = null
-        var account: LocalAccount? = null
-        var accountCount = 0
-        var layout: DiskLayout? = null
-        walk(root) { element ->
-            when (element.localName ?: element.tagName) {
-                "UILanguage" -> language = element.textContent?.trim()
-                "UserLocale" -> locale = element.textContent?.trim()
-                "ComputerName" -> computer = element.textContent?.trim()
-                "LocalAccount" -> {
-                    accountCount++
-                    val name = directText(element, "Name")
-                    val password = directText(element, "Password", "Value")
-                    val group = directText(element, "Group")
-                    if (name != null) {
-                        account = LocalAccount(name, password, group?.equals("Administrators", true))
-                    }
-                }
-                "DiskConfiguration" -> {
-                    val disk = childOrNull(element, "Disk") ?: return@walk
-                    val recoveryIds =
-                        childOrNull(disk, "ModifyPartitions")?.let { modify ->
-                            childElements(modify, "ModifyPartition")
-                                .filter {
-                                    directText(it, "TypeID")?.equals(
-                                        "de94bba4-06d1-4d40-a16a-bfd50179d6ac",
-                                        ignoreCase = true,
-                                    ) == true
-                                }
-                                .mapNotNull { directText(it, "PartitionID")?.toIntOrNull() }
-                                .toSet()
-                        } ?: emptySet()
-                    val partitions =
-                        childOrNull(disk, "CreatePartitions")?.let { creates ->
-                            childElements(creates, "CreatePartition")
-                                .sortedBy { directText(it, "Order")?.toIntOrNull() ?: Int.MAX_VALUE }
-                                .map { p ->
-                                    val id = directText(p, "Order")?.toIntOrNull() ?: 0
-                                    LayoutPartition(
-                                        sizeMb = directText(p, "Size")?.toLongOrNull() ?: 0L,
-                                        role =
-                                            when {
-                                                id in recoveryIds -> DiskPartitionRole.Recovery
-                                                directText(p, "Type")?.lowercase() == "efi" ->
-                                                    DiskPartitionRole.Efi
-                                                directText(p, "Type")?.lowercase() == "msr" ->
-                                                    DiskPartitionRole.Msr
-                                                else -> DiskPartitionRole.Primary
-                                            },
-                                        label = directText(p, "Label"),
-                                    )
-                                }
-                        } ?: emptyList()
-                    layout =
-                        DiskLayout(
-                            writeLayout = true,
-                            diskId = directText(disk, "DiskID")?.toLongOrNull(),
-                            wipe = directText(disk, "WillWipeDisk")?.toBooleanStrictOrNull() ?: false,
-                            partitions = partitions,
-                        )
-                }
+        val international = findComponentForRead(root, "oobeSystem", "Microsoft-Windows-International-Core")
+        val language = international?.let { directText(it, "UILanguage") }
+        val locale = international?.let { directText(it, "UserLocale") }
+
+        val specializeShell = findComponentForRead(root, "specialize", "Microsoft-Windows-Shell-Setup")
+        val computer = specializeShell?.let { directText(it, "ComputerName") }
+
+        val accountShell = findComponentForRead(root, "oobeSystem", "Microsoft-Windows-Shell-Setup")
+        val accountContainers = accountShell?.let { childElements(it, "UserAccounts") }.orEmpty()
+        val localAccountContainers =
+            if (accountContainers.size == 1) childElements(accountContainers.single(), "LocalAccounts") else emptyList()
+        val accountNodes =
+            if (localAccountContainers.size == 1) {
+                childElements(localAccountContainers.single(), "LocalAccount")
+            } else {
+                emptyList()
             }
-        }
-        if (accountCount > 1) account = null
+        val account =
+            if (accountNodes.size == 1) {
+                val node = accountNodes.single()
+                directText(node, "Name")?.let { name ->
+                    val passwordNode = childOrNull(node, "Password")
+                    val plainText = passwordNode?.let { directText(it, "PlainText")?.toBooleanStrictOrNull() }
+                    val group = directText(node, "Group")
+                    LocalAccount(
+                        name = name,
+                        password = if (plainText == false) null else passwordNode?.let { directText(it, "Value") },
+                        inAdministrators = group?.equals("Administrators", true) == true,
+                        preservedGroup = group?.takeUnless { it.equals("Administrators", true) },
+                        passwordPlainText = plainText,
+                        passwordIntent = XmlFieldIntent.Preserve,
+                        groupIntent = XmlFieldIntent.Preserve,
+                    )
+                }
+            } else {
+                null
+            }
+
+        val setup = findComponentForRead(root, "windowsPE", "Microsoft-Windows-Setup")
+        val configurations = setup?.let { childElements(it, "DiskConfiguration") }.orEmpty()
+        val layout =
+            if (configurations.size == 1) {
+                val disks = childElements(configurations.single(), "Disk")
+                if (disks.size == 1) readDiskLayout(disks.single()) else null
+            } else {
+                null
+            }
         if (language == null && locale == null && computer == null && account == null && layout == null) {
             return null
         }
@@ -449,20 +522,220 @@ object Autounattend {
             languageTag = language,
             localeId = locale,
             computerName = computer,
-            localAccount = account,
+            localAccount = account?.copy(
+                passwordIntent = XmlFieldIntent.Preserve,
+                groupIntent = XmlFieldIntent.Preserve,
+            ),
             diskLayout = layout,
+            intents = AutounattendIntents(
+                language = XmlFieldIntent.Preserve,
+                locale = XmlFieldIntent.Preserve,
+                computerName = XmlFieldIntent.Preserve,
+                localAccount = XmlFieldIntent.Preserve,
+                diskLayout = XmlFieldIntent.Preserve,
+            ),
+            originalDiskLayout = layout,
         )
     }
 
-    private fun collectUnknown(element: Element, path: String, add: (UnknownElement) -> Unit) {
+    private fun findComponentForRead(root: Element, pass: String, componentName: String): Element? {
+        val settings = childElements(root, "settings").filter {
+            it.namespaceURI == NS && it.getAttribute("pass") == pass
+        }
+        if (settings.size != 1) return null
+        val components = childElements(settings.single(), "component").filter {
+            it.namespaceURI == NS && it.getAttribute("name") == componentName
+        }
+        return components.singleOrNull()
+    }
+
+    private fun readDiskLayout(disk: Element): DiskLayout {
+        val recoveryIds =
+            childOrNull(disk, "ModifyPartitions")?.let { modify ->
+                childElements(modify, "ModifyPartition")
+                    .filter {
+                        directText(it, "TypeID")?.equals(
+                            "de94bba4-06d1-4d40-a16a-bfd50179d6ac",
+                            ignoreCase = true,
+                        ) == true
+                    }
+                    .mapNotNull { directText(it, "PartitionID")?.toIntOrNull() }
+                    .toSet()
+            } ?: emptySet()
+        val partitions =
+            childOrNull(disk, "CreatePartitions")?.let { creates ->
+                childElements(creates, "CreatePartition")
+                    .sortedBy { directText(it, "Order")?.toIntOrNull() ?: Int.MAX_VALUE }
+                    .map { partition ->
+                        val id = directText(partition, "Order")?.toIntOrNull() ?: 0
+                        LayoutPartition(
+                            sizeMb = directText(partition, "Size")?.toLongOrNull() ?: 0L,
+                            role = when {
+                                id in recoveryIds -> DiskPartitionRole.Recovery
+                                directText(partition, "Type")?.equals("efi", true) == true -> DiskPartitionRole.Efi
+                                directText(partition, "Type")?.equals("msr", true) == true -> DiskPartitionRole.Msr
+                                else -> DiskPartitionRole.Primary
+                            },
+                            label = directText(partition, "Label"),
+                        )
+                    }
+            } ?: emptyList()
+        return DiskLayout(
+            writeLayout = true,
+            diskId = directText(disk, "DiskID")?.toLongOrNull(),
+            wipe = directText(disk, "WillWipeDisk")?.toBooleanStrictOrNull() ?: false,
+            partitions = partitions,
+        )
+    }
+
+    private fun collectUnknown(
+        element: Element,
+        path: String,
+        parent: Element?,
+        add: (UnknownElement) -> Unit,
+    ) {
         val name = element.localName ?: element.tagName
         val currentPath = if (path.isEmpty()) name else "$path/$name"
-        if (name !in knownElements) add(UnknownElement(name, path.ifEmpty { null }))
+        val attributes = unsupportedAttributes(element)
+        val unsupportedPassword =
+            name == "Password" && directText(element, "PlainText")?.toBooleanStrictOrNull() == false
+        if (!isEditableElement(element, parent) || attributes.isNotEmpty() || unsupportedPassword) {
+            add(
+                UnknownElement(
+                    name,
+                    currentPath,
+                    attributes,
+                    detail = if (unsupportedPassword) "encoded password format" else null,
+                ),
+            )
+        }
         var child = element.firstChild
         while (child != null) {
-            if (child is Element) collectUnknown(child, currentPath, add)
+            when {
+                child is Element -> collectUnknown(child, currentPath, element, add)
+                child.nodeType == Node.COMMENT_NODE ->
+                    add(UnknownElement("#comment", "$currentPath/#comment", detail = "comment content"))
+                child.nodeType == Node.PROCESSING_INSTRUCTION_NODE ->
+                    add(UnknownElement("#processing-instruction", "$currentPath/#processing-instruction", detail = "processing instruction"))
+                child.nodeType == Node.CDATA_SECTION_NODE ->
+                    add(UnknownElement("#cdata", "$currentPath/#cdata", detail = "CDATA content"))
+                child.nodeType == Node.TEXT_NODE && !child.nodeValue.isNullOrBlank() && elementChildren(element).isNotEmpty() ->
+                    add(UnknownElement("#text", "$currentPath/#text", detail = "mixed text content"))
+            }
             child = child.nextSibling
         }
+    }
+
+    private fun isEditableElement(element: Element, parent: Element?): Boolean {
+        if (!isRecognizedElement(element, parent)) return false
+        if (parent == null || parent.localName == "unattend" || parent.localName == "settings") return true
+        if (parent.localName == "component") return isEditableComponentChild(element, parent)
+        if (!isEditableElement(parent, parent.parentNode as? Element)) return false
+        return (element.localName ?: element.tagName) in editableChildren[parent.localName].orEmpty()
+    }
+
+    private fun isEditableComponentChild(element: Element, component: Element): Boolean {
+        val pass = (component.parentNode as? Element)?.getAttribute("pass")
+        return when (component.getAttribute("name") to pass) {
+            "Microsoft-Windows-Setup" to "windowsPE" -> element.localName == "DiskConfiguration"
+            "Microsoft-Windows-Shell-Setup" to "specialize" -> element.localName == "ComputerName"
+            "Microsoft-Windows-Shell-Setup" to "oobeSystem" -> element.localName == "UserAccounts"
+            "Microsoft-Windows-International-Core" to "oobeSystem" ->
+                element.localName in setOf("UILanguage", "SystemLocale", "UserLocale")
+            else -> false
+        }
+    }
+
+    private fun isRecognizedElement(element: Element, parent: Element?): Boolean {
+        if (element.namespaceURI != NS) return false
+        val name = element.localName ?: element.tagName
+        if (name !in knownElements) return false
+        if (parent == null) return name == "unattend"
+        val parentName = parent.localName ?: parent.tagName
+        if (parentName == "unattend" && name == "settings") {
+            return element.getAttribute("pass") in knownPasses
+        }
+        if (parentName == "settings" && name == "component") {
+            return parent.getAttribute("pass") in knownPasses &&
+                element.getAttribute("name") in knownComponents
+        }
+        if (parentName == "component") {
+            val pass = (parent.parentNode as? Element)?.getAttribute("pass")
+            val componentName = parent.getAttribute("name")
+            val children =
+                when (componentName to pass) {
+                    "Microsoft-Windows-Setup" to "windowsPE" -> setOf("DiskConfiguration", "ImageInstall")
+                    "Microsoft-Windows-Shell-Setup" to "specialize" -> setOf("ComputerName")
+                    "Microsoft-Windows-Shell-Setup" to "oobeSystem" -> setOf("UserAccounts")
+                    "Microsoft-Windows-International-Core" to "oobeSystem" ->
+                        setOf("UILanguage", "SystemLocale", "UserLocale", "InputLocale")
+                    else -> emptySet()
+                }
+            return name in children
+        }
+        val allowed = allowedChildren[parentName] ?: return false
+        return name in allowed
+    }
+
+    private val editableChildren =
+        mapOf(
+            "UserAccounts" to setOf("LocalAccounts"),
+            "LocalAccounts" to setOf("LocalAccount"),
+            "LocalAccount" to setOf("Name", "Group", "Password"),
+            "Password" to setOf("Value", "PlainText"),
+            "DiskConfiguration" to setOf("WillShowUI", "Disk"),
+            "Disk" to setOf("DiskID", "WillWipeDisk", "CreatePartitions", "ModifyPartitions"),
+            "CreatePartitions" to setOf("CreatePartition"),
+            "CreatePartition" to setOf("Order", "Type", "Size", "Label"),
+            "ModifyPartitions" to setOf("ModifyPartition"),
+            "ModifyPartition" to setOf("Order", "PartitionID", "Format", "TypeID", "Label"),
+            "ImageInstall" to setOf("OSImage", "DataImage"),
+            "OSImage" to setOf("InstallFrom", "InstallTo", "InstallToAvailablePartition"),
+            "InstallFrom" to setOf("MetaData"),
+            "MetaData" to setOf("Key", "Value"),
+            "InstallTo" to setOf("DiskID", "PartitionID"),
+            "DataImage" to setOf("InstallTo"),
+        )
+
+    private val allowedChildren =
+        mapOf(
+            "settings" to setOf("component"),
+            "component" to knownElements - setOf("unattend", "settings", "component"),
+            "UserData" to setOf("AcceptEula", "FullName"),
+            "UserAccounts" to setOf("LocalAccounts"),
+            "LocalAccounts" to setOf("LocalAccount"),
+            "LocalAccount" to setOf("Name", "DisplayName", "Group", "Description", "Password"),
+            "Password" to setOf("Value", "PlainText"),
+            "DiskConfiguration" to setOf("WillShowUI", "Disk"),
+            "Disk" to setOf("DiskID", "WillWipeDisk", "CreatePartitions", "ModifyPartitions"),
+            "CreatePartitions" to setOf("CreatePartition"),
+            "CreatePartition" to setOf("Order", "Type", "Size", "Label"),
+            "ModifyPartitions" to setOf("ModifyPartition"),
+            "ModifyPartition" to setOf("Order", "PartitionID", "Format", "PartitionType", "Active", "Extend", "Label", "TypeID"),
+            "ImageInstall" to setOf("OSImage", "DataImage"),
+            "OSImage" to setOf("InstallFrom", "InstallTo", "InstallToAvailablePartition"),
+            "DataImage" to setOf("Path", "InstallTo", "DoNotResize"),
+            "InstallFrom" to setOf("MetaData"),
+            "MetaData" to setOf("Key", "Value"),
+            "InstallTo" to setOf("DiskID", "PartitionID"),
+        )
+
+    private fun unsupportedAttributes(element: Element): List<String> {
+        val name = element.localName ?: element.tagName
+        val allowed = allowedAttributes[name].orEmpty()
+        val result = ArrayList<String>()
+        val attributes = element.attributes
+        for (index in 0 until attributes.length) {
+            val attribute = attributes.item(index)
+            val attributeName = attribute.localName ?: attribute.nodeName
+            val namespace = attribute.namespaceURI
+            val isXmlns = attributeName == "xmlns" || namespace == XMLNS
+            val isUnqualifiedAllowed = namespace.isNullOrEmpty() && attributeName in allowed
+            val isWcmAction = attributeName == "action" && namespace == WCM &&
+                name in setOf("Disk", "CreatePartition", "ModifyPartition") && attribute.value == "add"
+            if (!isXmlns && !isUnqualifiedAllowed && !isWcmAction) result.add(attributeName)
+        }
+        return result
     }
 
     private fun newDocument(): Document {
@@ -504,13 +777,23 @@ object Autounattend {
             runCatching { isExpandEntityReferences = false }
         }
 
-    private fun findComponent(root: Element, pass: String, componentName: String): Element? =
-        childElements(root, "settings")
-            .firstOrNull { it.getAttribute("pass") == pass }
-            ?.let { settings ->
-                childElements(settings, "component")
-                    .firstOrNull { it.getAttribute("name") == componentName }
+    private fun findComponent(root: Element, pass: String, componentName: String): Element? {
+        val settings = childElements(root, "settings").filter {
+            it.namespaceURI == NS && it.getAttribute("pass") == pass
+        }
+        if (settings.size > 1) {
+            throw IllegalStateException("unattend/$pass has ${settings.size} settings blocks; refusing to guess")
+        }
+        val components = settings.firstOrNull()?.let { settingsNode ->
+            childElements(settingsNode, "component").filter {
+                it.namespaceURI == NS && it.getAttribute("name") == componentName
             }
+        }.orEmpty()
+        if (components.size > 1) {
+            throw IllegalStateException("$pass/$componentName has ${components.size} components; refusing to guess")
+        }
+        return components.firstOrNull()
+    }
 
     private fun ensureComponent(
         document: Document,
@@ -519,9 +802,13 @@ object Autounattend {
         componentName: String,
     ): Element {
         val settings = ensureSettings(document, root, pass)
-        childElements(settings, "component")
-            .firstOrNull { it.getAttribute("name") == componentName }
-            ?.let { return it }
+        val components = childElements(settings, "component").filter {
+            it.namespaceURI == NS && it.getAttribute("name") == componentName
+        }
+        if (components.size > 1) {
+            throw IllegalStateException("$pass/$componentName has ${components.size} components; refusing to guess")
+        }
+        components.firstOrNull()?.let { return it }
         val component = document.createElementNS(namespace(root), "component")
         component.setAttribute("name", componentName)
         component.setAttribute("processorArchitecture", "amd64")
@@ -533,43 +820,134 @@ object Autounattend {
     }
 
     private fun ensureSettings(document: Document, root: Element, pass: String): Element {
-        childElements(root, "settings").firstOrNull { it.getAttribute("pass") == pass }?.let { return it }
-        val settings = document.createElementNS(namespace(root), "settings")
-        settings.setAttribute("pass", pass)
-        root.appendChild(settings)
-        return settings
+        val settings = childElements(root, "settings").filter {
+            it.namespaceURI == NS && it.getAttribute("pass") == pass
+        }
+        if (settings.size > 1) {
+            throw IllegalStateException("unattend/$pass has ${settings.size} settings blocks; refusing to guess")
+        }
+        settings.firstOrNull()?.let { return it }
+        val created = document.createElementNS(namespace(root), "settings")
+        created.setAttribute("pass", pass)
+        root.appendChild(created)
+        return created
     }
 
-    private fun requireSupportedSubtree(parent: Element, context: String) {
-        val namespace = parent.namespaceURI
-        if (namespace != NS) {
-            throw IllegalStateException(
-                "$context contains an element without the unattend namespace; refusing to delete it",
-            )
-        }
-        val name = parent.localName ?: parent.tagName
-        if (name !in knownElements) {
-            throw IllegalStateException(
-                "$context contains unknown element <$name>; refusing to delete it",
-            )
-        }
-        val attributes = parent.attributes
-        for (index in 0 until attributes.length) {
-            val attribute = attributes.item(index)
-            val attributeNamespace = attribute.namespaceURI
-            val attributeName = attribute.localName ?: attribute.nodeName
-            val allowed =
-                attributeName == "xmlns" ||
-                    attributeNamespace == "http://www.w3.org/2000/xmlns/" ||
-                    (attributeNamespace == "http://schemas.microsoft.com/WMIConfig/2002/State" &&
-                        attributeName == "action")
-            if (!allowed) {
+    private fun requireSupportedSubtree(
+        parent: Element,
+        context: String,
+        replacing: Boolean = false,
+    ) {
+        fun check(element: Element, owner: Element?) {
+            val name = element.localName ?: element.tagName
+            if (!isRecognizedElement(element, owner)) {
                 throw IllegalStateException(
-                    "$context contains unsupported attribute $attributeName; refusing to delete it",
+                    "$context contains unsupported element at ${pathOf(element)} <$name>; refusing to rewrite it",
                 )
             }
+            if (replacing && owner?.localName == "ModifyPartition" &&
+                name !in setOf("Order", "PartitionID", "Format", "Label", "TypeID")
+            ) {
+                throw IllegalStateException(
+                    "$context contains non-round-trippable field at ${pathOf(element)} <$name>; refusing to replace it",
+                )
+            }
+            requireSafeNonElementContent(element, context)
+            if (replacing && !isEditableElement(element, owner)) {
+                throw IllegalStateException(
+                    "$context contains unsupported editable field at ${pathOf(element)} <$name>; refusing to replace it",
+                )
+            }
+            val unsupported = unsupportedAttributes(element)
+            if (unsupported.isNotEmpty()) {
+                throw IllegalStateException(
+                    "$context contains unsupported attribute(s) at ${pathOf(element)}: " +
+                        unsupported.joinToString(", "),
+                )
+            }
+            val children = elementChildren(element)
+            val repeatable = repeatableChildren[element.localName ?: element.tagName].orEmpty()
+            children.groupingBy { it.localName ?: it.tagName }.eachCount().forEach { (name, count) ->
+                if (count > 1 && name !in repeatable) {
+                    throw IllegalStateException(
+                        "$context contains duplicate <$name> at ${pathOf(element)}; refusing to guess",
+                    )
+                }
+            }
+            children.forEach { check(it, element) }
         }
-        elementChildren(parent).forEach { requireSupportedSubtree(it, context) }
+        check(parent, parent.parentNode as? Element)
+    }
+
+    private val repeatableChildren =
+        mapOf(
+            "unattend" to setOf("settings"),
+            "settings" to setOf("component"),
+            "CreatePartitions" to setOf("CreatePartition"),
+            "ModifyPartitions" to setOf("ModifyPartition"),
+            "ImageInstall" to setOf("DataImage"),
+        )
+
+    private fun requireLayoutReplacementPreserves(
+        configuration: Element,
+        layout: DiskLayout,
+        original: DiskLayout?,
+    ) {
+        if (original == null) throw IllegalStateException("Existing layout snapshot missing")
+        val disk = childElements(configuration, "Disk").singleOrNull()
+            ?: throw IllegalStateException("Existing DiskConfiguration has no unique Disk")
+        val create = childOrNull(disk, "CreatePartitions")
+            ?: throw IllegalStateException("Existing DiskConfiguration has no CreatePartitions")
+        val parts = childElements(create, "CreatePartition")
+        if (parts.size != original.partitions.size) throw IllegalStateException("Existing partition mapping changed")
+        val orders = parts.mapNotNull { directText(it, "Order")?.toIntOrNull() }
+        if (orders.size != parts.size || orders.toSet().size != orders.size) {
+            throw IllegalStateException("Existing CreatePartition orders are ambiguous")
+        }
+        parts.sortedBy { directText(it, "Order")?.toIntOrNull() ?: Int.MAX_VALUE }
+            .zip(original.partitions).forEachIndexed { index, (element, source) ->
+                if (directText(element, "Order")?.toIntOrNull() != index + 1 ||
+                    directText(element, "Size")?.toLongOrNull() != source.sizeMb ||
+                    directText(element, "Type")?.equals(partitionType(source.role), true) != true ||
+                    directText(element, "Label") != source.label
+                ) throw IllegalStateException("Existing layout is not fully represented")
+            }
+        val fields = childOrNull(disk, "ModifyPartitions")?.let { childElements(it, "ModifyPartition") }.orEmpty()
+        val ids = fields.mapNotNull { directText(it, "PartitionID")?.toIntOrNull() }
+        if (ids.size != fields.size || ids.toSet().size != ids.size) {
+            throw IllegalStateException("Existing ModifyPartition IDs are ambiguous")
+        }
+        val modifyOrders = fields.mapNotNull { directText(it, "Order")?.toIntOrNull() }
+        if (modifyOrders.size != fields.size || modifyOrders.any { it <= 0 } || modifyOrders.toSet().size != modifyOrders.size) {
+            throw IllegalStateException("Existing ModifyPartition orders are ambiguous")
+        }
+        val expected = original.partitions.count { it.role != DiskPartitionRole.Msr }
+        if (fields.size != expected) throw IllegalStateException("Existing modify mapping is ambiguous")
+        fields.forEach { field ->
+            val id = directText(field, "PartitionID")?.toIntOrNull()
+            val source = id?.let { original.partitions.getOrNull(it - 1) }
+                ?: throw IllegalStateException("Existing ModifyPartition reference is invalid")
+            if (source.role == DiskPartitionRole.Msr || directText(field, "Format") != format(source.role) ||
+                directText(field, "Label") != source.label
+            ) throw IllegalStateException("Existing ModifyPartition values are not represented")
+            val typeId = directText(field, "TypeID")
+            if (source.role == DiskPartitionRole.Recovery &&
+                !typeId.equals("de94bba4-06d1-4d40-a16a-bfd50179d6ac", true)
+            ) throw IllegalStateException("Existing recovery TypeID is not represented")
+            if (source.role != DiskPartitionRole.Recovery && typeId != null) {
+                throw IllegalStateException("Existing TypeID is not represented")
+            }
+        }
+        if (layout.partitions.isEmpty()) throw IllegalStateException("Requested layout is empty")
+    }
+    private fun pathOf(element: Element): String {
+        val names = ArrayList<String>()
+        var current: Element? = element
+        while (current != null) {
+            names.add(current.localName ?: current.tagName)
+            current = current.parentNode as? Element
+        }
+        return names.asReversed().joinToString("/")
     }
 
     private fun child(document: Document, parent: Element, name: String): Element =
@@ -594,19 +972,65 @@ object Autounattend {
         val result = ArrayList<Element>()
         var child = parent.firstChild
         while (child != null) {
-            if (child is Element && (child.localName ?: child.tagName) == name) result.add(child)
+            if (child is Element && child.namespaceURI == NS &&
+                (child.localName ?: child.tagName) == name
+            ) result.add(child)
             child = child.nextSibling
         }
         return result
     }
 
+    private fun requireAtMostOne(parent: Element, name: String, context: String) {
+        val count = childElements(parent, name).size
+        if (count > 1) {
+            throw IllegalStateException(
+                "$context has $count <$name> elements; refusing to guess which one to edit",
+            )
+        }
+    }
+
     private fun setText(document: Document, parent: Element, name: String, value: String) {
+        requireAtMostOne(parent, name, "${pathOf(parent)}/$name")
         val element = child(document, parent, name)
+        val unsupported = unsupportedAttributes(element)
+        if (unsupported.isNotEmpty()) {
+            throw IllegalStateException(
+                "${pathOf(element)} contains unsupported attribute(s): ${unsupported.joinToString(", ")}",
+            )
+        }
+        requireSafeNonElementContent(element, "${pathOf(element)}")
+        if (elementChildren(element).isNotEmpty()) {
+            throw IllegalStateException(
+                "${pathOf(element)} has child elements; refusing to replace text and lose structure",
+            )
+        }
         element.textContent = value
     }
 
     private fun removeChild(parent: Element, name: String) {
-        childElements(parent, name).forEach { parent.removeChild(it) }
+        val children = childElements(parent, name)
+        if (children.size > 1) {
+            throw IllegalStateException("${pathOf(parent)} has duplicate <$name>; refusing removal")
+        }
+        children.singleOrNull()?.let { child ->
+            requireSupportedSubtree(child, "${pathOf(parent)}/$name", replacing = true)
+            requireSafeNonElementContent(child, "${pathOf(parent)}/$name")
+            parent.removeChild(child)
+        }
+    }
+
+    private fun requireSafeNonElementContent(element: Element, context: String) {
+        var child = element.firstChild
+        while (child != null) {
+            when (child.nodeType) {
+                Node.COMMENT_NODE, Node.PROCESSING_INSTRUCTION_NODE, Node.CDATA_SECTION_NODE ->
+                    throw IllegalStateException("$context contains non-element XML content; refusing mutation")
+                Node.TEXT_NODE -> if (elementChildren(element).isNotEmpty() && !child.nodeValue.isNullOrBlank()) {
+                    throw IllegalStateException("$context contains mixed text content; refusing mutation")
+                }
+            }
+            child = child.nextSibling
+        }
     }
 
     private fun setActionAdd(document: Document, root: Element, element: Element) {

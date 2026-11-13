@@ -518,7 +518,8 @@ object VentoySetup {
             val validation =
                 Autounattend.validate(
                     params,
-                    requireDeclaredDiskSize = requireDeclaredDiskSize,
+                    requireDeclaredDiskSize = requireDeclaredDiskSize &&
+                        params.intents.diskLayout == XmlFieldIntent.Set,
                 )
             if (validation.problems.isNotEmpty()) {
                 throw UnattendValidationException(validation)

@@ -4146,8 +4146,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         allowDestructiveTemplate = effect.allowDestructiveTemplate,
                         expectedTemplateSha256 = effect.expectedTemplateSha256,
                         expectedPlanSha256 = effect.expectedPlanSha256,
-                        // UI generation is the editor path; direct non-editor callers keep false.
-                        requireDeclaredDiskSize = true,
+                        // Preserve imported layouts without editor-only capacity metadata; validate size only on explicit layout Set.
+                        requireDeclaredDiskSize = params.intents.diskLayout == usb.ventoy.XmlFieldIntent.Set,
                         onMutation = { mutationAttempted = true },
                     )
                     if (mutationAttempted) commitReached = true

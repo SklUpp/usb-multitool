@@ -205,6 +205,22 @@ class AutounattendTest {
     }
 
     @Test
+    fun planDigestSeparatesNullableAndDelimitedValues() {
+        val nullLabel = AutounattendParams(
+            diskLayout = DiskLayout(
+                partitions = listOf(LayoutPartition(100, DiskPartitionRole.Primary, null)),
+            ),
+        )
+        val literalLabel = nullLabel.copy(
+            diskLayout = DiskLayout(
+                partitions = listOf(LayoutPartition(100, DiskPartitionRole.Primary, "null")),
+            ),
+        )
+        assertNotEquals(autounattendPlanSha256("a\n.xml", nullLabel, listOf("/ISO/a\n.iso")), autounattendPlanSha256("a\n.xml", literalLabel, listOf("/ISO/a\n.iso")))
+        assertNotEquals(autounattendPlanSha256("a.xml", nullLabel, listOf("/ISO/a.iso")), autounattendPlanSha256("a.xml", nullLabel, listOf("/ISO/a.iso", "/ISO/b.iso")))
+    }
+
+    @Test
     fun layoutKeepsInstallSelectionAndRejectsUnknownSiblings() {
         fun base(extra: String) = """
             <unattend xmlns="urn:schemas-microsoft-com:unattend">
@@ -454,6 +470,245 @@ class AutounattendTest {
     }
 
     @Test
+    fun unknownReportIncludesStructuralPathAndUnsupportedAttributes() {
+        val xml = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem">
+                <component name="Microsoft-Windows-International-Core">
+                  <UILanguage vendorFlag="keep">de-DE</UILanguage>
+                  <VendorBlock><VendorLeaf/></VendorBlock>
+                </component>
+              </settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val document = (Autounattend.read("/ventoy/a.xml", xml) as AutounattendState.Parsed).document
+        assertTrue(
+            document.unknownElements.any {
+                it.name == "UILanguage" &&
+                    it.path == "unattend/settings/component/UILanguage" &&
+                    "vendorFlag" in it.attributes
+            },
+        )
+        assertTrue(
+            document.unknownElements.any {
+                it.name == "VendorBlock" && it.path == "unattend/settings/component/VendorBlock"
+            },
+        )
+    }
+
+    @Test
+    fun textMutationRefusesUnknownChildrenInsteadOfDroppingThem() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize">
+                <component name="Microsoft-Windows-Shell-Setup">
+                  <ComputerName><VendorValue/></ComputerName>
+                </component>
+              </settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(base, AutounattendParams(computerName = "new-name"))
+        }
+    }
+
+    @Test
+    fun unrelatedUnknownComponentRemainsWritableWhenTargetStructureIsSafe() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize">
+                <component name="Vendor-Extension"><VendorThing keep="yes"/></component>
+              </settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val generated = String(
+            Autounattend.generate(base, AutounattendParams(computerName = "new-name")),
+            Charsets.UTF_8,
+        )
+        assertTrue(generated.contains("VendorThing"))
+        assertTrue(generated.contains("keep=\"yes\""))
+        assertTrue(generated.contains("ComputerName"))
+    }
+
+    @Test
+    fun groupRemovalRefusesUnknownGroupStructure() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name>
+                  <Group vendorFlag="keep"><VendorGroup/></Group>
+                </LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(base, AutounattendParams(localAccount = LocalAccount("Alice", inAdministrators = false)))
+        }
+    }
+
+    @Test
+    fun vendorNamespaceTargetIsNotImportedOrEdited() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:v="urn:vendor">
+              <settings pass="specialize"><component name="Microsoft-Windows-Shell-Setup">
+                <v:ComputerName>VENDOR</v:ComputerName>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val parsed = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document
+        assertEquals(null, parsed.existing?.computerName)
+        val generated = String(Autounattend.generate(base, AutounattendParams(computerName = "NEW")), Charsets.UTF_8)
+        assertTrue(generated.contains("v:ComputerName"))
+        assertTrue(generated.contains("VENDOR"))
+        assertTrue(generated.contains("<ComputerName>NEW</ComputerName>"))
+    }
+
+    @Test
+    fun generalizeComputerNameIsReportedUnknownAndNotImported() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="generalize"><component name="Microsoft-Windows-Shell-Setup">
+                <ComputerName>OLD</ComputerName>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val parsed = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document
+        assertEquals(null, parsed.existing?.computerName)
+        assertTrue(parsed.unknownElements.any { it.path == "unattend/settings/component/ComputerName" })
+    }
+
+    @Test
+    fun duplicatePasswordContainersRefuseRewrite() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name>
+                  <Password><Value>first</Value><PlainText>true</PlainText></Password>
+                  <Password><Value>second</Value><PlainText>true</PlainText></Password>
+                </LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(base, AutounattendParams(localAccount = LocalAccount("Alice", "new")))
+        }
+    }
+
+    @Test
+    fun duplicateTargetComponentsRefuseRewrite() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize">
+                <component name="Microsoft-Windows-Shell-Setup"/>
+                <component name="Microsoft-Windows-Shell-Setup"/>
+              </settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(base, AutounattendParams(computerName = "NEW"))
+        }
+    }
+
+    @Test
+    fun duplicateTargetSettingsRefuseRewrite() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize"/>
+              <settings pass="specialize"/>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(base, AutounattendParams(computerName = "NEW"))
+        }
+    }
+
+
+    @Test
+    fun unsupportedModifyPartitionFieldsBlockLayoutReplacement() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="windowsPE"><component name="Microsoft-Windows-Setup">
+                <DiskConfiguration><Disk><ModifyPartitions><ModifyPartition>
+                  <Order>1</Order><PartitionID>2</PartitionID><Active>true</Active>
+                </ModifyPartition></ModifyPartitions></Disk></DiskConfiguration>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(
+                base,
+                AutounattendParams(
+                    diskLayout = DiskLayout(
+                        writeLayout = true,
+                        diskId = 0,
+                        partitions = listOf(LayoutPartition(100, DiskPartitionRole.Primary)),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun encodedPasswordIsNotImportedAsPlaintextOrRewritten() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name>
+                  <Password><Value>encoded</Value><PlainText>false</PlainText></Password>
+                </LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val parsed = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document
+        assertEquals(false, parsed.existing?.localAccount?.passwordPlainText)
+        assertEquals(null, parsed.existing?.localAccount?.password)
+        assertTrue(parsed.unknownElements.any { it.detail == "encoded password format" })
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(base, AutounattendParams(localAccount = LocalAccount("Alice", "new")))
+        }
+    }
+    @Test
+    fun importedNonAdministratorGroupIsNotSilentlyRemoved() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name><Group>Users</Group></LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val parsed = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document
+        assertEquals("Users", parsed.existing?.localAccount?.preservedGroup)
+        assertEquals(false, parsed.existing?.localAccount?.inAdministrators)
+        val account = parsed.existing?.localAccount ?: error("account not parsed")
+        val generated = String(Autounattend.generate(base, AutounattendParams(localAccount = account)), Charsets.UTF_8)
+        assertTrue(generated.contains("<Group>Users</Group>"))
+    }
+
+    @Test
+    fun nonRoundTrippableModifyPartitionFormatBlocksReplacement() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="windowsPE"><component name="Microsoft-Windows-Setup">
+                <DiskConfiguration><Disk><ModifyPartitions><ModifyPartition>
+                  <Order>1</Order><PartitionID>2</PartitionID><Format>FAT32</Format>
+                </ModifyPartition></ModifyPartitions></Disk></DiskConfiguration>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(
+                base,
+                AutounattendParams(
+                    diskLayout = DiskLayout(
+                        writeLayout = true,
+                        diskId = 0,
+                        partitions = listOf(LayoutPartition(100, DiskPartitionRole.Primary)),
+                    ),
+                ),
+            )
+        }
+    }
+    @Test
     fun reorderChangesCreateOrderModifyIdsAndInstallTarget() {
         fun layout(partitions: List<LayoutPartition>) =
             DiskLayout(
@@ -619,5 +874,243 @@ class AutounattendTest {
         assertTrue(
             Autounattend.read("/ventoy/a.xml", "<unattend>".toByteArray()) is AutounattendState.Unreadable,
         )
+    }
+
+    @Test
+    fun importedSnapshotPreservesWithoutMutationIntent() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="windowsPE"><component name="Microsoft-Windows-Setup">
+                <DiskConfiguration><Disk><DiskID>0</DiskID><WillWipeDisk>false</WillWipeDisk>
+                  <CreatePartitions><CreatePartition><Order>1</Order><Type>Primary</Type><Size>100</Size></CreatePartition></CreatePartitions>
+                </Disk></DiskConfiguration>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val existing = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document.existing
+            ?: error("missing imported snapshot")
+        val generated = String(Autounattend.generate(base, existing), Charsets.UTF_8)
+        assertTrue(generated.contains("<DiskID>0</DiskID>"))
+        assertTrue(generated.contains("<Type>Primary</Type>"))
+    }
+
+    @Test
+    fun importedPasswordAndGroupPreserveWithoutMutationIntent() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name>
+                  <Password><Value>encoded</Value><PlainText>false</PlainText></Password><Group>Users</Group>
+                </LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val existing = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document.existing
+            ?: error("missing imported snapshot")
+        val generated = String(Autounattend.generate(base, existing), Charsets.UTF_8)
+        assertTrue(generated.contains("<PlainText>false</PlainText>"))
+        assertTrue(generated.contains("<Group>Users</Group>"))
+    }
+
+    @Test
+    fun defaultLocalAccountMayBeNonAdministrator() {
+        val xml = String(
+            Autounattend.generate(null, AutounattendParams(localAccount = LocalAccount("Alice"))),
+            Charsets.UTF_8,
+        )
+        assertTrue(xml.contains("<LocalAccount>"))
+        assertFalse(xml.contains("Administrators"))
+    }
+
+    @Test
+    fun explicitRenameRunsWhenPasswordAndGroupArePreserved() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name><Group>Users</Group></LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val params = AutounattendParams(
+            localAccount = LocalAccount(
+                name = "Bob",
+                preservedGroup = "Users",
+                passwordIntent = XmlFieldIntent.Preserve,
+                groupIntent = XmlFieldIntent.Preserve,
+            ),
+        )
+        val xml = String(Autounattend.generate(base, params), Charsets.UTF_8)
+        assertTrue(xml.contains("<Name>Bob</Name>"))
+        assertFalse(xml.contains("<Name>Alice</Name>"))
+        assertTrue(xml.contains("<Group>Users</Group>"))
+    }
+
+    @Test
+    fun nestedCommentsAndProcessingInstructionsBlockRemoval() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name><?vendor keep?><!--keep--></LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(
+                base,
+                AutounattendParams(
+                    intents = AutounattendIntents(
+                        language = XmlFieldIntent.Preserve,
+                        locale = XmlFieldIntent.Preserve,
+                        computerName = XmlFieldIntent.Preserve,
+                        localAccount = XmlFieldIntent.Remove,
+                        diskLayout = XmlFieldIntent.Preserve,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun duplicateModifyPartitionOrdersBlockReplacement() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="windowsPE"><component name="Microsoft-Windows-Setup">
+                <DiskConfiguration><Disk><DiskID>0</DiskID><WillWipeDisk>false</WillWipeDisk>
+                  <CreatePartitions>
+                    <CreatePartition><Order>1</Order><Type>Primary</Type><Size>100</Size></CreatePartition>
+                    <CreatePartition><Order>2</Order><Type>Primary</Type><Size>100</Size></CreatePartition>
+                  </CreatePartitions>
+                  <ModifyPartitions>
+                    <ModifyPartition><Order>1</Order><PartitionID>1</PartitionID><Format>NTFS</Format></ModifyPartition>
+                    <ModifyPartition><Order>1</Order><PartitionID>2</PartitionID><Format>NTFS</Format></ModifyPartition>
+                  </ModifyPartitions>
+                </Disk></DiskConfiguration>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val layout = DiskLayout(
+            writeLayout = true,
+            diskId = 0,
+            partitions = listOf(
+                LayoutPartition(100, DiskPartitionRole.Primary),
+                LayoutPartition(100, DiskPartitionRole.Primary),
+            ),
+        )
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(
+                base,
+                AutounattendParams(diskLayout = layout, originalDiskLayout = layout),
+            )
+        }
+    }
+
+    @Test
+    fun nestedCommentsBlockDiskReplacement() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="windowsPE"><component name="Microsoft-Windows-Setup">
+                <DiskConfiguration><Disk><?vendor keep?><CreatePartitions><CreatePartition><Order>1</Order><Type>Primary</Type><Size>100</Size></CreatePartition></CreatePartitions></Disk></DiskConfiguration>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(
+                base,
+                AutounattendParams(
+                    diskLayout = DiskLayout(
+                        writeLayout = true,
+                        diskId = 0,
+                        partitions = listOf(LayoutPartition(100, DiskPartitionRole.Primary)),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun unknownReportIncludesCommentsProcessingInstructionsAndCdata() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize"><component name="Microsoft-Windows-Shell-Setup">
+                <ComputerName>OLD<?vendor keep?><!--keep--><![CDATA[cdata]]></ComputerName>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val document = (Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed).document
+        assertTrue(document.unknownElements.any { it.name == "#comment" })
+        assertTrue(document.unknownElements.any { it.name == "#processing-instruction" })
+        assertTrue(document.unknownElements.any { it.name == "#cdata" })
+    }
+
+    @Test
+    fun removingAccountRefusesUnsupportedDescription() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts><LocalAccounts><LocalAccount><Name>Alice</Name><Description>vendor metadata</Description></LocalAccount></LocalAccounts></UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        assertThrows(IllegalStateException::class.java) {
+            Autounattend.generate(
+                base,
+                AutounattendParams(
+                    intents = AutounattendIntents(
+                        language = XmlFieldIntent.Preserve,
+                        locale = XmlFieldIntent.Preserve,
+                        computerName = XmlFieldIntent.Preserve,
+                        localAccount = XmlFieldIntent.Remove,
+                        diskLayout = XmlFieldIntent.Preserve,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun validationIgnoresPreservedImportedValues() {
+        val params = AutounattendParams(
+            computerName = "*",
+            diskLayout = DiskLayout(
+                writeLayout = true,
+                diskId = 0,
+                partitions = listOf(LayoutPartition(100, DiskPartitionRole.Primary)),
+            ),
+            intents = AutounattendIntents(
+                language = XmlFieldIntent.Set,
+                locale = XmlFieldIntent.Preserve,
+                computerName = XmlFieldIntent.Preserve,
+                localAccount = XmlFieldIntent.Preserve,
+                diskLayout = XmlFieldIntent.Preserve,
+            ),
+        )
+        assertTrue(Autounattend.validate(params, requireDeclaredDiskSize = true).problems.isEmpty())
+    }
+
+    @Test
+    fun removingLocalAccountPreservesOtherUserAccountSettings() {
+        val base = """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="oobeSystem"><component name="Microsoft-Windows-Shell-Setup">
+                <UserAccounts>
+                  <AdministratorPassword><Value>keep-me</Value></AdministratorPassword>
+                  <LocalAccounts><LocalAccount><Name>Alice</Name></LocalAccount></LocalAccounts>
+                </UserAccounts>
+              </component></settings>
+            </unattend>
+        """.trimIndent().toByteArray()
+        val params = AutounattendParams(
+            intents = AutounattendIntents(
+                language = XmlFieldIntent.Preserve,
+                locale = XmlFieldIntent.Preserve,
+                computerName = XmlFieldIntent.Preserve,
+                localAccount = XmlFieldIntent.Remove,
+                diskLayout = XmlFieldIntent.Preserve,
+            ),
+        )
+        val xml = String(Autounattend.generate(base, params), Charsets.UTF_8)
+        assertTrue(xml.contains("AdministratorPassword"))
+        assertTrue(xml.contains("keep-me"))
+        assertFalse(xml.contains("<LocalAccounts>"))
     }
 }

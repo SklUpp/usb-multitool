@@ -61,8 +61,10 @@ import usb.ventoy.DiskPartitionRole
 import usb.ventoy.LayoutPartition
 import usb.ventoy.diskLayoutInstallTargetPartitionId
 import usb.ventoy.diskLayoutRemainingMb
-import usb.ventoy.diskLayoutTotalMb
 import usb.ventoy.LocalAccount
+import usb.ventoy.diskLayoutTotalMb
+import usb.ventoy.AutounattendIntents
+import usb.ventoy.XmlFieldIntent
 import usb.ventoy.SettingStatus
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlCatalog
@@ -1265,25 +1267,34 @@ private fun GenerateDialog(
     onGenerate: (AutounattendParams, Boolean, String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var language by remember { mutableStateOf("en-US") }
-    var localeOn by remember { mutableStateOf(false) }
-    var locale by remember { mutableStateOf("") }
-    var computerOn by remember { mutableStateOf(false) }
-    var computer by remember { mutableStateOf("") }
-    var accountOn by remember { mutableStateOf(false) }
-    var accountName by remember { mutableStateOf("") }
+    val existing = document?.existing
+    val existingAccount = existing?.localAccount
+    val existingLayout = existing?.diskLayout
+    var language by remember(document) { mutableStateOf(existing?.languageTag ?: "en-US") }
+    var localeOn by remember(document) { mutableStateOf(existing?.localeId != null) }
+    var locale by remember(document) { mutableStateOf(existing?.localeId.orEmpty()) }
+    var computerOn by remember(document) { mutableStateOf(existing?.computerName != null) }
+    var computer by remember(document) { mutableStateOf(existing?.computerName.orEmpty()) }
+    var accountOn by remember(document) { mutableStateOf(existingAccount != null) }
+    var accountName by remember(document) { mutableStateOf(existingAccount?.name.orEmpty()) }
     var accountPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     val showPasswordLabel = stringResource(
         if (passwordVisible) R.string.params_account_password_hide
         else R.string.params_account_password_show,
     )
-    var accountAdmin by remember { mutableStateOf(true) }
-    var layoutOn by remember { mutableStateOf(false) }
-    var wipe by remember { mutableStateOf(false) }
-    var diskId by remember { mutableStateOf("0") }
-    var declaredDiskSize by remember { mutableStateOf("") }
-    val partitions = remember { mutableStateListOf<LayoutPartitionDraft>() }
+    var accountAdmin by remember(document) { mutableStateOf(existingAccount?.inAdministrators == true) }
+    var layoutOn by remember(document) { mutableStateOf(existingLayout != null) }
+    var wipe by remember(document) { mutableStateOf(existingLayout?.wipe ?: false) }
+    var diskId by remember(document) { mutableStateOf(existingLayout?.diskId?.toString() ?: "0") }
+    var declaredDiskSize by remember(document) { mutableStateOf(existingLayout?.declaredSizeMb?.toString().orEmpty()) }
+    val partitions = remember(document) {
+        mutableStateListOf<LayoutPartitionDraft>().apply {
+            existingLayout?.partitions?.forEach { partition ->
+                add(LayoutPartitionDraft(partition.sizeMb.toString(), partition.role, partition.label.orEmpty()))
+            }
+        }
+    }
     val markers = document?.destructiveMarkers.orEmpty()
     var destructiveAck by remember(document) { mutableStateOf(markers.isEmpty()) }
 
@@ -1295,16 +1306,17 @@ private fun GenerateDialog(
             partitions = partitions.map { it.toPartition() },
             declaredSizeMb = declaredDiskSize.toLongOrNull(),
         )
+    val layoutChangedForValidation = existingLayout == null || draftLayout.copy(declaredSizeMb = null) != existingLayout.copy(declaredSizeMb = null)
     val layoutProblems =
         if (layoutOn) {
             Autounattend.validate(
                 AutounattendParams(diskLayout = draftLayout),
-                requireDeclaredDiskSize = true,
+                requireDeclaredDiskSize = layoutChangedForValidation,
             ).problems
         } else {
             emptyList()
         }
-    val layoutValid = !layoutOn || layoutProblems.isEmpty()
+    val layoutValid = !layoutOn || !layoutChangedForValidation || layoutProblems.isEmpty()
     val accountValid = !accountOn || accountName.isNotBlank()
     // Destructive markers are only accepted with an explicit tick; a null digest would be
     // refused by the backend, so the button stays disabled instead.
@@ -1602,31 +1614,69 @@ private fun GenerateDialog(
         confirmButton = {
             Button(
                 onClick = {
+                    val accountValue = if (accountOn) {
+                        val existingValue = existingAccount
+                        val groupChanged = existingValue == null || accountAdmin != (existingValue.inAdministrators == true)
+                        LocalAccount(
+                            name = accountName.trim().ifBlank { null },
+                            password = accountPassword.ifEmpty { null },
+                            inAdministrators = accountAdmin,
+                            preservedGroup = if (groupChanged) null else existingValue?.preservedGroup,
+                            passwordIntent = if (accountPassword.isEmpty()) XmlFieldIntent.Preserve else XmlFieldIntent.Set,
+                            groupIntent = if (groupChanged) XmlFieldIntent.Set else XmlFieldIntent.Preserve,
+                        )
+                    } else null
+                    val accountIntent = when {
+                        !accountOn && existingAccount != null -> XmlFieldIntent.Remove
+                        !accountOn -> XmlFieldIntent.Preserve
+                        existingAccount == null -> XmlFieldIntent.Set
+                        accountName.trim().ifBlank { null } != existingAccount.name ||
+                            accountPassword.isNotEmpty() ||
+                            accountAdmin != (existingAccount.inAdministrators == true) -> XmlFieldIntent.Set
+                        else -> XmlFieldIntent.Preserve
+                    }
+                    val localeValue = locale.trim().ifBlank { null }
+                    val computerValue = computer.trim().ifBlank { null }
+                    val layoutChanged = existingLayout == null || draftLayout != existingLayout
+                    val layoutIntent = when {
+                        !layoutOn && existingLayout != null -> XmlFieldIntent.Remove
+                        !layoutOn -> XmlFieldIntent.Preserve
+                        existingLayout == null || layoutChanged -> XmlFieldIntent.Set
+                        else -> XmlFieldIntent.Preserve
+                    }
+                    val languageValue = language.trim().ifBlank { null }
+                    val languageIntent = when {
+                        document != null && existing?.languageTag == null && languageValue == "en-US" -> XmlFieldIntent.Preserve
+                        existing?.languageTag == languageValue -> XmlFieldIntent.Preserve
+                        else -> XmlFieldIntent.Set
+                    }
+                    val localeIntent = when {
+                        localeOn && existing?.localeId == localeValue -> XmlFieldIntent.Preserve
+                        localeOn -> XmlFieldIntent.Set
+                        existing?.localeId != null -> XmlFieldIntent.Remove
+                        else -> XmlFieldIntent.Preserve
+                    }
+                    val computerIntent = when {
+                        computerOn && existing?.computerName == computerValue -> XmlFieldIntent.Preserve
+                        computerOn -> XmlFieldIntent.Set
+                        existing?.computerName != null -> XmlFieldIntent.Remove
+                        else -> XmlFieldIntent.Preserve
+                    }
                     onGenerate(
                         AutounattendParams(
-                            languageTag = language.trim().ifBlank { null },
-                            localeId = if (localeOn) locale.trim().ifBlank { null } else null,
-                            computerName = if (computerOn) computer.trim().ifBlank { null } else null,
-                            localAccount = if (accountOn) {
-                                LocalAccount(
-                                    name = accountName.trim().ifBlank { null },
-                                    password = accountPassword.ifEmpty { null },
-                                    inAdministrators = accountAdmin,
-                                )
-                            } else {
-                                null
-                            },
-                            diskLayout = if (layoutOn) {
-                                DiskLayout(
-                                    writeLayout = true,
-                                    diskId = diskId.toLongOrNull(),
-                                    wipe = wipe,
-                                    partitions = partitions.map { it.toPartition() },
-                                    declaredSizeMb = declaredDiskSize.toLongOrNull(),
-                                )
-                            } else {
-                                null
-                            },
+                            languageTag = languageValue,
+                            localeId = localeValue,
+                            computerName = computerValue,
+                            localAccount = accountValue,
+                            diskLayout = if (layoutOn) draftLayout else null,
+                            intents = AutounattendIntents(
+                                language = languageIntent,
+                                locale = localeIntent,
+                                computerName = computerIntent,
+                                localAccount = accountIntent,
+                                diskLayout = layoutIntent,
+                            ),
+                            originalDiskLayout = existingLayout,
                         ),
                         markers.isNotEmpty() && destructiveAck,
                         document?.templateSha256,
