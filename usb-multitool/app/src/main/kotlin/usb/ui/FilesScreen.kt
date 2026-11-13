@@ -52,7 +52,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,14 +59,12 @@ import usb.fs.FilesystemSpace
 import usb.multitool.R
 
 /**
- * Files tab over the real volume of the selected partition.
+ * Files tab over real volume of selected partition.
  *
- * Two blocks only: the Partitions block carries the partition choice row and the measured
- * filesystem free space; the folder block owns the path, the icon actions, the expandable
- * statuses and one shared lazy area for every file/folder of the mounted volume. Write state
- * shows RO only for guaranteed EFI protection and unknown otherwise: a verified RW needs a
- * live mount fact. EFI policy still lives on the Ventoy tab, and the reducer keeps enforcing
- * it for every mutation.
+ * Compact partition choice row carries measured filesystem space; folder block owns path,
+ * icon actions and one shared lazy area for every file/folder. Operation errors and progress
+ * stay in shell's shared status panel. Write state shows RO only for guaranteed EFI protection
+ * and unknown otherwise: verified RW needs live mount fact.
  */
 @Composable
 fun FilesScreen(
@@ -144,41 +141,26 @@ fun FilesScreen(
     val writeAccess = selected?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown
     val space = selected?.let(state::filesystemSpace)
 
-    // Statuses of the current folder are expandable; the expanded choice belongs to this
-    // exact attachment + path, not to another stick or folder.
-    var statusesExpanded by remember(
-        state.selectedPartitionId,
-        state.currentPath,
-        state.device?.identity,
-        state.device?.attachGeneration,
-    ) {
-        mutableStateOf(false)
-    }
 
     if (state.partitions.isEmpty()) {
         Column(
             modifier = modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            SectionCard(
-                title = stringResource(R.string.files_section_partition),
-                titleColor = MaterialTheme.colorScheme.onSurface,
+            EmptyHint(stringResource(R.string.files_no_partitions_hint))
+            OutlinedButton(
+                onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                EmptyHint(stringResource(R.string.files_no_partitions_hint))
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.files_no_partitions_cta))
-                }
+                Text(stringResource(R.string.files_no_partitions_cta))
             }
         }
         return
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        // A large font or a short window must not squeeze the file list out of existence:
-        // the header is capped and scrolls inside its cap, the folder block keeps the rest.
+        // A large font or short window must not squeeze file list out of existence.
+        // The compact partition row scrolls inside its cap; folder block keeps rest.
         val headerMaxHeight = maxHeight * 0.45f
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -190,24 +172,16 @@ fun FilesScreen(
                     .heightIn(max = headerMaxHeight)
                     .verticalScroll(rememberScrollState()),
             ) {
-                SectionCard(
-                    title = stringResource(R.string.files_section_partition),
-                    titleColor = MaterialTheme.colorScheme.onSurface,
-                ) {
-                    PartitionChoiceRow(
-                        options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
-                        selectedId = selected?.id ?: state.partitions.first().id,
-                        writeAccess = writeAccess,
-                        enabled = state.actionsEnabled,
-                        onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
-                    )
-                    Text(
-                        text = freeSpaceText(space),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
+                PartitionChoiceRow(
+                    options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
+                    partitions = state.partitions,
+                    selectedId = selected?.id ?: state.partitions.first().id,
+                    writeAccess = writeAccess,
+                    sizeLabel = selected?.let { partitionSizeLabel(state, it) },
+                    space = space,
+                    enabled = state.actionsEnabled,
+                    onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
+                )
             }
 
             FolderCard(
@@ -216,9 +190,6 @@ fun FilesScreen(
                 canWrite = canWrite,
                 selection = selection,
                 selectedFile = selectedFile,
-                statusMessage = state.statusMessage,
-                statusesExpanded = statusesExpanded,
-                onToggleStatuses = { statusesExpanded = !statusesExpanded },
                 onSelect = { entry -> selectedFile = if (selectedFile == entry) null else entry },
                 onNavigate = { entry ->
                     onIntent(UiIntent.OpenDirectory(fatChildPath(state.currentPath, entry.name)))
@@ -714,9 +685,6 @@ private fun FolderCard(
     canWrite: Boolean,
     selection: FileEntry?,
     selectedFile: FileEntry?,
-    statusMessage: UiMessage?,
-    statusesExpanded: Boolean,
-    onToggleStatuses: () -> Unit,
     onSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
     onClearSelection: () -> Unit,
@@ -728,7 +696,8 @@ private fun FolderCard(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
-) {
+)
+{
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -748,11 +717,6 @@ private fun FolderCard(
                     canAct = canAct,
                     canWrite = canWrite,
                     selection = selection,
-                    statusMessage = statusMessage,
-                    statusesExpanded = statusesExpanded,
-                    filesPending = state.filesPending,
-                    filesError = state.filesError,
-                    onToggleStatuses = onToggleStatuses,
                     onNavigateUp = onNavigateUp,
                     onRefresh = onRefresh,
                     onNewFolder = onNewFolder,
@@ -811,10 +775,7 @@ private fun FolderCard(
     }
 }
 
-/**
- * Path and icon actions at the top of the folder block. Its bottom is the expandable status
- * area: the general status and the real fields of the selected file/folder, nothing synthesized.
- */
+/** Path and icon actions at top of folder block. */
 @Composable
 private fun FolderSubblock(
     pathLabel: String,
@@ -822,11 +783,6 @@ private fun FolderSubblock(
     canAct: Boolean,
     canWrite: Boolean,
     selection: FileEntry?,
-    statusMessage: UiMessage?,
-    statusesExpanded: Boolean,
-    filesPending: Boolean,
-    filesError: String?,
-    onToggleStatuses: () -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
     onNewFolder: () -> Unit,
@@ -860,9 +816,7 @@ private fun FolderSubblock(
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // The block title is the up button itself; the path is relative to the root
@@ -870,7 +824,9 @@ private fun FolderSubblock(
                 IconButton(
                     onClick = onNavigateUp,
                     enabled = canNavigateUp,
-                    modifier = Modifier.semantics { contentDescription = upDescription },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .semantics { contentDescription = upDescription },
                 ) {
                     GlyphIcon(glyph = Glyph.ArrowUp, size = 22.dp)
                 }
@@ -945,171 +901,10 @@ private fun FolderSubblock(
                     )
                 }
             }
-            // Expandable status space at the bottom of the sub-block: general status plus the
-            // real fields of the selected file/folder. Collapsed by default, never synthesized.
-            FolderStatusArea(
-                expanded = statusesExpanded,
-                onToggle = onToggleStatuses,
-                statusMessage = statusMessage,
-                filesPending = filesPending,
-                filesError = filesError,
-                selection = selection,
-            )
         }
     }
 }
 
-/**
- * Expandable statuses: a general status from the live state plus the real fields of the
- * selected file/folder. Collapsed by default; nothing is synthesized when a value is absent.
- */
-@Composable
-private fun FolderStatusArea(
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    statusMessage: UiMessage?,
-    filesPending: Boolean,
-    filesError: String?,
-    selection: FileEntry?,
-) {
-    val title = stringResource(R.string.files_statuses)
-    val expansion = stringResource(
-        if (expanded) R.string.files_statuses_expanded else R.string.files_statuses_collapsed,
-    )
-    val general = statusMessage?.localized()
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .clickable(
-                    onClickLabel = title,
-                    role = Role.Button,
-                ) { onToggle() }
-                .semantics { stateDescription = expansion }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-            )
-            GlyphIcon(
-                glyph = if (expanded) Glyph.ChevronUp else Glyph.ChevronDown,
-                size = 20.dp,
-                tint = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-        if (!expanded) {
-            general?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp),
-                )
-            }
-        } else {
-            general?.let {
-                StatusLine(stringResource(R.string.files_status_general), it)
-            }
-            if (filesPending) {
-                StatusLine(
-                    stringResource(R.string.type_folder),
-                    stringResource(R.string.files_listing),
-                )
-            }
-            filesError?.let {
-                StatusLine(stringResource(R.string.type_folder), it, error = true)
-            }
-            selection?.let { SelectionStatusRow(it) }
-        }
-    }
-}
-
-@Composable
-private fun StatusLine(label: String, value: String, error: Boolean = false) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(0.4f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (error) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            modifier = Modifier.weight(0.6f),
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-/** Real fields of the selected entry; a directory never claims a file format or size. */
-@Composable
-private fun SelectionStatusRow(entry: FileEntry) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = entry.name,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (entry.isDirectory) {
-            Text(
-                text = stringResource(R.string.type_folder),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-            )
-        } else {
-            fileFormatLabel(entry.name, entry.isDirectory)?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
-            }
-            Text(
-                text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-            )
-        }
-    }
-}
 
 /** Icon-only control; the description is the only visible-to-a11y label. */
 @Composable
@@ -1138,12 +933,16 @@ private fun FolderActionButton(
 @Composable
 private fun PartitionChoiceRow(
     options: List<Pair<String, String>>,
+    partitions: List<PartitionTab>,
     selectedId: String,
     writeAccess: PartitionWriteAccess,
+    sizeLabel: String?,
+    space: FilesystemSpace?,
     enabled: Boolean,
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val selected = partitions.firstOrNull { it.id == selectedId }
     val label = stringResource(R.string.files_current_partition)
     Box(modifier = Modifier.fillMaxWidth()) {
         Surface(
@@ -1160,23 +959,33 @@ private fun PartitionChoiceRow(
                         onClickLabel = label,
                         role = Role.Button,
                     ) { expanded = true }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = selected?.let(::partitionDisplayName) ?: "—",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = selected?.filesystemLabel?.ifEmpty { "—" } ?: "—",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                        )
+                    }
                     Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelSmall,
+                        text = listOfNotNull(sizeLabel, freeSpaceText(space)).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                    )
-                    Text(
-                        text = options.firstOrNull { it.first == selectedId }?.second ?: "—",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -1363,10 +1172,13 @@ private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): Stri
         DeviceIdentity.formatCapacity(it * state.diskSectorSize.toULong())
     }
 
+internal fun partitionDisplayName(partition: PartitionTab): String =
+    partition.name.ifBlank { partition.id } +
+        partition.volumeLabel.orEmpty().trim().takeIf { it.isNotEmpty() }?.let { " ($it)" }.orEmpty()
+
 private fun partitionOptionLabel(state: AppUiState, partition: PartitionTab): String =
     buildString {
-        append(partition.name)
-        if (partition.isEfiType) append(" (EFI)")
+        append(partitionDisplayName(partition))
         partition.filesystemLabel.takeIf { it.isNotEmpty() }?.let {
             append(" · ")
             append(it)

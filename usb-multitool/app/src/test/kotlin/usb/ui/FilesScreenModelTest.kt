@@ -104,4 +104,14 @@ class FilesScreenModelTest {
         assertEquals(FileNameParts("win11.old", ""), fileNameParts("win11.old", true))
         assertEquals(FileNameParts("win11", ".iso"), fileNameParts("win11.iso", false))
     }
+
+    @Test
+    fun partitionDisplayNameKeepsNameAndOptionalVolumeLabel() {
+        assertEquals("Ventoy (DATA)", partition().copy(volumeLabel = "DATA").let(::partitionDisplayName))
+        assertEquals("Ventoy", partitionDisplayName(partition()))
+        assertEquals(
+            "1",
+            partitionDisplayName(partition(name = "", id = "1").copy(volumeLabel = "  ")),
+        )
+    }
 }
