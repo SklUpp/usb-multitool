@@ -556,8 +556,6 @@ private fun GlobalSettingsCard(
                         MaterialTheme.colorScheme.onSurface
                     },
                 modifier = Modifier.weight(1f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = when {
