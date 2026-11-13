@@ -83,6 +83,7 @@ import usb.ui.UiMessage
 import usb.ui.UiMessageKey
 import usb.ui.UiReducer
 import usb.ui.WindowsImportRequestCodes
+import usb.ui.WindowsImportPickerCoordinator
 import usb.ui.AppLanguage
 import usb.device.UsbDiskSession
 import usb.device.UsbExclusiveClaim
@@ -5815,46 +5816,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** One pending SAF context per Activity; codes come from the process-wide allocator. */
-    private val windowsImportQueue: usb.ui.WindowsImportLaunchQueue by lazy {
-        usb.ui.WindowsImportLaunchQueue(requestCodeAllocator(applicationContext))
-    }
-
-    private val windowsImportTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var windowsImportTimeoutCode: Int? = null
-    private val windowsImportTimeoutRunnable =
-        Runnable {
-            val code = windowsImportTimeoutCode ?: return@Runnable
-            windowsImportTimeoutCode = null
-            // Old code is retired, so a late result can no longer join a newer launch.
-            windowsImportQueue.resetByRequestCode(code)
-            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerTimedOut)))
-        }
-
-    private fun armWindowsImportTimeout(requestCode: Int) {
-        windowsImportTimeoutHandler.removeCallbacks(windowsImportTimeoutRunnable)
-        windowsImportTimeoutCode = requestCode
-        windowsImportTimeoutHandler.postDelayed(
-            windowsImportTimeoutRunnable,
-            WINDOWS_IMPORT_TIMEOUT_MS,
+    /** Windows SAF picker queue, timeout, recreation state, and result fencing. */
+    private val windowsImportCoordinator: WindowsImportPickerCoordinator by lazy {
+        WindowsImportPickerCoordinator(
+            queue = usb.ui.WindowsImportLaunchQueue(requestCodeAllocator(applicationContext)),
+            onTimeout = {
+                viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerTimedOut)))
+            },
         )
     }
 
-    private fun disarmWindowsImportTimeout() {
-        windowsImportTimeoutHandler.removeCallbacks(windowsImportTimeoutRunnable)
-        windowsImportTimeoutCode = null
-    }
-
-    /**
-     * SAF document picked for a phone-to-stick import. The legacy request code identifies
-     * the launch, so a duplicate/late result cannot consume a newer pending context. The
-     * ActivityResult lambda API has no per-launch identifier; modern registry keys cannot be
-     * unregistered publicly, so requestCode is the honest discriminator here.
-     */
+    /** SAF document picked for a phone-to-stick import. */
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        val context = windowsImportQueue.take(requestCode) ?: return
-        disarmWindowsImportTimeout()
+        val context = windowsImportCoordinator.takeResult(requestCode) ?: return
         if (resultCode != android.app.Activity.RESULT_OK) {
             viewModel.traceEvent("picker.windows_import.cancel", "requestCode" to requestCode)
             return
@@ -5896,7 +5871,7 @@ class MainActivity : ComponentActivity() {
         pickSessionId: String?,
     ) {
         val start =
-            windowsImportQueue.begin(
+            windowsImportCoordinator.begin(
                 kind = kind,
                 directory = directory,
                 pickSessionId = pickSessionId,
@@ -5925,11 +5900,11 @@ class MainActivity : ComponentActivity() {
             startActivityForResult(intent, context.requestCode)
         }
         if (launched.isFailure) {
-            disarmWindowsImportTimeout()
-            windowsImportQueue.resetByRequestCode(context.requestCode)
+            windowsImportCoordinator.launchFailed(context.requestCode)
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
         }
     }
+
 
     /** Exact source selected before SAF destination; stale callback is rejected, never retargeted. */
     private var pendingDownloadBinding: FilesDownloadBinding? = null
@@ -6075,52 +6050,20 @@ class MainActivity : ComponentActivity() {
                 FilesDownloadBinding(directory, name, size, identity, generation, partition, start, count)
             } else null
         }
-        // The document picker may recreate the activity; without these two the result would
-        // arrive as an image bound for /ISO, so an XML chosen for /ventoy would be misfiled and
-        // its marker scan skipped.
         val savedState = savedInstanceState
-        val restoredKind =
-            savedState
-                ?.getString(STATE_PENDING_WINDOWS_KIND)
-                ?.let { stored ->
-                    runCatching { usb.ui.WindowsImportKind.valueOf(stored) }.getOrNull()
-                }
-        val restoredRequestCode =
-            savedState?.getInt(STATE_PENDING_WINDOWS_REQUEST, -1) ?: -1
-        val requestCodeRange =
-            WindowsImportRequestCodes.FIRST_REQUEST_CODE..
-                WindowsImportRequestCodes.LAST_REQUEST_CODE
-        if (savedState != null &&
-            restoredKind != null &&
-            restoredRequestCode in requestCodeRange
-        ) {
-            val restored =
-                windowsImportQueue.restore(
-                    usb.ui.PendingWindowsImport(
-                        kind = restoredKind,
-                        directory = savedState.getString(STATE_PENDING_WINDOWS_DIRECTORY),
-                        pickSessionId =
-                            savedState.getString(STATE_PENDING_WINDOWS_PICK_SESSION),
-                        identity = savedState.getString(STATE_PENDING_WINDOWS_IDENTITY),
-                        attachGeneration =
-                            savedState.getLong(STATE_PENDING_WINDOWS_ATTACH, -1L),
-                        requestCode = restoredRequestCode,
-                    ),
-                )
-            if (!restored) {
-                // The durable mark could not be raised: drop the context instead of
-                // accepting a result for an unsecured code.
+        // Windows picker state is restored as one fenced context; coordinator owns its
+        // request-code, timeout, and saved-state invariants.
+        when (windowsImportCoordinator.restore(savedInstanceState)) {
+            WindowsImportPickerCoordinator.RestoreResult.Unavailable ->
                 viewModel.onIntent(
                     UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)),
                 )
-            }
+            WindowsImportPickerCoordinator.RestoreResult.Ignored,
+            WindowsImportPickerCoordinator.RestoreResult.Restored -> Unit
         }
         pickerEventsScope.launch {
             viewModel.pickerCancellations.collect { session ->
-                if (windowsImportQueue.resetByPickSession(session)) {
-                    // Only the matching launch was cleared; a newer pending keeps its timeout.
-                    disarmWindowsImportTimeout()
-                }
+                windowsImportCoordinator.cancelByPickSession(session)
             }
         }
         val restoredFolderAction =
@@ -6202,31 +6145,14 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
-
     override fun onResume() {
         super.onResume()
-        // Delivery of the reducer cancel event can race destruction/cancellation. The live
-        // pick session is authoritative: a pending launch for a session that no longer
-        // exists is retired before any late result can be considered.
-        windowsImportQueue.pending?.let { pending ->
-            val live = viewModel.state.device
-            if (pending.identity != live?.identity ||
-                pending.attachGeneration != (live?.attachGeneration ?: 0L)
-            ) {
-                // The stick changed while the picker was away: its URI is not ours.
-                windowsImportQueue.resetByRequestCode(pending.requestCode)
-                disarmWindowsImportTimeout()
-                return@let
-            }
-            val session = pending.pickSessionId
-            if (session != null && viewModel.state.filesPickMode?.sessionId != session) {
-                windowsImportQueue.resetByPickSession(session)
-                disarmWindowsImportTimeout()
-                return@let
-            }
-            // A restored/returned screen must not stay busy forever if the result was lost.
-            armWindowsImportTimeout(pending.requestCode)
-        }
+        val live = viewModel.state.device
+        windowsImportCoordinator.onResume(
+            identity = live?.identity,
+            attachGeneration = live?.attachGeneration ?: 0L,
+            pickSessionId = viewModel.state.filesPickMode?.sessionId,
+        )
         backupFolderLaunches.pending?.let { pending ->
             if (pending.action == BackupFolderAction.ChangeFolder) {
                 // Nothing to resume: the result itself only rebinds the folder. Retiring the
@@ -6246,18 +6172,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         // The picker itself is in front; do not expire a context the user is browsing.
-        disarmWindowsImportTimeout()
+        windowsImportCoordinator.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
-        disarmWindowsImportTimeout()
+        windowsImportCoordinator.onDestroy()
         pickerEventsScope.cancel()
         super.onDestroy()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        windowsImportCoordinator.saveState(outState)
         outState.putString(STATE_VENTOY_SETTINGS_IDENTITY, ventoySettingsPickerIdentity)
         ventoySettingsPickerGeneration?.let {
             outState.putLong(STATE_VENTOY_SETTINGS_ATTACH, it)
@@ -6281,20 +6208,6 @@ class MainActivity : ComponentActivity() {
             outState.putString(STATE_PENDING_FOLDER_TOKEN, pending.sessionToken)
         }
         outState.putBoolean(STATE_PENDING_FOLDER_LOST, lostBackupAction)
-        windowsImportQueue.pending?.let { context ->
-            outState.putString(STATE_PENDING_WINDOWS_KIND, context.kind.name)
-            context.directory?.let {
-                outState.putString(STATE_PENDING_WINDOWS_DIRECTORY, it)
-            }
-            context.pickSessionId?.let {
-                outState.putString(STATE_PENDING_WINDOWS_PICK_SESSION, it)
-            }
-            context.identity?.let {
-                outState.putString(STATE_PENDING_WINDOWS_IDENTITY, it)
-            }
-            outState.putLong(STATE_PENDING_WINDOWS_ATTACH, context.attachGeneration)
-            outState.putInt(STATE_PENDING_WINDOWS_REQUEST, context.requestCode)
-        }
     }
 
     override fun onStart() {
@@ -6408,22 +6321,10 @@ class MainActivity : ComponentActivity() {
             "usb.multitool.PENDING_FOLDER_LOST"
         private const val STATE_PENDING_FOLDER_TOKEN =
             "usb.multitool.PENDING_FOLDER_TOKEN"
-        private const val STATE_PENDING_WINDOWS_KIND = "usb.multitool.PENDING_WINDOWS_KIND"
-        private const val STATE_PENDING_WINDOWS_DIRECTORY =
-            "usb.multitool.PENDING_WINDOWS_DIRECTORY"
-        private const val STATE_PENDING_WINDOWS_PICK_SESSION =
-            "usb.multitool.PENDING_WINDOWS_PICK_SESSION"
-        private const val STATE_PENDING_WINDOWS_IDENTITY =
-            "usb.multitool.PENDING_WINDOWS_IDENTITY"
-        private const val STATE_PENDING_WINDOWS_ATTACH =
-            "usb.multitool.PENDING_WINDOWS_ATTACH"
-        private const val STATE_PENDING_WINDOWS_REQUEST =
-            "usb.multitool.PENDING_WINDOWS_REQUEST"
         private const val STATE_VENTOY_SETTINGS_IDENTITY =
             "usb.multitool.VENTOY_SETTINGS_IDENTITY"
         private const val STATE_VENTOY_SETTINGS_ATTACH =
             "usb.multitool.VENTOY_SETTINGS_ATTACH"
-        private const val WINDOWS_IMPORT_TIMEOUT_MS = 5 * 60 * 1000L
 
         @Volatile
         private var sharedImportCodes: WindowsImportRequestCodes? = null
