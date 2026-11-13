@@ -44,12 +44,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -105,6 +108,8 @@ fun PartitionsScreen(
     var renameText by remember { mutableStateOf("") }
     var labelTargetId by remember { mutableStateOf<String?>(null) }
     var labelBinding by remember { mutableStateOf<PartitionBinding?>(null) }
+    var filesystemMenuExpanded by remember { mutableStateOf(false) }
+    var filesystemMenuTarget by remember { mutableStateOf<PartitionBinding?>(null) }
     var labelText by remember { mutableStateOf("") }
     val partitionGeometryKey = state.partitions.map { it.id to (it.startLba to it.sectorCount) }
     var schemePrompt by remember(state.device, state.partitionScheme, partitionGeometryKey) {
@@ -605,6 +610,16 @@ fun PartitionsScreen(
             revealRequester.bringIntoView()
         }
     }
+    val latestState by rememberUpdatedState(state)
+    LaunchedEffect(
+        state.device,
+        state.selectedPartitionId,
+        selected?.startLba,
+        selected?.sectorCount,
+    ) {
+        filesystemMenuExpanded = false
+        filesystemMenuTarget = null
+    }
 
     Box(modifier = modifier.fillMaxWidth()) {
         selected?.takeIf { stickyVisible }?.let { stickyPartition ->
@@ -738,7 +753,11 @@ fun PartitionsScreen(
                 val displayName = partition.name.ifBlank { partition.id }
                 val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
                 val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
-                val filesystemUsage = filesystemUsageLabel(state, partition)
+                val rowTitle = listOfNotNull(
+                    "${index + 1}",
+                    title,
+                    partition.filesystemLabel.takeIf { it.isNotEmpty() },
+                ).joinToString(" · ")
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (isSelected) {
@@ -781,16 +800,14 @@ fun PartitionsScreen(
                         RadioDot(selected = isSelected)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "${index + 1} · $title",
+                                text = rowTitle,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             val rowFacts = listOfNotNull(
-                                partition.filesystemLabel.ifEmpty { "—" },
                                 partitionSizeLabel(state, partition),
-                                filesystemUsage ?: stringResource(R.string.filesystem_usage_unavailable),
                                 lbaRangeLabel(partition.startLba, partition.sectorCount),
                             )
                             Text(
@@ -888,18 +905,6 @@ fun PartitionsScreen(
                         PartitionWriteAccess.Unknown -> "—"
                     },
                 )
-                InfoRow(
-                    stringResource(R.string.partitions_filesystem_label),
-                    selected.filesystemLabel.ifEmpty { "—" },
-                )
-                InfoRow(
-                    stringResource(R.string.partitions_size_label),
-                    partitionSizeLabel(state, selected) ?: "—",
-                )
-                InfoRow(
-                    stringResource(R.string.partitions_lba_label),
-                    lbaRangeLabel(selected.startLba, selected.sectorCount) ?: "—",
-                )
                 // Filesystem free space, never the table's free region. Unknown stays unknown.
                 val space = state.filesystemSpace(selected)
                 InfoRow(
@@ -914,33 +919,61 @@ fun PartitionsScreen(
                         stringResource(R.string.filesystem_usage_unavailable)
                     },
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CompactChoice(
-                        options = FormatCatalog.supportedFormatIds().map {
-                            it to FormatCatalog.label(it)
-                        },
-                        selected = state.selectedFormatId,
-                        onSelect = { onIntent(UiIntent.SelectFormatFilesystem(it)) },
-                        label = stringResource(R.string.partitions_format_target),
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier.weight(1f),
-                    )
+                Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(
                         onClick = {
-                            onIntent(UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
+                            state.device?.let { device ->
+                                filesystemMenuTarget = PartitionBinding(
+                                    device = device,
+                                    partitionId = selected.id,
+                                    startLba = selected.startLba,
+                                    sectorCount = selected.sectorCount,
+                                )
+                                filesystemMenuExpanded = true
+                            }
                         },
-                        enabled = state.actionsEnabled && state.selectedPartitionId != null &&
-                            blockedHint == null,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
+                        enabled = state.actionsEnabled && blockedHint == null,
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(stringResource(R.string.partitions_format_action))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.partitions_filesystem_label),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = selected.filesystemLabel.ifEmpty { "—" },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        GlyphIcon(glyph = Glyph.ChevronDown, size = 20.dp)
+                    }
+                    DropdownMenu(
+                        expanded = filesystemMenuExpanded,
+                        onDismissRequest = { filesystemMenuExpanded = false },
+                    ) {
+                        FormatCatalog.supportedFormatIds().forEach { formatId ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(R.string.partitions_format_target) +
+                                            " " + FormatCatalog.label(formatId),
+                                    )
+                                },
+                                onClick = {
+                                    filesystemMenuExpanded = false
+                                    val target = filesystemMenuTarget
+                                    if (target != null && target.matches(latestState)) {
+                                        // AppShell callers apply intents synchronously; second
+                                        // intent snapshots chosen type into confirmation.
+                                        onIntent(UiIntent.SelectFormatFilesystem(formatId))
+                                        onIntent(UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
+                                    }
+                                    filesystemMenuTarget = null
+                                },
+                            )
+                        }
                     }
                 }
                 if (namesSupported) {
@@ -2104,18 +2137,13 @@ private fun RadioDot(selected: Boolean) {
     }
 }
 
-private fun filesystemUsageLabel(state: AppUiState, partition: PartitionTab): String? {
-    val space = state.filesystemSpace(partition) ?: return null
-    val percent = if (space.totalBytes == 0UL) 0.0 else
-        space.usedBytes.toDouble() / space.totalBytes.toDouble() * 100.0
-    return "${DeviceIdentity.formatCapacity(space.usedBytes)} of " +
-        "${DeviceIdentity.formatCapacity(space.totalBytes)} (${String.format("%.1f%%", percent)})"
-}
 
-private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? =
-    partition.sectorCount?.let {
-        DeviceIdentity.formatCapacity(it * state.diskSectorSize.toULong())
-    }
+private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? {
+    val sectors = partition.sectorCount ?: return null
+    val sectorSize = state.diskSectorSize
+    if (sectorSize <= 0 || sectors > ULong.MAX_VALUE / sectorSize.toULong()) return null
+    return DeviceIdentity.formatCapacity(sectors * sectorSize.toULong())
+}
 
 /**
  * "LBA start–end · count sectors" for one exact range, or null when the geometry is
