@@ -5,13 +5,10 @@ import kotlin.math.abs
 /**
  * Shell-owned presentation state. It stays separate from [AppUiState]: collapsing status or
  * opening the journal never touches operation progress, cancellation, or readback verdict.
- * Status and journal controls remain independent; the full journal layer remains separate.
  */
 internal data class ShellPanelState(
-    /** Status body is folded into the thin line attached to the navigation bar. */
+    /** Status body is folded into the compact bottom affordance. */
     val statusCollapsed: Boolean = false,
-    /** Journal list is expanded inside the status block. */
-    val journalExpanded: Boolean = false,
     /** Opaque full journal layer covers the tabs. */
     val journalScreenOpen: Boolean = false,
 ) {
@@ -19,20 +16,13 @@ internal data class ShellPanelState(
     fun collapseStatus(): ShellPanelState =
         if (statusCollapsed) this else copy(statusCollapsed = true)
 
-    /** Restore the expanded status row without changing the journal list. */
+    /** Restore the expanded status row. */
     fun expandStatus(): ShellPanelState =
         if (!statusCollapsed) this else copy(statusCollapsed = false)
-
-    /** Toggle inline journal only; collapsed status remains collapsed. */
-    fun toggleJournal(): ShellPanelState = copy(journalExpanded = !journalExpanded)
 
     fun openJournalScreen(): ShellPanelState = copy(journalScreenOpen = true)
 
     fun closeJournalScreen(): ShellPanelState = copy(journalScreenOpen = false)
-
-    /** Clearing the log cannot leave an expanded journal over an empty list. */
-    fun journalCleared(): ShellPanelState =
-        if (journalExpanded) copy(journalExpanded = false) else this
 }
 /** Screen that owns operation details; null keeps auto-expansion conservative. */
 internal fun OperationTitle.shellTab(): ShellTab? = when (this) {

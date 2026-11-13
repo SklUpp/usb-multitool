@@ -1,5 +1,5 @@
 package usb.ui
-
+import usb.service.OperationTokenGenerator
 import usb.fs.FilesystemId
 import usb.fs.FormatCatalog
 import usb.partition.TableScheme
@@ -38,6 +38,7 @@ object UiStateHostCheck {
         require(absent.state.pendingConfirmation == null)
         require(absent.state.statusMessage == UiMessage.Key(UiMessageKey.NoDevice))
 
+        val token = OperationTokenGenerator.next()
         val ready =
             AppUiState(
                 presence = DevicePresence.Ready,
@@ -264,6 +265,7 @@ object UiStateHostCheck {
                     OperationProgress(
                         state = OperationState.Running,
                         title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
+                        token = token,
                         bytesDone = 10,
                         bytesTotal = 100,
                     ),
@@ -278,20 +280,26 @@ object UiStateHostCheck {
         fun statusOf(state: OperationState, err: String? = null): UiMessage? =
             UiReducer.reduce(
                 ready,
-                UiIntent.OperationUpdated(OperationProgress(state, OperationTitle.Upload, errorMessage = err)),
+                UiIntent.OperationBegan(OperationProgress(state, OperationTitle.Upload, token, errorMessage = err))
             ).state.statusMessage
 
         require(statusOf(OperationState.Completed) == UiMessage.Key(UiMessageKey.Success))
         require(statusOf(OperationState.Cancelled) == UiMessage.Key(UiMessageKey.CancelledStatus))
         require(statusOf(OperationState.Failed, "boom") == UiMessage.Raw("boom"))
         require(statusOf(OperationState.Partial, "kept map") == UiMessage.Raw("kept map"))
+        val resultToken = OperationTokenGenerator.next()
+        val resultBegan = UiReducer.reduce(
+            ready,
+            UiIntent.OperationBegan(OperationProgress(OperationState.Running, OperationTitle.RescueBackup, resultToken)),
+        ).state
         require(
             UiReducer.reduce(
-                ready,
+                resultBegan,
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         OperationState.Completed,
                         OperationTitle.RescueBackup,
+                        token = resultToken,
                         resultMessage = "saved /a.bin",
                     ),
                 ),
@@ -417,7 +425,7 @@ object UiStateHostCheck {
 
         val running = ready.copy(
             presence = DevicePresence.Busy,
-            operation = OperationProgress(OperationState.Running, OperationTitle.Destructive(DestructiveAction.RAW_WRITE), bytesTotal = 100),
+            operation = OperationProgress(OperationState.Running, OperationTitle.Destructive(DestructiveAction.RAW_WRITE), token, bytesTotal = 100),
         )
         val switched = UiReducer.reduce(running, UiIntent.SelectPartition("2"))
         require(switched.effects.isEmpty()) { "partition switch during a write must not list" }
@@ -534,15 +542,44 @@ object UiStateHostCheck {
         require(deviceSwitched.linkOverwriteCandidate == null)
         require(UiReducer.reduce(deviceSwitched, UiIntent.RequestLinkOverwrite("win.iso")).state.pendingConfirmation == null)
 
-        val cancelEffect = UiReducer.reduce(ready, UiIntent.CancelOperation)
+        val cancelEffect = UiReducer.reduce(ready, UiIntent.CancelOperation(token))
+        require(cancelEffect.effects.isEmpty()) { "inactive token must not cancel" }
         val staged = ready.copy(stagedRawImagePath = "/staging/old.img", stagedRawImageLabel = "old")
-        val stagedBusy = staged.copy(operation = OperationProgress(OperationState.Running, OperationTitle.Destructive(DestructiveAction.RAW_WRITE), bytesTotal = 1))
+        val stagedBusy = staged.copy(operation = OperationProgress(OperationState.Running, OperationTitle.Destructive(DestructiveAction.RAW_WRITE), token, bytesTotal = 1))
         require(UiReducer.reduce(stagedBusy, UiIntent.ClearStagedRawImage()).state.stagedRawImagePath == "/staging/old.img")
         require(UiReducer.reduce(stagedBusy, UiIntent.SetStagedRawImage("/staging/new.img", "new")).state.stagedRawImagePath == "/staging/old.img")
         val stagedConfirmed = staged.copy(pendingConfirmation = DestructiveConfirmation.request(device, DestructiveAction.RAW_WRITE))
         require(UiReducer.reduce(stagedConfirmed, UiIntent.ClearStagedRawImage()).state.stagedRawImagePath == "/staging/old.img")
-        require(cancelEffect.effects.single() is UiEffect.CancelOperation)
+        val activeCancel = UiReducer.reduce(stagedBusy, UiIntent.CancelOperation(token))
+        require(activeCancel.effects.single() is UiEffect.CancelOperation)
 
+        val tokenA = OperationTokenGenerator.next()
+        val tokenB = OperationTokenGenerator.next()
+        val begunA = UiReducer.reduce(
+            ready,
+            UiIntent.OperationBegan(OperationProgress(OperationState.Running, OperationTitle.Upload, tokenA)),
+        ).state
+        val begunB = UiReducer.reduce(
+            begunA,
+            UiIntent.OperationBegan(OperationProgress(OperationState.Running, OperationTitle.Upload, tokenB)),
+        ).state
+        require(begunB.operation?.token == tokenB)
+        require(
+            UiReducer.reduce(
+                begunB,
+                UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, OperationTitle.Upload, tokenA)),
+            ).state == begunB,
+        )
+        val terminalB = UiReducer.reduce(
+            begunB,
+            UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, OperationTitle.Upload, tokenB)),
+        ).state
+        require(
+            UiReducer.reduce(
+                terminalB,
+                UiIntent.OperationUpdated(OperationProgress(OperationState.Running, OperationTitle.Upload, tokenB)),
+            ).state == terminalB,
+        )
         val corrupt = ready.copy(tableValid = false)
         val createBlocked = UiReducer.reduce(corrupt, UiIntent.RequestDestructive(DestructiveAction.CREATE_PARTITION))
         require(createBlocked.state.pendingConfirmation == null)
@@ -614,7 +651,7 @@ object UiStateHostCheck {
                 device = device,
                 stagedRawImagePath = "/data/staging/raw-1-img.bin",
                 stagedRawImageLabel = "img.bin",
-                operation = OperationProgress(state = OperationState.Running, title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE)),
+                operation = OperationProgress(state = OperationState.Running, title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE), token = OperationTokenGenerator.next()),
             )
             require(!busy.actionsEnabled)
             val blocked = UiReducer.reduce(busy, UiIntent.SetImage("content://new.iso"))

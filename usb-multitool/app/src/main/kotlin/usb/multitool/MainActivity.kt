@@ -61,6 +61,8 @@ import usb.service.DiskController
 import usb.operation.DiskOperation
 import usb.operation.syncDestructiveDisk
 import usb.service.OperationHandle
+import usb.service.OperationToken
+import usb.service.OperationTokenGenerator
 import usb.service.DiskService
 import usb.ui.AppShell
 import usb.ui.AppUiState
@@ -206,11 +208,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingRawMeasureEffect: UiEffect.MeasureRawSource? = null
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
-    /**
-     * Attachment identity, published atomically: device and generation always change
-     * together, so a pin built here can never pair the previous device with a new
-     * generation (or the reverse) while attach/detach is in progress.
-     */
+    private val operationGenerations = java.util.concurrent.ConcurrentHashMap<OperationToken, Long>()
+    /** Attachment identity, published atomically: device and generation always change together. */
     private val attachment = AttachmentState<UsbDevice>()
     private val attachGeneration: Long get() = attachment.snapshot().generation
     private val attachedDevice: UsbDevice? get() = attachment.snapshot().device
@@ -616,7 +615,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else -> Unit
         }
         if (stagingMutationFailed) return
+        val preserveNoDeviceOperation =
+            intent is UiIntent.DeviceChanged &&
+                intent.device == null &&
+                (intent.presence == DevicePresence.Absent || intent.presence == DevicePresence.Disconnected) &&
+                state.operation?.let { operationGenerations[it.token] == attachGeneration } == true
         val result = UiReducer.reduce(state, intent)
+        val adjustedResult =
+            if (preserveNoDeviceOperation && result.state.operation == null) {
+                result.copy(
+                    state = result.state.copy(
+                        operation = state.operation,
+                        statusMessage = state.statusMessage,
+                    ),
+                )
+            } else {
+                result
+            }
+        if (intent is UiIntent.OperationBegan) {
+            operationGenerations[intent.progress.token] = attachGeneration
+        }
         if (intent is UiIntent.CancelWindowsIsoImport) {
             // Best-effort cancel the SAF read and disown its ticket; the reducer already
             // released the SAF guard, so a stuck provider cannot block the next import.
@@ -627,42 +645,127 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 "operation.cancel.request",
                 "device" to deviceKey(attachedDevice),
                 "gen" to attachGeneration,
+                "token" to intent.token.value,
             )
         }
-        if (intent is UiIntent.OperationUpdated && intent.progress != null) {
-            val current = intent.progress
-            val previous = state.operation
-            if (previous?.state != current.state || previous?.title != current.title) {
-                val detail = current.errorMessage
-                    ?: current.resultMessage
-                    ?: current.readScanResult?.toLogLine()
-                val message = "${current.label}: ${current.state}" + if (detail.isNullOrBlank()) "" else " — $detail"
-                android.util.Log.i("UsbMultitool", message)
-                // Structured detail for the trace file; the short line above goes to the journal.
-                trace.log(
-                    "operation",
-                    "name" to current.label,
-                    "state" to current.state,
-                    "bytes" to current.bytesTotal,
-                    "device" to deviceKey(attachedDevice),
-                    "gen" to attachGeneration,
-                    "detail" to detail,
-                )
-                state = UiReducer.reduce(state, UiIntent.AppendLog(logLine(message))).state
+        var acceptedOperationIntent = true
+        val liveAttachmentGeneration = attachment.snapshot().generation
+        if (intent is UiIntent.OperationBegan || intent is UiIntent.OperationUpdated) {
+            val current = when (intent) {
+                is UiIntent.OperationBegan -> intent.progress
+                is UiIntent.OperationUpdated -> intent.progress
+                else -> error("unreachable")
+            }
+            val operationGenerationMatches =
+                operationGenerations[current.token]?.let { generation ->
+                    generation == liveAttachmentGeneration &&
+                        (state.device == null || state.device.attachGeneration == generation)
+                } == true
+            acceptedOperationIntent = operationGenerationMatches &&
+                adjustedResult.state !== state && adjustedResult.state.operation == current
+            if (acceptedOperationIntent) {
+                val previous = state.operation
+                if (previous?.state != current.state ||
+                    previous?.title != current.title ||
+                    previous?.token != current.token
+                ) {
+                    val detail = current.errorMessage
+                        ?: current.resultMessage
+                        ?: current.readScanResult?.toLogLine()
+                    val message = "${current.label}: ${current.state}" +
+                        if (detail.isNullOrBlank()) "" else " — $detail"
+                    android.util.Log.i("UsbMultitool", message)
+                    trace.log(
+                        "operation",
+                        "name" to current.label,
+                        "state" to current.state,
+                        "token" to current.token.value,
+                        "bytes" to current.bytesTotal,
+                        "device" to deviceKey(attachedDevice),
+                        "gen" to liveAttachmentGeneration,
+                        "detail" to detail,
+                    )
+                    state = UiReducer.reduce(state, UiIntent.AppendLog(logLine(message))).state
+                }
             }
         }
-        state = if (intent is UiIntent.OperationUpdated) result.state.copy(logLines = state.logLines) else result.state
-        result.effects.forEach { effect ->
-            handleEffect(effect)
+        if (acceptedOperationIntent &&
+            (intent is UiIntent.OperationBegan || intent is UiIntent.OperationUpdated)
+        ) {
+            state = adjustedResult.state.copy(logLines = state.logLines)
+        } else if (intent !is UiIntent.OperationBegan && intent !is UiIntent.OperationUpdated) {
+            state = adjustedResult.state
         }
-        refreshFilesystemUsage(intent)
-    }
+        var completionGenerationAccepted = false
+        val completionResult =
+            (intent as? UiIntent.OperationUpdated)
+                ?.takeIf {
+                    when (it.progress.state) {
+                        OperationState.Completed,
+                        OperationState.Cancelled,
+                        OperationState.Partial,
+                        OperationState.Failed,
+                        -> true
+                        OperationState.Queued, OperationState.Running -> false
+                    }
+                }
+                ?.let { terminalIntent ->
+                    operationGenerations.remove(terminalIntent.progress.token)?.let { generation ->
+                        completionGenerationAccepted =
+                            liveAttachmentGeneration == generation &&
+                                (state.device == null || state.device.attachGeneration == generation)
+                        UiReducer.reduce(
+                            state,
+                            UiIntent.OperationCompletionEffects(
+                                token = terminalIntent.progress.token,
+                                attachmentGeneration = generation,
+                                title = terminalIntent.progress.title,
+                                state = terminalIntent.progress.state,
+                            ),
+                        )
+                    }
+                }
+        if (completionResult != null && completionGenerationAccepted) state = completionResult.state
+        if (acceptedOperationIntent) {
+            adjustedResult.effects.forEach { effect ->
+                handleEffect(effect)
+            }
+        }
+        if (completionGenerationAccepted) {
+            completionResult?.effects?.forEach { effect -> handleEffect(effect) }
+        }
+        if (acceptedOperationIntent || completionGenerationAccepted) refreshFilesystemUsage(intent)
 
+    }
     /** Post an intent to the main dispatcher; disk workers must never mutate state directly. */
     private fun onIntentDeferred(intent: UiIntent) {
         scope.launch(Dispatchers.Main.immediate) { onIntent(intent) }
     }
 
+    private fun publishOperationStarted(
+        handle: OperationHandle,
+        title: OperationTitle,
+        token: OperationToken,
+        cancelable: Boolean,
+    ) {
+        scope.launch {
+            while (handle.state == usb.operation.OperationState.Queued) {
+                delay(PROGRESS_TICK_MS)
+            }
+            if (handle.state == usb.operation.OperationState.Running && state.operation?.token == token) {
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = OperationState.Running,
+                            title = title,
+                            token = token,
+                            cancelable = cancelable,
+                        ),
+                    ),
+                )
+            }
+        }
+    }
     fun handleEffect(effect: UiEffect) {
         when (effect) {
             is UiEffect.SubmitDestructive -> {
@@ -1208,35 +1311,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val isCooperative = action.cooperative
+                val token = nextOperationToken()
+                val handle = DiskController.get().submit(op, token)
+                if (isCooperative) activeHandle = handle
+                activeHandles.add(handle)
                 onIntent(
-                    UiIntent.OperationUpdated(
+                    UiIntent.OperationBegan(
                         OperationProgress(
-                            state = OperationState.Running,
+                            state = OperationState.Queued,
                             title = opTitle,
+                            token = token,
                             cancelable = isCooperative,
                         ),
                     ),
                 )
-                val handle = DiskController.get().submit(op)
-                if (isCooperative) activeHandle = handle
-                activeHandles.add(handle)
                 scope.launch {
                     val ticker = launch {
                         while (true) {
                             delay(LOG_TICK_MS)
                             val done = op.bytesDone
                             val total = op.bytesTotal
-                            onIntent(UiIntent.OperationUpdated(OperationProgress(
-                                state = OperationState.Running,
-                                title = opTitle,
-                                bytesDone = done,
-                                bytesTotal = total,
-                                cancelable = isCooperative,
-                            )))
-                            val progress = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $done bytes"
-                            val message = "$actionName$progress"
-                            android.util.Log.i("UsbMultitool", message)
-                            onIntent(UiIntent.AppendLog(logLine(message)))
+                            if (handle.state == usb.operation.OperationState.Running) {
+                                onIntent(UiIntent.OperationUpdated(OperationProgress(
+                                    state = OperationState.Running,
+                                    title = opTitle,
+                                    token = token,
+                                    bytesDone = done,
+                                    bytesTotal = total,
+                                    cancelable = isCooperative,
+                                )))
+                                val progress = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $done bytes"
+                                val message = "$actionName$progress"
+                                if (state.operation?.token == token) {
+                                    android.util.Log.i("UsbMultitool", message)
+                                    onIntent(UiIntent.AppendLog(logLine(message)))
+                                }
+                            }
                         }
                     }
                     try {
@@ -1249,6 +1359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 OperationProgress(
                                     state = mappedState,
                                     title = opTitle,
+                                    token = token,
                                     errorMessage = errorMsg,
                                     resultMessage = op.result,
                                     rawWriteResult = rawWriteOutcome,
@@ -1477,8 +1588,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "${info.backup.currentLba})"
                 }
 
-            UiEffect.CancelOperation -> {
-                activeHandle?.cancel()
+            is UiEffect.CancelOperation -> {
+                val current = state.operation
+                if (current?.token == effect.token &&
+                    current.cancelable &&
+                    (current.state == OperationState.Running || current.state == OperationState.Queued)
+                ) {
+                    activeHandles.firstOrNull { it.token == effect.token }?.cancel()
+                }
             }
             is UiEffect.LoadFiles -> {
                 listDirectory(effect.path)
@@ -1554,11 +1671,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is UiEffect.LinkXml -> {
                 val imagePaths = effect.imagePaths
                 if (imagePaths.isEmpty()) {
+                    val token = nextOperationToken()
+                    onIntent(
+                        UiIntent.OperationBegan(
+                            OperationProgress(
+                                state = OperationState.Queued,
+                                title = OperationTitle.AutounattendXmlLink,
+                                token = token,
+                                cancelable = false,
+                            ),
+                        ),
+                    )
                     onIntent(
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Failed,
                                 title = OperationTitle.AutounattendXmlLink,
+                                token = token,
                                 errorMessage = "No image selected for the Windows setup link",
                             ),
                         ),
@@ -1606,17 +1735,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+                val token = nextOperationToken()
+                val handle = DiskController.get().submit(op, token)
+                activeHandles.add(handle)
                 onIntent(
-                    UiIntent.OperationUpdated(
+                    UiIntent.OperationBegan(
                         OperationProgress(
-                            state = OperationState.Running,
+                            state = OperationState.Queued,
                             title = OperationTitle.AutounattendXmlLink,
+                            token = token,
                             cancelable = false,
                         ),
                     ),
                 )
-                val handle = DiskController.get().submit(op)
-                activeHandles.add(handle)
+                publishOperationStarted(
+                    handle,
+                    OperationTitle.AutounattendXmlLink,
+                    token,
+                    cancelable = false,
+                )
                 scope.launch {
                     try {
                         val outcome = handle.await()
@@ -1628,6 +1765,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 OperationProgress(
                                     state = mappedState,
                                     title = OperationTitle.AutounattendXmlLink,
+                                    token = token,
                                     errorMessage = errorMsg,
                                     resultMessage = op.result,
                                     cancelable = false,
@@ -1639,6 +1777,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             overwriteCause = overwriteCause.cause
                         }
                         if (overwriteCause is usb.ventoy.VentoyOverwriteRequiredException &&
+                            state.operation?.token == token &&
                             attachmentLive(operationGeneration) &&
                             state.device?.identity == deviceIdentity
                         ) {
@@ -1650,7 +1789,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 ),
                             )
                         }
-                        if (mappedState == OperationState.Completed) {
+                        if (mappedState == OperationState.Completed && state.operation?.token == token) {
                             onIntent(UiIntent.LoadWindowsImageLinks)
                         }
                     } finally {
@@ -1710,6 +1849,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun runSelfTest() {
+        if (state.operation?.state == OperationState.Queued || state.operation?.state == OperationState.Running) return
         val dev = attachedDevice
         val mgr = usbManager
         if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
@@ -1719,13 +1859,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 report.summary()
             }
         } else {
+            val token = nextOperationToken()
+            val selfTestGeneration = attachment.snapshot().generation
             scope.launch {
                 onIntent(
-                    UiIntent.OperationUpdated(
-                        OperationProgress(state = OperationState.Running, title = OperationTitle.SelfTestRunning, cancelable = false),
+                    UiIntent.OperationBegan(
+                        OperationProgress(
+                            state = OperationState.Queued,
+                            title = OperationTitle.SelfTestRunning,
+                            token = token,
+                            cancelable = false,
+                        ),
                     ),
                 )
                 try {
+                    onIntent(
+                        UiIntent.OperationUpdated(
+                            OperationProgress(
+                                state = OperationState.Running,
+                                title = OperationTitle.SelfTest,
+                                token = token,
+                                cancelable = false,
+                            ),
+                        ),
+                    )
                     val report = withContext(Dispatchers.Default) {
                         usb.diagnostics.SelfTestRunner.runAll(disk = null)
                     }
@@ -1736,19 +1893,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             OperationProgress(
                                 state = targetState,
                                 title = OperationTitle.SelfTest,
+                                token = token,
                                 resultMessage = if (report.allPassed) summary else null,
                                 errorMessage = if (!report.allPassed) summary else null,
                                 cancelable = false,
                             ),
                         ),
                     )
-                    onIntent(UiIntent.Status(UiMessage.Raw(summary)))
+                    if (state.operation?.token == token &&
+                        attachment.snapshot().generation == selfTestGeneration
+                    ) onIntent(UiIntent.Status(UiMessage.Raw(summary)))
                 } catch (t: Throwable) {
                     onIntent(
                         UiIntent.OperationUpdated(
                             OperationProgress(
                                 state = OperationState.Failed,
                                 title = OperationTitle.SelfTest,
+                                token = token,
                                 errorMessage = t.message ?: "Self-test failed",
                                 cancelable = false,
                             ),
@@ -2029,7 +2190,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (isNewDevice) {
             cancelActiveInspection(cancelUsb = true)
             usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
-            activeHandles.clear()
             activeHandle = null
         }
         // One volatile publish: the device and its generation become visible together, so
@@ -2194,7 +2354,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -2371,7 +2532,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -2412,8 +2574,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
-        if (device != null && device.deviceId != attachedDevice?.deviceId) return
-        val detachedKey = deviceKey(device ?: attachedDevice)
+        val live = attachment.snapshot()
+        if (device == null && live.device == null) return
+        if (device != null && device.deviceId != live.device?.deviceId) return
+        val detachedKey = deviceKey(device ?: live.device)
         val detachedGeneration = attachment.publish(null, bumpGeneration = true)
         if (detachedKey != null) {
             trace.log("usb.detach", "device" to detachedKey, "gen" to detachedGeneration)
@@ -2427,7 +2591,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         usageInFlightKey = null
         cancelActiveInspection(cancelUsb = true)
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
-        activeHandles.clear()
+        // Keep handles registered until their workers finish real close; cancellation is not close.
         activeHandle = null
         // No mount can start while attachedDevice is null, so every mount allocated up to this
         // fence belongs to the detached stick. The close below runs on IO; a new attach that
@@ -2639,9 +2803,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val finished =
             intent is UiIntent.OperationUpdated &&
-                intent.progress?.state != null &&
-                intent.progress?.state != OperationState.Running &&
-                intent.progress?.state != OperationState.Queued
+                intent.progress.state != OperationState.Running &&
+                intent.progress.state != OperationState.Queued
         if (!state.needsFilesystemUsageRequest(key, lastUsageKey, usageInFlightKey, finished)) return
         val result = UiReducer.reduce(state, UiIntent.RequestFilesystemUsage)
         if (result.effects.isEmpty()) return
@@ -2890,11 +3053,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val pin = currentAttachmentPin()
         // Holder: publish SetStaged only after copy+sync+close succeed; onSuccess runs on Main.
         val stagedPathHolder = arrayOfNulls<String>(1)
+        val stagedPublished = java.util.concurrent.atomic.AtomicBoolean(false)
         submitFilesOperation(
             title = OperationTitle.StageForRawWrite(name),
-            onSuccess = {
+            onSuccessWithToken = { stageToken ->
                 val stagedPath = stagedPathHolder[0]
-                if (stagedPath != null) {
+                if (stagedPath != null && state.operation?.token == stageToken) {
                     val stagedFile = java.io.File(stagedPath)
                     val compressedMagic =
                         runCatching {
@@ -2910,13 +3074,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             compressedMagic = compressedMagic,
                         ),
                     )
+                    stagedPublished.set(
+                        state.operation?.token == stageToken &&
+                            !state.isRunning &&
+                            state.pendingConfirmation == null &&
+                            state.stagedRawImagePath == stagedPath
+                    )
                 }
             },
-            onTerminal = { outcome ->
+            onTerminal = { outcome, terminalToken ->
                 // Late-cancel race after last isActive check: executor may still mark
                 // Cancelled/Failed without throwing — drop unpublished staged copy.
                 // Never throw from terminal callback (would crash Main handler).
-                if (outcome !is usb.operation.OperationState.Completed) {
+                if (outcome !is usb.operation.OperationState.Completed || !stagedPublished.get()) {
                     val orphan = stagedPathHolder[0]
                     stagedPathHolder[0] = null
                     try {
@@ -2929,14 +3099,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ?.addSuppressed(err)
                         val detail = err.message ?: err.javaClass.simpleName
                         onIntent(UiIntent.AppendLog(logLine("Upload cleanup failed: $detail")))
-                        onIntent(
-                            UiIntent.Status(
-                                UiMessage.Key(
-                                    UiMessageKey.DeleteStagingFailed,
-                                    listOf(detail),
+                        if (state.operation?.token == terminalToken) {
+                            onIntent(
+                                UiIntent.Status(
+                                    UiMessage.Key(
+                                        UiMessageKey.DeleteStagingFailed,
+                                        listOf(detail),
+                                    ),
                                 ),
-                            ),
-                        )
+                            )
+                        }
                     }
                 }
             },
@@ -3216,7 +3388,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         windowsImageHandle = handle
         activeHandles.add(handle)
         scope.launch {
@@ -3275,7 +3448,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -3424,9 +3598,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
+                val token = nextOperationToken()
                 val handle =
                     try {
-                        DiskController.get().submit(op)
+                        DiskController.get().submit(op, token)
                     } catch (failure: Throwable) {
                         finishInspection()
                         return@launch
@@ -3729,34 +3904,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandle = handle
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
+            UiIntent.OperationBegan(
                 OperationProgress(
-                    state = OperationState.Running,
+                    state = OperationState.Queued,
                     title = opTitle,
+                    token = token,
                     bytesTotal = proposal.sizeBytes ?: -1L,
                     cancelable = true,
                 ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandle = handle
-        activeHandles.add(handle)
         scope.launch {
             val ticker = launch {
                 while (true) {
                     delay(PROGRESS_TICK_MS)
-                    onIntent(
-                        UiIntent.OperationUpdated(
-                            OperationProgress(
-                                state = OperationState.Running,
-                                title = opTitle,
-                                bytesDone = op.bytesDone,
-                                bytesTotal = op.bytesTotal,
-                                cancelable = true,
+                    if (handle.state == usb.operation.OperationState.Running) {
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Running,
+                                    title = opTitle,
+                                    token = token,
+                                    bytesDone = op.bytesDone,
+                                    bytesTotal = op.bytesTotal,
+                                    cancelable = true,
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    }
                 }
             }
             try {
@@ -3769,6 +3949,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = opTitle,
+                            token = token,
                             bytesDone = op.bytesDone,
                             bytesTotal = op.bytesTotal,
                             errorMessage = message,
@@ -3777,7 +3958,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ),
                     ),
                 )
-                if (mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && mappedState == OperationState.Completed) {
                     if (proposal.kind == usb.ui.WindowsImportKind.XmlTemplate) {
                         onIntent(
                             UiIntent.WindowsTemplateImported(
@@ -3785,8 +3966,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     } else {
-                        // The operation is terminal only after the volume/disk closed. Auto
-                        // selection is therefore allowed exactly here, never on Partial.
                         op.copiedPath?.let { target ->
                             onIntent(
                                 UiIntent.FilesPickCopySucceeded(
@@ -3797,9 +3976,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                     }
-                    // ISO catalog already invalidated by OperationUpdated; Ventoy tab reloads.
                     onIntent(UiIntent.LoadWindowsImageLinks)
-                } else if (message != null) {
+                } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                     if (op.failureCause is usb.ventoy.ImportDirectoryMissingException) {
                         // The cached folder list just proved stale: re-read it and reopen the
@@ -3851,18 +4029,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandle = handle
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
+            UiIntent.OperationBegan(
                 OperationProgress(
-                    state = OperationState.Running,
+                    state = OperationState.Queued,
                     title = opTitle,
+                    token = token,
                     cancelable = true,
                 ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandle = handle
-        activeHandles.add(handle)
+        publishOperationStarted(handle, opTitle, token, cancelable = true)
         scope.launch {
             try {
                 val outcome = handle.await()
@@ -3873,15 +4054,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = opTitle,
+                            token = token,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
                         ),
                     ),
                 )
-                if (mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && mappedState == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
-                } else if (message != null) {
+                } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -3928,13 +4110,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, title = opTitle, cancelable = false),
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Queued,
+                    title = opTitle,
+                    token = token,
+                    cancelable = false,
+                ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandles.add(handle)
+        publishOperationStarted(handle, opTitle, token, cancelable = false)
         scope.launch {
             try {
                 val outcome = handle.await()
@@ -3945,13 +4134,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = opTitle,
+                            token = token,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
                         ),
                     ),
                 )
-                if (message != null) onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                if (state.operation?.token == token && message != null) onIntent(UiIntent.Status(UiMessage.Raw(message)))
             } finally {
                 activeHandles.remove(handle)
             }
@@ -3992,7 +4182,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -4092,7 +4283,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -4161,13 +4353,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, title = opTitle, cancelable = false),
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Queued,
+                    title = opTitle,
+                    token = token,
+                    cancelable = false,
+                ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandles.add(handle)
+        publishOperationStarted(handle, opTitle, token, cancelable = false)
         scope.launch {
             try {
                 val outcome = handle.await()
@@ -4178,18 +4377,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = opTitle,
+                            token = token,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
                         ),
                     ),
                 )
-                if (mappedState == OperationState.Completed) {
-                    // OperationUpdated already dropped XML/catalogs (Missing + epoch).
-                    // Ventoy tab reloads when open; avoid a second off-tab mount here.
+                if (state.operation?.token == token && mappedState == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
-                } else if (message != null) {
+                } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -4442,7 +4640,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -4514,7 +4713,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -4698,7 +4898,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        val handle = DiskController.get().submit(op)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
         activeHandles.add(handle)
         scope.launch {
             try {
@@ -4810,17 +5011,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
+            UiIntent.OperationBegan(
                 OperationProgress(
-                    state = OperationState.Running,
+                    state = OperationState.Queued,
                     title = title,
+                    token = token,
                     cancelable = false,
                 ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandles.add(handle)
+        publishOperationStarted(handle, title, token, cancelable = false)
         scope.launch {
             try {
                 val outcome = handle.await()
@@ -4831,13 +5035,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = title,
+                            token = token,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
                         ),
-                    ),
+                    )
                 )
-                if (mappedState != OperationState.Completed && message != null) {
+                if (state.operation?.token == token && mappedState != OperationState.Completed && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -4914,13 +5119,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, title = title, cancelable = false),
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Queued,
+                    title = title,
+                    token = token,
+                    cancelable = false,
+                ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandles.add(handle)
+        publishOperationStarted(handle, title, token, cancelable = false)
         scope.launch {
             try {
                 val outcome = handle.await()
@@ -4931,13 +5143,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = title,
+                            token = token,
                             errorMessage = message,
                             resultMessage = op.result,
                             cancelable = false,
                         ),
-                    ),
+                    )
                 )
-                if (mappedState != OperationState.Completed && message != null) {
+                if (state.operation?.token == token && mappedState != OperationState.Completed && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -5019,13 +5232,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun submitBindingOperation(op: DiskOperation, title: OperationTitle, xmlName: String) {
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
         onIntent(
-            UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, title = title, cancelable = false),
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Queued,
+                    title = title,
+                    token = token,
+                    cancelable = false,
+                ),
             ),
         )
-        val handle = DiskController.get().submit(op)
-        activeHandles.add(handle)
+        publishOperationStarted(handle, title, token, cancelable = false)
         scope.launch {
             try {
                 val outcome = handle.await()
@@ -5036,16 +5256,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         OperationProgress(
                             state = mappedState,
                             title = title,
+                            token = token,
                             errorMessage = message,
                             cancelable = false,
                         ),
                     ),
                 )
-                if (mappedState == OperationState.Completed) {
-                    // OperationUpdated dropped document to Missing + bumped epoch; tab reloads.
+                if (state.operation?.token == token && mappedState == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
-                } else if (message != null) {
+                } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -5127,7 +5347,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          */
         listFailure: ((String) -> UiIntent)? = null,
         onSuccess: (() -> Unit)? = null,
-        onTerminal: ((usb.operation.OperationState) -> Unit)? = null,
+        onSuccessWithToken: ((OperationToken) -> Unit)? = null,
+        onTerminal: ((usb.operation.OperationState, OperationToken) -> Unit)? = null,
         quiet: Boolean = listFailure != null,
         body: (DiskOperation) -> Unit,
     ): OperationHandle {
@@ -5166,47 +5387,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(operation, token)
+        if (!quiet) activeHandle = handle
+        activeHandles.add(handle)
         if (FilesOperationPolicy.publishOperationProgress(quiet)) {
             onIntent(
-                UiIntent.OperationUpdated(
+                UiIntent.OperationBegan(
                     OperationProgress(
-                        state = OperationState.Running,
+                        state = OperationState.Queued,
                         title = title,
+                        token = token,
                         bytesTotal = bytesTotal,
                     ),
                 ),
             )
         }
-        val handle = DiskController.get().submit(operation)
-        if (!quiet) activeHandle = handle
-        activeHandles.add(handle)
         scope.launch {
             val ticker = launch {
                 var lastLogAt = android.os.SystemClock.elapsedRealtime()
                 var lastLogged = -1L
                 while (true) {
                     delay(PROGRESS_TICK_MS)
-                    if (FilesOperationPolicy.publishOperationProgress(quiet)) {
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = OperationState.Running,
-                                    title = title,
-                                    bytesDone = operation.bytesDone,
-                                    bytesTotal = operation.bytesTotal,
+                    if (handle.state == usb.operation.OperationState.Running) {
+                        if (FilesOperationPolicy.publishOperationProgress(quiet)) {
+                            onIntent(
+                                UiIntent.OperationUpdated(
+                                    OperationProgress(
+                                        state = OperationState.Running,
+                                        title = title,
+                                        token = token,
+                                        bytesDone = operation.bytesDone,
+                                        bytesTotal = operation.bytesTotal,
+                                    ),
                                 ),
-                            ),
-                        )
-                    }
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastLogAt >= LOG_TICK_MS && operation.bytesDone != lastLogged) {
-                        lastLogAt = now
-                        lastLogged = operation.bytesDone
-                        val total = operation.bytesTotal
-                        val detail = if (total > 0) " ${(lastLogged.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $lastLogged bytes"
-                        val message = "$label$detail"
-                        android.util.Log.i("UsbMultitool", message)
-                        onIntent(UiIntent.AppendLog(logLine(message)))
+                            )
+                        }
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastLogAt >= LOG_TICK_MS && operation.bytesDone != lastLogged && state.operation?.token == token) {
+                            lastLogAt = now
+                            lastLogged = operation.bytesDone
+                            val total = operation.bytesTotal
+                            val detail = if (total > 0) " ${(lastLogged.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $lastLogged bytes"
+                            val message = "$label$detail"
+                            android.util.Log.i("UsbMultitool", message)
+                            onIntent(UiIntent.AppendLog(logLine(message)))
+                        }
                     }
                 }
             }
@@ -5241,10 +5467,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val message = FilesOperationPolicy.primaryErrorMessage(cause)
                         if (plan.postBoundFailure) {
                             onIntent(listFailure!!(message))
-                        } else if (plan.postStatus) {
-                            onIntent(UiIntent.Status(UiMessage.Raw(message)))
-                        } else {
-                            onIntent(UiIntent.AppendLog(logLine("$label failed: $message")))
+                        } else if (state.operation?.token == token) {
+                            if (plan.postStatus) {
+                                onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                            } else {
+                                onIntent(UiIntent.AppendLog(logLine("$label failed: $message")))
+                            }
                         }
                         if (plan.postOperationProgress) {
                             onIntent(
@@ -5252,13 +5480,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     OperationProgress(
                                         state = OperationState.Failed,
                                         title = title,
+                                        token = token,
                                         errorMessage = message,
                                     ),
-                                ),
+                                )
                             )
                         }
                         publishCloseDiagnostics(cause)
-                        onTerminal?.invoke(outcome)
+                        onTerminal?.invoke(outcome, token)
                     }
                     is usb.operation.OperationState.Cancelled -> {
                         if (plan.postBoundFailure) {
@@ -5267,14 +5496,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (plan.postOperationProgress) {
                             onIntent(
                                 UiIntent.OperationUpdated(
-                                    OperationProgress(state = OperationState.Cancelled, title = title),
+                                    OperationProgress(
+                                        state = OperationState.Cancelled,
+                                        title = title,
+                                        token = token,
+                                    ),
                                 ),
                             )
                         }
                         // RO cancel: executor drops failureCause; close still logged via closeDiagnostic.
                         // Terminal stays Cancelled — never promote to Failed for close-on-cancel.
                         publishCloseDiagnostics(operation.failureCause)
-                        onTerminal?.invoke(outcome)
+                        onTerminal?.invoke(outcome, token)
                     }
                     is usb.operation.OperationState.Partial -> {
                         // withWritableVolume already closed under lock; do not close again.
@@ -5285,7 +5518,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         if (plan.postBoundFailure) {
                             onIntent(listFailure!!(message))
-                        } else if (plan.postStatus) {
+                        } else if (state.operation?.token == token && plan.postStatus) {
                             onIntent(UiIntent.Status(UiMessage.Raw(message)))
                         }
                         if (plan.postOperationProgress) {
@@ -5294,6 +5527,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     OperationProgress(
                                         state = OperationState.Partial,
                                         title = title,
+                                        token = token,
                                         bytesDone = operation.bytesDone,
                                         bytesTotal = operation.bytesTotal,
                                         errorMessage = message,
@@ -5302,7 +5536,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                         publishCloseDiagnostics(cause)
-                        onTerminal?.invoke(outcome)
+                        onTerminal?.invoke(outcome, token)
                     }
                     else -> {
                         if (plan.postOperationProgress) {
@@ -5311,14 +5545,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     OperationProgress(
                                         state = OperationState.Completed,
                                         title = title,
+                                        token = token,
                                         bytesDone = operation.bytesDone,
                                         bytesTotal = operation.bytesTotal,
                                     ),
                                 ),
                             )
                         }
-                        onSuccess?.invoke()
-                        onTerminal?.invoke(outcome)
+                        if (state.operation?.token == token) onSuccess?.invoke()
+                        onSuccessWithToken?.invoke(token)
+                        onTerminal?.invoke(outcome, token)
                     }
                 }
             } finally {
@@ -5382,43 +5618,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        onIntent(
-            UiIntent.OperationUpdated(
-                OperationProgress(state = OperationState.Running, title = title, cancelable = cancelable),
-            ),
-        )
-        val handle = DiskController.get().submit(operation)
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(operation, token)
         if (cancelable) activeHandle = handle
         activeHandles.add(handle)
+        onIntent(
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Queued,
+                    title = title,
+                    token = token,
+                    cancelable = cancelable,
+                ),
+            ),
+        )
         scope.launch {
             val ticker = launch {
                 while (true) {
                     delay(PROGRESS_TICK_MS)
-                    onIntent(
-                        UiIntent.OperationUpdated(
-                            OperationProgress(
-                                state = OperationState.Running,
-                                title = title,
-                                bytesDone = operation.bytesDone,
-                                bytesTotal = operation.bytesTotal,
-                                cancelable = cancelable,
+                    if (handle.state == usb.operation.OperationState.Running) {
+                        onIntent(
+                            UiIntent.OperationUpdated(
+                                OperationProgress(
+                                    state = OperationState.Running,
+                                    title = title,
+                                    token = token,
+                                    bytesDone = operation.bytesDone,
+                                    bytesTotal = operation.bytesTotal,
+                                    cancelable = cancelable,
+                                ),
                             ),
-                        ),
-                    )
+                        )
+                    }
                 }
             }
             val logTicker = launch {
                 var lastLogged = -1L
                 while (true) {
                     delay(LOG_TICK_MS)
-                    val done = operation.bytesDone
-                    val total = operation.bytesTotal
-                    if (done != lastLogged) {
-                        lastLogged = done
-                        val pct = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else ""
-                        val message = "$label$pct"
-                        android.util.Log.i("UsbMultitool", message)
-                        onIntent(UiIntent.AppendLog(logLine(message)))
+                    if (handle.state == usb.operation.OperationState.Running && state.operation?.token == token) {
+                        val done = operation.bytesDone
+                        val total = operation.bytesTotal
+                        if (done != lastLogged) {
+                            lastLogged = done
+                            val pct = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else ""
+                            val message = "$label$pct"
+                            android.util.Log.i("UsbMultitool", message)
+                            onIntent(UiIntent.AppendLog(logLine(message)))
+                        }
                     }
                 }
             }
@@ -5429,10 +5676,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 when (outcome) {
                     is usb.operation.OperationState.Failed -> {
                         val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
-                        onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                        if (state.operation?.token == token) {
+                            onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                        }
                         onIntent(
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
+                                    token = token,
                                     outcome = outcome,
                                     title = title,
                                     bytesDone = operation.bytesDone,
@@ -5444,13 +5694,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 ),
                             ),
                         )
-                        // The USB claim may be gone; reopen for the next attempt.
-                        scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
+                        if (state.operation?.token == token) {
+                            scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
+                        }
                     }
                     else -> {
                         onIntent(
                             UiIntent.OperationUpdated(
                                 readOnlyOperationProgress(
+                                    token = token,
                                     outcome = outcome,
                                     title = title,
                                     bytesDone = operation.bytesDone,

@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 
 class ConfirmationTest {
     private val device =
@@ -63,7 +64,13 @@ class UiStateMachineTest {
                 ),
             vtoyBypassChecks = true,
         )
-
+    private fun terminal(base: AppUiState, progress: OperationProgress): ReduceResult {
+        val begun = UiReducer.reduce(
+            base,
+            UiIntent.OperationBegan(progress.copy(state = OperationState.Running)),
+        ).state
+        return UiReducer.reduce(begun, UiIntent.OperationUpdated(progress))
+    }
     @Test
     fun absentDeviceBlocksDestructiveConfirm() {
         val result =
@@ -97,6 +104,7 @@ class UiStateMachineTest {
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
+                        token = OperationTokenGenerator.next(),
                         state = OperationState.Running,
                         title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
                         bytesDone = 1000,
@@ -116,48 +124,38 @@ class UiStateMachineTest {
     @Test
     fun successCancellationFailureAndPartialSurfaceTruthfully() {
         val base = ready()
-        val completed =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(OperationState.Completed, OperationTitle.Destructive(DestructiveAction.WIPE)),
-                ),
-            )
+        val completed = reduceTerminalOperation(
+            base,
+            OperationProgress(OperationState.Completed, OperationTitle.Destructive(DestructiveAction.WIPE), token = OperationTokenGenerator.next()),
+        )
         assertEquals(UiMessage.Key(UiMessageKey.Success), completed.state.statusMessage)
 
-        val cancelled =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(OperationState.Cancelled, OperationTitle.Destructive(DestructiveAction.WIPE)),
-                ),
-            )
+        val cancelled = reduceTerminalOperation(
+            base,
+            OperationProgress(OperationState.Cancelled, OperationTitle.Destructive(DestructiveAction.WIPE), token = OperationTokenGenerator.next()),
+        )
         assertEquals(UiMessage.Key(UiMessageKey.CancelledStatus), cancelled.state.statusMessage)
 
-        val failed =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        OperationState.Failed,
-                        OperationTitle.Destructive(DestructiveAction.WIPE),
-                        errorMessage = "I/O error",
-                    ),
-                ),
-            )
+        val failed = reduceTerminalOperation(
+            base,
+            OperationProgress(
+                OperationState.Failed,
+                OperationTitle.Destructive(DestructiveAction.WIPE),
+                token = OperationTokenGenerator.next(),
+                errorMessage = "I/O error",
+            ),
+        )
         assertEquals(UiMessage.Raw("I/O error"), failed.state.statusMessage)
 
-        val partial =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        OperationState.Partial,
-                        OperationTitle.RescueBackup,
-                        errorMessage = "Partial rescue map retained",
-                    ),
-                ),
-            )
+        val partial = reduceTerminalOperation(
+            base,
+            OperationProgress(
+                OperationState.Partial,
+                OperationTitle.RescueBackup,
+                token = OperationTokenGenerator.next(),
+                errorMessage = "Partial rescue map retained",
+            ),
+        )
         assertEquals(UiMessage.Raw("Partial rescue map retained"), partial.state.statusMessage)
 
         val scan = ReadScanOutcome(
@@ -167,36 +165,32 @@ class UiStateMachineTest {
             failedRangeCount = 1,
             averageBytesPerSecond = null,
         )
-        val scanDone =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        OperationState.Completed,
-                        OperationTitle.ReadScan,
-                        readScanResult = scan,
-                    ),
-                ),
-            )
+        val scanDone = reduceTerminalOperation(
+            base,
+            OperationProgress(
+                OperationState.Completed,
+                OperationTitle.ReadScan,
+                token = OperationTokenGenerator.next(),
+                readScanResult = scan,
+            ),
+        )
         assertEquals(UiMessage.ReadScan(scan), scanDone.state.statusMessage)
         // Language switch must keep structured numbers, not freeze a sentence.
         val switched = UiReducer.reduce(scanDone.state, UiIntent.SetLanguage(AppLanguage.Russian))
         assertEquals(UiMessage.ReadScan(scan), switched.state.statusMessage)
         assertEquals(AppLanguage.Russian, switched.state.language)
 
-        val scanCancel =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        OperationState.Cancelled,
-                        OperationTitle.ReadScan,
-                        bytesDone = 1024L,
-                        bytesTotal = 8192L,
-                        readScanResult = scan,
-                    ),
-                ),
-            )
+        val scanCancel = reduceTerminalOperation(
+            base,
+            OperationProgress(
+                OperationState.Cancelled,
+                OperationTitle.ReadScan,
+                token = OperationTokenGenerator.next(),
+                bytesDone = 1024L,
+                bytesTotal = 8192L,
+                readScanResult = scan,
+            ),
+        )
         assertEquals(UiMessage.ReadScan(scan), scanCancel.state.statusMessage)
 
     }
@@ -668,24 +662,25 @@ class UiStateMachineTest {
     @Test
     fun completedOperationShowsItsResultMessage() {
         val detail = "Rescue backup: image /x.img, map /x.map: 10 copied, 2 unreadable"
-        val completed =
-            UiReducer.reduce(
-                ready(),
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        OperationState.Completed,
-                        OperationTitle.RescueBackup,
-                        resultMessage = detail,
-                    ),
-                ),
-            )
+        val completed = reduceTerminalOperation(
+            ready(),
+            OperationProgress(
+                OperationState.Completed,
+                OperationTitle.RescueBackup,
+                token = OperationTokenGenerator.next(),
+                resultMessage = detail,
+            ),
+        )
         assertEquals(UiMessage.Raw(detail), completed.state.statusMessage)
 
-        val bare =
-            UiReducer.reduce(
-                ready(),
-                UiIntent.OperationUpdated(OperationProgress(OperationState.Completed, OperationTitle.Destructive(DestructiveAction.WIPE))),
-            )
+        val bare = reduceTerminalOperation(
+            ready(),
+            OperationProgress(
+                OperationState.Completed,
+                OperationTitle.Destructive(DestructiveAction.WIPE),
+                token = OperationTokenGenerator.next(),
+            ),
+        )
         assertEquals(UiMessage.Key(UiMessageKey.Success), bare.state.statusMessage)
     }
 
@@ -704,6 +699,7 @@ class UiStateMachineTest {
                     OperationProgress(
                         state = OperationState.Running,
                         title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
+                        token = OperationTokenGenerator.next(),
                         bytesTotal = 100,
                     ),
             )

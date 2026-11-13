@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 
 /**
  * Behavioural contract of the shell log and the two-state theme, asserted without a
@@ -16,6 +17,7 @@ class ShellLogBehaviorTest {
 
     private fun runningOperation() = OperationProgress(
         state = OperationState.Running,
+        token = OperationTokenGenerator.next(),
         title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
         bytesDone = 40,
         bytesTotal = 100,

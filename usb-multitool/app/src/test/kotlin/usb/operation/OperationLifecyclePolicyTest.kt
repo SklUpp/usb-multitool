@@ -8,6 +8,8 @@ class OperationLifecyclePolicyTest {
     @Test fun cancelAllInvokesEveryHandle() {
         val cancelled = mutableListOf<String>()
         fun handle(id: String) = object : OperationHandle {
+            override val token = usb.service.OperationTokenGenerator.next()
+            override var state: OperationState = OperationState.Queued
             override fun cancel() {
                 cancelled += id
             }

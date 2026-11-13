@@ -28,7 +28,7 @@ import usb.ventoy.autounattendPlanSha256
 import usb.ventoy.diskLayoutInstallTargetPartitionId
 import usb.ventoy.diskLayoutRemainingMb
 import usb.ventoy.diskLayoutTotalMb
-
+import usb.service.OperationToken
 
 /**
  * Pure state transitions for the four-screen shell.
@@ -97,8 +97,15 @@ sealed class UiIntent {
         val rawGeometry: usb.partition.RawRangeGeometry? = null,
     ) : UiIntent()
 
-    data class OperationUpdated(val progress: OperationProgress?) : UiIntent()
-
+    data class OperationBegan(val progress: OperationProgress) : UiIntent()
+    data class OperationUpdated(val progress: OperationProgress) : UiIntent()
+    data class OperationCleared(val token: OperationToken) : UiIntent()
+    data class OperationCompletionEffects(
+        val token: OperationToken,
+        val attachmentGeneration: Long,
+        val title: OperationTitle,
+        val state: OperationState,
+    ) : UiIntent()
     data class RequestDestructive(val action: DestructiveAction) : UiIntent()
     /**
      * Create a partition in the validated free region, optionally formatting it in the same
@@ -147,6 +154,8 @@ sealed class UiIntent {
         val imagePaths: List<String> = emptyList(),
         val templatePath: String? = null,
     ) : UiIntent()
+
+    data object DismissLinkOverwrite : UiIntent()
 
     data class LinkOverwriteAvailable(
         val fileName: String,
@@ -565,7 +574,7 @@ sealed class UiIntent {
 
     data class Status(val message: UiMessage?) : UiIntent()
 
-    data object CancelOperation : UiIntent()
+    data class CancelOperation(val token: OperationToken) : UiIntent()
 
     /**
      * Enter the absolute FAT directory [path]. Clears [AppUiState.files] and emits a
@@ -676,7 +685,7 @@ sealed interface UiEffect {
         val confirmation: DestructiveConfirmation,
     ) : UiEffect
 
-    data object CancelOperation : UiEffect
+    data class CancelOperation(val token: OperationToken) : UiEffect
 
     data class LinkXml(
         val imagePaths: List<String>,
@@ -849,6 +858,65 @@ data class ReduceResult(
 )
 
 object UiReducer {
+    private fun reduceOperationProgress(
+        state: AppUiState,
+        progress: OperationProgress,
+        begin: Boolean,
+    ): ReduceResult {
+        val previous = state.operation
+        if (!begin) {
+            if (previous == null || previous.token != progress.token || previous.state.isTerminal()) {
+                return ReduceResult(state)
+            }
+            if (progress.state == OperationState.Queued && previous.state == OperationState.Running) {
+                return ReduceResult(state)
+            }
+        }
+        val terminal = progress.state.isTerminal()
+        val base = state.copy(
+            operation = progress,
+            pendingVentoyControls =
+                if (terminal && progress.state == OperationState.Completed &&
+                    progress.title.clearsPendingVentoyControls() &&
+                    (progress.title == OperationTitle.SetVentoyGlobalSetting ||
+                        state.ventoySettingsSource.isDefaultPath())
+                ) emptyList() else state.pendingVentoyControls,
+            filesystemUsage = if (terminal) null else state.filesystemUsage,
+            presence = when {
+                progress.state == OperationState.Running &&
+                    (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy) ->
+                    DevicePresence.Busy
+                terminal && state.presence == DevicePresence.Busy -> DevicePresence.Ready
+                else -> state.presence
+            },
+            statusMessage = when (progress.state) {
+                OperationState.Completed ->
+                    progress.readScanResult?.let(UiMessage::ReadScan)
+                        ?: progress.resultMessage?.let(UiMessage::Raw)
+                        ?: state.statusMessage?.takeUnless { it.isDefaultStateStatus() }
+                        ?: UiMessage.Key(UiMessageKey.Success)
+                OperationState.Cancelled ->
+                    progress.readScanResult?.let(UiMessage::ReadScan)
+                        ?: UiMessage.Key(UiMessageKey.CancelledStatus)
+                OperationState.Failed -> progress.errorMessage?.let(UiMessage::Raw)
+                    ?: UiMessage.Key(UiMessageKey.FailedStatus)
+                OperationState.Partial ->
+                    progress.readScanResult?.let(UiMessage::ReadScan)
+                        ?: (progress.resultMessage ?: progress.errorMessage)
+                            ?.let(UiMessage::Raw)
+                        ?: UiMessage.Key(UiMessageKey.PartialStatus)
+                OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
+                OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
+            },
+        )
+        return ReduceResult(base)
+    }
+
+    private fun OperationState.isTerminal(): Boolean = when (this) {
+        OperationState.Queued, OperationState.Running -> false
+        OperationState.Completed, OperationState.Cancelled, OperationState.Partial -> true
+        OperationState.Failed -> true
+    }
     /**
      * Actions that rewrite the partition layout. Ambiguity blocks them unconditionally:
      * unlike an EFI read-only partition, no override may lift this.
@@ -1187,6 +1255,7 @@ object UiReducer {
                     }
                 ReduceResult(
                     state.copy(
+                        operation = state.operation?.takeIf { sameStick },
                         presence = intent.presence,
                         device = device,
                         vtoyEfiWritePartitionId = retainedEfi?.id,
@@ -1462,104 +1531,23 @@ object UiReducer {
                 }
             }
 
-            is UiIntent.OperationUpdated -> {
-                val progress = intent.progress
-                val terminal =
-                    when (progress?.state) {
-                        OperationState.Completed,
-                        OperationState.Partial,
-                        OperationState.Failed,
-                        OperationState.Cancelled,
-                        -> true
-                        else -> false
-                    }
-                val base =
-                    state.copy(
-                        operation = progress,
-                        // A settings write succeeded and its bytes are final; a Partial keeps
-                        // the staged list for an explicit retry.
-                        pendingVentoyControls =
-                            if (terminal &&
-                                progress != null &&
-                                progress.state == OperationState.Completed &&
-                                progress.title.clearsPendingVentoyControls() &&
-                                (progress.title == OperationTitle.SetVentoyGlobalSetting ||
-                                    state.ventoySettingsSource.isDefaultPath())
-                            ) {
-                                emptyList()
-                            } else {
-                                state.pendingVentoyControls
-                            },
-                        // A write, format or file mutation can change free space while the
-                        // geometry stays identical, so the old number is not current.
-                        filesystemUsage =
-                            when (progress?.state) {
-                                OperationState.Completed,
-                                OperationState.Cancelled,
-                                OperationState.Failed,
-                                OperationState.Partial,
-                                -> null
-                                else -> state.filesystemUsage
-                            },
-                        presence =
-                            when {
-                                progress?.state == OperationState.Running ->
-                                    if (state.presence == DevicePresence.Ready ||
-                                        state.presence == DevicePresence.Busy
-                                    ) {
-                                        DevicePresence.Busy
-                                    } else {
-                                        state.presence
-                                    }
-                                progress?.state == OperationState.Completed ||
-                                    progress?.state == OperationState.Cancelled ||
-                                    progress?.state == OperationState.Failed ||
-                                    progress?.state == OperationState.Partial ->
-                                    if (state.presence == DevicePresence.Busy) {
-                                        DevicePresence.Ready
-                                    } else {
-                                        state.presence
-                                    }
-                                else -> state.presence
-                            },
-                        statusMessage =
-                            when (progress?.state) {
-                                OperationState.Completed ->
-                                    // Keep a more specific status (for example a staged-image
-                                    // hint) when the operation has no result message.
-                                    progress.readScanResult?.let(UiMessage::ReadScan)
-                                        ?: progress.resultMessage?.let(UiMessage::Raw)
-                                        ?: state.statusMessage?.takeIf { !it.isDefaultStateStatus() }
-                                        ?: UiMessage.Key(UiMessageKey.Success)
-                                OperationState.Cancelled ->
-                                    progress.readScanResult?.let(UiMessage::ReadScan)
-                                        ?: UiMessage.Key(UiMessageKey.CancelledStatus)
-                                OperationState.Failed ->
-                                    progress.errorMessage?.let(UiMessage::Raw)
-                                        ?: UiMessage.Key(UiMessageKey.FailedStatus)
-                                OperationState.Partial ->
-                                    progress.readScanResult?.let(UiMessage::ReadScan)
-                                        ?: (progress.resultMessage ?: progress.errorMessage)
-                                            ?.let(UiMessage::Raw)
-                                        ?: UiMessage.Key(UiMessageKey.PartialStatus)
-                                OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
-                                OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
-                                null -> state.statusMessage
-                            },
-                    )
-                // Disk layout/content mutations leave retained Ventoy/XML caches and the open
-                // directory listing wrong. Catalogs are dropped here; the Files list is
-                // cleared and re-read only when the Files tab is the visible one. Deferred
-                // import-folder work is released by the reduce() wrapper below.
-                val invalidates =
-                    terminal && progress != null && progress.title.invalidatesVentoyStickCaches()
-                if (invalidates) {
-                    filesReload(dropVentoyStickCaches(base, keepTemplatePath = true))
+            is UiIntent.OperationBegan -> reduceOperationProgress(state, intent.progress, begin = true)
+            is UiIntent.OperationUpdated -> reduceOperationProgress(state, intent.progress, begin = false)
+            is UiIntent.OperationCleared ->
+                if (state.operation?.token == intent.token) {
+                    ReduceResult(state.copy(operation = null))
                 } else {
-                    ReduceResult(base)
+                    ReduceResult(state)
                 }
-            }
-
+            is UiIntent.OperationCompletionEffects ->
+                if (intent.state.isTerminal() &&
+                    intent.title.invalidatesVentoyStickCaches() &&
+                    state.device?.attachGeneration == intent.attachmentGeneration
+                ) {
+                    filesReload(dropVentoyStickCaches(state.copy(filesystemUsage = null), keepTemplatePath = true))
+                } else {
+                    ReduceResult(state)
+                }
             UiIntent.InvalidateVentoyStickCaches ->
                 ReduceResult(dropVentoyStickCaches(state, keepTemplatePath = true))
 
@@ -2022,6 +2010,19 @@ object UiReducer {
                     ),
                 )
             }
+            UiIntent.DismissLinkOverwrite ->
+                ReduceResult(
+                    state.copy(
+                        linkOverwriteCandidate = null,
+                        linkOverwriteCandidateIdentity = null,
+                        linkOverwriteCandidateGeneration = null,
+                        linkOverwriteCandidatePaths = emptyList(),
+                        linkOverwriteCandidateTemplatePath = null,
+                        statusMessage = state.statusMessage.takeUnless {
+                            it == UiMessage.Key(UiMessageKey.LinkOverwriteNeeded)
+                        },
+                    ),
+                )
             is UiIntent.RequestLinkOverwrite -> {
                 val device = state.device
                 val candidateMatches =
@@ -3608,7 +3609,7 @@ object UiReducer {
                 ReduceResult(state.copy(darkTheme = !state.darkTheme))
 
             UiIntent.RunSelfTest ->
-                if (state.isRunning) {
+                if (state.operation?.state == OperationState.Queued || state.operation?.state == OperationState.Running) {
                     ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.OperationInProgress)))
                 } else {
                     ReduceResult(
@@ -3624,11 +3625,17 @@ object UiReducer {
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 
-            UiIntent.CancelOperation ->
-                ReduceResult(
-                    state,
-                    effects = listOf(UiEffect.CancelOperation),
-                )
+            is UiIntent.CancelOperation ->
+                if (state.operation?.token == intent.token && state.operation.cancelable &&
+                    (state.operation.state == OperationState.Running || state.operation.state == OperationState.Queued)
+                ) {
+                    ReduceResult(
+                        state,
+                        effects = listOf(UiEffect.CancelOperation(intent.token)),
+                    )
+                } else {
+                    ReduceResult(state)
+                }
 
             is UiIntent.OpenDirectory -> {
                 val target = safePickPath(intent.path)

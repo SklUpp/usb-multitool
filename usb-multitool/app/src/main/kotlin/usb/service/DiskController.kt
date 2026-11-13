@@ -29,6 +29,9 @@ class DiskController(
 
     fun submit(operation: DiskOperation): OperationHandle = executor.submit(operation)
 
+    fun submit(operation: DiskOperation, token: OperationToken): OperationHandle =
+        executor.submit(operation, token)
+
     fun onDisconnected() = executor.onDisconnected()
     fun onConnected(deviceId: String? = null) = executor.onConnected(deviceId)
 

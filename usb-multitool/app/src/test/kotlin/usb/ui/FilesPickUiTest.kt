@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 import usb.fs.FilesystemId
 
 /**
@@ -314,13 +315,15 @@ class FilesPickUiTest {
         assertNull(cancelled.state.filesPickMode)
         assertEquals(ShellTab.Partitions, cancelled.state.tab)
 
+        val runningToken = OperationTokenGenerator.next()
         val running =
             UiReducer.reduce(
                 begun(),
-                UiIntent.OperationUpdated(
+                UiIntent.OperationBegan(
                     OperationProgress(
                         state = OperationState.Running,
                         title = OperationTitle.ImportTarget("win11.iso"),
+                        token = runningToken,
                         bytesDone = 1L,
                         bytesTotal = 10L,
                     ),
@@ -353,19 +356,28 @@ class FilesPickUiTest {
         assertEquals("/ISO/win11.iso", selected.path)
         assertEquals(1234uL, selected.sizeBytes)
 
-        val partialState = begun()
-        val partial =
+        val partialToken = OperationTokenGenerator.next()
+        val partialState =
             UiReducer.reduce(
-                partialState,
-                UiIntent.OperationUpdated(
+                begun(),
+                UiIntent.OperationBegan(
                     OperationProgress(
-                        state = OperationState.Partial,
+                        state = OperationState.Running,
                         title = OperationTitle.ImportTarget("win11.iso"),
-                        bytesDone = 10L,
-                        bytesTotal = 100L,
+                        token = partialToken,
                     ),
                 ),
-            )
+            ).state
+        val partial = reduceTerminalOperation(
+            partialState,
+            OperationProgress(
+                state = OperationState.Partial,
+                title = OperationTitle.ImportTarget("win11.iso"),
+                token = partialToken,
+                bytesDone = 10L,
+                bytesTotal = 100L,
+            ),
+        )
         assertNotNull(partial.state.filesPickMode)
         assertNull(partial.state.filesPickSelection(FilesPickPurpose.WindowsImage))
     }

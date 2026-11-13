@@ -54,6 +54,9 @@
     <string name="partitions_range_tick_edge_label">%1$d MiB · LBA %2$d</string>
     <string name="partitions_size_sectors">Size in sectors</string>
     <string name="partitions_continue">Continue</string>
+    <string name="cancel_operation_title">Cancel operation?</string>
+    <string name="cancel_operation_body">Cancel %1$s? Only confirmation stops this operation.</string>
+    <string name="cancel_operation_confirm">Confirm cancellation</string>
     <string name="action_cancel">Cancel</string>
 
     <string name="partitions_selected_title">Partition information</string>

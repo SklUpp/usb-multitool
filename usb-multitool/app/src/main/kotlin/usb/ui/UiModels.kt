@@ -1,5 +1,6 @@
 package usb.ui
 
+import usb.service.OperationToken
 import usb.fs.FilesystemId
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageSnapshot
@@ -995,6 +996,7 @@ sealed interface OperationTitle {
 data class OperationProgress(
     val state: OperationState,
     val title: OperationTitle,
+    val token: OperationToken,
     val bytesDone: Long = 0L,
     val bytesTotal: Long = 0L,
     val bytesPerSecond: Long = 0L,

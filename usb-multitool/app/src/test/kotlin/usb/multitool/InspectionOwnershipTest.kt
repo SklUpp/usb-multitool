@@ -27,6 +27,8 @@ class InspectionOwnershipTest {
         )
 
     private class FakeHandle : OperationHandle {
+        override val token = usb.service.OperationTokenGenerator.next()
+        override var state: OperationState = OperationState.Queued
         var cancelled = false
 
         override suspend fun await(): OperationState = OperationState.Completed

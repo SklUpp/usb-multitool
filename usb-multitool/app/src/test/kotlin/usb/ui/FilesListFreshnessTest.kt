@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 
 /**
  * F5/F15: directory list answers stay bound to path + partition + attachment +
@@ -738,6 +739,7 @@ class FilesListFreshnessTest {
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
+                        token = OperationTokenGenerator.next(),
                         state = OperationState.Running,
                         title = OperationTitle.Upload,
                     ),
@@ -783,6 +785,7 @@ class FilesListFreshnessTest {
 
     @Test
     fun completedMutationReloadsTheVisibleFolderOnce() {
+        val token = OperationTokenGenerator.next()
         val running =
             ready(
                 path = "/ISO",
@@ -790,6 +793,7 @@ class FilesListFreshnessTest {
             ).copy(
                 operation =
                     OperationProgress(
+                        token = token,
                         state = OperationState.Running,
                         title = OperationTitle.Upload,
                     ),
@@ -801,6 +805,7 @@ class FilesListFreshnessTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         state = OperationState.Completed,
+                        token = token,
                         title = OperationTitle.Upload,
                     ),
                 ),
@@ -811,15 +816,16 @@ class FilesListFreshnessTest {
         assertEquals(running.filesListGeneration + 1L, done.state.filesListGeneration)
         assertEquals("/ISO", (done.effects.single() as UiEffect.LoadFiles).path)
     }
-
     @Test
     fun failedMutationStillInvalidatesTheListing() {
+        val token = OperationTokenGenerator.next()
         val running =
             ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
                 .copy(
                     operation =
                         OperationProgress(
                             state = OperationState.Running,
+                            token = token,
                             title = OperationTitle.DeleteEntry("old.bin"),
                         ),
                 )
@@ -830,6 +836,7 @@ class FilesListFreshnessTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         state = OperationState.Failed,
+                        token = token,
                         title = OperationTitle.DeleteEntry("old.bin"),
                         errorMessage = "delete failed",
                     ),
@@ -845,6 +852,7 @@ class FilesListFreshnessTest {
 
     @Test
     fun mutationOnAnotherTabDefersReloadUntilEntry() {
+        val token = OperationTokenGenerator.next()
         val running =
             ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
                 .copy(
@@ -852,6 +860,7 @@ class FilesListFreshnessTest {
                     operation =
                         OperationProgress(
                             state = OperationState.Running,
+                            token = token,
                             title = OperationTitle.DeleteEntry("old.bin"),
                         ),
                 )
@@ -862,6 +871,7 @@ class FilesListFreshnessTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         state = OperationState.Partial,
+                        token = token,
                         title = OperationTitle.DeleteEntry("old.bin"),
                         errorMessage = "partial",
                     ),
@@ -910,6 +920,7 @@ class FilesListFreshnessTest {
                     presence = DevicePresence.Busy,
                     operation =
                         OperationProgress(
+                            token = OperationTokenGenerator.next(),
                             state = OperationState.Running,
                             title = OperationTitle.Upload,
                         ),

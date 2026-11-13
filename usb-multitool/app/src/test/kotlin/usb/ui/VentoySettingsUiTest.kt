@@ -8,6 +8,7 @@ import usb.fs.FilesystemId
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoySettingsSource
+import usb.service.OperationTokenGenerator
 
 /** Reducer + confirmation contract for staged Ventoy global settings. */
 class VentoySettingsUiTest {
@@ -92,16 +93,15 @@ class VentoySettingsUiTest {
             ).state
         assertEquals(controls, requested.pendingConfirmation?.ventoyControls)
 
-        val completed =
-            UiReducer.reduce(
-                requested,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Completed,
-                        title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                    ),
-                ),
-            ).state
+        val completedToken = OperationTokenGenerator.next()
+        val completed = reduceTerminalOperation(
+            requested,
+            OperationProgress(
+                state = OperationState.Completed,
+                token = completedToken,
+                title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+            ),
+        ).state
         assertEquals(
             "default-path updates must clear written controls",
             emptyList<VentoyControlSetting>(),
@@ -121,29 +121,26 @@ class VentoySettingsUiTest {
 
     @Test
     fun partialInstallKeepsControlsForRetryAndCompletedClearsThem() {
-        val partial =
-            UiReducer.reduce(
-                ready(pending = controls),
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Partial,
-                        title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                        errorMessage = "settings write failed",
-                    ),
-                ),
-            ).state
+        val partialToken = OperationTokenGenerator.next()
+        val partial = reduceTerminalOperation(
+            ready(pending = controls),
+            OperationProgress(
+                state = OperationState.Partial,
+                token = partialToken,
+                title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                errorMessage = "settings write failed",
+            ),
+        ).state
         assertEquals(controls, partial.pendingVentoyControls)
 
-        val completed =
-            UiReducer.reduce(
-                partial,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Completed,
-                        title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                    ),
-                ),
-            ).state
+        val completed = reduceTerminalOperation(
+            partial,
+            OperationProgress(
+                state = OperationState.Completed,
+                token = partialToken,
+                title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+            ),
+        ).state
         assertEquals(emptyList<VentoyControlSetting>(), completed.pendingVentoyControls)
     }
 
@@ -288,31 +285,28 @@ class VentoySettingsUiTest {
 
     @Test
     fun retryAfterPartialAppliesTheSameSnapshot() {
-        val partial =
-            UiReducer.reduce(
-                ready(pending = controls),
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Partial,
-                        title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                        errorMessage = "settings write failed",
-                    ),
-                ),
-            ).state
+        val partialToken = OperationTokenGenerator.next()
+        val partial = reduceTerminalOperation(
+            ready(pending = controls),
+            OperationProgress(
+                state = OperationState.Partial,
+                token = partialToken,
+                title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                errorMessage = "settings write failed",
+            ),
+        ).state
         val retry = UiReducer.reduce(partial, UiIntent.RequestApplyVentoyControls)
         val effect = retry.effects.filterIsInstance<UiEffect.ApplyVentoyControls>().single()
         assertEquals(controls, effect.settings)
 
-        val retried =
-            UiReducer.reduce(
-                retry.state,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Completed,
-                        title = OperationTitle.SetVentoyGlobalSetting,
-                    ),
-                ),
-            ).state
+        val retried = reduceTerminalOperation(
+            retry.state,
+            OperationProgress(
+                state = OperationState.Completed,
+                token = partialToken,
+                title = OperationTitle.SetVentoyGlobalSetting,
+            ),
+        ).state
         assertEquals(emptyList<VentoyControlSetting>(), retried.pendingVentoyControls)
     }
 

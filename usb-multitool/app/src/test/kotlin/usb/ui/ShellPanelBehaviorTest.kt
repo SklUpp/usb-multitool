@@ -13,64 +13,33 @@ import org.junit.Test
 class ShellPanelBehaviorTest {
 
     @Test
-    fun collapseFoldsTheStatusAndKeepsEveryOtherFlag() {
-        val open = ShellPanelState(journalExpanded = true, journalScreenOpen = true)
+    fun collapseFoldsOnlyStatusAndKeepsJournalIndependent() {
+        val open = ShellPanelState(journalScreenOpen = true)
         val folded = open.collapseStatus()
         assertTrue(folded.statusCollapsed)
-        // The journal flags survive the fold; the panel only stops drawing them.
-        assertTrue(folded.journalExpanded)
         assertTrue(folded.journalScreenOpen)
-        // Folding twice changes nothing.
         assertEquals(folded, folded.collapseStatus())
     }
-
     @Test
-    fun arrowTogglesOnlyTheJournalWhileTheStatusIsUnfolded() {
-        val rest = ShellPanelState()
-        val expanded = rest.toggleJournal()
-        assertTrue(expanded.journalExpanded)
+    fun expansionChangesOnlyStatusFlag() {
+        val folded = ShellPanelState(statusCollapsed = true, journalScreenOpen = true)
+        val expanded = folded.expandStatus()
         assertFalse(expanded.statusCollapsed)
-        assertEquals(rest, expanded.toggleJournal())
+        assertTrue(expanded.journalScreenOpen)
+        assertEquals(expanded, expanded.expandStatus())
     }
 
     @Test
-    fun arrowTogglesJournalWithoutUnfoldingStatus() {
+    fun journalLayerRemainsIndependentOfStatus() {
         val folded = ShellPanelState(statusCollapsed = true)
-        val opened = folded.toggleJournal()
-        assertTrue(opened.statusCollapsed)
-        assertTrue(opened.journalExpanded)
-        assertEquals(folded, opened.toggleJournal())
-    }
-
-    @Test
-    fun fullJournalLayerIsIndependentOfTheStatusAndInlineJournal() {
-        val collapsed = ShellPanelState(statusCollapsed = true, journalExpanded = true)
-        val opened = collapsed.openJournalScreen()
+        val opened = folded.openJournalScreen()
         assertTrue(opened.journalScreenOpen)
         assertTrue(opened.statusCollapsed)
-        assertTrue(opened.journalExpanded)
-
         val closed = opened.closeJournalScreen()
         assertFalse(closed.journalScreenOpen)
-        // Closing the layer leaves the tab where it was and the status folded.
         assertTrue(closed.statusCollapsed)
-        assertTrue(closed.journalExpanded)
     }
 
-    @Test
-    fun clearingTheLogClosesOnlyAnExpandedInlineJournal() {
-        val expanded = ShellPanelState(journalExpanded = true)
-        assertFalse(expanded.journalCleared().journalExpanded)
-
-        val folded = ShellPanelState(statusCollapsed = true, journalExpanded = true)
-        assertEquals(
-            ShellPanelState(statusCollapsed = true),
-            folded.journalCleared(),
-        )
-
-        val untouched = ShellPanelState()
-        assertEquals(untouched, untouched.journalCleared())
-    }
 
     @Test
     fun swipeNeedsDistanceAndHorizontalDominance() {

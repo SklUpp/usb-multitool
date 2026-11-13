@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 import usb.fs.FilesystemId
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendState
@@ -228,6 +229,7 @@ class VentoyUiStateTest {
         val busy = withVentoy().copy(
             operation = OperationProgress(
                 state = OperationState.Running,
+                token = OperationTokenGenerator.next(),
                 title = OperationTitle.BindImagesToUnattendXml,
             ),
         )
@@ -276,6 +278,7 @@ class VentoyUiStateTest {
             presence = DevicePresence.Busy,
             operation = OperationProgress(
                 state = OperationState.Running,
+                token = OperationTokenGenerator.next(),
                 title = OperationTitle.ProbeDevice,
             ),
         )
@@ -289,13 +292,12 @@ class VentoyUiStateTest {
     @Test
     fun ventoyInstallCompletedDropsCatalogsKeepsTemplate() {
         val loaded = withVentoy().copy(ventoyCacheEpoch = 4L)
-        val next = UiReducer.reduce(
+        val next = reduceTerminalOperation(
             loaded,
-            UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Completed,
-                    title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                ),
+            OperationProgress(
+                state = OperationState.Completed,
+                token = OperationTokenGenerator.next(),
+                title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
             ),
         ).state
         assertEquals(template, next.windowsTemplatePath)
@@ -306,26 +308,19 @@ class VentoyUiStateTest {
         assertEquals(AutounattendState.Missing, next.autounattendState)
         assertTrue(next.windowsSelectedImages.isEmpty())
         assertEquals(5L, next.ventoyCacheEpoch)
-        assertEquals(
-            loaded.windowsIsoCandidatesGeneration + 1,
-            next.windowsIsoCandidatesGeneration,
-        )
-        assertEquals(
-            loaded.autounattendRequestGeneration + 1,
-            next.autounattendRequestGeneration,
-        )
+        assertEquals(loaded.windowsIsoCandidatesGeneration + 1, next.windowsIsoCandidatesGeneration)
+        assertEquals(loaded.autounattendRequestGeneration + 1, next.autounattendRequestGeneration)
     }
 
     @Test
     fun rawWritePartialAlsoDropsCatalogs() {
-        val next = UiReducer.reduce(
+        val next = reduceTerminalOperation(
             withVentoy(),
-            UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Partial,
-                    title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
-                    errorMessage = "transport cut",
-                ),
+            OperationProgress(
+                state = OperationState.Partial,
+                token = OperationTokenGenerator.next(),
+                title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
+                errorMessage = "transport cut",
             ),
         ).state
         assertNull(next.ventoyFolders)
@@ -343,13 +338,12 @@ class VentoyUiStateTest {
             DestructiveAction.VENTOY_UPDATE,
             DestructiveAction.WIPE,
         )) {
-            val next = UiReducer.reduce(
+            val next = reduceTerminalOperation(
                 withVentoy(),
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Completed,
-                        title = OperationTitle.Destructive(action),
-                    ),
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = OperationTokenGenerator.next(),
+                    title = OperationTitle.Destructive(action),
                 ),
             ).state
             assertNull(next.ventoyGlobalSettings)
@@ -361,13 +355,12 @@ class VentoyUiStateTest {
     @Test
     fun probeCompletedDoesNotDropVentoyCaches() {
         val loaded = withVentoy()
-        val next = UiReducer.reduce(
+        val next = reduceTerminalOperation(
             loaded,
-            UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Completed,
-                    title = OperationTitle.ProbeDevice,
-                ),
+            OperationProgress(
+                state = OperationState.Completed,
+                token = OperationTokenGenerator.next(),
+                title = OperationTitle.ProbeDevice,
             ),
         ).state
         assertNotNull(next.ventoyFolders)
@@ -380,13 +373,12 @@ class VentoyUiStateTest {
     fun staleIsoCandidatesLoadedAfterInvalidationDropped() {
         val loaded = withVentoy()
         val genBefore = loaded.windowsIsoCandidatesGeneration
-        val afterDrop = UiReducer.reduce(
+        val afterDrop = reduceTerminalOperation(
             loaded,
-            UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Completed,
-                    title = OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
-                ),
+            OperationProgress(
+                state = OperationState.Completed,
+                token = OperationTokenGenerator.next(),
+                title = OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
             ),
         ).state
         assertEquals(genBefore + 1, afterDrop.windowsIsoCandidatesGeneration)
@@ -458,13 +450,12 @@ class VentoyUiStateTest {
 
     @Test
     fun uploadCompletedInvalidatesCatalogs() {
-        val next = UiReducer.reduce(
+        val next = reduceTerminalOperation(
             withVentoy(),
-            UiIntent.OperationUpdated(
-                OperationProgress(
-                    state = OperationState.Completed,
-                    title = OperationTitle.Upload,
-                ),
+            OperationProgress(
+                state = OperationState.Completed,
+                token = OperationTokenGenerator.next(),
+                title = OperationTitle.Upload,
             ),
         ).state
         assertNull(next.windowsIsoCandidates)
@@ -476,14 +467,13 @@ class VentoyUiStateTest {
     @Test
     fun failedAndCancelledDestructiveStillInvalidate() {
         for (terminal in listOf(OperationState.Failed, OperationState.Cancelled)) {
-            val next = UiReducer.reduce(
+            val next = reduceTerminalOperation(
                 withVentoy(),
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = terminal,
-                        title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                        errorMessage = "x",
-                    ),
+                OperationProgress(
+                    state = terminal,
+                    token = OperationTokenGenerator.next(),
+                    title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                    errorMessage = "x",
                 ),
             ).state
             assertNull(next.ventoyGlobalSettings)
@@ -766,6 +756,7 @@ class VentoyUiStateTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = OperationTokenGenerator.next(),
                         title = OperationTitle.Upload,
                     ),
                 deferredImportFolderPick = WindowsImportKind.Image,
@@ -806,6 +797,7 @@ class VentoyUiStateTest {
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
+                        token = OperationTokenGenerator.next(),
                         state = OperationState.Running,
                         title = OperationTitle.Upload,
                     ),
@@ -835,12 +827,14 @@ class VentoyUiStateTest {
 
     @Test
     fun reopenWhileRunningConsumeThenTerminalLoadsAndReopens() {
+        val operationToken = OperationTokenGenerator.next()
         val base =
             withVentoy().copy(
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = operationToken,
                         title = OperationTitle.Upload,
                     ),
             )
@@ -868,6 +862,7 @@ class VentoyUiStateTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         state = OperationState.Completed,
+                        token = operationToken,
                         title = OperationTitle.ProbeDevice,
                     ),
                 ),
@@ -957,12 +952,14 @@ class VentoyUiStateTest {
 
     @Test
     fun terminalMutationKeepsDeferredPickUntilQuietIntent() {
+        val operationToken = OperationTokenGenerator.next()
         val base =
             withVentoy().copy(
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = operationToken,
                         title = OperationTitle.Upload,
                     ),
             )
@@ -984,6 +981,7 @@ class VentoyUiStateTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         state = OperationState.Partial,
+                        token = operationToken,
                         title = OperationTitle.DeleteEntry("gone.bin"),
                         errorMessage = "partial",
                     ),
@@ -1551,27 +1549,28 @@ class VentoyUiStateTest {
     @Test
     fun terminalImportFailureReopenUsesCapturedGeneration() {
         val base = withVentoy()
-        val running =
-            UiReducer.reduce(
-                base,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Running,
-                        title = OperationTitle.ImportTarget("win.iso"),
-                    ),
+        val importToken = OperationTokenGenerator.next()
+        val running = UiReducer.reduce(
+            base,
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Running,
+                    token = importToken,
+                    title = OperationTitle.ImportTarget("win.iso"),
                 ),
-            ).state
-        val failed =
-            UiReducer.reduce(
-                running,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Failed,
-                        title = OperationTitle.ImportTarget("win.iso"),
-                        errorMessage = "import folder is gone",
-                    ),
+            ),
+        ).state
+        val failed = UiReducer.reduce(
+            running,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Failed,
+                    token = importToken,
+                    title = OperationTitle.ImportTarget("win.iso"),
+                    errorMessage = "import folder is gone",
                 ),
-            ).state
+            ),
+        ).state
         assertTrue(failed.isoImportGeneration > base.isoImportGeneration)
         val device = requireNotNull(failed.device)
 
@@ -1691,6 +1690,7 @@ class VentoyUiStateTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = OperationTokenGenerator.next(),
                         title = OperationTitle.Upload,
                     ),
             )
@@ -1780,6 +1780,7 @@ class VentoyUiStateTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = OperationTokenGenerator.next(),
                         title = OperationTitle.Upload,
                     ),
             )
@@ -1955,6 +1956,7 @@ class VentoyUiStateTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = OperationTokenGenerator.next(),
                         title = OperationTitle.Upload,
                     ),
                 ventoyFolderPath = "/ISO",
@@ -2048,6 +2050,7 @@ class VentoyUiStateTest {
     @Test
     fun runningOperationFolderRefreshIsReleasedOnTerminal() {
         // A Running operation keeps actionsEnabled false even when DeviceChanged says Ready.
+        val scanToken = OperationTokenGenerator.next()
         val busy =
             withVentoy().copy(
                 tab = ShellTab.Ventoy,
@@ -2055,6 +2058,7 @@ class VentoyUiStateTest {
                 operation =
                     OperationProgress(
                         state = OperationState.Running,
+                        token = scanToken,
                         title = OperationTitle.ReadScan,
                     ),
                 ventoyFolderPath = "/ISO",
@@ -2065,29 +2069,29 @@ class VentoyUiStateTest {
         assertTrue(queued.effects.isEmpty())
         assertTrue(queued.state.ventoyFoldersPending)
 
-        val stillBusy =
-            UiReducer.reduce(
-                queued.state,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Running,
-                        title = OperationTitle.ReadScan,
-                    ),
+        val stillBusy = UiReducer.reduce(
+            queued.state,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Running,
+                    token = scanToken,
+                    title = OperationTitle.ReadScan,
                 ),
-            )
+            ),
+        )
         assertTrue(stillBusy.effects.isEmpty())
         assertTrue(stillBusy.state.ventoyFoldersPending)
 
-        val released =
-            UiReducer.reduce(
-                stillBusy.state,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Completed,
-                        title = OperationTitle.ReadScan,
-                    ),
+        val released = UiReducer.reduce(
+            stillBusy.state,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = scanToken,
+                    title = OperationTitle.ReadScan,
                 ),
-            )
+            ),
+        )
         val effect = released.effects.single() as UiEffect.LoadVentoyFolders
         assertEquals("/ISO", effect.path)
         assertEquals(released.state.ventoyFoldersRequest, effect.requestToken)
@@ -2115,6 +2119,7 @@ class VentoyUiStateTest {
                 UiIntent.OperationUpdated(
                     OperationProgress(
                         state = OperationState.Completed,
+                        token = scanToken,
                         title = OperationTitle.ReadScan,
                     ),
                 ),

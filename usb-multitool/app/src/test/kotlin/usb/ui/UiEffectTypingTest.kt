@@ -144,9 +144,21 @@ class UiEffectTypingTest {
         assertTrue(
             UiReducer.reduce(ready(), UiIntent.StartReadScan).effects.single() is UiEffect.ReadScan,
         )
+        val token = usb.service.OperationTokenGenerator.next()
+        val running = ready().copy(
+            presence = DevicePresence.Busy,
+            operation = OperationProgress(
+                state = OperationState.Running,
+                title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
+                token = token,
+            ),
+        )
         assertTrue(
-            UiReducer.reduce(ready(), UiIntent.CancelOperation).effects.single()
+            UiReducer.reduce(running, UiIntent.CancelOperation(token)).effects.single()
                 is UiEffect.CancelOperation,
+        )
+        assertTrue(
+            UiReducer.reduce(ready(), UiIntent.CancelOperation(token)).effects.isEmpty(),
         )
     }
 }

@@ -12,6 +12,7 @@ import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.partition.TableScheme
 
+import usb.service.OperationTokenGenerator
 /**
  * Free-space wiring: the reducer asks for a measurement bound to the live attachment and
  * geometry, publishes it only while that binding still holds, and drops stale answers.
@@ -93,9 +94,9 @@ class FilesystemUsageUiTest {
 
     @Test
     fun noRequestWhileAnOperationRunsOrAConfirmationIsOpen() {
-        val running = ready().copy(operation = OperationProgress(state = OperationState.Running, title = OperationTitle.FormatTarget("p1")))
+        val running = ready().copy(operation = OperationProgress(state = OperationState.Running, title = OperationTitle.FormatTarget("p1"), token = OperationTokenGenerator.next()))
         assertTrue(UiReducer.reduce(running, UiIntent.RequestFilesystemUsage).effects.isEmpty())
-        val queued = ready().copy(operation = OperationProgress(state = OperationState.Queued, title = OperationTitle.Destructive(DestructiveAction.CREATE_PARTITION)))
+        val queued = ready().copy(operation = OperationProgress(state = OperationState.Queued, title = OperationTitle.Destructive(DestructiveAction.CREATE_PARTITION), token = OperationTokenGenerator.next()))
         assertTrue(UiReducer.reduce(queued, UiIntent.RequestFilesystemUsage).effects.isEmpty())
         val absent = ready().copy(presence = DevicePresence.Disconnected)
         assertTrue(UiReducer.reduce(absent, UiIntent.RequestFilesystemUsage).effects.isEmpty())
@@ -225,9 +226,16 @@ class FilesystemUsageUiTest {
             requested.state,
             UiIntent.FilesystemUsageResulted(1L, key, space(1uL, 2uL)),
         )
+        val uploadToken = OperationTokenGenerator.next()
         val running = UiReducer.reduce(
             published.state,
-            UiIntent.OperationUpdated(OperationProgress(state = OperationState.Running, title = OperationTitle.Upload)),
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Running,
+                    title = OperationTitle.Upload,
+                    token = uploadToken,
+                ),
+            ),
         )
         assertEquals(key, requireNotNull(running.state.filesystemUsage).key)
         for (terminal in listOf(
@@ -237,8 +245,10 @@ class FilesystemUsageUiTest {
             OperationState.Cancelled,
         )) {
             val finished = UiReducer.reduce(
-                published.state,
-                UiIntent.OperationUpdated(OperationProgress(state = terminal, title = OperationTitle.Upload)),
+                running.state,
+                UiIntent.OperationUpdated(
+                    OperationProgress(state = terminal, title = OperationTitle.Upload, token = uploadToken),
+                ),
             )
             assertNull("$terminal must invalidate the measured value", finished.state.filesystemUsage)
         }

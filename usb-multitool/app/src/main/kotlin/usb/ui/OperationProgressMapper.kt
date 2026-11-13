@@ -1,9 +1,11 @@
 package usb.ui
 
+import usb.service.OperationToken
 import usb.operation.OperationState as ServiceOperationState
 
 /** Maps read-only operation outcome to UI progress without touching operation ownership. */
 fun readOnlyOperationProgress(
+    token: OperationToken,
     outcome: ServiceOperationState,
     title: OperationTitle,
     bytesDone: Long,
@@ -16,12 +18,14 @@ fun readOnlyOperationProgress(
     is ServiceOperationState.Failed -> OperationProgress(
         state = OperationState.Failed,
         title = title,
+        token = token,
         errorMessage = outcome.cause.message ?: outcome.cause.javaClass.simpleName,
         cancelable = cancelable,
     )
     is ServiceOperationState.Cancelled -> OperationProgress(
         state = OperationState.Cancelled,
         title = title,
+        token = token,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
@@ -31,6 +35,7 @@ fun readOnlyOperationProgress(
     is ServiceOperationState.Partial -> OperationProgress(
         state = OperationState.Partial,
         title = title,
+        token = token,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
@@ -41,6 +46,7 @@ fun readOnlyOperationProgress(
     is ServiceOperationState.Queued -> OperationProgress(
         state = OperationState.Queued,
         title = title,
+        token = token,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         cancelable = cancelable,
@@ -48,6 +54,7 @@ fun readOnlyOperationProgress(
     is ServiceOperationState.Running -> OperationProgress(
         state = OperationState.Running,
         title = title,
+        token = token,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         cancelable = cancelable,
@@ -55,6 +62,7 @@ fun readOnlyOperationProgress(
     is ServiceOperationState.Completed -> OperationProgress(
         state = OperationState.Completed,
         title = title,
+        token = token,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,

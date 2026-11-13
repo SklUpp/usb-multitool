@@ -54,6 +54,9 @@
     <string name="partitions_range_tick_edge_label">%1$d МиБ · LBA %2$d</string>
     <string name="partitions_size_sectors">Размер в секторах</string>
     <string name="partitions_continue">Продолжить</string>
+    <string name="cancel_operation_title">Отменить операцию?</string>
+    <string name="cancel_operation_body">Отменить «%1$s»? Только подтверждение остановит операцию.</string>
+    <string name="cancel_operation_confirm">Подтвердить отмену</string>
     <string name="action_cancel">Отмена</string>
 
     <string name="partitions_selected_title">Информация о разделе</string>

@@ -13,6 +13,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -128,6 +129,7 @@ import usb.fs.FilesystemUsage
 import usb.image.ReadbackProblem
 import usb.image.ReadbackVerdict
 import usb.multitool.R
+import usb.service.OperationToken
 import java.util.Locale
 
 /**
@@ -213,9 +215,6 @@ fun AppShell(
                 logButtonFocus.requestFocusIfAttached("log open button")
             }
         }
-        LaunchedEffect(state.logLines.isEmpty()) {
-            if (state.logLines.isEmpty()) panels = panels.journalCleared()
-        }
         LaunchedEffect(state.operation?.state, state.operation?.title) {
             // Evaluate only when operation facts change. A later tab switch must not reopen a
             // status the user deliberately collapsed.
@@ -257,7 +256,6 @@ fun AppShell(
                         panels = panels,
                         onCollapseStatus = { panels = panels.collapseStatus() },
                         onExpandStatus = { panels = panels.expandStatus() },
-                        onToggleJournal = { panels = panels.toggleJournal() },
                     )
                     if (!panels.journalScreenOpen) {
                         NavigationBar(
@@ -439,7 +437,38 @@ fun AppShell(
             }
         }
 
-        state.pendingConfirmation?.let { confirmation ->
+        state.linkOverwriteCandidate
+            ?.let { candidate ->
+                AlertDialog(
+                    onDismissRequest = { onIntent(UiIntent.DismissLinkOverwrite) },
+                    title = { Text(stringResource(R.string.status_overwrite_title)) },
+                    text = {
+                        Text(stringResource(R.string.status_link_exists, candidate.substringAfterLast('/')))
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onIntent(
+                                    UiIntent.RequestLinkOverwrite(
+                                        fileName = candidate,
+                                        imagePaths = state.linkOverwriteCandidatePaths,
+                                        templatePath = state.linkOverwriteCandidateTemplatePath,
+                                    ),
+                                )
+                            },
+                        ) { Text(stringResource(R.string.status_overwrite)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { onIntent(UiIntent.DismissLinkOverwrite) }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    },
+                )
+            }
+
+        state.pendingConfirmation
+            ?.takeIf { state.linkOverwriteCandidate == null }
+            ?.let { confirmation ->
             // Explicit acknowledgement: the target board requires a checked box before the
             // destructive button becomes reachable. Reset per confirmation, never sticky.
             var acknowledged by remember(confirmation) { mutableStateOf(false) }
@@ -539,13 +568,12 @@ fun AppShell(
  */
 private val ShellPanelStateSaver = listSaver<ShellPanelState, Boolean>(
     save = {
-        listOf(it.statusCollapsed, it.journalExpanded, it.journalScreenOpen)
+        listOf(it.statusCollapsed, it.journalScreenOpen)
     },
     restore = {
         ShellPanelState(
             statusCollapsed = it[0],
-            journalExpanded = it[1],
-            journalScreenOpen = it[2],
+            journalScreenOpen = it[1],
         )
     },
 )
@@ -801,18 +829,7 @@ private fun LogOpenButton(
     }
 }
 
-/**
- * Status/operation line above the navigation bar.
- *
- * Two independent folds, as approved:
- * - the cross folds the whole status into a thin title line attached to the navigation
- *   bar; the operation, its progress, its cancel action, the overwrite prompt and the
- *   readback verdict all stay in state and come back unchanged;
- * - the arrow on the title line unfolds the journal list inside the same surface (never
- *   a floating overlay), and while the status is folded it unfolds both at once.
- *
- * The panel never clears anything through the reducer: folding is presentation only.
- */
+/** Operation status surface; Journal and overwrite prompts stay outside status. */
 @Composable
 internal fun StatusLogPanel(
     state: AppUiState,
@@ -820,27 +837,16 @@ internal fun StatusLogPanel(
     panels: ShellPanelState,
     onCollapseStatus: () -> Unit,
     onExpandStatus: () -> Unit,
-    onToggleJournal: () -> Unit,
 ) {
     val op = state.operation
-    val overwrite = state.linkOverwriteCandidate
-    val hasLog = state.logLines.isNotEmpty()
-    if (op == null && state.statusMessage == null && !hasLog && overwrite == null) return
+    if (op == null && state.statusMessage == null) return
     val collapsed = panels.statusCollapsed
-    val journalExpanded = panels.journalExpanded && hasLog
-    val logList = rememberLazyListState()
-    LaunchedEffect(journalExpanded, state.logLines.size) {
-        if (journalExpanded && state.logLines.isNotEmpty()) {
-            logList.animateScrollToItem(state.logLines.lastIndex)
-        }
-    }
-
     val failed = op?.state == OperationState.Failed
     val partial = op?.state == OperationState.Partial
     val cancelled = op?.state == OperationState.Cancelled
     val completed = op?.state == OperationState.Completed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
-    val cancelable = op != null && op.state == OperationState.Running && op.cancelable
+    val cancelable = op?.let { running && it.cancelable } == true
     val terminal = failed || partial || cancelled || completed
     val container = when {
         failed -> MaterialTheme.colorScheme.errorContainer
@@ -854,26 +860,16 @@ internal fun StatusLogPanel(
         completed -> MaterialTheme.colorScheme.onPrimaryContainer
         else -> MaterialTheme.colorScheme.inverseOnSurface
     }
-    val title = when {
-        op != null -> "${operationLabel(op)} · ${operationStateLabel(op.state)}"
-        overwrite != null -> stringResource(R.string.status_overwrite_title)
-        else -> stringResource(R.string.status_title)
+    val operationName = op?.let { operationLabel(it) }
+    val title = if (op != null) {
+        "$operationName · ${operationStateLabel(op.state)}"
+    } else {
+        stringResource(R.string.status_title)
     }
-    val detail = when {
-        op != null -> op.errorMessage
-            ?: op.readScanResult?.let { readScanSummary(it) }
-            ?: op.resultMessage
-        overwrite != null -> stringResource(
-            R.string.status_link_exists,
-            overwrite.substringAfterLast('/'),
-        )
-        else -> state.statusMessage?.localized() ?: state.logLines.lastOrNull()
-    }
+    val detail = if (op != null) op.errorMessage ?: op.readScanResult?.let { readScanSummary(it) } ?: op.resultMessage else state.statusMessage?.localized()
     val statusAnnouncement = when {
         op != null && terminal -> title
-        op == null && state.statusMessage != null && state.statusMessage !is UiMessage.Raw -> {
-            state.statusMessage.localized()
-        }
+        op == null && state.statusMessage != null && state.statusMessage !is UiMessage.Raw -> state.statusMessage.localized()
         else -> null
     }
     val metric = when {
@@ -883,247 +879,54 @@ internal fun StatusLogPanel(
         op.bytesDone > 0L -> DeviceIdentity.formatCapacity(op.bytesDone.toULong())
         else -> operationStateLabel(op.state)
     }
-
-    // "Verified" is claimed only for Verified, and for a partial write only for the bytes that
-    // were actually written.
     val readbackNote = op?.rawWriteResult?.let { result ->
         when (val verdict = result.readback) {
-            ReadbackVerdict.Verified -> {
-                val whole = result.writtenBytes.toULong() ==
-                    result.range.byteLength(state.diskSectorSize)
-                if (whole) {
-                    stringResource(R.string.raw_readback_verified)
-                } else {
-                    stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
-                }
-            }
-            is ReadbackVerdict.Mismatch -> stringResource(
-                R.string.raw_readback_mismatch,
-                verdict.mismatchedSectors.toLong(),
-                verdict.firstMismatchLba.toLong(),
-            )
-            is ReadbackVerdict.Unverified -> stringResource(
-                R.string.raw_readback_unverified,
-                verdict.range.startLba.toLong(),
-                verdict.range.sectorCount.toLong(),
-            )
-            is ReadbackVerdict.Incomplete -> stringResource(
-                R.string.raw_readback_incomplete,
-                stringResource(
-                    when (verdict.reason) {
-                        ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled
-                        ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed
-                        ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error
-                    },
-                ),
-            )
+            ReadbackVerdict.Verified -> if (result.writtenBytes.toULong() == result.range.byteLength(state.diskSectorSize)) stringResource(R.string.raw_readback_verified) else stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
+            is ReadbackVerdict.Mismatch -> stringResource(R.string.raw_readback_mismatch, verdict.mismatchedSectors.toLong(), verdict.firstMismatchLba.toLong())
+            is ReadbackVerdict.Unverified -> stringResource(R.string.raw_readback_unverified, verdict.range.startLba.toLong(), verdict.range.sectorCount.toLong())
+            is ReadbackVerdict.Incomplete -> stringResource(R.string.raw_readback_incomplete, stringResource(when (verdict.reason) { ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled; ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed; ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error }))
         }
     }
-
-    val journalDescription = if (journalExpanded) {
-        stringResource(R.string.log_collapse)
-    } else {
-        stringResource(R.string.log_expand)
-    }
-    val collapseDescription = stringResource(R.string.status_collapse)
-    val expandDescription = stringResource(R.string.status_expand)
+    data class CancelRequest(val token: OperationToken, val name: String)
+    var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
     val cancelDescription = stringResource(R.string.action_cancel)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Surface(
-            shape = if (collapsed) CircleShape else RoundedCornerShape(16.dp),
-            color = container,
-            modifier = if (collapsed) {
-                Modifier.size(144.dp)
-            } else {
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp)
-            },
-        ) {
-            if (collapsed) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Text(
-                        text = metric ?: title,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = content,
-                        maxLines = 2,
-                        textAlign = TextAlign.Center,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.semantics {
-                            liveRegion = LiveRegionMode.Polite
-                            statusAnnouncement?.let { contentDescription = it }
-                        },
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-                        if (cancelable) {
-                            IconButton(
-                                onClick = { onIntent(UiIntent.CancelOperation) },
-                                modifier = Modifier.semantics { contentDescription = cancelDescription },
-                            ) {
-                                GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
-                            }
-                        }
-                        if (hasLog) {
-                            IconButton(
-                                onClick = onToggleJournal,
-                                modifier = Modifier.semantics { contentDescription = journalDescription },
-                            ) {
-                                GlyphIcon(
-                                    glyph = if (journalExpanded) Glyph.ChevronDown else Glyph.ChevronUp,
-                                    size = 18.dp,
-                                    tint = content,
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = onExpandStatus,
-                            modifier = Modifier.semantics { contentDescription = expandDescription },
-                        ) {
-                            GlyphIcon(glyph = Glyph.ChevronUp, size = 18.dp, tint = content)
-                        }
-                    }
-                    if (overwrite != null) {
-                        TextButton(
-                            onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) {
-                            Text(stringResource(R.string.status_overwrite), color = content)
-                        }
-                    }
-                }
-            } else {
-                Column(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = if (statusAnnouncement != null) Modifier.semantics {
-                                    liveRegion = LiveRegionMode.Polite
-                                    contentDescription = statusAnnouncement
-                                } else Modifier,
-                            )
-                            detail?.let { message ->
-                                Text(
-                                    text = message,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = content.copy(alpha = 0.85f),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            readbackNote?.let { message ->
-                                Text(
-                                    text = message,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = content,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                        metric?.let {
-                            Text(it, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content)
-                        }
-                        if (cancelable) {
-                            IconButton(
-                                onClick = { onIntent(UiIntent.CancelOperation) },
-                                modifier = Modifier.semantics { contentDescription = cancelDescription },
-                            ) {
-                                GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
-                            }
-                        }
-                        if (hasLog) {
-                            IconButton(
-                                onClick = onToggleJournal,
-                                modifier = Modifier.semantics { contentDescription = journalDescription },
-                            ) {
-                                GlyphIcon(
-                                    glyph = if (journalExpanded) Glyph.ChevronDown else Glyph.ChevronUp,
-                                    size = 20.dp,
-                                    tint = content,
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = onCollapseStatus,
-                            modifier = Modifier.semantics { contentDescription = collapseDescription },
-                        ) {
-                            GlyphIcon(glyph = Glyph.Close, size = 20.dp, tint = content)
-                        }
-                    }
-                    if (op != null && running && op.bytesTotal > 0L) {
-                        LinearProgressIndicator(
-                            progress = { op.fraction },
-                            modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = content.copy(alpha = 0.2f),
-                        )
-                    }
-                    if (overwrite != null) {
-                        TextButton(
-                            onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
-                            modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp),
-                        ) { Text(stringResource(R.string.status_overwrite), color = content) }
-                    }
-                }
-            }
+    val statusDescription = if (collapsed) stringResource(R.string.status_expand) else stringResource(R.string.status_collapse)
+    fun requestCancel() {
+        op?.takeIf { cancelable }?.let {
+            cancelRequest = CancelRequest(it.token, operationName ?: title)
         }
-        if (journalExpanded) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = container,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-            ) {
-                LazyColumn(
-                    state = logList,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 180.dp)
-                        .padding(horizontal = 12.dp)
-                        .semantics {
-                            collectionInfo = CollectionInfo(state.logLines.size, 1)
-                        },
-                ) {
-                    items(state.logLines.size) { index ->
-                        Text(
-                            state.logLines[index],
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content,
-                            modifier = Modifier.semantics {
-                                collectionItemInfo = CollectionItemInfo(index, 1, 0, 1)
-                            },
-                        )
+    }
+    val statusSurface = Modifier
+        .then(if (collapsed) Modifier.size(144.dp) else Modifier.fillMaxWidth())
+        .then(if (collapsed) Modifier else Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp))
+        .combinedClickable(role = Role.Button, onClickLabel = statusDescription, onLongClickLabel = if (collapsed && cancelable) cancelDescription else null, onClick = if (collapsed) onExpandStatus else onCollapseStatus, onLongClick = if (collapsed && cancelable) ::requestCancel else null)
+        .semantics { if (statusAnnouncement != null) { liveRegion = LiveRegionMode.Polite; contentDescription = statusAnnouncement } }
+    Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)), horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(shape = if (collapsed) CircleShape else RoundedCornerShape(16.dp), color = container, modifier = statusSurface) {
+            if (collapsed) {
+                Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Text(metric ?: title, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content, maxLines = 2, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+                    if (cancelable) IconButton(onClick = ::requestCancel, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content) }
+                }
+            } else {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            detail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                            readbackNote?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                        }
+                        metric?.let { Text(it, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content) }
+                        if (cancelable) IconButton(onClick = ::requestCancel, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content) }
                     }
+                    if (op != null && running && op.bytesTotal > 0L) LinearProgressIndicator(progress = { op.fraction }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape), color = MaterialTheme.colorScheme.primary, trackColor = content.copy(alpha = 0.2f))
                 }
             }
         }
     }
-
+    cancelRequest?.let { request ->
+        AlertDialog(onDismissRequest = { cancelRequest = null }, title = { Text(stringResource(R.string.cancel_operation_title)) }, text = { Text(stringResource(R.string.cancel_operation_body, request.name)) }, confirmButton = { TextButton(onClick = { cancelRequest = null; onIntent(UiIntent.CancelOperation(request.token)) }) { Text(stringResource(R.string.cancel_operation_confirm)) } }, dismissButton = { TextButton(onClick = { cancelRequest = null }) { Text(stringResource(R.string.action_cancel)) } })
+    }
 }
 /**
  * Full log screen: every entry, an explicit "copy all" (warned about paths and serials),

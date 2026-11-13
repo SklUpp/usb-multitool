@@ -13,6 +13,25 @@ import usb.device.DiskException
 import usb.operation.DiskOperation
 import usb.operation.OperationState
 
+/** Stable identity for one submitted operation instance. */
+@JvmInline
+value class OperationToken(val value: Long)
+
+/** Allocates tokens once per process; zero is never issued. */
+object OperationTokenGenerator {
+    private val next = AtomicLong(0L)
+
+    fun next(): OperationToken = OperationToken(
+        next.updateAndGet { current ->
+            if (current == Long.MAX_VALUE) {
+                throw IllegalStateException("Operation token exhausted")
+            }
+            current + 1L
+        },
+    )
+}
+
+
 
 interface OperationWakeLock {
     fun acquire()
@@ -35,6 +54,8 @@ object NoOpServiceControl : ServiceControl {
 }
 
 interface OperationHandle {
+    val token: OperationToken
+    val state: OperationState
     suspend fun await(): OperationState
     fun cancel()
 }
@@ -48,6 +69,7 @@ class OperationExecutor(
     private val queue = ArrayDeque<QueuedOp>()
     private val disconnected = AtomicBoolean(false)
     private val connectionGeneration = AtomicLong(0)
+    private val connectionLifecycleLock = Any()
     private var running = false
     @Volatile private var current: QueuedOp? = null
     @Volatile private var currentDeviceId: String? = null
@@ -93,10 +115,16 @@ class OperationExecutor(
         idleStopSignalled = true
     }
 
-    fun submit(operation: DiskOperation): OperationHandle {
+    fun submit(operation: DiskOperation): OperationHandle =
+        submit(operation, OperationTokenGenerator.next())
+
+    fun submit(operation: DiskOperation, token: OperationToken): OperationHandle {
         val submitGen = connectionGeneration.get()
-        val handle = QueuedOp(operation, generation = submitGen)
-        // Count before async enqueue so a second submit cannot lose a race
+        val handle = QueuedOp(
+            operation = operation,
+            generation = submitGen,
+            token = token,
+        )
         // against the first op's idle stopWhenIdle check.
         handle.markCounted()
         outstanding.incrementAndGet()
@@ -142,8 +170,9 @@ class OperationExecutor(
     }
 
     fun onDisconnected() {
-        val gen = connectionGeneration.incrementAndGet()
-        disconnected.set(true)
+        val gen = synchronized(connectionLifecycleLock) {
+            connectionGeneration.incrementAndGet().also { disconnected.set(true) }
+        }
         currentDeviceId = null
         scope.launch {
             var runningOp: QueuedOp? = null
@@ -169,12 +198,15 @@ class OperationExecutor(
         }
     }
     fun onConnected(deviceId: String? = null) {
-        val same = !disconnected.get() &&
-            ((deviceId != null && currentDeviceId == deviceId) || (deviceId == null && currentDeviceId == null))
+        val same = synchronized(connectionLifecycleLock) {
+            !disconnected.get() &&
+                ((deviceId != null && currentDeviceId == deviceId) || (deviceId == null && currentDeviceId == null))
+        }
         if (same) return
-        currentDeviceId = deviceId
-        val gen = connectionGeneration.incrementAndGet()
-        disconnected.set(false)
+        val gen = synchronized(connectionLifecycleLock) {
+            currentDeviceId = deviceId
+            connectionGeneration.incrementAndGet().also { disconnected.set(false) }
+        }
         scope.launch {
             var runningOp: QueuedOp? = null
             val toFail = mutableListOf<QueuedOp>()
@@ -221,9 +253,9 @@ class OperationExecutor(
                 }
                 running = true
                 current = next
+                next.markRunning()
                 next
             } ?: continue
-
             try {
                 runOne(op)
             } finally {
@@ -251,7 +283,7 @@ class OperationExecutor(
             return
         }
 
-        op.state = OperationState.Running
+        if (op.state != OperationState.Running) return
         try {
             wakeLock.acquire()
         } catch (t: Throwable) {
@@ -263,6 +295,7 @@ class OperationExecutor(
             return
         }
         var terminal: OperationState = OperationState.Completed
+        var cancelledThrown = false
         try {
             try {
                 op.operation.run()
@@ -271,9 +304,6 @@ class OperationExecutor(
                 attachSecondaryFailure(op, e)
                 terminal = classifyThrown(op, cancelled = false)
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // Do not wrap cooperative/cancellation as IoFailure.
-                // Still attach as suppressed when a primary failure already exists so close/
-                // disconnect after Failed is not silent.
                 if (op.operation.failureCause != null ||
                     op.operation.state is OperationState.Failed
                 ) {
@@ -284,6 +314,7 @@ class OperationExecutor(
                 ) {
                     op.operation.failureCause = e
                 }
+                cancelledThrown = true
                 terminal = classifyThrown(op, cancelled = true)
             } catch (t: Throwable) {
                 attachSecondaryFailure(op, t)
@@ -293,8 +324,17 @@ class OperationExecutor(
             try {
                 wakeLock.release()
             } catch (_: Throwable) {}
-            clearSuccessNoiseCause(op, terminal)
-            if (!op.isDone()) op.complete(terminal)
+            op.withLifecycleLock {
+                synchronized(connectionLifecycleLock) {
+                    val finalTerminal = when {
+                        cancelledThrown -> classifyThrown(op, cancelled = true)
+                        terminal == OperationState.Completed -> classifyNormalReturn(op)
+                        else -> terminal
+                    }
+                    clearSuccessNoiseCause(op, finalTerminal)
+                    if (!op.isDone()) op.complete(finalTerminal)
+                }
+            }
         }
     }
 
@@ -413,11 +453,14 @@ class OperationExecutor(
     private inner class QueuedOp(
         val operation: DiskOperation,
         val generation: Long,
+        override val token: OperationToken,
     ) : OperationHandle {
         private val result = CompletableDeferred<OperationState>()
         val cancelled = AtomicBoolean(false)
-        @Volatile var state: OperationState = OperationState.Queued
+        @Volatile override var state: OperationState = OperationState.Queued
         private val counted = AtomicBoolean(false)
+        private val lifecycleLock = Any()
+        fun <T> withLifecycleLock(block: () -> T): T = synchronized(lifecycleLock, block)
 
         fun isDone(): Boolean = result.isCompleted
 
@@ -425,15 +468,25 @@ class OperationExecutor(
             counted.set(true)
         }
 
+        fun markRunning(): Boolean = synchronized(lifecycleLock) {
+            if (result.isCompleted || state != OperationState.Queued) return@synchronized false
+            state = OperationState.Running
+            operation.state = OperationState.Running
+            true
+        }
+
         fun complete(state: OperationState) {
-            if (result.complete(state)) {
+            synchronized(lifecycleLock) {
+                if (result.isCompleted) return
+                check(state.isTerminal()) { "Non-terminal operation state: $state" }
                 this.state = state
                 this.operation.state = state
+                result.complete(state)
                 if (counted.get()) outstanding.decrementAndGet()
             }
         }
 
-        fun recordDisconnect() {
+        fun recordDisconnect() = synchronized(connectionLifecycleLock) {
             // Late disconnect after durable success must not invent an error cause;
             // classify still returns Completed via state/commitReached.
             val success = operation.commitReached ||
@@ -452,8 +505,17 @@ class OperationExecutor(
         override suspend fun await(): OperationState = result.await()
 
         override fun cancel() {
-            cancelled.set(true)
-            operation.markInactive()
+            synchronized(lifecycleLock) {
+                if (result.isCompleted) return
+                cancelled.set(true)
+                operation.markInactive()
+            }
         }
     }
+}
+
+private fun OperationState.isTerminal(): Boolean = when (this) {
+    OperationState.Queued, OperationState.Running -> false
+    OperationState.Completed, OperationState.Cancelled, OperationState.Partial -> true
+    is OperationState.Failed -> true
 }

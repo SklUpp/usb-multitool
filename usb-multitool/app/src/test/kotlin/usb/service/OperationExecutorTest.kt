@@ -24,6 +24,31 @@ import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
 
 class OperationExecutorTest {
+    @Test fun eachSubmitGetsUniqueTokenAndQueuedCancelIsAddressed() = runTest {
+        val executor = OperationExecutor(this)
+        val gate = CompletableDeferred<Unit>()
+        val first = executor.submit(object : DiskOperation("first") {
+            override suspend fun run() = gate.await()
+        })
+        val second = executor.submit(object : DiskOperation("second") {
+            override suspend fun run() = Unit
+        })
+        assertTrue(first.token != second.token)
+        second.cancel()
+        assertEquals(OperationState.Cancelled, second.await())
+        gate.complete(Unit)
+        assertEquals(OperationState.Completed, first.await())
+    }
+
+    @Test fun terminalHandleIgnoresLateCancel() = runTest {
+        val executor = OperationExecutor(this)
+        val handle = executor.submit(object : DiskOperation("done") {
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, handle.await())
+        handle.cancel()
+        assertEquals(OperationState.Completed, handle.state)
+    }
     @Test fun renameSyncFailureAfterMarkedMutationIsPartial() = runTest {
         val volume = object : UsbFsVolume {
             var renamed = false
@@ -1071,6 +1096,34 @@ class OperationExecutorTest {
         started.await()
         executor.onDisconnected()
         gate.complete(Unit)
+        assertEquals(OperationState.Completed, handle.await())
+    }
+
+    @Test fun eachSubmitGetsDistinctTokenIncludingSameOperation() = runTest {
+        val executor = OperationExecutor(this)
+        val gate = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation() {
+            override suspend fun run() { gate.await() }
+        }
+        val first = executor.submit(operation)
+        val second = executor.submit(operation)
+        assertFalse(first.token == second.token)
+        first.cancel()
+        second.cancel()
+        gate.complete(Unit)
+        assertEquals(OperationState.Cancelled, first.await())
+        assertEquals(OperationState.Cancelled, second.await())
+    }
+
+    @Test fun cancelTerminalRaceKeepsTerminalResult() = runTest {
+        val executor = OperationExecutor(this)
+        val returned = CompletableDeferred<Unit>()
+        val operation = object : DiskOperation() {
+            override suspend fun run() { returned.complete(Unit) }
+        }
+        val handle = executor.submit(operation)
+        returned.await()
+        handle.cancel()
         assertEquals(OperationState.Completed, handle.await())
     }
 

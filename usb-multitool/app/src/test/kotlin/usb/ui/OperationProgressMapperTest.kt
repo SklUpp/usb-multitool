@@ -3,9 +3,11 @@ package usb.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 import usb.operation.OperationState as ServiceOperationState
 
 class OperationProgressMapperTest {
+    private val token = OperationTokenGenerator.next()
     private val scan = ReadScanOutcome(
         sectorsRead = 3UL,
         totalSectors = 16UL,
@@ -16,7 +18,7 @@ class OperationProgressMapperTest {
 
     @Test fun partialPreservesProgressAndMessages() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Partial, OperationTitle.ReadScan, 4L, 10L, "saved", IllegalStateException("incomplete"), false,
+            token, ServiceOperationState.Partial, OperationTitle.ReadScan, 4L, 10L, "saved", IllegalStateException("incomplete"), false,
         )
         assertEquals(OperationState.Partial, progress.state)
         assertEquals(4L, progress.bytesDone)
@@ -28,7 +30,7 @@ class OperationProgressMapperTest {
 
     @Test fun failedUsesOutcomeCauseMessage() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Failed(IllegalArgumentException("bad disk")), OperationTitle.ReadScan, 4L, 10L, null, null, true,
+            token, ServiceOperationState.Failed(IllegalArgumentException("bad disk")), OperationTitle.ReadScan, 4L, 10L, null, null, true,
         )
         assertEquals(OperationState.Failed, progress.state)
         assertEquals("bad disk", progress.errorMessage)
@@ -37,7 +39,7 @@ class OperationProgressMapperTest {
 
     @Test fun queuedAndRunningKeepTheirState() {
         val queued = readOnlyOperationProgress(
-            ServiceOperationState.Queued, OperationTitle.ReadScan, 0L, 10L, "stale", null, true, readScanResult = scan,
+            token, ServiceOperationState.Queued, OperationTitle.ReadScan, 0L, 10L, "stale", null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Queued, queued.state)
         assertEquals(0L, queued.bytesDone)
@@ -47,7 +49,7 @@ class OperationProgressMapperTest {
         assertNull(queued.readScanResult)
 
         val running = readOnlyOperationProgress(
-            ServiceOperationState.Running, OperationTitle.ReadScan, 4L, 10L, "stale", null, true, readScanResult = scan,
+            token, ServiceOperationState.Running, OperationTitle.ReadScan, 4L, 10L, "stale", null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Running, running.state)
         assertEquals(4L, running.bytesDone)
@@ -57,7 +59,7 @@ class OperationProgressMapperTest {
 
     @Test fun cancelledKeepsProgressAndStructuredScan() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Cancelled, OperationTitle.ReadScan, 4L, 10L, null, null, false, readScanResult = scan,
+            token, ServiceOperationState.Cancelled, OperationTitle.ReadScan, 4L, 10L, null, null, false, readScanResult = scan,
         )
         assertEquals(OperationState.Cancelled, progress.state)
         assertEquals(false, progress.cancelable)
@@ -68,7 +70,7 @@ class OperationProgressMapperTest {
 
     @Test fun completedPreservesResultProgressAndScan() {
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Completed, OperationTitle.ReadScan, 10L, 10L, null, null, true, readScanResult = scan,
+            token, ServiceOperationState.Completed, OperationTitle.ReadScan, 10L, 10L, null, null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Completed, progress.state)
         assertEquals(10L, progress.bytesDone)
@@ -79,7 +81,7 @@ class OperationProgressMapperTest {
     @Test fun preservesTypedTitleAndLogLabel() {
         val title = OperationTitle.ListPath("/ISO")
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Completed, title, 10L, 10L, "ok", null, true,
+            token, ServiceOperationState.Completed, title, 10L, 10L, "ok", null, true,
         )
         assertEquals(title, progress.title)
         assertEquals("List /ISO", progress.label)
@@ -90,7 +92,7 @@ class OperationProgressMapperTest {
         val title = OperationTitle.Destructive(DestructiveAction.GPT_RESTORE)
         assertEquals("restore GPT backup", title.logLabel)
         val progress = readOnlyOperationProgress(
-            ServiceOperationState.Running, title, 0L, 0L, null, null, true,
+            token, ServiceOperationState.Running, title, 0L, 0L, null, null, true,
         )
         assertEquals(title, progress.title)
         assertEquals("restore GPT backup", progress.label)

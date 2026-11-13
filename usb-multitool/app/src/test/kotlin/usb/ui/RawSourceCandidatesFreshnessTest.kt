@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.service.OperationTokenGenerator
 
 class RawSourceCandidatesFreshnessTest {
     private val device =
@@ -49,6 +50,7 @@ class RawSourceCandidatesFreshnessTest {
         val bRunning =
             OperationProgress(
                 state = OperationState.Running,
+                token = OperationTokenGenerator.next(),
                 title = OperationTitle.Destructive(DestructiveAction.WIPE),
             )
         val base =
@@ -78,6 +80,7 @@ class RawSourceCandidatesFreshnessTest {
         val queued =
             OperationProgress(
                 state = OperationState.Queued,
+                token = OperationTokenGenerator.next(),
                 title = OperationTitle.FormatTarget("1"),
             )
         val base = ready(status = UiMessage.Raw("queued-B"), operation = queued)
