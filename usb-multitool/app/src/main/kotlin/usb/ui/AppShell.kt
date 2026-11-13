@@ -847,7 +847,6 @@ internal fun StatusLogPanel(
     val completed = op?.state == OperationState.Completed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
     val cancelable = op?.let { running && it.cancelable } == true
-    val terminal = failed || partial || cancelled || completed
     val container = when {
         failed -> MaterialTheme.colorScheme.errorContainer
         partial || cancelled -> MaterialTheme.colorScheme.tertiaryContainer
@@ -866,11 +865,11 @@ internal fun StatusLogPanel(
     } else {
         stringResource(R.string.status_title)
     }
-    val detail = if (op != null) op.errorMessage ?: op.readScanResult?.let { readScanSummary(it) } ?: op.resultMessage else state.statusMessage?.localized()
-    val statusAnnouncement = when {
-        op != null && terminal -> title
-        op == null && state.statusMessage != null && state.statusMessage !is UiMessage.Raw -> state.statusMessage.localized()
-        else -> null
+    val operationDetail = op?.errorMessage ?: op?.readScanResult?.let { readScanSummary(it) } ?: op?.resultMessage
+    val statusText = state.statusMessage?.localized()
+    val details = buildList {
+        operationDetail?.let(::add)
+        statusText?.takeIf { it != operationDetail }?.let(::add)
     }
     val metric = when {
         op == null -> null
@@ -887,6 +886,12 @@ internal fun StatusLogPanel(
             is ReadbackVerdict.Incomplete -> stringResource(R.string.raw_readback_incomplete, stringResource(when (verdict.reason) { ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled; ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed; ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error }))
         }
     }
+    val accessibleMessage = buildList {
+        add(title)
+        metric?.let(::add)
+        details.forEach(::add)
+        readbackNote?.takeIf { it !in details }?.let(::add)
+    }.joinToString(" · ")
     data class CancelRequest(val token: OperationToken, val name: String)
     var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
     val cancelDescription = stringResource(R.string.action_cancel)
@@ -900,12 +905,14 @@ internal fun StatusLogPanel(
         .then(if (collapsed) Modifier.size(144.dp) else Modifier.fillMaxWidth())
         .then(if (collapsed) Modifier else Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp))
         .combinedClickable(role = Role.Button, onClickLabel = statusDescription, onLongClickLabel = if (collapsed && cancelable) cancelDescription else null, onClick = if (collapsed) onExpandStatus else onCollapseStatus, onLongClick = if (collapsed && cancelable) ::requestCancel else null)
-        .semantics { if (statusAnnouncement != null) { liveRegion = LiveRegionMode.Polite; contentDescription = statusAnnouncement } }
+        .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = accessibleMessage }
     Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)), horizontalAlignment = Alignment.CenterHorizontally) {
         Surface(shape = if (collapsed) CircleShape else RoundedCornerShape(16.dp), color = container, modifier = statusSurface) {
             if (collapsed) {
                 Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Text(metric ?: title, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content, maxLines = 2, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+                    Text(metric ?: title, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content, maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+                    statusText?.takeIf { it != operationDetail }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis) }
+                    operationDetail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis) }
                     if (cancelable) IconButton(onClick = ::requestCancel, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content) }
                 }
             } else {
@@ -913,8 +920,8 @@ internal fun StatusLogPanel(
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            detail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                            readbackNote?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                            details.forEach { detail -> Text(detail, style = MaterialTheme.typography.labelSmall, color = content) }
+                            readbackNote?.takeIf { it !in details }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content) }
                         }
                         metric?.let { Text(it, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content) }
                         if (cancelable) IconButton(onClick = ::requestCancel, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content) }
