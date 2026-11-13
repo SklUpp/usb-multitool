@@ -828,6 +828,7 @@ fun PartitionsScreen(
                 title = stringResource(R.string.partitions_selected_title),
                 titleColor = MaterialTheme.colorScheme.onSurface,
                 trailing = {
+                    val deleteDescription = stringResource(R.string.partitions_delete_action)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         InfoHelpButton(
                             infoTitle = stringResource(R.string.partitions_info_help_title),
@@ -840,7 +841,7 @@ fun PartitionsScreen(
                             enabled = state.actionsEnabled && blockedHint == null &&
                                 !state.partitionTableDamaged,
                             modifier = Modifier.semantics {
-                                contentDescription = stringResource(R.string.partitions_delete_action)
+                                contentDescription = deleteDescription
                             },
                         ) {
                             GlyphIcon(Glyph.Trash, size = 20.dp, tint = MaterialTheme.colorScheme.error)

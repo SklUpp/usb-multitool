@@ -38,6 +38,7 @@ import usb.ventoy.AutounattendState
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoySettingsDocument
+import usb.ventoy.VentoySettingsDocumentException
 import usb.ventoy.VentoySettingsSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -213,6 +214,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val attachment = AttachmentState<UsbDevice>()
     private val attachGeneration: Long get() = attachment.snapshot().generation
     private val attachedDevice: UsbDevice? get() = attachment.snapshot().device
+    private fun nextOperationToken(): OperationToken = OperationTokenGenerator.next()
     /** Pick generations make slow SAF inspections lose to the newest selection. */
     private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
@@ -658,8 +660,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val operationGenerationMatches =
                 operationGenerations[current.token]?.let { generation ->
+                    val stateDevice = state.device
                     generation == liveAttachmentGeneration &&
-                        (state.device == null || state.device.attachGeneration == generation)
+                        (stateDevice == null || stateDevice.attachGeneration == generation)
                 } == true
             acceptedOperationIntent = operationGenerationMatches &&
                 adjustedResult.state !== state && adjustedResult.state.operation == current
@@ -711,9 +714,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 ?.let { terminalIntent ->
                     operationGenerations.remove(terminalIntent.progress.token)?.let { generation ->
+                        val stateDevice = state.device
                         completionGenerationAccepted =
                             liveAttachmentGeneration == generation &&
-                                (state.device == null || state.device.attachGeneration == generation)
+                                (stateDevice == null || stateDevice.attachGeneration == generation)
                         UiReducer.reduce(
                             state,
                             UiIntent.OperationCompletionEffects(

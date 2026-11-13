@@ -49,7 +49,7 @@ internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
     -> ShellTab.Ventoy
     OperationTitle.CheckRawRange,
     OperationTitle.ListRawSources,
-    OperationTitle.StageForRawWrite,
+    is OperationTitle.StageForRawWrite,
     is OperationTitle.FormatTarget,
     -> ShellTab.Partitions
     OperationTitle.ReadScan,

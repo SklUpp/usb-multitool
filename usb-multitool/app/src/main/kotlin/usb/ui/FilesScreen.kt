@@ -610,7 +610,7 @@ private fun FilesPickScreen(
                         )
                     }
                     if (copying.state == OperationState.Running && copying.cancelable) {
-                        TextButton(onClick = { onIntent(UiIntent.CancelOperation) }) {
+                        TextButton(onClick = { onIntent(UiIntent.CancelOperation(copying.token)) }) {
                             Text(stringResource(R.string.action_cancel))
                         }
                     }

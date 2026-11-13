@@ -732,7 +732,7 @@ object Autounattend {
             val isXmlns = attributeName == "xmlns" || namespace == XMLNS
             val isUnqualifiedAllowed = namespace.isNullOrEmpty() && attributeName in allowed
             val isWcmAction = attributeName == "action" && namespace == WCM &&
-                name in setOf("Disk", "CreatePartition", "ModifyPartition") && attribute.value == "add"
+                name in setOf("Disk", "CreatePartition", "ModifyPartition") && attribute.nodeValue == "add"
             if (!isXmlns && !isUnqualifiedAllowed && !isWcmAction) result.add(attributeName)
         }
         return result
