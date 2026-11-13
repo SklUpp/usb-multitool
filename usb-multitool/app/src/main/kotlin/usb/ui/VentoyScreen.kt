@@ -1,12 +1,15 @@
 package usb.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -42,6 +46,12 @@ import androidx.compose.ui.unit.dp
 import usb.multitool.R
 import usb.ventoy.FolderReadProblem
 
+private enum class DownloadPrompt {
+    Generic,
+    Unpinned,
+    AlreadyLatest,
+}
+private val DownloadedReleaseOrange = Color(0xFFE65100)
 @Composable
 fun VentoyScreen(
     state: AppUiState,
@@ -132,28 +142,29 @@ fun VentoyScreen(
     ) {
         SectionCard(
             title = stringResource(R.string.ventoy_section_title),
-            // White-on-black in the dark theme and black-on-white in the light theme.
             titleColor = MaterialTheme.colorScheme.onSurface,
             trailing = {
                 Row(
+                    modifier = Modifier.wrapContentWidth().horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                    VentoyVersionRow(state = state, onIntent = onIntent)
                     state.downloadedVentoyRelease?.let { downloaded ->
                         Badge(
                             text = stringResource(
-                                R.string.ventoy_badge_downloaded,
+                                if (downloaded.independentlyPinned) R.string.ventoy_badge_pinned
+                                else R.string.ventoy_badge_downloaded,
                                 downloaded.release,
                             ),
                             container = MaterialTheme.colorScheme.tertiaryContainer,
-                            content = MaterialTheme.colorScheme.onTertiaryContainer,
+                            content = DownloadedReleaseOrange,
                         )
                     }
                     InfoHelpButton(
                         infoTitle = stringResource(R.string.ventoy_help_title),
                         infoText = stringResource(R.string.ventoy_help_text) +
-                            "\n\n" +
-                            stringResource(R.string.ventoy_help_details),
+                            "\n\n" + stringResource(R.string.ventoy_help_details),
                     )
                 }
             },
@@ -161,7 +172,6 @@ fun VentoyScreen(
             if (!state.actionsEnabled) {
                 EmptyHint(UiReducer.presenceMessage(state.presence).localized())
             }
-            VentoyVersionRow(state = state, onIntent = onIntent)
             if (!state.ventoyInstallAvailable) {
                 Text(
                     text = stringResource(R.string.msg_ventoy_store_unavailable),
@@ -169,63 +179,24 @@ fun VentoyScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            val downloaded = state.downloadedVentoyRelease
-            val upstream = state.upstreamVentoyRelease
-            if (downloaded == null && upstream != null && state.upstreamVentoyPinned == false) {
-                Text(
-                    text = stringResource(R.string.ventoy_upstream_unpinned, upstream),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (downloaded != null && upstream != null && upstream != downloaded.release) {
-                Text(
-                    text = if (state.upstreamVentoyPinned == false) {
-                        stringResource(
-                            R.string.ventoy_pinned_unavailable,
-                            downloaded.release,
-                            upstream,
-                        )
-                    } else {
-                        stringResource(
-                            R.string.ventoy_pinned_diff,
-                            downloaded.release,
-                            upstream,
-                        )
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(
-                    onClick = {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL))
-                    },
-                    enabled = state.actionsEnabled &&
-                        state.ventoyInstallAvailable &&
+                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
+                    enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
                         !state.ventoyDownloadInFlight &&
                         (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error,
-                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
                 ) {
-                    Text(
-                        text = stringResource(R.string.ventoy_install),
-                        fontWeight = FontWeight.Bold,
-                    )
+                    Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
                 }
                 Button(
-                    onClick = {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE))
-                    },
-                    enabled = state.actionsEnabled &&
-                        state.ventoyInstallAvailable &&
+                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
+                    enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
                         !state.ventoyDownloadInFlight &&
                         (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
                     modifier = Modifier.weight(1f),
@@ -238,26 +209,28 @@ fun VentoyScreen(
                     )
                 }
             }
-            state.ventoyDownloadError?.let { message ->
+            state.ventoyDownloadError?.let { error ->
                 Text(
-                    text = message,
+                    text = stringResource(R.string.ventoy_download_failed, error),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            state.upstreamVentoyError?.let { error ->
+                Text(
+                    text = stringResource(R.string.ventoy_upstream_check_failed, error),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
             }
         }
 
-        // Phone import lives next to the sections it feeds: an image becomes bindable, and an
-        // XML template becomes the answer file. The source document is never moved or deleted.
         ImportFromPhoneCard(
             state = state,
             onIntent = onIntent,
             onPickWindowsFile = onPickWindowsFile,
         )
 
-        // Windows/XML work is one subsection of this tab: the answer file that already exists,
-        // the parameters used to regenerate it, which images are bound to it, and the real
-        // global `control` values. No new tab, nothing in Files.
         AutounattendSection(
             state = state,
             onIntent = onIntent,
@@ -278,8 +251,45 @@ private fun VentoyVersionRow(
 ) {
     val checkLabel = stringResource(R.string.ventoy_check_version)
     val downloadLabel = stringResource(R.string.ventoy_download)
-    // Network traffic is the only thing this action starts; Install/Update stays separate.
-    var showDownloadWarning by remember { mutableStateOf(false) }
+    var downloadPrompt by remember { mutableStateOf<DownloadPrompt?>(null) }
+    var pendingDownloadCheck by remember { mutableStateOf(false) }
+    var promptRelease by remember { mutableStateOf<String?>(null) }
+    var promptPinned by remember { mutableStateOf<Boolean?>(null) }
+    var promptRequest by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(
+        state.ventoyUpstreamRequest,
+        state.upstreamVentoyRelease,
+        state.ventoyUpstreamChecking,
+    ) {
+        if (promptRequest != null && promptRequest != state.ventoyUpstreamRequest) {
+            downloadPrompt = null
+            promptRelease = null
+            promptPinned = null
+            promptRequest = null
+        } else if (pendingDownloadCheck && !state.ventoyUpstreamChecking) {
+            pendingDownloadCheck = false
+            val upstream = state.upstreamVentoyRelease
+            if (upstream == null) {
+                downloadPrompt = null
+                promptRelease = null
+                promptPinned = null
+                promptRequest = null
+            } else {
+                val current = state.downloadedVentoyRelease?.release
+                    ?: state.installedVentoyRelease
+                    ?: state.bundledVentoyRelease
+                val comparison = ventoyReleaseComparison(current, upstream)
+                downloadPrompt = when {
+                    comparison.order != null && comparison.order <= 0 -> DownloadPrompt.AlreadyLatest
+                    state.upstreamVentoyPinned == false -> DownloadPrompt.Unpinned
+                    else -> DownloadPrompt.Generic
+                }
+                promptRelease = upstream
+                promptPinned = state.upstreamVentoyPinned
+                promptRequest = state.ventoyUpstreamRequest
+            }
+        }
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -288,7 +298,12 @@ private fun VentoyVersionRow(
         VentoyVersionFact(
             glyph = Glyph.Package,
             label = stringResource(R.string.ventoy_version_bundled),
-            value = state.bundledVentoyRelease,
+            value = state.downloadedVentoyRelease?.release ?: state.bundledVentoyRelease,
+            valueColor = if (state.downloadedVentoyRelease != null) {
+                DownloadedReleaseOrange
+            } else {
+                null
+            },
             modifier = Modifier.weight(1f),
         )
         VentoyVersionFact(
@@ -305,67 +320,96 @@ private fun VentoyVersionRow(
             modifier = Modifier.weight(1f),
         )
         IconButton(
-            onClick = { onIntent(UiIntent.CheckVentoyUpstream) },
-            enabled = !state.ventoyUpstreamChecking,
-            modifier = Modifier.semantics { contentDescription = checkLabel },
-        ) {
-            if (state.ventoyUpstreamChecking) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            } else {
-                GlyphIcon(Glyph.Refresh, size = 20.dp)
-            }
-        }
-        IconButton(
             onClick = {
-                if (VentoyDownloadWarning.requiresConfirmation(state.ventoyDownloadInFlight)) {
-                    showDownloadWarning = true
-                } else {
-                    onIntent(UiIntent.RequestDownloadVentoyRelease)
-                }
+                pendingDownloadCheck = true
+                onIntent(UiIntent.CheckVentoyUpstream)
             },
-            enabled = !state.ventoyDownloadInFlight,
+            enabled = !state.ventoyDownloadInFlight && !state.ventoyUpstreamChecking,
             modifier = Modifier.semantics { contentDescription = downloadLabel },
         ) {
-            if (state.ventoyDownloadInFlight) {
+            if (state.ventoyDownloadInFlight || state.ventoyUpstreamChecking) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             } else {
                 GlyphIcon(Glyph.Download, size = 20.dp)
             }
         }
     }
-    if (showDownloadWarning) {
-        VentoyDownloadWarningDialog(
-            onConfirm = {
-                showDownloadWarning = false
-                onIntent(UiIntent.RequestDownloadVentoyRelease)
+    val prompt = downloadPrompt
+    val promptVersion = promptRelease
+    if (prompt != null && promptVersion != null) {
+        val upstream = promptVersion
+        AlertDialog(
+            onDismissRequest = {
+                downloadPrompt = null
+                promptRelease = null
+                promptPinned = null
+                promptRequest = null
             },
-            onDismiss = { showDownloadWarning = false },
+            title = {
+                Text(
+                    when (prompt) {
+                        DownloadPrompt.Unpinned -> stringResource(R.string.ventoy_download_unpinned_warning_title)
+                        DownloadPrompt.AlreadyLatest -> stringResource(R.string.ventoy_download_already_latest_title)
+                        DownloadPrompt.Generic -> stringResource(R.string.ventoy_download_warning_title)
+                    },
+                )
+            },
+            text = {
+                Text(
+                    when (prompt) {
+                        DownloadPrompt.Unpinned -> stringResource(
+                            R.string.ventoy_download_unpinned_warning_body,
+                            upstream,
+                        )
+                        DownloadPrompt.AlreadyLatest -> stringResource(
+                            R.string.ventoy_download_already_latest_body,
+                            state.downloadedVentoyRelease?.release
+                                ?: state.installedVentoyRelease
+                                ?: state.bundledVentoyRelease.orEmpty(),
+                            upstream,
+                        )
+                        DownloadPrompt.Generic -> stringResource(R.string.ventoy_download_warning_body)
+                    },
+                )
+            },
+            confirmButton = {
+                if (prompt != DownloadPrompt.AlreadyLatest) {
+                    TextButton(onClick = {
+                        val release = promptRelease
+                        val pinned = promptPinned
+                        val request = promptRequest
+                        downloadPrompt = null
+                        promptRelease = null
+                        promptPinned = null
+                        promptRequest = null
+                        if (release != null && pinned != null && request != null) {
+                            onIntent(
+                                UiIntent.ConfirmVentoyReleaseDownload(
+                                    release = release,
+                                    pinned = pinned,
+                                    upstreamRequest = request,
+                                ),
+                            )
+                        }
+                    }) {
+                        Text(stringResource(R.string.ventoy_download_warning_confirm))
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    downloadPrompt = null
+                    promptRelease = null
+                    promptPinned = null
+                    promptRequest = null
+                }) {
+                    Text(stringResource(R.string.ventoy_download_warning_cancel))
+                }
+            },
         )
     }
 }
 
-/** Confirms the network fetch only; it never writes the stick by itself. */
-@Composable
-private fun VentoyDownloadWarningDialog(
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.ventoy_download_warning_title)) },
-        text = { Text(stringResource(R.string.ventoy_download_warning_body)) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.ventoy_download_warning_confirm))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.ventoy_download_warning_cancel))
-            }
-        },
-    )
-}
 
 @Composable
 private fun VentoyVersionFact(
@@ -374,7 +418,8 @@ private fun VentoyVersionFact(
     value: String?,
     modifier: Modifier = Modifier,
     readError: String? = null,
-) {
+    valueColor: Color? = null,
+){
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -384,18 +429,14 @@ private fun VentoyVersionFact(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            GlyphIcon(
-                glyph = glyph,
-                size = 14.dp,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Box(
+                modifier = Modifier.semantics { contentDescription = label },
+            ) {
+                GlyphIcon(
+                    glyph = glyph,
+                    size = 14.dp,
+                )
+            }
         }
         Text(
             text = when {
@@ -405,7 +446,7 @@ private fun VentoyVersionFact(
             },
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Bold,
-            color = if (readError != null) {
+            color = valueColor ?: if (readError != null) {
                 MaterialTheme.colorScheme.error
             } else {
                 MaterialTheme.colorScheme.onSurface

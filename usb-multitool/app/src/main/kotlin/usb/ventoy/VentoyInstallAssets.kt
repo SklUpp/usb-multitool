@@ -27,7 +27,11 @@ object VentoyInstallAssets {
                 VentoyReleaseStore.requireMatches(stored, confirmed.provenance).assets
             }
         }
-        VentoyDownloader.requirePinned(assets)
+        if (confirmed is VentoyReleaseSource.Downloaded && !confirmed.provenance.independentlyPinned) {
+            VentoyDownloader.requireValidated(assets)
+        } else {
+            VentoyDownloader.requirePinned(assets)
+        }
         if (assets.release != confirmed.release) {
             throw VentoyAssetsMissingException(
                 "Confirmed Ventoy ${confirmed.release}, but the available payload is " +

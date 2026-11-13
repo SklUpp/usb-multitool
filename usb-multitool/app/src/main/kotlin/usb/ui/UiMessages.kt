@@ -377,11 +377,18 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
     confirmation.ventoyRelease?.let { release ->
         lines += stringResource(R.string.confirm_ventoy_release, release.release)
         if (release is usb.ventoy.VentoyReleaseSource.Downloaded) {
-            lines += stringResource(
-                R.string.confirm_ventoy_provenance,
-                release.provenance.archiveSha256,
-                release.provenance.sourceUrl,
-            )
+            lines += if (release.provenance.independentlyPinned) {
+                stringResource(
+                    R.string.confirm_ventoy_provenance,
+                    release.provenance.archiveSha256,
+                    release.provenance.sourceUrl,
+                )
+            } else {
+                stringResource(
+                    R.string.confirm_ventoy_unpinned,
+                    release.provenance.sourceUrl,
+                )
+            }
         }
     }
     confirmation.targetPartitionName?.let {

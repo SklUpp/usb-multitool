@@ -340,6 +340,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     release = stored.assets.release,
                                     archiveSha256 = stored.archiveSha256,
                                     sourceUrl = stored.sourceUrl,
+                                    independentlyPinned = stored.independentlyPinned,
                                 ),
                             )
                         }
@@ -4197,15 +4198,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun checkVentoyUpstream(requestToken: Long) {
         scope.launch {
-            val tag = withContext(Dispatchers.IO) {
-                usb.ventoy.VentoyDownloader.checkLatestRelease()
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    usb.ventoy.VentoyDownloader.checkLatestRelease()
+                        ?: throw IllegalStateException("upstream latest release unavailable")
+                }
             }
-            onIntent(
-                UiIntent.SetVentoyUpstreamRelease(
-                    requestToken = requestToken,
-                    tag = tag,
-                    pinned = tag?.let { VentoyDownloader.pinnedSourceOrNull(it) != null },
-                ),
+            outcome.fold(
+                onSuccess = { tag ->
+                    onIntent(
+                        UiIntent.SetVentoyUpstreamRelease(
+                            requestToken = requestToken,
+                            tag = tag,
+                            pinned = VentoyDownloader.pinnedSourceOrNull(tag) != null,
+                        ),
+                    )
+                },
+                onFailure = { failure ->
+                    onIntent(
+                        UiIntent.SetVentoyUpstreamRelease(
+                            requestToken = requestToken,
+                            tag = null,
+                            error = failure.message ?: failure.javaClass.simpleName,
+                        ),
+                    )
+                },
             )
         }
     }
@@ -4222,13 +4239,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
                     val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
-                    val source =
-                        usb.ventoy.VentoyDownloader.pinnedDownloadSource(upstreamVersion)
-                    val downloaded = usb.ventoy.VentoyDownloader.downloadRelease(
-                        cacheDir = app.cacheDir,
-                        release = source.release,
-                        isActive = { job?.isActive == true },
-                    )
+                    val downloaded =
+                        if (upstreamVersion != null && VentoyDownloader.pinnedSourceOrNull(upstreamVersion) == null) {
+                            VentoyDownloader.downloadUnpinnedRelease(
+                                cacheDir = app.cacheDir,
+                                release = upstreamVersion,
+                                isActive = { job?.isActive == true },
+                            )
+                        } else {
+                            val source = VentoyDownloader.pinnedDownloadSource(upstreamVersion)
+                            VentoyDownloader.downloadRelease(
+                                cacheDir = app.cacheDir,
+                                release = source.release,
+                                isActive = { job?.isActive == true },
+                            )
+                        }
                     usb.ventoy.VentoyReleaseStore.save(
                         filesDir = filesDir,
                         download = downloaded,
@@ -4245,6 +4270,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 release = stored.assets.release,
                                 archiveSha256 = stored.archiveSha256,
                                 sourceUrl = stored.sourceUrl,
+                                independentlyPinned = stored.independentlyPinned,
                             ),
                         ),
                     )
@@ -4261,6 +4287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         release = stored.assets.release,
                                         archiveSha256 = stored.archiveSha256,
                                         sourceUrl = stored.sourceUrl,
+                                        independentlyPinned = stored.independentlyPinned,
                                     ),
                                     message = getApplication<Application>().getString(
                                         R.string.ventoy_promotion_unconfirmed,
@@ -4280,6 +4307,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         release = stored.assets.release,
                                         archiveSha256 = stored.archiveSha256,
                                         sourceUrl = stored.sourceUrl,
+                                        independentlyPinned = stored.independentlyPinned,
                                     ),
                                     message = getApplication<Application>().getString(
                                         R.string.ventoy_download_unconfirmed,
@@ -4310,6 +4338,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         release = stored.assets.release,
                                         archiveSha256 = stored.archiveSha256,
                                         sourceUrl = stored.sourceUrl,
+                                        independentlyPinned = stored.independentlyPinned,
                                     ),
                                     message = getApplication<Application>().getString(
                                         R.string.ventoy_download_recovered,

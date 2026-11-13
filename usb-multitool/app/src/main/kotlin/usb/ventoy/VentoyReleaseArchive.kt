@@ -63,6 +63,11 @@ internal object VentoyReleaseArchive {
                     )
                 }
                 if (wanted) {
+                    if (found.containsKey(baseName)) {
+                        throw VentoyReleaseArchiveException(
+                            "Release archive contains duplicate member $baseName",
+                        )
+                    }
                     val data = ByteArray(size.toInt())
                     if (!readExactly(gz, data)) {
                         throw VentoyReleaseArchiveException("Truncated data for $fullName")

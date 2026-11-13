@@ -1402,11 +1402,12 @@ data class AppUiState(
      */
     val installedVentoyReadError: String? = null,
     /**
-     * Latest official Ventoy release reported by the upstream check. Null means the check
-     * has not landed for this attachment or failed; both render as n/a.
+     * Latest official Ventoy release reported by upstream. Null means unavailable;
+     * [upstreamVentoyError] explains a failed check.
      */
     val upstreamVentoyRelease: String? = null,
-    /** True/false when the upstream check could classify it; null until then. */
+    val upstreamVentoyError: String? = null,
+    /** True/false when upstream check classified a tag; null until then. */
     val upstreamVentoyPinned: Boolean? = null,
     /**
      * Explicit app-private release store fact. Only [VentoyReleaseStoreState.Verified]

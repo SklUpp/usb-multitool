@@ -276,7 +276,7 @@ data class VentoyAssets(
          * result would reach the USB medium.
          */
         fun decompressXz(data: ByteArray, maxBytes: Long = MAX_DECOMPRESSED_ASSET_BYTES): ByteArray {
-            if (!isXz(data)) return data
+            require(isXz(data)) { "Ventoy payload must be an XZ stream" }
             require(maxBytes >= 0) { "maxBytes must be non-negative, was $maxBytes" }
             try {
                 val bais = java.io.ByteArrayInputStream(data)

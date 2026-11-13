@@ -202,14 +202,16 @@ object VentoyControlCatalog {
 }
 
 /**
- * Provenance of one offline verified release. [archiveSha256] is the digest of the official
- * archive that was independently pinned before download; [sourceUrl] is one of that pin's
- * HTTPS URLs. Neither value is accepted when it only comes from the downloaded payload.
+ * Provenance of one app-private release. Pinned records carry independent archive/member SHA
+ * trust; unpinned records carry only structural and self-consistent checks and must remain
+ * visibly labelled as lacking independent authenticity verification.
  */
 data class VentoyReleaseProvenance(
     val release: String,
     val archiveSha256: String,
     val sourceUrl: String,
+    /** False when no independent trusted archive/member SHA exists for this release. */
+    val independentlyPinned: Boolean = true,
 )
 
 /**

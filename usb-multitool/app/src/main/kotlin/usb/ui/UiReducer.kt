@@ -425,11 +425,17 @@ sealed class UiIntent {
     data class SetVentoyUpstreamRelease(
         val requestToken: Long,
         val tag: String?,
-        /** Null when no tag landed; false means the tag has no independent local pin. */
         val pinned: Boolean? = null,
+        val error: String? = null,
     ) : UiIntent()
-    /** Read-only download into app-private storage; never writes the stick. */
+    /** Legacy direct request; reducer rejects an unpinned latest without a bound confirmation. */
     data object RequestDownloadVentoyRelease : UiIntent()
+    /** Download only exact latest fact shown in the risk dialog. */
+    data class ConfirmVentoyReleaseDownload(
+        val release: String,
+        val pinned: Boolean,
+        val upstreamRequest: Long,
+    ) : UiIntent()
     data class VentoyReleaseDownloaded(
         val requestToken: Long,
         val provenance: usb.ventoy.VentoyReleaseProvenance,
@@ -3324,6 +3330,7 @@ object UiReducer {
                     ReduceResult(
                         state.copy(
                             upstreamVentoyRelease = intent.tag?.trim()?.takeIf { it.isNotEmpty() },
+                            upstreamVentoyError = intent.error?.trim()?.takeIf { it.isNotEmpty() },
                             upstreamVentoyPinned =
                                 intent.tag?.trim()?.takeIf { it.isNotEmpty() }
                                     ?.let { intent.pinned },
@@ -3333,7 +3340,7 @@ object UiReducer {
                 }
 
             UiIntent.RequestDownloadVentoyRelease ->
-                if (state.ventoyDownloadInFlight) {
+                if (state.ventoyDownloadInFlight || state.upstreamVentoyPinned == false) {
                     ReduceResult(state)
                 } else {
                     val token = state.ventoyDownloadRequest + 1L
@@ -3351,6 +3358,34 @@ object UiReducer {
                         ),
                     )
                 }
+
+            is UiIntent.ConfirmVentoyReleaseDownload -> {
+                val current = state.upstreamVentoyRelease
+                val currentPinned = state.upstreamVentoyPinned
+                if (state.ventoyDownloadInFlight ||
+                    intent.upstreamRequest != state.ventoyUpstreamRequest ||
+                    current == null ||
+                    current != intent.release ||
+                    currentPinned != intent.pinned
+                ) {
+                    ReduceResult(state)
+                } else {
+                    val token = state.ventoyDownloadRequest + 1L
+                    ReduceResult(
+                        state.copy(
+                            ventoyDownloadRequest = token,
+                            ventoyDownloadInFlight = true,
+                            ventoyDownloadError = null,
+                        ),
+                        effects = listOf(
+                            UiEffect.DownloadVentoyRelease(
+                                requestToken = token,
+                                upstreamVersion = intent.release,
+                            ),
+                        ),
+                    )
+                }
+            }
 
             is UiIntent.VentoyReleaseDownloaded ->
                 if (intent.requestToken != state.ventoyDownloadRequest) {

@@ -6,11 +6,10 @@ import java.util.Properties
 /**
  * App-private home of the last verified Ventoy release.
  *
- * A release is accepted only when its members recompute to this app's independent pin
- * ([VentoyDownloader.requirePinned]). `sha256.txt` inside the directory and an API-supplied
- * archive digest are not trust anchors. Saving writes and verifies a staging copy first;
- * publication keeps a recoverable copy until the new one is in place, and [load] also
- * accepts a fully verified staging directory left by an interrupted publication.
+ * A release is accepted only when its members recompute to the app's independent pin, or when
+ * an explicit unpinned download was accepted after risk confirmation and structural validation.
+ * `sha256.txt` and an API-supplied archive digest are never trust anchors. Saving writes and
+ * verifies a staging copy first; publication keeps a recoverable copy until the new one is in place.
  */
 object VentoyReleaseStore {
     internal const val DIR = "ventoy-release"
@@ -22,6 +21,7 @@ object VentoyReleaseStore {
         val assets: VentoyAssets,
         val archiveSha256: String,
         val sourceUrl: String,
+        val independentlyPinned: Boolean = true,
         val directory: File,
     )
 
@@ -222,6 +222,7 @@ object VentoyReleaseStore {
                 setProperty("commit", assets.commit)
                 setProperty("archiveSha256", download.archiveSha256)
                 setProperty("sourceUrl", download.sourceUrl)
+                setProperty("independentlyPinned", download.independentlyPinned.toString())
             }
             val manifestText = java.io.StringWriter().also { writer ->
                 manifest.store(writer, null)
@@ -239,7 +240,8 @@ object VentoyReleaseStore {
             }
             require(
                 verified.archiveSha256.equals(download.archiveSha256, ignoreCase = true) &&
-                    verified.sourceUrl == download.sourceUrl,
+                    verified.sourceUrl == download.sourceUrl &&
+                    verified.independentlyPinned == download.independentlyPinned,
             ) {
                 "saved Ventoy provenance did not read back"
             }
@@ -312,15 +314,20 @@ object VentoyReleaseStore {
         }
     }
 
-    /** Revalidates the exact confirmed provenance against the bytes on disk. */
+    /** Revalidates exact confirmed provenance against bytes on disk. */
     fun requireMatches(
         stored: StoredRelease,
         provenance: VentoyReleaseProvenance,
     ): StoredRelease {
-        VentoyDownloader.requirePinned(stored.assets)
+        if (stored.independentlyPinned) {
+            VentoyDownloader.requirePinned(stored.assets)
+        } else {
+            VentoyDownloader.requireValidated(stored.assets)
+        }
         if (stored.assets.release != provenance.release ||
             !stored.archiveSha256.equals(provenance.archiveSha256, ignoreCase = true) ||
-            stored.sourceUrl != provenance.sourceUrl
+            stored.sourceUrl != provenance.sourceUrl ||
+            stored.independentlyPinned != provenance.independentlyPinned
         ) {
             throw VentoyAssetsMissingException(
                 "Confirmed Ventoy ${provenance.release} is no longer the stored release; " +
@@ -367,8 +374,8 @@ object VentoyReleaseStore {
         left != null &&
             left.assets.release == right.assets.release &&
             left.archiveSha256.equals(right.archiveSha256, ignoreCase = true) &&
-            left.sourceUrl == right.sourceUrl
-
+            left.sourceUrl == right.sourceUrl &&
+            left.independentlyPinned == right.independentlyPinned
     private fun writeVerified(dir: File, name: String, bytes: ByteArray) {
         val file = File(dir, name)
         file.outputStream().use { output ->
@@ -387,15 +394,34 @@ object VentoyReleaseStore {
             val release = manifest.getProperty("release")?.trim().orEmpty()
             val archiveSha = manifest.getProperty("archiveSha256")?.trim().orEmpty()
             val sourceUrl = manifest.getProperty("sourceUrl")?.trim().orEmpty()
+            val independentlyPinned =
+                manifest.getProperty("independentlyPinned")?.trim()?.toBooleanStrictOrNull() ?: true
             val assets = VentoyAssets.loadFromDirectory(dir, strict = true)
-            val source = VentoyDownloader.requirePinned(assets)
-            require(source.release == release) {
-                "version file ${assets.release} != manifest $release"
+            if (independentlyPinned) {
+                val source = VentoyDownloader.requirePinned(assets)
+                require(source.release == release) {
+                    "version file ${assets.release} != manifest $release"
+                }
+                require(source.archiveSha256.equals(archiveSha, ignoreCase = true)) {
+                    "archive digest $archiveSha is not the independently pinned ${source.archiveSha256}"
+                }
+            } else {
+                VentoyDownloader.requireValidated(assets)
+                require(assets.release == release) {
+                    "version file ${assets.release} != manifest $release"
+                }
+                require(archiveSha.matches(Regex("[0-9a-fA-F]{64}"))) {
+                    "unpinned archive digest is malformed"
+                }
+                val source = java.net.URL(sourceUrl)
+                require(source.protocol.equals("https", ignoreCase = true)) {
+                    "unpinned source URL must use HTTPS"
+                }
+                require(source.host.lowercase(java.util.Locale.ROOT) == "github.com") {
+                    "unpinned source URL must be GitHub release URL"
+                }
             }
-            require(source.archiveSha256.equals(archiveSha, ignoreCase = true)) {
-                "archive digest $archiveSha is not the independently pinned ${source.archiveSha256}"
-            }
-            StoredRelease(assets, archiveSha, sourceUrl, dir)
+            StoredRelease(assets, archiveSha, sourceUrl, independentlyPinned, dir)
         } catch (failure: Throwable) {
             fatalCauseOrNull(failure)?.let { throw it }
             null
