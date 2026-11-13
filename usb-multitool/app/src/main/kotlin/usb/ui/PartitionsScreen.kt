@@ -32,6 +32,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -705,106 +706,118 @@ fun PartitionsScreen(
                         stringResource(R.string.partitions_create_first)
                     },
                 )
-            } else {
+            }
+            if (state.partitions.isNotEmpty() || state.freeRegions.any { it.sectorCount > 0UL }) {
                 PartitionSelectStrip(
                     state = state,
                     onIntent = { intent ->
                         onIntent(intent)
                         if (intent is UiIntent.SelectPartition) revealToken++
                     },
+                    onSelectFree = { region ->
+                        if (state.tableValid && !state.partitionTableDamaged) {
+                            creatableRegions.firstOrNull { it.first == region }
+                                ?.let { openCreate(it.first, it.second, it.third) }
+                        }
+                    },
                 )
-                orderedPartitions.forEachIndexed { index, partition ->
-                    val isSelected = partition.id == state.selectedPartitionId
-                    val access = state.partitionWriteAccess(partition)
-                    val accessLabel = when (access) {
-                        PartitionWriteAccess.ReadOnly -> "RO"
-                        PartitionWriteAccess.Unknown -> "—"
-                    }
-                    val accessDescription = stringResource(
-                        when (access) {
-                            PartitionWriteAccess.ReadOnly -> R.string.partitions_write_ro
-                            PartitionWriteAccess.Unknown -> R.string.partitions_write_unknown
-                        },
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                        },
-                        border = if (isSelected) {
-                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                        } else {
-                            null
-                        },
+            }
+            orderedPartitions.forEachIndexed { index, partition ->
+                val isSelected = partition.id == state.selectedPartitionId
+                val access = state.partitionWriteAccess(partition)
+                val accessLabel = when (access) {
+                    PartitionWriteAccess.ReadOnly -> "RO"
+                    PartitionWriteAccess.Unknown -> "—"
+                }
+                val accessDescription = stringResource(
+                    when (access) {
+                        PartitionWriteAccess.ReadOnly -> R.string.partitions_write_ro
+                        PartitionWriteAccess.Unknown -> R.string.partitions_write_unknown
+                    },
+                )
+                val displayName = partition.name.ifBlank { partition.id }
+                val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
+                val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
+                val filesystemUsage = filesystemUsageLabel(state, partition)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                    },
+                    border = if (isSelected) {
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        null
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (isSelected) {
+                                Modifier
+                                    .bringIntoViewRequester(revealRequester)
+                                    .onGloballyPositioned {
+                                        selectedRowBottomPx = it.positionInRoot().y + it.size.height
+                                    }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .selectable(
+                            selected = isSelected,
+                            enabled = state.actionsEnabled,
+                            role = Role.RadioButton,
+                            onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
+                        ),
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .then(
-                                if (isSelected) {
-                                    Modifier
-                                        .bringIntoViewRequester(revealRequester)
-                                        .onGloballyPositioned {
-                                            selectedRowBottomPx = it.positionInRoot().y + it.size.height
-                                        }
-                                } else {
-                                    Modifier
-                                },
-                            )
-                            .selectable(
-                                selected = isSelected,
-                                enabled = state.actionsEnabled,
-                                role = Role.RadioButton,
-                                onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
-                            ),
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioDot(selected = isSelected)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${index + 1} · ${partition.name}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                val rowFacts = listOfNotNull(
-                                    partition.filesystemLabel.ifEmpty { "—" },
-                                    partitionSizeLabel(state, partition),
-                                    lbaRangeLabel(partition.startLba, partition.sectorCount),
-                                )
-                                Text(
-                                    text = rowFacts.joinToString(" · "),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            if (partition.isEfiType) {
-                                Badge(text = "EFI")
-                            }
+                        RadioDot(selected = isSelected)
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = accessLabel,
+                                text = "${index + 1} · $title",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val rowFacts = listOfNotNull(
+                                partition.filesystemLabel.ifEmpty { "—" },
+                                partitionSizeLabel(state, partition),
+                                filesystemUsage ?: stringResource(R.string.filesystem_usage_unavailable),
+                                lbaRangeLabel(partition.startLba, partition.sectorCount),
+                            )
+                            Text(
+                                text = rowFacts.joinToString(" · "),
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = when (access) {
-                                    PartitionWriteAccess.ReadOnly ->
-                                        MaterialTheme.colorScheme.error
-                                    PartitionWriteAccess.Unknown ->
-                                        MaterialTheme.colorScheme.onSurface
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription = accessDescription
-                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
+                        if (partition.isEfiType) {
+                            Badge(text = "EFI")
+                        }
+                        Text(
+                            text = accessLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = when (access) {
+                                PartitionWriteAccess.ReadOnly ->
+                                    MaterialTheme.colorScheme.error
+                                PartitionWriteAccess.Unknown ->
+                                    MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.semantics {
+                                contentDescription = accessDescription
+                            },
+                        )
                     }
                 }
             }
@@ -863,6 +876,10 @@ fun PartitionsScreen(
                     stringResource(
                         if (selected.isEfiType) R.string.answer_yes else R.string.answer_no,
                     ),
+                )
+                InfoRow(
+                    stringResource(R.string.bootable_label),
+                    stringResource(if (selected.bootable) R.string.answer_yes else R.string.answer_no),
                 )
                 InfoRow(
                     stringResource(R.string.partitions_write_state_label),
@@ -1628,8 +1645,20 @@ private fun segmentEnd(segment: StripSegment): ULong =
     }
 
 @Composable
-private fun PartitionSelectStrip(state: AppUiState, onIntent: (UiIntent) -> Unit) {
-    val partitions = state.partitions.filter { (it.sectorCount ?: 0uL) > 0uL }
+private fun PartitionSelectStrip(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    onSelectFree: (FreeRegionUi) -> Unit,
+){
+    val partitions = state.partitions
+        .filter { (it.sectorCount ?: 0uL) > 0uL }
+        .sortedWith(compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id })
+    val creatableStarts = mibAlignSectors(state.diskSectorSize)?.let { align ->
+        state.freeRegions.mapNotNull { region ->
+            val skip = (align - region.startLba % align) % align
+            region.startLba.takeIf { skip < region.sectorCount }
+        }.toSet()
+    }.orEmpty()
     val segments = buildList {
         partitions.forEach { add(StripSegment(it, null)) }
         state.freeRegions.filter { it.sectorCount > 0UL }.forEach { add(StripSegment(null, it)) }
@@ -1675,16 +1704,26 @@ private fun PartitionSelectStrip(state: AppUiState, onIntent: (UiIntent) -> Unit
                 segments.forEachIndexed { index, segment ->
                     val partition = segment.partition
                     val isSelected = partition?.id == state.selectedPartitionId
+                    val partitionNumber = partition?.let { selectedPartition ->
+                        partitions.indexOfFirst { it.id == selectedPartition.id } + 1
+                    }
                     val description = if (partition != null) {
                         stringResource(
                             R.string.partitions_strip_item_a11y,
-                            index + 1,
+                            partitionNumber ?: 0,
                             partition.name.ifBlank { partition.id },
                             partitionSizeLabel(state, partition) ?: "—",
                         )
                     } else {
-                        stringResource(R.string.partitions_strip_free)
+                        listOfNotNull(
+                            stringResource(R.string.partitions_strip_free),
+                            segment.free?.let { free -> lbaRangeLabel(free.startLba, free.sectorCount) },
+                        ).joinToString(" · ")
                     }
+                    val freeSelectable = segment.free?.let { free ->
+                        state.tableValid && !state.partitionTableDamaged &&
+                            free.startLba in creatableStarts
+                    } == true
                     Column(
                         modifier = Modifier
                             .width(widths[index])
@@ -1698,7 +1737,10 @@ private fun PartitionSelectStrip(state: AppUiState, onIntent: (UiIntent) -> Unit
                                         onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
                                     )
                                 } else {
-                                    Modifier
+                                    Modifier.clickable(
+                                        enabled = state.actionsEnabled && freeSelectable,
+                                        onClick = { segment.free?.let(onSelectFree) },
+                                    )
                                 },
                             )
                             .semantics { contentDescription = description },
@@ -2060,6 +2102,14 @@ private fun RadioDot(selected: Boolean) {
             drawCircle(color = color, radius = size.minDimension / 2f - 5.dp.toPx())
         }
     }
+}
+
+private fun filesystemUsageLabel(state: AppUiState, partition: PartitionTab): String? {
+    val space = state.filesystemSpace(partition) ?: return null
+    val percent = if (space.totalBytes == 0UL) 0.0 else
+        space.usedBytes.toDouble() / space.totalBytes.toDouble() * 100.0
+    return "${DeviceIdentity.formatCapacity(space.usedBytes)} of " +
+        "${DeviceIdentity.formatCapacity(space.totalBytes)} (${String.format("%.1f%%", percent)})"
 }
 
 private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? =
