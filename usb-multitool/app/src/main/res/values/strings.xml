@@ -350,7 +350,7 @@
     <string name="diagnostics_read_scan">Read scan</string>
     <string name="diagnostics_read_scan_hint">Bad sectors</string>
     <string name="diagnostics_rescue_backup">Image + map</string>
-    <string name="diagnostics_rescue_backup_hint">ddrescue backup</string>
+    <string name="diagnostics_rescue_backup_hint">Rescue backup</string>
     <string name="diagnostics_gpt_copy">GPT copy</string>
     <string name="diagnostics_gpt_copy_hint">Save the structure</string>
     <string name="diagnostics_rescue_title">Restore from image</string>
