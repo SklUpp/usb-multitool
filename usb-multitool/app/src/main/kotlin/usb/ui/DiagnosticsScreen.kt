@@ -158,6 +158,7 @@ fun DiagnosticsScreen(
 
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_rescue_backup),
+                hint = stringResource(R.string.diagnostics_rescue_backup_hint),
                 infoTitle = stringResource(R.string.diagnostics_rescue_title),
                 infoText = stringResource(R.string.diagnostics_rescue_note),
             )
@@ -234,6 +235,7 @@ fun DiagnosticsScreen(
 
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_gpt_copy),
+                hint = stringResource(R.string.diagnostics_gpt_copy_hint),
                 infoTitle = stringResource(R.string.diagnostics_gpt_restore_info_title),
                 infoText = stringResource(R.string.diagnostics_gpt_restore_info_text),
             )
@@ -334,6 +336,10 @@ fun DiagnosticsScreen(
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.weight(1f),
                     )
+                    InfoHelpButton(
+                        infoTitle = stringResource(R.string.diagnostics_danger_title),
+                        infoText = stringResource(R.string.diagnostics_danger_body),
+                    )
                     GlyphIcon(
                         glyph = if (dangerExpanded) Glyph.ChevronUp else Glyph.ChevronDown,
                         tint = MaterialTheme.colorScheme.error,
@@ -369,6 +375,7 @@ fun DiagnosticsScreen(
 @Composable
 private fun SubsectionHeader(
     title: String,
+    hint: String? = null,
     infoTitle: String,
     infoText: String,
 ) {
@@ -376,12 +383,20 @@ private fun SubsectionHeader(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            hint?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         InfoHelpButton(infoTitle = infoTitle, infoText = infoText)
     }
 }
