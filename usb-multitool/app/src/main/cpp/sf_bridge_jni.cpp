@@ -80,6 +80,17 @@ void capture_exception(JNIEnv *env, BridgeCtx *ctx) {
     }
     if (cause != nullptr) env->DeleteLocalRef(cause);
 }
+void throw_java_exception(JNIEnv *env, const char *class_name, const char *message) {
+    jclass exception_class = env->FindClass(class_name);
+    if (exception_class == nullptr) return;
+    env->ThrowNew(exception_class, message);
+    env->DeleteLocalRef(exception_class);
+}
+
+void capture_illegal_state(JNIEnv *env, BridgeCtx *ctx, const char *message) {
+    throw_java_exception(env, "java/lang/IllegalStateException", message);
+    capture_exception(env, ctx);
+}
 
 int32_t read_at(void *raw, uint64_t offset, uint8_t *out, size_t len) {
     auto *ctx = static_cast<BridgeCtx *>(raw);
@@ -125,6 +136,10 @@ int32_t progress(void *raw, uint64_t finished, uint64_t bad, uint64_t pending,
     auto *ctx = static_cast<BridgeCtx *>(raw);
     JNIEnv *env = env_for(ctx);
     if (env == nullptr) return 1;
+    if (count > static_cast<size_t>(std::numeric_limits<jsize>::max()) / 3) {
+        capture_illegal_state(env, ctx, "SectorForge progress map exceeds JNI long-array limit");
+        return 1;
+    }
     jlongArray array = nullptr;
     if (blocks != nullptr && count > 0) {
         const jsize length = static_cast<jsize>(count * 3);
@@ -262,15 +277,28 @@ Java_usb_diagnostics_SectorForgeNative_nativeExecute(JNIEnv *env, jclass, jlong 
 extern "C" JNIEXPORT jlong JNICALL
 Java_usb_diagnostics_SectorForgeNative_nativeBlocks(JNIEnv *env, jclass, jlong handle,
                                                     jlongArray out) {
+    if (out == nullptr) {
+        throw_java_exception(env, "java/lang/IllegalArgumentException", "block output array is null");
+        return -1;
+    }
     jsize capacity = env->GetArrayLength(out);
+    if (capacity % 3 != 0) {
+        throw_java_exception(env, "java/lang/IllegalArgumentException",
+                             "block output array length is not a triple count");
+        return -1;
+    }
     if (capacity == 0) {
         uint64_t needed = sf_run_blocks(static_cast<uint64_t>(handle), nullptr, 0);
-        return needed == std::numeric_limits<uint64_t>::max() ? -1
-                                                             : static_cast<jlong>(needed);
+        if (needed == std::numeric_limits<uint64_t>::max()) return -1;
+        if (needed > static_cast<uint64_t>(std::numeric_limits<jlong>::max())) {
+            throw_java_exception(env, "java/lang/IllegalStateException",
+                                 "SectorForge block count exceeds JNI long range");
+            return -1;
+        }
+        return static_cast<jlong>(needed);
     }
     jlong *values = env->GetLongArrayElements(out, nullptr);
     if (values == nullptr) {
-        env->ExceptionClear();
         return -1;
     }
     uint64_t needed = sf_run_blocks(static_cast<uint64_t>(handle),
@@ -278,6 +306,11 @@ Java_usb_diagnostics_SectorForgeNative_nativeBlocks(JNIEnv *env, jclass, jlong h
                                     static_cast<size_t>(capacity / 3));
     env->ReleaseLongArrayElements(out, values, 0);
     if (needed == std::numeric_limits<uint64_t>::max()) return -1;
+    if (needed > static_cast<uint64_t>(std::numeric_limits<jlong>::max())) {
+        throw_java_exception(env, "java/lang/IllegalStateException",
+                             "SectorForge block count exceeds JNI long range");
+        return -1;
+    }
     return static_cast<jlong>(needed);
 }
 

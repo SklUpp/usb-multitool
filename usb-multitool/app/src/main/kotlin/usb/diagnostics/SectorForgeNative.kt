@@ -53,6 +53,9 @@ internal object SectorForgeNative {
             val out = LongArray(capacity * 3)
             val needed = nativeBlocks(handle, out)
             check(needed >= 0) { "SectorForge engine lost the run handle" }
+            check(needed <= Int.MAX_VALUE.toLong() / 3) {
+                "SectorForge block map exceeds JVM array limit"
+            }
             if (needed <= capacity) return out.copyOf((needed * 3).toInt())
             capacity = needed.toInt()
         }
