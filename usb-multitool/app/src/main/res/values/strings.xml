@@ -134,6 +134,7 @@
     <string name="diagnostics_perf_rescue_hint">Data copied between map checkpoints. Smaller intervals lose less progress after a crash or cancel but publish the map more often, which slows the backup.</string>
     <string name="diagnostics_perf_value_kib">%1$d KiB</string>
     <string name="diagnostics_perf_value_mib">%1$d MiB</string>
+    <string name="diagnostics_reset_default">Reset to default</string>
     <string name="diagnostics_backups_title">Backups</string>
     <string name="diagnostics_backups_subtitle">Read-only. Files stay in the app folder.</string>
     <string name="diagnostics_backup_folder">Backup folder</string>

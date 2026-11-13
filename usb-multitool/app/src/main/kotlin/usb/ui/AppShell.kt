@@ -43,7 +43,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -207,19 +206,27 @@ fun AppShell(
         LaunchedEffect(panels.journalScreenOpen) {
             if (panels.journalScreenOpen) {
                 // Clear focus before fencing the covered group, then focus the journal layer.
-                // Composition and remembered form state remain untouched.
                 focusManager.clearFocus(force = true)
                 logScreenFocus.requestFocusIfAttached("log screen")
             } else if (restoreLogFocus) {
                 restoreLogFocus = false
-                // The layer that held accessibility focus is gone; send focus back to
-                // the control that opened it instead of letting the framework pick an
-                // arbitrary node. Guarded because a detached requester would throw.
                 logButtonFocus.requestFocusIfAttached("log open button")
             }
         }
         LaunchedEffect(state.logLines.isEmpty()) {
             if (state.logLines.isEmpty()) panels = panels.journalCleared()
+        }
+        LaunchedEffect(state.operation?.state, state.operation?.title) {
+            // Evaluate only when operation facts change. A later tab switch must not reopen a
+            // status the user deliberately collapsed.
+            val operation = state.operation
+            if (
+                operation?.state == OperationState.Completed &&
+                operation.title.shellTab() != null &&
+                operation.title.shellTab() != state.tab
+            ) {
+                panels = panels.expandStatus()
+            }
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
@@ -249,6 +256,7 @@ fun AppShell(
                         onIntent = onIntent,
                         panels = panels,
                         onCollapseStatus = { panels = panels.collapseStatus() },
+                        onExpandStatus = { panels = panels.expandStatus() },
                         onToggleJournal = { panels = panels.toggleJournal() },
                     )
                     if (!panels.journalScreenOpen) {
@@ -654,7 +662,7 @@ private fun DeviceHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp),
+            .padding(top = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -666,12 +674,12 @@ private fun DeviceHeader(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
                 Text(
                     text = device?.label ?: stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -679,34 +687,33 @@ private fun DeviceHeader(
                 )
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = if (state.presence == DevicePresence.PermissionRequired) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
 
-        // Outside the title surface, beside it: the header block keeps its own edges and
-        // these controls never overlap it. The version sits above them and opens the repo.
+        // Version and non-journal controls share one compact row. Journal remains a text action.
         Column(horizontalAlignment = Alignment.End) {
-            ProjectVersionButton(versionName = versionName)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
             ) {
+                ProjectVersionButton(versionName = versionName)
                 LanguagePicker(language = state.language, onIntent = onIntent)
                 ThemeToggle(darkTheme = state.darkTheme, onIntent = onIntent)
-                LogOpenButton(
-                    lineCount = state.logLines.size,
-                    focusRequester = logButtonFocus,
-                    onOpenLog = onOpenLog,
-                )
             }
+            LogOpenButton(
+                lineCount = state.logLines.size,
+                focusRequester = logButtonFocus,
+                onOpenLog = onOpenLog,
+            )
         }
     }
 }
@@ -774,7 +781,7 @@ private suspend fun PointerInputScope.detectShellSwipe(
     }
 }
 
-/** 48 dp entry to the full log screen, beside the language and theme controls. */
+/** 48 dp text entry to the full log screen; status controls stay separate. */
 @Composable
 private fun LogOpenButton(
     lineCount: Int,
@@ -782,18 +789,15 @@ private fun LogOpenButton(
     onOpenLog: () -> Unit,
 ) {
     val label = stringResource(R.string.log_screen_title)
-    IconButton(
+    TextButton(
         onClick = onOpenLog,
         modifier = Modifier
-            .size(48.dp)
+            .heightIn(min = 48.dp)
             .focusRequester(focusRequester)
             .semantics { contentDescription = "$label · $lineCount" },
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        GlyphIcon(
-            glyph = Glyph.Log,
-            size = 20.dp,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(label, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -815,6 +819,7 @@ internal fun StatusLogPanel(
     onIntent: (UiIntent) -> Unit,
     panels: ShellPanelState,
     onCollapseStatus: () -> Unit,
+    onExpandStatus: () -> Unit,
     onToggleJournal: () -> Unit,
 ) {
     val op = state.operation
@@ -822,7 +827,7 @@ internal fun StatusLogPanel(
     val hasLog = state.logLines.isNotEmpty()
     if (op == null && state.statusMessage == null && !hasLog && overwrite == null) return
     val collapsed = panels.statusCollapsed
-    val journalExpanded = panels.journalExpanded && !collapsed && hasLog
+    val journalExpanded = panels.journalExpanded && hasLog
     val logList = rememberLazyListState()
     LaunchedEffect(journalExpanded, state.logLines.size) {
         if (journalExpanded && state.logLines.isNotEmpty()) {
@@ -831,18 +836,23 @@ internal fun StatusLogPanel(
     }
 
     val failed = op?.state == OperationState.Failed
+    val partial = op?.state == OperationState.Partial
+    val cancelled = op?.state == OperationState.Cancelled
+    val completed = op?.state == OperationState.Completed
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
     val cancelable = op != null && op.state == OperationState.Running && op.cancelable
-    // A failure must stay readable: error-on-inverseSurface is ~1.5:1 in both themes.
-    val container = if (failed) {
-        MaterialTheme.colorScheme.errorContainer
-    } else {
-        MaterialTheme.colorScheme.inverseSurface
+    val terminal = failed || partial || cancelled || completed
+    val container = when {
+        failed -> MaterialTheme.colorScheme.errorContainer
+        partial || cancelled -> MaterialTheme.colorScheme.tertiaryContainer
+        completed -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.inverseSurface
     }
-    val content = if (failed) {
-        MaterialTheme.colorScheme.onErrorContainer
-    } else {
-        MaterialTheme.colorScheme.inverseOnSurface
+    val content = when {
+        failed -> MaterialTheme.colorScheme.onErrorContainer
+        partial || cancelled -> MaterialTheme.colorScheme.onTertiaryContainer
+        completed -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.inverseOnSurface
     }
     val title = when {
         op != null -> "${operationLabel(op)} · ${operationStateLabel(op.state)}"
@@ -859,14 +869,19 @@ internal fun StatusLogPanel(
         )
         else -> state.statusMessage?.localized() ?: state.logLines.lastOrNull()
     }
-    // Announce operation state and authored status once, not raw provider/error text, every
-    // progress tick, or every journal append. Polite live region avoids interrupting focus.
     val statusAnnouncement = when {
-        op != null && op.state != OperationState.Running && op.state != OperationState.Queued -> title
+        op != null && terminal -> title
         op == null && state.statusMessage != null && state.statusMessage !is UiMessage.Raw -> {
             state.statusMessage.localized()
         }
         else -> null
+    }
+    val metric = when {
+        op == null -> null
+        completed -> "✓"
+        op.bytesTotal > 0L -> "${(op.fraction * 100).toInt()}%"
+        op.bytesDone > 0L -> DeviceIdentity.formatCapacity(op.bytesDone.toULong())
+        else -> operationStateLabel(op.state)
     }
 
     // "Verified" is claimed only for Verified, and for a partial write only for the bytes that
@@ -905,221 +920,202 @@ internal fun StatusLogPanel(
         }
     }
 
-    val journalDescription = when {
-        collapsed -> stringResource(R.string.status_expand)
-        journalExpanded -> stringResource(R.string.log_collapse)
-        else -> stringResource(R.string.log_expand)
+    val journalDescription = if (journalExpanded) {
+        stringResource(R.string.log_collapse)
+    } else {
+        stringResource(R.string.log_expand)
     }
     val collapseDescription = stringResource(R.string.status_collapse)
+    val expandDescription = stringResource(R.string.status_expand)
     val cancelDescription = stringResource(R.string.action_cancel)
-
-    Surface(
-        // Folded, the surface becomes a flat strip whose bottom edge meets the navigation
-        // bar; unfolded, it keeps the rounded card above it.
-        shape = if (collapsed) {
-            RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-        } else {
-            RoundedCornerShape(8.dp)
-        },
-        color = container,
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            // The bottom bar is outside Scaffold's content insets: in landscape a side
-            // navigation bar or cutout must not cover the title, percent or action icons.
-            .windowInsetsPadding(
-                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
-            )
-            .then(
-                if (collapsed) {
-                    Modifier.padding(top = 4.dp)
-                } else {
-                    // Top spacing separates the block from the tab content; when folded the
-                    // strip sits directly on the navigation bar.
-                    Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp)
-                },
-            )
-            .heightIn(min = 48.dp),
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = if (collapsed) 12.dp else 16.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+        Surface(
+            shape = if (collapsed) CircleShape else RoundedCornerShape(16.dp),
+            color = container,
+            modifier = if (collapsed) {
+                Modifier.size(144.dp)
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp)
+            },
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+            if (collapsed) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
                     Text(
-                        text = title,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = content,
-                        maxLines = if (collapsed) 1 else 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = if (statusAnnouncement != null) {
-                            Modifier.semantics {
-                                liveRegion = LiveRegionMode.Polite
-                                contentDescription = statusAnnouncement
-                            }
-                        } else {
-                            Modifier
-                        },
-                    )
-                    if (!collapsed) {
-                        detail?.let { message ->
-                            Text(
-                                text = message,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = content.copy(alpha = 0.85f),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        readbackNote?.let { message ->
-                            Text(
-                                text = message,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = content,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
-
-                if (op != null && op.bytesTotal > 0L) {
-                    Text(
-                        text = "${(op.fraction * 100).toInt()}%",
+                        text = metric ?: title,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = content,
+                        maxLines = 2,
+                        textAlign = TextAlign.Center,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                            statusAnnouncement?.let { contentDescription = it }
+                        },
                     )
-                }
-                // Folded, the cancel action stays on the title line as a stop glyph so the
-                // strip remains one row high and the operation can still be stopped.
-                if (collapsed && cancelable) {
-                    IconButton(
-                        onClick = { onIntent(UiIntent.CancelOperation) },
-                        modifier = Modifier.semantics {
-                            contentDescription = cancelDescription
-                        },
-                    ) {
-                        GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
-                    }
-                }
-                // Up while the journal is hidden (or the status is folded), down while it
-                // is open. The glyph, not a text label, so the title keeps its width.
-                // Without log lines the arrow would toggle nothing, so the fold is left to
-                // the cross; while folded it is the way back out.
-                if (collapsed || hasLog) {
-                    IconButton(
-                        onClick = onToggleJournal,
-                        modifier = Modifier.semantics { contentDescription = journalDescription },
-                    ) {
-                        GlyphIcon(
-                            glyph = if (journalExpanded) Glyph.ChevronDown else Glyph.ChevronUp,
-                            size = 20.dp,
-                            tint = content,
-                        )
-                    }
-                }
-                if (!collapsed) {
-                    IconButton(
-                        onClick = onCollapseStatus,
-                        modifier = Modifier.semantics {
-                            contentDescription = collapseDescription
-                        },
-                    ) {
-                        GlyphIcon(glyph = Glyph.Close, size = 20.dp, tint = content)
-                    }
-                }
-            }
-
-            // Cancel (when unfolded) and the overwrite prompt stay reachable while folded:
-            // folding must never hide an action needed to stop or resolve a live operation.
-            if ((cancelable && !collapsed) || overwrite != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
-                ) {
-                    if (cancelable) {
-                        TextButton(
-                            onClick = { onIntent(UiIntent.CancelOperation) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                        if (cancelable) {
+                            IconButton(
+                                onClick = { onIntent(UiIntent.CancelOperation) },
+                                modifier = Modifier.semantics { contentDescription = cancelDescription },
+                            ) {
+                                GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
+                            }
+                        }
+                        if (hasLog) {
+                            IconButton(
+                                onClick = onToggleJournal,
+                                modifier = Modifier.semantics { contentDescription = journalDescription },
+                            ) {
+                                GlyphIcon(
+                                    glyph = if (journalExpanded) Glyph.ChevronDown else Glyph.ChevronUp,
+                                    size = 18.dp,
+                                    tint = content,
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onExpandStatus,
+                            modifier = Modifier.semantics { contentDescription = expandDescription },
                         ) {
-                            Text(
-                                text = stringResource(R.string.action_cancel),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                            )
+                            GlyphIcon(glyph = Glyph.ChevronUp, size = 18.dp, tint = content)
                         }
                     }
                     if (overwrite != null) {
                         TextButton(
                             onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
                             modifier = Modifier.heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         ) {
-                            Text(
-                                text = stringResource(R.string.status_overwrite),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                            )
+                            Text(stringResource(R.string.status_overwrite), color = content)
                         }
                     }
                 }
+            } else {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = if (statusAnnouncement != null) Modifier.semantics {
+                                    liveRegion = LiveRegionMode.Polite
+                                    contentDescription = statusAnnouncement
+                                } else Modifier,
+                            )
+                            detail?.let { message ->
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = content.copy(alpha = 0.85f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            readbackNote?.let { message ->
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = content,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        metric?.let {
+                            Text(it, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content)
+                        }
+                        if (cancelable) {
+                            IconButton(
+                                onClick = { onIntent(UiIntent.CancelOperation) },
+                                modifier = Modifier.semantics { contentDescription = cancelDescription },
+                            ) {
+                                GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
+                            }
+                        }
+                        if (hasLog) {
+                            IconButton(
+                                onClick = onToggleJournal,
+                                modifier = Modifier.semantics { contentDescription = journalDescription },
+                            ) {
+                                GlyphIcon(
+                                    glyph = if (journalExpanded) Glyph.ChevronDown else Glyph.ChevronUp,
+                                    size = 20.dp,
+                                    tint = content,
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onCollapseStatus,
+                            modifier = Modifier.semantics { contentDescription = collapseDescription },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Close, size = 20.dp, tint = content)
+                        }
+                    }
+                    if (op != null && running && op.bytesTotal > 0L) {
+                        LinearProgressIndicator(
+                            progress = { op.fraction },
+                            modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = content.copy(alpha = 0.2f),
+                        )
+                    }
+                    if (overwrite != null) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.RequestLinkOverwrite(overwrite)) },
+                            modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.status_overwrite), color = content) }
+                    }
+                }
             }
-
-            if (op != null && running && op.bytesTotal > 0L) {
-                LinearProgressIndicator(
-                    progress = { op.fraction },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(CircleShape),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = content.copy(alpha = 0.2f),
-                )
-            }
-
-            // Expanded: the same surface continues into the log. No second card appears
-            // behind or above it, so the block reads as one piece.
-            if (journalExpanded) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(top = 4.dp),
-                    color = content.copy(alpha = 0.25f),
-                )
+        }
+        if (journalExpanded) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = container,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 LazyColumn(
                     state = logList,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 180.dp)
+                        .padding(horizontal = 12.dp)
                         .semantics {
-                            collectionInfo = CollectionInfo(
-                                rowCount = state.logLines.size,
-                                columnCount = 1,
-                            )
+                            collectionInfo = CollectionInfo(state.logLines.size, 1)
                         },
                 ) {
                     items(state.logLines.size) { index ->
                         Text(
-                            text = state.logLines[index],
+                            state.logLines[index],
                             style = MaterialTheme.typography.labelSmall,
                             color = content,
                             modifier = Modifier.semantics {
-                                collectionItemInfo = CollectionItemInfo(
-                                    rowIndex = index,
-                                    rowSpan = 1,
-                                    columnIndex = 0,
-                                    columnSpan = 1,
-                                )
+                                collectionItemInfo = CollectionItemInfo(index, 1, 0, 1)
                             },
                         )
                     }
@@ -1127,8 +1123,8 @@ internal fun StatusLogPanel(
             }
         }
     }
-}
 
+}
 /**
  * Full log screen: every entry, an explicit "copy all" (warned about paths and serials),
  * an export of the redacted on-device trace, and an immediate clear. Back leaves the

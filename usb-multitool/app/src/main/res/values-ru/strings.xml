@@ -134,6 +134,7 @@
     <string name="diagnostics_perf_rescue_hint">Сколько данных копируется между сохранениями карты. Меньший интервал теряет меньше прогресса после сбоя или отмены, но чаще публикует карту и замедляет копирование.</string>
     <string name="diagnostics_perf_value_kib">%1$d КиБ</string>
     <string name="diagnostics_perf_value_mib">%1$d МиБ</string>
+    <string name="diagnostics_reset_default">Сбросить по умолчанию</string>
     <string name="diagnostics_backups_title">Резервные копии</string>
     <string name="diagnostics_backups_subtitle">Только чтение; файлы остаются в папке приложения</string>
     <string name="diagnostics_backup_folder">Папка резервных копий</string>

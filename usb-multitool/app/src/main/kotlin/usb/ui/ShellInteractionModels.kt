@@ -3,15 +3,9 @@ package usb.ui
 import kotlin.math.abs
 
 /**
- * Shell-owned presentation state: how the status block and the two log surfaces are shown.
- *
- * It is deliberately separate from [AppUiState]: collapsing the status or closing the log
- * screen never touches the running operation, its progress, cancel action or readback
- * verdict. Only the tab lives in the reducer, because only the reducer may change it.
- *
- * Nesting follows the approved answer: the journal arrow sits on the status title line, and
- * collapsing the status hides the journal with it while keeping its expanded flag, so the
- * arrow restores both. The full journal screen is a third, independent layer.
+ * Shell-owned presentation state. It stays separate from [AppUiState]: collapsing status or
+ * opening the journal never touches operation progress, cancellation, or readback verdict.
+ * Status and journal controls remain independent; the full journal layer remains separate.
  */
 internal data class ShellPanelState(
     /** Status body is folded into the thin line attached to the navigation bar. */
@@ -21,20 +15,16 @@ internal data class ShellPanelState(
     /** Opaque full journal layer covers the tabs. */
     val journalScreenOpen: Boolean = false,
 ) {
-    /** Cross button: fold the status, keep every value it shows. Idempotent. */
+    /** Fold the status into the compact bottom affordance, keeping every operation value. */
     fun collapseStatus(): ShellPanelState =
         if (statusCollapsed) this else copy(statusCollapsed = true)
 
-    /**
-     * Up/down arrow on the status title line. While folded it unfolds the status and opens
-     * the journal in one step; while unfolded it only toggles the journal list.
-     */
-    fun toggleJournal(): ShellPanelState =
-        if (statusCollapsed) {
-            copy(statusCollapsed = false, journalExpanded = true)
-        } else {
-            copy(journalExpanded = !journalExpanded)
-        }
+    /** Restore the expanded status row without changing the journal list. */
+    fun expandStatus(): ShellPanelState =
+        if (!statusCollapsed) this else copy(statusCollapsed = false)
+
+    /** Toggle inline journal only; collapsed status remains collapsed. */
+    fun toggleJournal(): ShellPanelState = copy(journalExpanded = !journalExpanded)
 
     fun openJournalScreen(): ShellPanelState = copy(journalScreenOpen = true)
 
@@ -43,6 +33,68 @@ internal data class ShellPanelState(
     /** Clearing the log cannot leave an expanded journal over an empty list. */
     fun journalCleared(): ShellPanelState =
         if (journalExpanded) copy(journalExpanded = false) else this
+}
+/** Screen that owns operation details; null keeps auto-expansion conservative. */
+internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
+    OperationTitle.Upload,
+    is OperationTitle.ListPath,
+    is OperationTitle.NewFolder,
+    is OperationTitle.DeleteEntry,
+    is OperationTitle.RenameEntry,
+    is OperationTitle.DownloadEntry,
+    -> ShellTab.Files
+    OperationTitle.AutounattendXmlLink,
+    OperationTitle.ReadXmlBindings,
+    OperationTitle.RemoveXmlBindings,
+    OperationTitle.SaveGlobalWindowsControls,
+    OperationTitle.ReadUnattendXml,
+    OperationTitle.ListVentoyImages,
+    OperationTitle.GenerateUnattendXml,
+    OperationTitle.ReadVentoyGlobalSettings,
+    OperationTitle.ListVentoyFolders,
+    OperationTitle.SetVentoyGlobalSetting,
+    OperationTitle.BindImagesToUnattendXml,
+    OperationTitle.UnbindImageFromUnattendXml,
+    is OperationTitle.ImportTarget,
+    -> ShellTab.Ventoy
+    OperationTitle.CheckRawRange,
+    OperationTitle.ListRawSources,
+    OperationTitle.StageForRawWrite,
+    is OperationTitle.FormatTarget,
+    -> ShellTab.Partitions
+    OperationTitle.ReadScan,
+    OperationTitle.RescueBackup,
+    OperationTitle.GptCriticalBackup,
+    OperationTitle.SelfTest,
+    OperationTitle.SelfTestRunning,
+    -> ShellTab.Diagnostics
+    is OperationTitle.Destructive -> when (action) {
+        DestructiveAction.VENTOY_INSTALL,
+        DestructiveAction.VENTOY_UPDATE,
+        DestructiveAction.VENTOY_LINK_XML,
+        DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT,
+        -> ShellTab.Ventoy
+        DestructiveAction.WIPE,
+        DestructiveAction.GPT_RESTORE,
+        DestructiveAction.RESCUE_RESTORE,
+        -> ShellTab.Diagnostics
+        DestructiveAction.RAW_WRITE,
+        DestructiveAction.FORMAT_PARTITION,
+        DestructiveAction.DELETE_PARTITION,
+        DestructiveAction.CREATE_PARTITION,
+        DestructiveAction.GPT_REPAIR,
+        DestructiveAction.SET_PARTITION_ROLE,
+        DestructiveAction.SET_PARTITION_BOOTABLE,
+        DestructiveAction.RENAME_PARTITION,
+        DestructiveAction.RENAME_VOLUME_LABEL,
+        DestructiveAction.INITIALIZE_PARTITION_TABLE,
+        -> ShellTab.Partitions
+    }
+    OperationTitle.ProbeDevice,
+    OperationTitle.RefreshPartitions,
+    OperationTitle.ListDataPartitionFiles,
+    -> null
 }
 
 /** Direction of a committed horizontal tab swipe, in reading order. */

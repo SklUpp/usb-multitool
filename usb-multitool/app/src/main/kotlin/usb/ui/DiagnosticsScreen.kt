@@ -1,6 +1,5 @@
 package usb.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -309,7 +307,6 @@ fun DiagnosticsScreen(
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
@@ -349,7 +346,6 @@ fun DiagnosticsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (dangerExpanded) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.error.copy(alpha = 0.25f))
                     Button(
                         onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.WIPE)) },
                         enabled = state.actionsEnabled,

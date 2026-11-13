@@ -2,8 +2,10 @@ package usb.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -15,12 +17,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import usb.device.TransferTuning
 import usb.diagnostics.PerformancePreferences
 import usb.multitool.R
-
 /**
  * Diagnostics performance knobs. Values live in SharedPreferences and are pushed into
  * [TransferTuning] on release; every operation snapshots them when it starts, so moving
@@ -58,6 +61,13 @@ internal fun PerformanceSettingsSection() {
         )
     }
 
+    val resetDescription = stringResource(R.string.diagnostics_reset_default)
+    fun saveValues() = PerformancePreferences.save(
+        context,
+        scsiChunkKib = scsiChunkKib,
+        jniCapKib = jniCapKib,
+        rescueCheckpointMib = rescueCheckpointMib,
+    )
     SectionCard(
         title = stringResource(R.string.diagnostics_perf_title),
         subtitle = stringResource(R.string.diagnostics_perf_subtitle),
@@ -69,14 +79,12 @@ internal fun PerformanceSettingsSection() {
             range = TransferTuning.MIN_SCSI_CHUNK_KIB..TransferTuning.MAX_SCSI_CHUNK_KIB,
             step = TransferTuning.SCSI_CHUNK_STEP_KIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_kib, scsiChunkKib),
+            resetDescription = resetDescription,
             onValueChange = { scsiChunkKib = it },
-            onValueChangeFinished = {
-                PerformancePreferences.save(
-                    context,
-                    scsiChunkKib = scsiChunkKib,
-                    jniCapKib = jniCapKib,
-                    rescueCheckpointMib = rescueCheckpointMib,
-                )
+            onValueChangeFinished = { saveValues() },
+            onReset = {
+                scsiChunkKib = TransferTuning.DEFAULT_SCSI_CHUNK_KIB
+                saveValues()
             },
         )
         PerfSlider(
@@ -86,14 +94,12 @@ internal fun PerformanceSettingsSection() {
             range = TransferTuning.MIN_JNI_CAP_KIB..TransferTuning.MAX_JNI_CAP_KIB,
             step = TransferTuning.JNI_CAP_STEP_KIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_kib, jniCapKib),
+            resetDescription = resetDescription,
             onValueChange = { jniCapKib = it },
-            onValueChangeFinished = {
-                PerformancePreferences.save(
-                    context,
-                    scsiChunkKib = scsiChunkKib,
-                    jniCapKib = jniCapKib,
-                    rescueCheckpointMib = rescueCheckpointMib,
-                )
+            onValueChangeFinished = { saveValues() },
+            onReset = {
+                jniCapKib = TransferTuning.DEFAULT_JNI_CAP_KIB
+                saveValues()
             },
         )
         PerfSlider(
@@ -104,14 +110,12 @@ internal fun PerformanceSettingsSection() {
                 TransferTuning.MIN_RESCUE_CHECKPOINT_MIB..TransferTuning.MAX_RESCUE_CHECKPOINT_MIB,
             step = TransferTuning.RESCUE_CHECKPOINT_STEP_MIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_mib, rescueCheckpointMib),
+            resetDescription = resetDescription,
             onValueChange = { rescueCheckpointMib = it },
-            onValueChangeFinished = {
-                PerformancePreferences.save(
-                    context,
-                    scsiChunkKib = scsiChunkKib,
-                    jniCapKib = jniCapKib,
-                    rescueCheckpointMib = rescueCheckpointMib,
-                )
+            onValueChangeFinished = { saveValues() },
+            onReset = {
+                rescueCheckpointMib = TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB
+                saveValues()
             },
         )
     }
@@ -125,8 +129,10 @@ private fun PerfSlider(
     range: IntRange,
     step: Int,
     valueLabel: String,
+    resetDescription: String,
     onValueChange: (Int) -> Unit,
     onValueChangeFinished: () -> Unit,
+    onReset: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -134,11 +140,23 @@ private fun PerfSlider(
             .padding(vertical = 2.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onReset,
+                modifier = Modifier.semantics { contentDescription = resetDescription },
+            ) {
+                Text("↻", style = MaterialTheme.typography.titleMedium)
+            }
+        }
         Text(
             text = valueLabel,
             style = MaterialTheme.typography.labelMedium,

@@ -34,11 +34,12 @@ class ShellPanelBehaviorTest {
     }
 
     @Test
-    fun arrowRestoresTheStatusAndOpensTheJournalWhenFolded() {
+    fun arrowTogglesJournalWithoutUnfoldingStatus() {
         val folded = ShellPanelState(statusCollapsed = true)
-        val restored = folded.toggleJournal()
-        assertFalse(restored.statusCollapsed)
-        assertTrue(restored.journalExpanded)
+        val opened = folded.toggleJournal()
+        assertTrue(opened.statusCollapsed)
+        assertTrue(opened.journalExpanded)
+        assertEquals(folded, opened.toggleJournal())
     }
 
     @Test
