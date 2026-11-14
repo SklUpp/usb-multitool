@@ -1,4 +1,5 @@
 package usb.ui
+import android.os.Bundle
 
 /**
  * Work that fires as soon as the shared SAF backup folder is chosen.
@@ -83,6 +84,57 @@ class BackupFolderLaunchQueue(private val sessionToken: String) {
     var pending: PendingBackupFolderAction? = null
         private set
 
+    private var lostAction = false
+
+    /** Restore pending picker context; true only when this restore newly drops a write action. */
+    fun restoreState(state: Bundle?): Boolean {
+        if (state == null) return false
+        lostAction = state.getBoolean(STATE_LOST, false)
+        val action = state.getString(STATE_ACTION)
+            ?.let { runCatching { BackupFolderAction.valueOf(it) }.getOrNull() }
+            ?: return false
+        val context = PendingBackupFolderAction(
+            action = action,
+            identity = state.getString(STATE_IDENTITY),
+            attachGeneration = state.getLong(STATE_ATTACH, 0L),
+            deviceKey = state.getString(STATE_DEVICE_KEY),
+            serialNumber = state.getString(STATE_SERIAL),
+            sessionToken = state.getString(STATE_TOKEN).orEmpty(),
+        )
+        if (restore(context)) return false
+        if (action != BackupFolderAction.ChangeFolder) {
+            lostAction = true
+            return true
+        }
+        return false
+    }
+
+    /** Persist pending picker context and process-death marker. */
+    fun saveState(outState: Bundle) {
+        pending?.let { context ->
+            outState.putString(STATE_ACTION, context.action.name)
+            outState.putString(STATE_IDENTITY, context.identity)
+            outState.putLong(STATE_ATTACH, context.attachGeneration)
+            outState.putString(STATE_DEVICE_KEY, context.deviceKey)
+            outState.putString(STATE_SERIAL, context.serialNumber)
+            outState.putString(STATE_TOKEN, context.sessionToken)
+        }
+        outState.putBoolean(STATE_LOST, lostAction)
+    }
+
+    val hasLostAction: Boolean
+        get() = lostAction
+
+    fun takeLostAction(): Boolean {
+        val lost = lostAction
+        lostAction = false
+        return lost
+    }
+
+    fun clearLostAction() {
+        lostAction = false
+    }
+
     /** Records [action] before its picker starts; never replaces an existing context. */
     fun begin(
         action: BackupFolderAction,
@@ -145,4 +197,14 @@ class BackupFolderLaunchQueue(private val sessionToken: String) {
     fun cancel() {
         pending = null
     }
-}
+
+    private companion object {
+        const val STATE_ACTION = "usb.multitool.PENDING_FOLDER_ACTION"
+        const val STATE_IDENTITY = "usb.multitool.PENDING_FOLDER_IDENTITY"
+        const val STATE_ATTACH = "usb.multitool.PENDING_FOLDER_ATTACH"
+        const val STATE_DEVICE_KEY = "usb.multitool.PENDING_FOLDER_DEVICE_KEY"
+        const val STATE_SERIAL = "usb.multitool.PENDING_FOLDER_SERIAL"
+        const val STATE_LOST = "usb.multitool.PENDING_FOLDER_LOST"
+        const val STATE_TOKEN = "usb.multitool.PENDING_FOLDER_TOKEN"
+    }
+ }

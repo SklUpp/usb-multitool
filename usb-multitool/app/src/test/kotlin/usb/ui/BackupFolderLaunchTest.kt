@@ -209,4 +209,5 @@ class BackupFolderLaunchTest {
         assertFalse(queue.restore(stale))
         assertEquals(live, queue.pending)
     }
+
 }

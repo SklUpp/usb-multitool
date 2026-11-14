@@ -6609,11 +6609,7 @@ class MainActivity : ComponentActivity() {
         BackupFolderLaunchQueue(viewModel.backupFolderLaunchToken)
     }
 
-    /**
-     * A restored pending action was dropped after process death. Kept until the picker's
-     * late result (or a retry) so a folder rebind is not reported as a successful start.
-     */
-    private var lostBackupAction = false
+    /** Backup picker queue owns action pin and process-death marker lifecycle. */
 
     private val backupFolderPicker = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -6621,7 +6617,7 @@ class MainActivity : ComponentActivity() {
         // Consumed for every result (including cancel) so a stale context cannot outlive it.
         val pending = backupFolderLaunches.take()
         if (uri == null) {
-            lostBackupAction = false
+            backupFolderLaunches.clearLostAction()
             return@registerForActivityResult
         }
         // Fail closed before touching the grant/folder: the stick may have been swapped
@@ -6629,7 +6625,7 @@ class MainActivity : ComponentActivity() {
         if (pending != null) {
             val check = checkBackupTarget(pending)
             if (check != BackupTargetCheck.Attached) {
-                lostBackupAction = false
+                backupFolderLaunches.clearLostAction()
                 viewModel.onIntent(
                     UiIntent.Status(UiMessage.Key(backupTargetMessage(check))),
                 )
@@ -6648,8 +6644,7 @@ class MainActivity : ComponentActivity() {
         }
         if (pending == null) {
             // The action died with the old process: keep the folder choice but say so.
-            if (lostBackupAction) {
-                lostBackupAction = false
+            if (backupFolderLaunches.takeLostAction()) {
                 viewModel.onIntent(
                     UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderActionLost)),
                 )
@@ -7182,7 +7177,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun openBackupFolderPicker(action: BackupFolderAction) {
         if (action == BackupFolderAction.ChangeFolder) backupFolderLaunches.cancel()
-        lostBackupAction = false
+        backupFolderLaunches.clearLostAction()
         val live = viewModel.attachmentSnapshot()
         val device = live.device
         val start =
@@ -7308,30 +7303,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        val restoredFolderAction =
-            savedState
-                ?.getString(STATE_PENDING_FOLDER_ACTION)
-                ?.let { stored -> runCatching { BackupFolderAction.valueOf(stored) }.getOrNull() }
-        lostBackupAction = savedState?.getBoolean(STATE_PENDING_FOLDER_LOST, false) ?: false
-        if (savedState != null && restoredFolderAction != null) {
-            // restore() drops the context when the token belongs to a dead process.
-            val restored =
-                backupFolderLaunches.restore(
-                    PendingBackupFolderAction(
-                        action = restoredFolderAction,
-                        identity = savedState.getString(STATE_PENDING_FOLDER_IDENTITY),
-                        attachGeneration = savedState.getLong(STATE_PENDING_FOLDER_ATTACH, 0L),
-                        deviceKey = savedState.getString(STATE_PENDING_FOLDER_DEVICE_KEY),
-                        serialNumber = savedState.getString(STATE_PENDING_FOLDER_SERIAL),
-                        sessionToken = savedState.getString(STATE_PENDING_FOLDER_TOKEN).orEmpty(),
-                    ),
-                )
-            if (!restored && restoredFolderAction != BackupFolderAction.ChangeFolder) {
-                lostBackupAction = true
-                viewModel.onIntent(
-                    UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderActionLost)),
-                )
-            }
+        if (backupFolderLaunches.restoreState(savedState)) {
+            viewModel.onIntent(
+                UiIntent.Status(UiMessage.Key(UiMessageKey.BackupFolderActionLost)),
+            )
         }
         requestPermissionsIfNeeded()
         setContent {
@@ -7480,15 +7455,7 @@ class MainActivity : ComponentActivity() {
             outState.putString(STATE_PENDING_BATCH_UPLOAD_START, pendingBatchUploadStart)
             outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, pendingBatchUploadCount)
         }
-        backupFolderLaunches.pending?.let { pending ->
-            outState.putString(STATE_PENDING_FOLDER_ACTION, pending.action.name)
-            outState.putString(STATE_PENDING_FOLDER_IDENTITY, pending.identity)
-            outState.putLong(STATE_PENDING_FOLDER_ATTACH, pending.attachGeneration)
-            outState.putString(STATE_PENDING_FOLDER_DEVICE_KEY, pending.deviceKey)
-            outState.putString(STATE_PENDING_FOLDER_SERIAL, pending.serialNumber)
-            outState.putString(STATE_PENDING_FOLDER_TOKEN, pending.sessionToken)
-        }
-        outState.putBoolean(STATE_PENDING_FOLDER_LOST, lostBackupAction)
+        backupFolderLaunches.saveState(outState)
     }
 
     override fun onStart() {
@@ -7627,19 +7594,6 @@ class MainActivity : ComponentActivity() {
         private const val STATE_PENDING_BATCH_UPLOAD_PARTITION = "usb.multitool.PENDING_BATCH_UPLOAD_PARTITION"
         private const val STATE_PENDING_BATCH_UPLOAD_START = "usb.multitool.PENDING_BATCH_UPLOAD_START"
         private const val STATE_PENDING_BATCH_UPLOAD_COUNT = "usb.multitool.PENDING_BATCH_UPLOAD_COUNT"
-        private const val STATE_PENDING_FOLDER_ACTION = "usb.multitool.PENDING_FOLDER_ACTION"
-        private const val STATE_PENDING_FOLDER_IDENTITY =
-            "usb.multitool.PENDING_FOLDER_IDENTITY"
-        private const val STATE_PENDING_FOLDER_ATTACH =
-            "usb.multitool.PENDING_FOLDER_ATTACH"
-        private const val STATE_PENDING_FOLDER_DEVICE_KEY =
-            "usb.multitool.PENDING_FOLDER_DEVICE_KEY"
-        private const val STATE_PENDING_FOLDER_SERIAL =
-            "usb.multitool.PENDING_FOLDER_SERIAL"
-        private const val STATE_PENDING_FOLDER_LOST =
-            "usb.multitool.PENDING_FOLDER_LOST"
-        private const val STATE_PENDING_FOLDER_TOKEN =
-            "usb.multitool.PENDING_FOLDER_TOKEN"
         private const val STATE_VENTOY_SETTINGS_IDENTITY =
             "usb.multitool.VENTOY_SETTINGS_IDENTITY"
         private const val STATE_VENTOY_SETTINGS_ATTACH =
