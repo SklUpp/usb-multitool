@@ -83,6 +83,7 @@ object Autounattend {
         collectUnknown(root, "", null, unknown::add)
         val existing = readParams(root)
         val markers = WindowsTemplate.inspect(bytes).destructiveMarkers
+        val decoded = runCatching { XmlText.decode(bytes) }.getOrNull()
         return AutounattendState.Parsed(
             AutounattendDocument(
                 existing = existing,
@@ -97,6 +98,9 @@ object Autounattend {
                     } else {
                         emptyList()
                     },
+                sourceText = decoded?.text,
+                sourceCharsetName = decoded?.charset?.name(),
+                sourceBom = decoded?.bom ?: ByteArray(0),
             ),
         )
     }

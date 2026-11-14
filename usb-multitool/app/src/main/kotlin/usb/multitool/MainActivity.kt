@@ -1834,6 +1834,8 @@ class MainViewModel(
 
             is UiEffect.GenerateAutounattend -> generateAutounattend(effect)
 
+            is UiEffect.WriteAutounattendRaw -> writeAutounattendRaw(effect)
+
             is UiEffect.CheckVentoyUpstream -> checkVentoyUpstream(effect.requestToken)
             is UiEffect.DownloadVentoyRelease ->
                 downloadVentoyRelease(effect.requestToken, effect.upstreamVersion)
@@ -4414,6 +4416,83 @@ class MainViewModel(
         }
     }
 
+    private fun writeAutounattendRaw(effect: UiEffect.WriteAutounattendRaw) {
+        val xmlName = effect.xmlName
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
+        val opTitle = OperationTitle.WriteUnattendXml
+        val label = opTitle.logLabel
+        val op = object : DiskOperation(name = label) {
+            @Volatile var result: String? = null
+
+            override suspend fun run() {
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
+                try {
+                    usb.ventoy.VentoySetup.writeAutounattendRaw(
+                        disk = disk,
+                        xmlName = xmlName,
+                        rawBytes = effect.rawBytes,
+                        overwriteXml = effect.overwriteXml,
+                        allowDestructiveTemplate = effect.allowDestructiveTemplate,
+                        expectedTemplateSha256 = effect.expectedTemplateSha256,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                    result = "Wrote ${usb.ventoy.VentoySetup.xmlPath(xmlName)}"
+                } finally {
+                    disk.close()
+                }
+            }
+        }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
+        onIntent(
+            UiIntent.OperationBegan(
+                OperationProgress(
+                    state = OperationState.Queued,
+                    title = opTitle,
+                    token = token,
+                    cancelable = false,
+                ),
+            ),
+        )
+        publishOperationStarted(handle, opTitle, token, cancelable = false)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                onIntent(
+                    UiIntent.OperationUpdated(
+                        OperationProgress(
+                            state = mappedState,
+                            title = opTitle,
+                            token = token,
+                            errorMessage = message,
+                            resultMessage = op.result,
+                            cancelable = false,
+                        ),
+                    ),
+                )
+                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                    onIntent(UiIntent.LoadAutounattend(xmlName))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally {
+                activeHandles.remove(handle)
+            }
+        }
+    }
+
+
 
     private fun checkVentoyUpstream(requestToken: Long) {
         scope.launch {
@@ -6310,7 +6389,10 @@ class MainActivity : ComponentActivity() {
     /** Exact source selected before SAF destination; stale callback is rejected, never retargeted. */
     private var pendingDownloadBinding: FilesDownloadBinding? = null
     private var pendingUsbPermissionKey: String? = null
+    private var pendingUsbPermissionToken: String? = null
+    private var deniedUsbPermissionKey: String? = null
     private var selectedUsbDeviceKey: String? = null
+    private var usbReceiverRegistered = false
 
     private val downloadLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
@@ -6328,7 +6410,6 @@ class MainActivity : ComponentActivity() {
         }
         viewModel.onIntent(UiIntent.DownloadFile(binding, uri.toString()))
     }
-
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
@@ -6352,15 +6433,27 @@ class MainActivity : ComponentActivity() {
                     if (device == null || selectedUsbDeviceKey == usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)) {
                         selectedUsbDeviceKey = null
                         pendingUsbPermissionKey = null
+                        pendingUsbPermissionToken = null
+                        deniedUsbPermissionKey = null
                     }
                     viewModel.onUsbDeviceDetached(device)
                 }
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     val callbackKey = device?.let { usb.device.UsbPermissionPolicy.key(it.deviceId, it.deviceName) }
+                    val callbackToken = intent.getStringExtra(EXTRA_USB_PERMISSION_TOKEN)
                     val liveDevice = usb.device.UsbPermissionPolicy.currentMatch(device, usbManager?.deviceList?.values.orEmpty())
-                    if (liveDevice != null && usb.device.UsbPermissionPolicy.accepts(pendingUsbPermissionKey, callbackKey, selectedUsbDeviceKey) && MassStorageDiscovery.findBotInterface(liveDevice) != null) {
+                    if (liveDevice != null && usb.device.UsbPermissionPolicy.accepts(
+                            pendingUsbPermissionKey,
+                            callbackKey,
+                            selectedUsbDeviceKey,
+                            pendingUsbPermissionToken,
+                            callbackToken,
+                        ) && MassStorageDiscovery.findBotInterface(liveDevice) != null
+                    ) {
                         pendingUsbPermissionKey = null
+                        pendingUsbPermissionToken = null
+                        if (!granted) deniedUsbPermissionKey = callbackKey
                         viewModel.onUsbDeviceAttached(liveDevice, granted, usbManager)
                     }
                 }
@@ -6586,6 +6679,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (usbReceiverRegistered) {
+            runCatching { unregisterReceiver(usbReceiver) }
+            usbReceiverRegistered = false
+        }
         windowsImportCoordinator.onDestroy()
         pickerEventsScope.cancel()
         super.onDestroy()
@@ -6621,26 +6718,31 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        val filter = IntentFilter().apply {
-            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction(ACTION_USB_PERMISSION)
+        if (!usbReceiverRegistered) {
+            val filter = IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+                addAction(ACTION_USB_PERMISSION)
+            }
+            // Only system USB attach/detach and our own PendingIntent broadcast arrive here,
+            // so the receiver is not exported (ContextCompat keeps the 2-arg call below API 33).
+            ContextCompat.registerReceiver(
+                this,
+                usbReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            usbReceiverRegistered = true
         }
-        // Only system USB attach/detach and our own PendingIntent broadcast arrive here,
-        // so the receiver is not exported (ContextCompat keeps the 2-arg call below API 33).
-        ContextCompat.registerReceiver(
-            this,
-            usbReceiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
         checkAttachedDevices()
     }
 
     override fun onStop() {
         super.onStop()
-        runCatching { unregisterReceiver(usbReceiver) }
     }
+
+
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -6674,24 +6776,41 @@ class MainActivity : ComponentActivity() {
         } else {
             selectedUsbDeviceKey = null
             pendingUsbPermissionKey = null
+            pendingUsbPermissionToken = null
+            deniedUsbPermissionKey = null
             viewModel.onUsbDeviceDetached()
             viewModel.onIntent(UiIntent.DeviceChanged(DevicePresence.Absent))
         }
     }
 
-    private fun selectUsbDevice(device: UsbDevice) {
+    private fun selectUsbDevice(device: UsbDevice, resetPermission: Boolean = false) {
         val key = usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)
-        if (selectedUsbDeviceKey != key) pendingUsbPermissionKey = null
+        if (resetPermission || selectedUsbDeviceKey != key) {
+            pendingUsbPermissionKey = null
+            pendingUsbPermissionToken = null
+            deniedUsbPermissionKey = null
+        }
         selectedUsbDeviceKey = key
     }
 
     private fun requestUsbPermission(usbManager: UsbManager, device: UsbDevice) {
-        pendingUsbPermissionKey = "${device.deviceId}:${device.deviceName}"
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        val key = usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)
+        if (pendingUsbPermissionKey == key || deniedUsbPermissionKey == key) return
+        val requestCode = usbPermissionRequestCounter.incrementAndGet().toInt()
+        val token = java.util.UUID.randomUUID().toString()
+        pendingUsbPermissionKey = key
+        pendingUsbPermissionToken = token
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_MUTABLE
+        } else {
+            0
+        }
         val permissionIntent = PendingIntent.getBroadcast(
             this,
-            0,
-            Intent(ACTION_USB_PERMISSION).setPackage(packageName),
+            requestCode,
+            Intent(ACTION_USB_PERMISSION)
+                .setPackage(packageName)
+                .putExtra(EXTRA_USB_PERMISSION_TOKEN, token),
             flags,
         )
         usbManager.requestPermission(device, permissionIntent)
@@ -6706,9 +6825,10 @@ class MainActivity : ComponentActivity() {
         // MANAGE_EXTERNAL_STORAGE stays declared in the manifest only; the app never asks
         // for it at startup because Ventoy assets and downloads are app-private now.
     }
-
     companion object {
         private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
+        private const val EXTRA_USB_PERMISSION_TOKEN = "usb.multitool.USB_PERMISSION_TOKEN"
+        private val usbPermissionRequestCounter = java.util.concurrent.atomic.AtomicLong()
         private const val STATE_PENDING_DOWNLOAD_DIRECTORY = "usb.multitool.PENDING_DOWNLOAD_DIRECTORY"
         private const val STATE_PENDING_DOWNLOAD_NAME = "usb.multitool.PENDING_DOWNLOAD_NAME"
         private const val STATE_PENDING_DOWNLOAD_SIZE = "usb.multitool.PENDING_DOWNLOAD_SIZE"

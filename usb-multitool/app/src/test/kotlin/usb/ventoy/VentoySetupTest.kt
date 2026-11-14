@@ -1,5 +1,6 @@
 package usb.ventoy
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -252,4 +253,104 @@ class VentoySetupTest {
         assertTrue(byteArrayOf(3, 4).contentEquals(requireNotNull(volume.fileBytes(VentoySetup.CONFIG_PATH))))
         assertTrue(volume.paths().none { it.contains(".bak-") || it.contains("ventoy_backup") })
     }
+
+    @Test
+    fun rawWriteKeepsExactBytesIncludingUnknownComment() {
+        val previous =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <!-- keep-me -->
+              <settings pass="specialize">
+                <component name="Vendor-Extension"><VendorThing keep="yes"/></component>
+              </settings>
+            </unattend>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/autounattend.xml" to previous))
+        val edited =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <!-- keep-me -->
+              <settings pass="specialize">
+                <component name="Vendor-Extension"><VendorThing keep="yes"/></component>
+                <component name="Microsoft-Windows-Shell-Setup">
+                  <ComputerName>RAW-PC</ComputerName>
+                </component>
+              </settings>
+            </unattend>
+            """.trimIndent().toByteArray()
+
+        VentoySetup.writeAutounattendRaw(
+            volume = volume,
+            xmlName = "autounattend.xml",
+            rawBytes = edited,
+            overwriteXml = true,
+            allowDestructiveTemplate = false,
+            expectedTemplateSha256 = WindowsTemplate.sha256(previous),
+        )
+
+        assertArrayEquals(edited, requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")))
+        assertEquals(1, volume.paths().count { it.startsWith("/ventoy/autounattend.xml.bak-") })
+        assertArrayEquals(
+            previous,
+            requireNotNull(
+                volume.fileBytes(
+                    volume.paths().single { it.startsWith("/ventoy/autounattend.xml.bak-") },
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun rawWriteRefusesDoctypeBeforeMutation() {
+        val previous =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/autounattend.xml" to previous))
+        val hostile =
+            """
+            <?xml version="1.0"?>
+            <!DOCTYPE unattend [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">&xxe;</unattend>
+            """.trimIndent().toByteArray()
+
+        assertThrows(InvalidTemplateException::class.java) {
+            VentoySetup.writeAutounattendRaw(
+                volume = volume,
+                xmlName = "autounattend.xml",
+                rawBytes = hostile,
+                overwriteXml = true,
+                expectedTemplateSha256 = WindowsTemplate.sha256(previous),
+            )
+        }
+        assertArrayEquals(previous, requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")))
+        assertTrue(volume.paths().none { it.contains(".bak-") })
+    }
+
+    @Test
+    fun rawWriteRefusesStaleSourceDigest() {
+        val previous =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/autounattend.xml" to previous))
+        val edited =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize"/>
+            </unattend>
+            """.trimIndent().toByteArray()
+
+        assertThrows(VentoySetup.TemplateChangedException::class.java) {
+            VentoySetup.writeAutounattendRaw(
+                volume = volume,
+                xmlName = "autounattend.xml",
+                rawBytes = edited,
+                overwriteXml = true,
+                expectedTemplateSha256 = "deadbeef",
+            )
+        }
+        assertArrayEquals(previous, requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")))
+    }
+
 }

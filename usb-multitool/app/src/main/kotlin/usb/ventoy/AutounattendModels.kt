@@ -132,7 +132,45 @@ data class AutounattendDocument(
     /** Existing layout content that blocks rewrite, surfaced before generation. */
     val layoutProblems: List<AutounattendProblem> = emptyList(),
     val templateInSearchScope: Boolean? = null,
-)
+    /**
+     * Exact decoded source text for raw full-document editing. Never produced by DOM
+     * serialization; cancel/apply must use these bytes via [XmlText.encode].
+     */
+    val sourceText: String? = null,
+    val sourceCharsetName: String? = null,
+    val sourceBom: ByteArray = ByteArray(0),
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is AutounattendDocument) return false
+        return existing == other.existing &&
+            unknownElements == other.unknownElements &&
+            boundImages == other.boundImages &&
+            sourcePath == other.sourcePath &&
+            destructiveMarkers == other.destructiveMarkers &&
+            templateSha256 == other.templateSha256 &&
+            layoutProblems == other.layoutProblems &&
+            templateInSearchScope == other.templateInSearchScope &&
+            sourceText == other.sourceText &&
+            sourceCharsetName == other.sourceCharsetName &&
+            sourceBom.contentEquals(other.sourceBom)
+    }
+
+    override fun hashCode(): Int {
+        var result = existing?.hashCode() ?: 0
+        result = 31 * result + unknownElements.hashCode()
+        result = 31 * result + boundImages.hashCode()
+        result = 31 * result + sourcePath.hashCode()
+        result = 31 * result + destructiveMarkers.hashCode()
+        result = 31 * result + (templateSha256?.hashCode() ?: 0)
+        result = 31 * result + layoutProblems.hashCode()
+        result = 31 * result + (templateInSearchScope?.hashCode() ?: 0)
+        result = 31 * result + (sourceText?.hashCode() ?: 0)
+        result = 31 * result + (sourceCharsetName?.hashCode() ?: 0)
+        result = 31 * result + sourceBom.contentHashCode()
+        return result
+    }
+}
 
 sealed class AutounattendState {
     data object Missing : AutounattendState()

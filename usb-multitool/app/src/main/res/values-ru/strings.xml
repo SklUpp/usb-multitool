@@ -588,6 +588,7 @@
     <string name="op_read_unattend_xml">Чтение unattend XML</string>
     <string name="op_list_ventoy_images">Список образов Ventoy</string>
     <string name="op_generate_unattend_xml">Создание unattend XML</string>
+    <string name="op_write_unattend_xml">Запись unattend XML</string>
     <string name="op_read_ventoy_global_settings">Чтение глобальных настроек Ventoy</string>
     <string name="op_list_ventoy_folders">Список папок Ventoy</string>
     <string name="op_set_ventoy_global_setting">Изменение глобальной настройки Ventoy</string>
@@ -753,6 +754,11 @@
     <string name="unattend_unbind">Отвязать</string>
     <string name="unattend_unknown_elements">Неизвестных элементов: %1$d</string>
     <string name="unattend_unknown_note">Неизвестные элементы внутри файла сохраняются; результат не будет байт-в-байт идентичен исходному.</string>
+    <string name="unattend_open_editor">Открыть редактор</string>
+    <string name="unattend_editor_title">Редактирование unattend XML</string>
+    <string name="unattend_editor_help">Редактируйте полный текст файла ответов. Применить записывает точные байты после проверки; Отмена отбрасывает черновик. Неизвестные элементы остаются как введены.</string>
+    <string name="unattend_editor_invalid">XML отклонён: нужен корректный unattend XML без DOCTYPE и ENTITY.</string>
+    <string name="unattend_editor_destructive_ack">Я понимаю, что эти разделы могут стереть диски на целевом компьютере</string>
     <string name="raw_choose_stick">Выбрать файл на флешке…</string>
     <string name="raw_choose_phone">Выбрать файл на телефоне…</string>
     <string name="raw_stick_title">Файлы на флешке</string>

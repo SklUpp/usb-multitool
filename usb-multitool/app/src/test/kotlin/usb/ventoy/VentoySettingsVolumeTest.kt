@@ -87,6 +87,152 @@ class VentoySettingsVolumeTest {
         }
     }
 
+    private fun readFile(disk: RecordingDisk, path: String): ByteArray {
+        var bytes = ByteArray(0)
+        withPart1(disk) { volume ->
+            val entry = requireNotNull(volume.statOrNull(path))
+            bytes = if (entry.size == 0L) ByteArray(0) else volume.read(path, 0L, entry.size.toInt())
+        }
+        return bytes
+    }
+
+
+    @Test
+    fun importedFileWritesMergedOutputPreservesUnknownFieldsAndBacksUpTarget() {
+        val disk = mountableVentoyStick()
+        val imported =
+            """
+            {
+              "control": [
+                {"VTOY_WIN11_BYPASS_CHECK": "0"},
+                {"IMPORTED_UNKNOWN": "keep"}
+              ],
+              "auto_install": [{"image": "/ISO/Win.iso"}],
+              "custom_section": {"keep": true}
+            }
+            """.trimIndent()
+        val previous =
+            """
+            {
+              "control": [{"VTOY_WIN11_BYPASS_CHECK": "0"}, {"TARGET_ONLY": "old"}],
+              "target_section": {"keep": true}
+            }
+            """.trimIndent()
+        withPart1(disk) { volume ->
+            volume.mkdir("/ventoy")
+            volume.write("/ventoy/import.json", imported.toByteArray(), create = true)
+            volume.write(VentoySetup.CONFIG_PATH, previous.toByteArray(), create = true)
+            volume.sync()
+        }
+        val sourceDigest = VentoySetup.readGlobalSettingsSnapshotAt(disk, "/ventoy/import.json").sha256
+        disk.resetStats()
+        var callbackCount = 0
+        assertTrue(
+            VentoySetup.applyImportedFile(
+                disk = disk,
+                sourcePath = "/ventoy/import.json",
+                expectedSha256 = sourceDigest,
+                settings = listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+                onMutation = { callbackCount++ },
+            ),
+        )
+        assertEquals(1, callbackCount)
+        assertTrue("changed import must sync", disk.syncCount > 0)
+
+        val root = MiniJson.parse(String(readFile(disk, VentoySetup.CONFIG_PATH))) as Map<*, *>
+        val control = root["control"] as List<*>
+        val flattened = control.flatMap { (it as Map<*, *>).entries }.associate {
+            it.key.toString() to it.value
+        }
+        assertEquals("1", flattened["VTOY_WIN11_BYPASS_CHECK"])
+        assertEquals("keep", flattened["IMPORTED_UNKNOWN"])
+        assertTrue("target-only key must not leak into imported output", "TARGET_ONLY" !in flattened)
+        assertEquals(true, (root["custom_section"] as Map<*, *>)["keep"])
+        assertNotNull(root["auto_install"])
+        assertTrue(
+            "backup must contain target bytes before replacement",
+            previous.toByteArray().contentEquals(readFile(disk, VentoySetup.CONFIG_BACKUP_PATH)),
+        )
+    }
+
+    @Test
+    fun importedFileSkipsWriteBackupAndSyncWhenTargetAlreadyEqualsMergedOutput() {
+        val disk = mountableVentoyStick()
+        val source =
+            """
+            {
+              "control": [{"VTOY_WIN11_BYPASS_CHECK": "0"}, {"UNKNOWN": "keep"}],
+              "unknown_section": {"value": 7}
+            }
+            """.trimIndent()
+        val merged = requireNotNull(
+            WindowsSetup.applyControls(
+                source,
+                listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+            ),
+        )
+        withPart1(disk) { volume ->
+            volume.mkdir("/ventoy")
+            volume.write("/ventoy/import.json", source.toByteArray(), create = true)
+            volume.write(VentoySetup.CONFIG_PATH, merged.toByteArray(), create = true)
+            volume.sync()
+        }
+        val sourceDigest = VentoySetup.readGlobalSettingsSnapshotAt(disk, "/ventoy/import.json").sha256
+        disk.resetStats()
+        var callbackCalled = false
+        assertFalse(
+            VentoySetup.applyImportedFile(
+                disk = disk,
+                sourcePath = "/ventoy/import.json",
+                expectedSha256 = sourceDigest,
+                settings = listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+                onMutation = { callbackCalled = true },
+            ),
+        )
+        assertFalse(callbackCalled)
+        assertEquals("no-op must not write target or backup", 0L, disk.writeCount)
+        assertEquals("no-op must not sync disk", 0L, disk.syncCount)
+        withPart1(disk) { volume ->
+            assertNull(volume.statOrNull(VentoySetup.CONFIG_BACKUP_PATH))
+        }
+    }
+
+    @Test
+    fun importedFileRejectsChangedSourceDigestBeforeMutation() {
+        val disk = mountableVentoyStick()
+        val original = """{"control":[{"VTOY_WIN11_BYPASS_CHECK":"0"}]}"""
+        val changed = """{"control":[{"VTOY_WIN11_BYPASS_CHECK":"1"}],"extra":true}"""
+        val previous = """{"control":[{"VTOY_WIN11_BYPASS_CHECK":"0"}],"target":true}"""
+        withPart1(disk) { volume ->
+            volume.mkdir("/ventoy")
+            volume.write("/ventoy/import.json", original.toByteArray(), create = true)
+            volume.write(VentoySetup.CONFIG_PATH, previous.toByteArray(), create = true)
+            volume.sync()
+        }
+        val originalDigest = VentoySetup.readGlobalSettingsSnapshotAt(disk, "/ventoy/import.json").sha256
+        withPart1(disk) { volume ->
+            volume.write("/ventoy/import.json", changed.toByteArray(), create = false)
+            volume.sync()
+        }
+        disk.resetStats()
+        var callbackCalled = false
+        assertThrows(IllegalArgumentException::class.java) {
+            VentoySetup.applyImportedFile(
+                disk = disk,
+                sourcePath = "/ventoy/import.json",
+                expectedSha256 = originalDigest,
+                settings = listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+                onMutation = { callbackCalled = true },
+            )
+        }
+        assertFalse(callbackCalled)
+        assertEquals("digest failure must not write target or backup", 0L, disk.writeCount)
+        assertEquals("digest failure must not sync disk", 0L, disk.syncCount)
+        assertTrue(previous.toByteArray().contentEquals(readFile(disk, VentoySetup.CONFIG_PATH)))
+        withPart1(disk) { volume ->
+            assertNull(volume.statOrNull(VentoySetup.CONFIG_BACKUP_PATH))
+        }
+    }
     private class ProbeThenFailReadDisk : BlockDevice {
         override val sectorSize: Int = 512
         override val sectorCount: ULong = 262144UL

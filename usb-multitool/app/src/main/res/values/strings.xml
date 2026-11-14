@@ -587,6 +587,7 @@
     <string name="op_read_unattend_xml">Read unattend XML</string>
     <string name="op_list_ventoy_images">List Ventoy images</string>
     <string name="op_generate_unattend_xml">Generate unattend XML</string>
+    <string name="op_write_unattend_xml">Write unattend XML</string>
     <string name="op_read_ventoy_global_settings">Read Ventoy global settings</string>
     <string name="op_list_ventoy_folders">List Ventoy folders</string>
     <string name="op_set_ventoy_global_setting">Set Ventoy global setting</string>
@@ -752,6 +753,11 @@
     <string name="unattend_unbind">Unbind</string>
     <string name="unattend_unknown_elements">Unknown elements: %1$d</string>
     <string name="unattend_unknown_note">Unknown elements inside the file are preserved; the result is not byte-identical to the source.</string>
+    <string name="unattend_open_editor">Open editor</string>
+    <string name="unattend_editor_title">Edit unattend XML</string>
+    <string name="unattend_editor_help">Edit the full answer-file text. Apply writes the exact bytes after validation; Cancel discards the draft. Unknown elements stay as typed.</string>
+    <string name="unattend_editor_invalid">The XML is refused: it must be well-formed unattend XML without DOCTYPE or ENTITY declarations.</string>
+    <string name="unattend_editor_destructive_ack">I understand these sections can erase disks on the target computer</string>
     <string name="raw_choose_stick">Choose a file on the stick…</string>
     <string name="raw_choose_phone">Choose a file on the phone…</string>
     <string name="raw_stick_title">Files on the stick</string>

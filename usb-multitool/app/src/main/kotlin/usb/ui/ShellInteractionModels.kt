@@ -40,6 +40,7 @@ internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
     OperationTitle.ReadUnattendXml,
     OperationTitle.ListVentoyImages,
     OperationTitle.GenerateUnattendXml,
+    OperationTitle.WriteUnattendXml,
     OperationTitle.ReadVentoyGlobalSettings,
     OperationTitle.ListVentoyFolders,
     OperationTitle.SetVentoyGlobalSetting,

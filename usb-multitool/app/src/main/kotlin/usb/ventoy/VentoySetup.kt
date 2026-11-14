@@ -437,7 +437,7 @@ object VentoySetup {
             onMutation()
             ensureDirectory(volume, VENTOY_DIR)
             previous?.let { backupBeforeReplace(volume, CONFIG_PATH, it) }
-            replaceFile(volume, CONFIG_PATH, bytes)
+            replaceFile(volume, CONFIG_PATH, outputBytes)
             true
         }
         if (changed) disk.sync()
@@ -739,6 +739,96 @@ object VentoySetup {
                     }
             GenerateResult(path.substringAfterLast('/'), validation, bindings)
         }
+
+    data class RawWriteResult(
+        val xmlName: String,
+        val path: String,
+        val sha256: String,
+        val destructiveMarkers: List<String>,
+    )
+
+    /**
+     * Write exact raw XML bytes for the answer file. Validates well-formed unattend XML,
+     * refuses DTD/ENTITY, rechecks source digest and overwrite confirmation, backs up the
+     * previous file, then replaces bytes without DOM reserialization.
+     */
+    fun writeAutounattendRaw(
+        disk: BlockDevice,
+        xmlName: String,
+        rawBytes: ByteArray,
+        overwriteXml: Boolean = false,
+        allowDestructiveTemplate: Boolean = false,
+        expectedTemplateSha256: String? = null,
+        onMutation: () -> Unit = {},
+    ): RawWriteResult =
+        withVolume(disk) { volume ->
+            writeAutounattendRaw(
+                volume = volume,
+                xmlName = xmlName,
+                rawBytes = rawBytes,
+                overwriteXml = overwriteXml,
+                allowDestructiveTemplate = allowDestructiveTemplate,
+                expectedTemplateSha256 = expectedTemplateSha256,
+                onMutation = onMutation,
+            )
+        }
+
+    /** Volume-level raw write for host tests without mounting FatFs. */
+    internal fun writeAutounattendRaw(
+        volume: UsbFsVolume,
+        xmlName: String,
+        rawBytes: ByteArray,
+        overwriteXml: Boolean = false,
+        allowDestructiveTemplate: Boolean = false,
+        expectedTemplateSha256: String? = null,
+        onMutation: () -> Unit = {},
+    ): RawWriteResult {
+        require(rawBytes.isNotEmpty()) { "XML body is empty" }
+        require(rawBytes.size.toLong() <= MAX_TEMPLATE_BYTES) {
+            "XML is ${rawBytes.size} bytes; limit is $MAX_TEMPLATE_BYTES"
+        }
+        val path = requireXmlName(xmlName)
+        val inspection = WindowsTemplate.inspect(rawBytes, requireUnattendRoot = true)
+        WindowsTemplate.requireAllowed(inspection, allowDestructiveTemplate)
+        val existing = readBytes(volume, path)
+        if (existing != null && !overwriteXml) {
+            throw XmlOverwriteRequiredException(
+                "$path already exists; the XML write needs its own confirmation",
+            )
+        }
+        if (existing != null) {
+            val existingInspection =
+                if (existing.isEmpty()) {
+                    TemplateInspection(emptyList())
+                } else {
+                    WindowsTemplate.inspect(existing)
+                }
+            requireAcknowledgedTemplate(
+                inspection = existingInspection,
+                bytes = existing,
+                allowDestructive = allowDestructiveTemplate,
+                expectedSha256 = expectedTemplateSha256,
+            )
+        } else if (expectedTemplateSha256 != null) {
+            throw TemplateChangedException(
+                "The XML was removed after inspection; re-open it before writing",
+            )
+        }
+        onMutation()
+        ensureDirectory(volume, VENTOY_DIR)
+        ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
+        if (existing != null) {
+            backupBeforeReplace(volume, path, existing)
+        }
+        replaceFile(volume, path, rawBytes)
+        return RawWriteResult(
+            xmlName = path.substringAfterLast('/'),
+            path = path,
+            sha256 = WindowsTemplate.sha256(rawBytes),
+            destructiveMarkers = inspection.destructiveMarkers,
+        )
+    }
+
 
     class XmlOverwriteRequiredException(message: String) : Exception(message)
     class TemplateChangedException(message: String) : Exception(message)

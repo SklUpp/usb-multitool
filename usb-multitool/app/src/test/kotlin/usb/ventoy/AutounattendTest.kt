@@ -470,6 +470,25 @@ class AutounattendTest {
     }
 
     @Test
+    fun readerKeepsExactSourceTextForRawEditor() {
+        val base =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <!-- keep spacing -->
+              <settings pass="oobeSystem">
+                <component name="Vendor-Extension"><VendorThing/></component>
+              </settings>
+            </unattend>
+            """.trimIndent().toByteArray()
+        val state = Autounattend.read("/ventoy/a.xml", base) as AutounattendState.Parsed
+        assertEquals(String(base, Charsets.UTF_8), state.document.sourceText)
+        assertEquals("UTF-8", state.document.sourceCharsetName)
+        assertEquals(0, state.document.sourceBom.size)
+        assertEquals(WindowsTemplate.sha256(base), state.document.templateSha256)
+    }
+
+
+    @Test
     fun unknownReportIncludesStructuralPathAndUnsupportedAttributes() {
         val xml = """
             <unattend xmlns="urn:schemas-microsoft-com:unattend">

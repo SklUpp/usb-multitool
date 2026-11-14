@@ -304,6 +304,7 @@ fun OperationTitle.localized(): String =
         OperationTitle.ReadUnattendXml -> stringResource(R.string.op_read_unattend_xml)
         OperationTitle.ListVentoyImages -> stringResource(R.string.op_list_ventoy_images)
         OperationTitle.GenerateUnattendXml -> stringResource(R.string.op_generate_unattend_xml)
+        OperationTitle.WriteUnattendXml -> stringResource(R.string.op_write_unattend_xml)
         OperationTitle.ReadVentoyGlobalSettings ->
             stringResource(R.string.op_read_ventoy_global_settings)
         OperationTitle.ListVentoyFolders -> stringResource(R.string.op_list_ventoy_folders)

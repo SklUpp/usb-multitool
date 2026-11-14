@@ -4,7 +4,7 @@
 
 ## Текущий срез — 2026-11-14
 
-- CI [43544218419](https://github.com/SklUpp/usb-multitool/actions/runs/43544218419) для `de20646` прошёл Rust, host FAT/exFAT/NTFS/EXT/USB, unit tests, debug APK, 16 KB alignment, lint и Kotlin compile. Это не аппаратная проверка.
+- Последний прошедший CI [43545606806](https://github.com/SklUpp/usb-multitool/actions/runs/43545606806) для `06f59ce`: Rust, host FAT/exFAT/NTFS/EXT/USB, unit tests, debug APK, 16 KB alignment, lint и Kotlin compile. Последующие UI и USB изменения в этом запуске не проверены.
 - В CI входят восстановленные lifecycle и SAF, проверка protective MBR при GPT backup/restore и добавленные тесты виртуального диска, rescue и picker. Границы каждого теста не означают исчерпывающего покрытия.
 - Для USB BOT/sense 52 JVM-теста `BotSessionImplTest`, `UsbDiskTest`, `UsbDiskSessionTest` прошли локально; полный CI и аппаратная проверка не заменяются этим результатом.
 - Физические USB detach во время IN/OUT/sync, конкретные SAF provider faults/process death, загрузка Ventoy, установка Windows и TalkBack не проверялись.
@@ -12,6 +12,8 @@
 - Пользователь одобрил единый lifecycle списка `Stale / Loading / Loaded / Failed` вместо `filesPending` и session-bound SAF для выбора Ventoy-образа с телефона. Изменения объединены и прошли CI `43544218419`; проверка на устройстве остаётся открытой.
 - Обнаружены и остановлены конфликтные варианты: дублирующий Compose pending для SAF и перегрузка `filesPending` для отложенного reload. Ограничения и риски доведены до пользователя.
 - Одобрены передача исходного `PendingWindowsImport` в timeout координатора и упорядоченная доставка launch/cancel. Реализация объединена и входит в unit/сборку CI; проверка на устройстве не выполнена.
+- После сообщений пользователя добавлены сохранение вкладки при пересоздании, исправление USB permission callback, правки разделов и панели статуса, raw XML editor и сохранение объединённого `ventoy.json`. XML-проверка локально: 78 тестов, 0 ошибок и пропусков; тесты JSON на native FatFs локально пропущены. Реальные USB callback, переподключение и визуальное соответствие не проверены на устройстве.
+- `New file (1).txt` остаётся критерием полного UI: мультивыбор и пакетные операции файлов, объединённая секция Ventoy/Windows и часть JSON/XML сценариев ещё не завершены; нельзя считать UI полностью соответствующим.
 
 ## Требования в работе
 

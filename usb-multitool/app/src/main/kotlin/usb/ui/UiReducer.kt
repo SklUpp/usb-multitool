@@ -374,6 +374,43 @@ sealed class UiIntent {
         val expectedTemplateSha256: String? = null,
         val planSha256: String? = null,
     ) : UiIntent()
+
+    /**
+     * Apply raw full-document XML text. Validates before confirmation; Cancel leaves disk
+     * untouched. Existing same-target files require overwrite confirmation.
+     */
+    data class RequestWriteAutounattendRaw(
+        val xmlName: String,
+        val rawBytes: ByteArray,
+        val overwriteXml: Boolean = false,
+        val allowDestructiveTemplate: Boolean = false,
+        val expectedTemplateSha256: String? = null,
+        val identity: String? = null,
+        val attachGeneration: Long = 0L,
+    ) : UiIntent() {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is RequestWriteAutounattendRaw) return false
+            return xmlName == other.xmlName &&
+                rawBytes.contentEquals(other.rawBytes) &&
+                overwriteXml == other.overwriteXml &&
+                allowDestructiveTemplate == other.allowDestructiveTemplate &&
+                expectedTemplateSha256 == other.expectedTemplateSha256 &&
+                identity == other.identity &&
+                attachGeneration == other.attachGeneration
+        }
+
+        override fun hashCode(): Int {
+            var result = xmlName.hashCode()
+            result = 31 * result + rawBytes.contentHashCode()
+            result = 31 * result + overwriteXml.hashCode()
+            result = 31 * result + allowDestructiveTemplate.hashCode()
+            result = 31 * result + (expectedTemplateSha256?.hashCode() ?: 0)
+            result = 31 * result + (identity?.hashCode() ?: 0)
+            result = 31 * result + attachGeneration.hashCode()
+            return result
+        }
+    }
     data class ConfirmDiskLayout(val acknowledged: Boolean) : UiIntent()
     data object DismissDiskLayout : UiIntent()
 
@@ -821,6 +858,34 @@ sealed interface UiEffect {
         val expectedTemplateSha256: String?,
         val expectedPlanSha256: String?,
     ) : UiEffect
+
+    data class WriteAutounattendRaw(
+        val xmlName: String,
+        val rawBytes: ByteArray,
+        val overwriteXml: Boolean,
+        val allowDestructiveTemplate: Boolean,
+        val expectedTemplateSha256: String?,
+    ) : UiEffect {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is WriteAutounattendRaw) return false
+            return xmlName == other.xmlName &&
+                rawBytes.contentEquals(other.rawBytes) &&
+                overwriteXml == other.overwriteXml &&
+                allowDestructiveTemplate == other.allowDestructiveTemplate &&
+                expectedTemplateSha256 == other.expectedTemplateSha256
+        }
+
+        override fun hashCode(): Int {
+            var result = xmlName.hashCode()
+            result = 31 * result + rawBytes.contentHashCode()
+            result = 31 * result + overwriteXml.hashCode()
+            result = 31 * result + allowDestructiveTemplate.hashCode()
+            result = 31 * result + (expectedTemplateSha256?.hashCode() ?: 0)
+            return result
+        }
+    }
+
 
     /** Read-only GitHub check; [requestToken] fences a result that outlived its attachment. */
     data class CheckVentoyUpstream(val requestToken: Long) : UiEffect
@@ -1922,7 +1987,8 @@ object UiReducer {
                             } == true) -> true
                     action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE &&
                         (pending.xmlTargetName.isNullOrBlank() ||
-                            state.pendingAutounattendGeneration == null) -> true
+                            (state.pendingAutounattendGeneration == null &&
+                                state.pendingAutounattendRawWrite == null)) -> true
                     // The confirmed control snapshot must still be writable.
                     (action == DestructiveAction.VENTOY_INSTALL ||
                         action == DestructiveAction.VENTOY_UPDATE) &&
@@ -1937,7 +2003,16 @@ object UiReducer {
                 }
                 // Fail-closed: null device/pending/action never reach effect branches.
                 if (invalidState || action == null || pending == null || device == null) {
-                    ReduceResult(state.copy(pendingConfirmation = null))
+                    val clearXmlWrite = action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE
+                    ReduceResult(
+                        state.copy(
+                            pendingConfirmation = null,
+                            pendingAutounattendRawWrite =
+                                if (clearXmlWrite) null else state.pendingAutounattendRawWrite,
+                            pendingAutounattendGeneration =
+                                if (clearXmlWrite) null else state.pendingAutounattendGeneration,
+                        ),
+                    )
                 } else if (action == DestructiveAction.VENTOY_LINK_XML) {
                     val paths =
                         pending.imagePaths.takeIf { it.isNotEmpty() }
@@ -1972,9 +2047,41 @@ object UiReducer {
                         )
                     }
                 } else if (action == DestructiveAction.VENTOY_UNATTEND_XML_WRITE) {
+                    val pendingRaw = state.pendingAutounattendRawWrite
                     val pendingGen = state.pendingAutounattendGeneration
                     val target = pending.xmlTargetName
-                    if (pendingGen == null ||
+                    if (pendingRaw != null) {
+                        if (target.isNullOrBlank() ||
+                            pendingRaw.xmlName != target ||
+                            pendingRaw.identity != device.identity ||
+                            pendingRaw.attachGeneration != device.attachGeneration
+                        ) {
+                            ReduceResult(
+                                state.copy(
+                                    pendingConfirmation = null,
+                                    pendingAutounattendRawWrite = null,
+                                    statusMessage = UiMessage.Key(UiMessageKey.TargetChanged),
+                                ),
+                            )
+                        } else {
+                            ReduceResult(
+                                state.copy(
+                                    pendingConfirmation = null,
+                                    pendingAutounattendRawWrite = null,
+                                    statusMessage = UiMessage.Raw("Writing unattend XML"),
+                                ),
+                                effects = listOf(
+                                    UiEffect.WriteAutounattendRaw(
+                                        xmlName = pendingRaw.xmlName,
+                                        rawBytes = pendingRaw.rawBytes,
+                                        overwriteXml = true,
+                                        allowDestructiveTemplate = pendingRaw.allowDestructiveTemplate,
+                                        expectedTemplateSha256 = pendingRaw.expectedTemplateSha256,
+                                    ),
+                                ),
+                            )
+                        }
+                    } else if (pendingGen == null ||
                         target.isNullOrBlank() ||
                         pendingGen.xmlName != target ||
                         pendingGen.identity != device.identity ||
@@ -2056,14 +2163,16 @@ object UiReducer {
             }
 
             UiIntent.DismissConfirmation -> {
-                val clearGen =
+                val clearXmlWrite =
                     state.pendingConfirmation?.action ==
                         DestructiveAction.VENTOY_UNATTEND_XML_WRITE
                 ReduceResult(
                     state.copy(
                         pendingConfirmation = null,
                         pendingAutounattendGeneration =
-                            if (clearGen) null else state.pendingAutounattendGeneration,
+                            if (clearXmlWrite) null else state.pendingAutounattendGeneration,
+                        pendingAutounattendRawWrite =
+                            if (clearXmlWrite) null else state.pendingAutounattendRawWrite,
                     ),
                 )
             }
@@ -3249,6 +3358,7 @@ object UiReducer {
                             )
                         ReduceResult(
                             state.copy(
+                                pendingAutounattendRawWrite = null,
                                 pendingAutounattendGeneration = pendingGen,
                                 pendingConfirmation =
                                     DestructiveConfirmation.request(
@@ -3263,6 +3373,7 @@ object UiReducer {
                     device != null && layout != null && layout.writeLayout ->
                         ReduceResult(
                             state.copy(
+                                pendingAutounattendRawWrite = null,
                                 pendingAutounattendGeneration =
                                     PendingAutounattendGeneration(
                                         xmlName = intent.xmlName,
@@ -3284,7 +3395,10 @@ object UiReducer {
                         )
                     else ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Raw("Generating unattend XML")),
+                            state.copy(
+                                pendingAutounattendRawWrite = null,
+                                statusMessage = UiMessage.Raw("Generating unattend XML"),
+                            ),
                             effects = listOf(
                                 UiEffect.GenerateAutounattend(
                                     xmlName = intent.xmlName,
@@ -3294,6 +3408,83 @@ object UiReducer {
                                     allowDestructiveTemplate = intent.allowDestructiveTemplate,
                                     expectedTemplateSha256 = intent.expectedTemplateSha256,
                                     expectedPlanSha256 = planSha256,
+                                ),
+                            ),
+                        )
+                }
+            }
+
+            is UiIntent.RequestWriteAutounattendRaw -> {
+                val device = state.device
+                val loadedTarget =
+                    when (val loaded = state.autounattendState) {
+                        is AutounattendState.Parsed -> loaded.document.sourcePath
+                        is AutounattendState.Unreadable -> loaded.sourcePath
+                        AutounattendState.Missing -> null
+                    }
+                val sameTarget = loadedTarget != null && sameXmlTarget(loadedTarget, intent.xmlName)
+                val attachmentStale =
+                    intent.identity != null &&
+                        (device == null ||
+                            intent.identity != device.identity ||
+                            intent.attachGeneration != device.attachGeneration)
+                when {
+                    device == null || !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    attachmentStale ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)),
+                        )
+                    state.autounattendState is AutounattendState.Parsed &&
+                        sameTarget && !intent.overwriteXml ->
+                        ReduceResult(
+                            state.copy(
+                                statusMessage = UiMessage.Key(UiMessageKey.XmlOverwriteRequired),
+                            ),
+                        )
+                    state.autounattendState is AutounattendState.Parsed &&
+                        sameTarget && intent.overwriteXml ->
+                        ReduceResult(
+                            state.copy(
+                                pendingAutounattendGeneration = null,
+                                pendingAutounattendRawWrite =
+                                    PendingAutounattendRawWrite(
+                                        xmlName = intent.xmlName,
+                                        rawBytes = intent.rawBytes,
+                                        overwriteXml = true,
+                                        allowDestructiveTemplate = intent.allowDestructiveTemplate,
+                                        identity = intent.identity ?: device.identity,
+                                        attachGeneration =
+                                            if (intent.identity != null) {
+                                                intent.attachGeneration
+                                            } else {
+                                                device.attachGeneration
+                                            },
+                                        expectedTemplateSha256 = intent.expectedTemplateSha256,
+                                    ),
+                                pendingConfirmation =
+                                    DestructiveConfirmation.request(
+                                        device,
+                                        DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+                                        xmlTargetName = intent.xmlName,
+                                    ),
+                                statusMessage = UiMessage.Key(UiMessageKey.ConfirmXmlOverwrite),
+                            ),
+                        )
+                    else ->
+                        ReduceResult(
+                            state.copy(
+                                pendingAutounattendGeneration = null,
+                                pendingAutounattendRawWrite = null,
+                                statusMessage = UiMessage.Raw("Writing unattend XML"),
+                            ),
+                            effects = listOf(
+                                UiEffect.WriteAutounattendRaw(
+                                    xmlName = intent.xmlName,
+                                    rawBytes = intent.rawBytes,
+                                    overwriteXml = intent.overwriteXml,
+                                    allowDestructiveTemplate = intent.allowDestructiveTemplate,
+                                    expectedTemplateSha256 = intent.expectedTemplateSha256,
                                 ),
                             ),
                         )
@@ -4403,6 +4594,7 @@ object UiReducer {
             OperationTitle.BindImagesToUnattendXml,
             OperationTitle.UnbindImageFromUnattendXml,
             OperationTitle.GenerateUnattendXml,
+            OperationTitle.WriteUnattendXml,
             OperationTitle.RemoveXmlBindings,
             OperationTitle.SetVentoyGlobalSetting,
             OperationTitle.SaveGlobalWindowsControls,
@@ -4418,6 +4610,7 @@ object UiReducer {
                 OperationTitle.RemoveXmlBindings,
                 OperationTitle.SaveGlobalWindowsControls,
                 OperationTitle.GenerateUnattendXml,
+                OperationTitle.WriteUnattendXml,
                 OperationTitle.SetVentoyGlobalSetting,
                 OperationTitle.BindImagesToUnattendXml,
                 OperationTitle.UnbindImageFromUnattendXml,

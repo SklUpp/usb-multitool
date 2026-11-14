@@ -954,6 +954,10 @@ sealed interface OperationTitle {
         override val logLabel: String get() = "Generate unattend XML"
     }
 
+    data object WriteUnattendXml : OperationTitle {
+        override val logLabel: String get() = "Write unattend XML"
+    }
+
     data object ReadVentoyGlobalSettings : OperationTitle {
         override val logLabel: String get() = "Read Ventoy global settings"
     }
@@ -1252,6 +1256,11 @@ data class AppUiState(
     /** Separate target-PC disk-layout acknowledgement; no USB identity. */
     val diskLayoutConfirmation: DiskLayoutConfirmation? = null,
     val pendingAutounattendGeneration: PendingAutounattendGeneration? = null,
+    /**
+     * Raw full-text XML apply waiting for overwrite confirmation. Distinct from
+     * [pendingAutounattendGeneration]; Cancel clears this without writing.
+     */
+    val pendingAutounattendRawWrite: PendingAutounattendRawWrite? = null,
     /** Real `control` read result; null = not loaded. Missing/Empty/ReadError stay distinct. */
     val ventoyGlobalSettings: VentoyGlobalSettings? = null,
     /**
@@ -1723,3 +1732,37 @@ data class PendingAutounattendGeneration(
     val expectedTemplateSha256: String? = null,
     val expectedPlanSha256: String? = null,
 )
+
+/** Raw XML text apply waiting only for overwrite acknowledgement. */
+data class PendingAutounattendRawWrite(
+    val xmlName: String,
+    val rawBytes: ByteArray,
+    val overwriteXml: Boolean,
+    val allowDestructiveTemplate: Boolean,
+    val identity: String? = null,
+    val attachGeneration: Long = 0L,
+    val expectedTemplateSha256: String? = null,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PendingAutounattendRawWrite) return false
+        return xmlName == other.xmlName &&
+            rawBytes.contentEquals(other.rawBytes) &&
+            overwriteXml == other.overwriteXml &&
+            allowDestructiveTemplate == other.allowDestructiveTemplate &&
+            identity == other.identity &&
+            attachGeneration == other.attachGeneration &&
+            expectedTemplateSha256 == other.expectedTemplateSha256
+    }
+
+    override fun hashCode(): Int {
+        var result = xmlName.hashCode()
+        result = 31 * result + rawBytes.contentHashCode()
+        result = 31 * result + overwriteXml.hashCode()
+        result = 31 * result + allowDestructiveTemplate.hashCode()
+        result = 31 * result + (identity?.hashCode() ?: 0)
+        result = 31 * result + attachGeneration.hashCode()
+        result = 31 * result + (expectedTemplateSha256?.hashCode() ?: 0)
+        return result
+    }
+}

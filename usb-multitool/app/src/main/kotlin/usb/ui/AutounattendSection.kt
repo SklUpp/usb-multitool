@@ -56,6 +56,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
 import usb.ventoy.VentoySetup
+import usb.ventoy.WindowsTemplate
+import usb.ventoy.XmlText
+import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
 import usb.ventoy.Autounattend
 import usb.ventoy.AutounattendDocument
 import usb.ventoy.AutounattendParams
@@ -102,7 +106,16 @@ internal fun AutounattendSection(
     val document = (state.autounattendState as? AutounattendState.Parsed)?.document
     var pickerOpen by remember { mutableStateOf(false) }
     var generateOpen by remember { mutableStateOf(false) }
+    var xmlEditorOpen by remember { mutableStateOf(false) }
 
+    LaunchedEffect(state.operation?.state, state.operation?.title) {
+        if (xmlEditorOpen &&
+            state.operation?.title == OperationTitle.WriteUnattendXml &&
+            state.operation?.state == OperationState.Completed
+        ) {
+            xmlEditorOpen = false
+        }
+    }
     // Keys = external readiness only. Missing/inFlight stay in the body guard:
     // Loaded(Missing) clears inFlight and would re-fire forever if those were keys.
     // presence/actionsEnabled: Busy→Ready after open-during-scan must retry once.
@@ -256,6 +269,15 @@ internal fun AutounattendSection(
                 ) {
                     Text(stringResource(R.string.unattend_generate))
                 }
+            }
+            OutlinedButton(
+                onClick = { xmlEditorOpen = true },
+                enabled = state.actionsEnabled &&
+                    document != null &&
+                    document.sourceText != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.unattend_open_editor))
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -480,6 +502,17 @@ internal fun AutounattendSection(
                 generateOpen = false
             },
             onDismiss = { generateOpen = false },
+        )
+    }
+
+    if (xmlEditorOpen && template != null && document?.sourceText != null) {
+        AutounattendRawEditorDialog(
+            template = template,
+            document = document,
+            device = state.device,
+            actionsEnabled = state.actionsEnabled,
+            onIntent = onIntent,
+            onCancel = { xmlEditorOpen = false },
         )
     }
 }
@@ -859,6 +892,152 @@ private fun GlobalSettingsEditorDialog(
         }
     }
 }
+
+@Composable
+private fun AutounattendRawEditorDialog(
+    template: String,
+    document: AutounattendDocument,
+    device: DeviceIdentity?,
+    actionsEnabled: Boolean,
+    onIntent: (UiIntent) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val sourceText = requireNotNull(document.sourceText)
+    var draft by remember(sourceText) { mutableStateOf(sourceText) }
+    var applyProblem by remember { mutableStateOf<String?>(null) }
+    var destructiveAck by remember(document.templateSha256) { mutableStateOf(false) }
+    val sourceCharset = remember(document.sourceCharsetName) {
+        runCatching { document.sourceCharsetName?.let(Charset::forName) }.getOrNull()
+            ?: StandardCharsets.UTF_8
+    }
+    val markers = remember(draft, sourceCharset, document.sourceBom) {
+        runCatching {
+            WindowsTemplate.inspect(
+                XmlText.encode(draft, sourceCharset, document.sourceBom),
+                requireUnattendRoot = true,
+            ).destructiveMarkers
+        }.getOrDefault(emptyList())
+    }
+    val invalidMessage = stringResource(R.string.unattend_editor_invalid)
+    val destructiveAckRequired = stringResource(R.string.unattend_editor_destructive_ack)
+    Dialog(
+        onDismissRequest = onCancel,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.unattend_editor_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    stringResource(R.string.unattend_editor_help),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                applyProblem?.let {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = {
+                        draft = it
+                        applyProblem = null
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    enabled = actionsEnabled,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                )
+                if (markers.isNotEmpty() || document.destructiveMarkers.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = destructiveAck,
+                                enabled = actionsEnabled,
+                                role = Role.Checkbox,
+                                onValueChange = { destructiveAck = it },
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Checkbox(
+                            checked = destructiveAck,
+                            onCheckedChange = null,
+                            enabled = actionsEnabled,
+                        )
+                        Text(
+                            text = stringResource(R.string.unattend_editor_destructive_ack),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onCancel,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.settings_cancel))
+                    }
+                    Button(
+                        onClick = {
+                            val charset = runCatching {
+                                document.sourceCharsetName?.let(Charset::forName)
+                            }.getOrNull() ?: StandardCharsets.UTF_8
+                            val encoded = runCatching {
+                                XmlText.encode(draft, charset, document.sourceBom)
+                            }.getOrElse {
+                                applyProblem = invalidMessage
+                                return@Button
+                            }
+                            val inspection = runCatching {
+                                WindowsTemplate.inspect(encoded, requireUnattendRoot = true)
+                            }.getOrElse {
+                                applyProblem = invalidMessage
+                                return@Button
+                            }
+                            val needsDestructive =
+                                inspection.destructiveMarkers.isNotEmpty() ||
+                                    document.destructiveMarkers.isNotEmpty()
+                            if (needsDestructive && !destructiveAck) {
+                                applyProblem = destructiveAckRequired
+                                return@Button
+                            }
+                            applyProblem = null
+                            onIntent(
+                                UiIntent.RequestWriteAutounattendRaw(
+                                    xmlName = template,
+                                    rawBytes = encoded,
+                                    overwriteXml = true,
+                                    allowDestructiveTemplate = needsDestructive && destructiveAck,
+                                    expectedTemplateSha256 = document.templateSha256,
+                                    identity = device?.identity,
+                                    attachGeneration = device?.attachGeneration ?: 0L,
+                                ),
+                            )
+                        },
+                        enabled = actionsEnabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.settings_apply))
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun EditablePairRow(
