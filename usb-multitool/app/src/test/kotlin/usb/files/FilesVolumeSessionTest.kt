@@ -2,8 +2,11 @@ package usb.files
 
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -1313,6 +1316,266 @@ class FilesVolumeSessionTest {
             session.withLock { session.filesystemUsageForLocked(pinA, "1", key) }
         }
         assertEquals(1, opens)
+    }
+
+
+    @Test
+    fun usageProbeDuringActiveRawOpenFailsFastAndReacquirableAfterRawClose() {
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+            },
+        )
+        val rawClaimHeld = CountDownLatch(1)
+        val probeDone = CountDownLatch(1)
+        val probeFailure = AtomicReference<Throwable?>()
+        val key = FilesystemUsageKey(1L, pinA.deviceKey, 2048uL, 4096uL, 512, FilesystemId.FAT)
+
+        val probeThread = Thread {
+            rawClaimHeld.await()
+            try {
+                session.withLock {
+                    session.filesystemUsageForLocked(pinA, "1", key)
+                }
+            } catch (t: Throwable) {
+                probeFailure.set(t)
+            } finally {
+                probeDone.countDown()
+            }
+        }
+        probeThread.start()
+
+        session.openAfterCloseClaimed { lease ->
+            rawClaimHeld.countDown()
+            assertTrue("probe must finish while raw claim is held", probeDone.await(5, TimeUnit.SECONDS))
+            assertTrue(
+                "usage probe must fail with BusyException when contested with raw claim",
+                probeFailure.get() is UsbExclusiveClaim.BusyException,
+            )
+            assertNull("probe failure must not publish or retain mount", session.mountEpochLocked())
+            assertTrue("claim is still held exclusively by raw session", session.claim.isHeld())
+            lease.close()
+        }
+
+        probeThread.join(5000)
+        assertFalse(probeThread.isAlive)
+        assertFalse("claim released after raw open ends", session.claim.isHeld())
+
+        val snapshot = session.withLock {
+            session.filesystemUsageForLocked(pinA, "1", key)
+        }
+        assertTrue("subsequent probe succeeds", snapshot.usage is FilesystemUsage.Known)
+        val usageEpoch = session.mountEpochLocked() ?: error("successful probe must publish mount")
+        assertEquals(CloseEpochResult.ClosedOk, session.withLock { session.closeIfEpochLocked(usageEpoch) })
+        assertFalse(session.claim.isHeld())
+    }
+
+    @Test
+    fun rawOpenBlockedWhenCachedUsageVolumeCloseFails() {
+        val closeErr = IOException("usage volume close unconfirmed")
+        var rawCallbackRan = false
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null, lease = lease)
+            },
+        )
+        val key = FilesystemUsageKey(1L, pinA.deviceKey, 2048uL, 4096uL, 512, FilesystemId.FAT)
+        val snap = session.withLock { session.filesystemUsageForLocked(pinA, "1", key) }
+        assertTrue(snap.usage is FilesystemUsage.Known)
+
+        val thrown = assertThrows(IOException::class.java) {
+            session.openAfterCloseClaimed {
+                rawCallbackRan = true
+            }
+        }
+        assertSame(closeErr, thrown)
+        assertFalse("raw open callback must not run after close failure", rawCallbackRan)
+        assertTrue("claim remains held fail-closed", session.claim.isHeld())
+
+        assertThrows(IllegalStateException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+        assertThrows(IOException::class.java) {
+            session.openAfterCloseClaimed { }
+        }
+    }
+
+    @Test
+    fun detachDuringSlowMountOpenDiscardsStaleMountAndAllowsRepluggedMount() {
+        var liveAttachment: AttachmentPin? = pinA
+        val mountOpening = CountDownLatch(1)
+        val detachTriggered = CountDownLatch(1)
+        val events = mutableListOf<String>()
+
+        val session = FilesVolumeSession(
+            currentAttachment = { liveAttachment },
+            openMounted = { partitionId, writable, _, lease ->
+                mountOpening.countDown()
+                assertTrue(detachTriggered.await(5, TimeUnit.SECONDS))
+                mounted(partitionId, writable, events, volumeClose = null, diskClose = null, lease = lease)
+            },
+        )
+
+        val detachFailure = AtomicReference<Throwable?>()
+        val detachThread = Thread {
+            try {
+                assertTrue(mountOpening.await(5, TimeUnit.SECONDS))
+                val detachedFence = session.mountFence()
+                assertEquals("fence captures in-flight epoch", 1L, detachedFence)
+                liveAttachment = pinB
+                detachTriggered.countDown()
+                val fenceResult = session.withLock { session.closeIfEpochAtMostLocked(detachedFence) }
+                assertEquals(CloseEpochResult.NotOwned, fenceResult)
+            } catch (t: Throwable) {
+                detachFailure.set(t)
+            }
+        }
+        detachThread.start()
+
+        val thrown = assertThrows(AttachmentChangedException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+        detachThread.join(5000)
+        assertFalse(detachThread.isAlive)
+        detachFailure.get()?.let { throw it }
+
+        assertEquals("USB attachment changed", thrown.message)
+        assertEquals(listOf("volume", "disk"), events)
+        assertNull("stale mount was not published", session.mountEpochLocked())
+        assertFalse("claim released when stale mount was closed", session.claim.isHeld())
+
+        val volume = session.withLock { session.volumeForLocked(pinB, "1") }
+        assertNotNull(volume)
+        assertEquals(2L, session.mountEpochLocked())
+        assertTrue("replugged mount holds claim", session.claim.isHeld())
+        assertEquals(CloseEpochResult.ClosedOk, session.withLock { session.closeIfEpochLocked(2L) })
+        assertFalse(session.claim.isHeld())
+    }
+
+    @Test
+    fun detachDuringSlowMountOpenWithCloseFailureLatchesAndBlocksRepluggedMount() {
+        var liveAttachment: AttachmentPin? = pinA
+        val mountOpening = CountDownLatch(1)
+        val detachTriggered = CountDownLatch(1)
+        val closeErr = IOException("umount failed during attachment swap")
+
+        val session = FilesVolumeSession(
+            currentAttachment = { liveAttachment },
+            openMounted = { partitionId, writable, _, lease ->
+                mountOpening.countDown()
+                assertTrue(detachTriggered.await(5, TimeUnit.SECONDS))
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null, lease = lease)
+            },
+        )
+
+        val detachFailure = AtomicReference<Throwable?>()
+        val detachThread = Thread {
+            try {
+                assertTrue(mountOpening.await(5, TimeUnit.SECONDS))
+                liveAttachment = pinB
+                detachTriggered.countDown()
+            } catch (t: Throwable) {
+                detachFailure.set(t)
+            }
+        }
+        detachThread.start()
+
+        assertThrows(AttachmentChangedException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+        detachThread.join(5000)
+        assertFalse(detachThread.isAlive)
+        detachFailure.get()?.let { throw it }
+
+        assertSame(closeErr, session.close())
+        val thrown = assertThrows(IllegalStateException::class.java) {
+            session.withLock { session.volumeForLocked(pinB, "1") }
+        }
+        assertSame(closeErr, thrown.cause)
+        assertTrue(thrown.message!!.contains("refusing remount"))
+        assertTrue("claim remains held fail-closed", session.claim.isHeld())
+    }
+
+    @Test
+    fun competingSessionBlockedByCloseFailureOnSharedClaim() {
+        val claim = UsbExclusiveClaim()
+        val closeErr = IOException("unconfirmed filesystem close")
+        val closeStarted = CountDownLatch(1)
+        val closeFinish = CountDownLatch(1)
+        val competingDone = CountDownLatch(1)
+        val competingFailure = AtomicReference<Throwable?>()
+
+        val session1 = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                mounted(
+                    partitionId, writable, volumeClose = closeErr, diskClose = null, lease = lease,
+                    beforeVolumeClose = {
+                        closeStarted.countDown()
+                        assertTrue(closeFinish.await(5, TimeUnit.SECONDS))
+                    },
+                )
+            },
+            claim = claim,
+        )
+        val session2 = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { _, _, _, _ -> error("must not open") },
+            claim = claim,
+        )
+
+        session1.withLock { session1.volumeForLocked(pinA, "1") }
+        assertTrue(claim.isHeld())
+
+        val closeThreadFailure = AtomicReference<Throwable?>()
+        val session1CloseThread = Thread {
+            try {
+                session1.close()
+            } catch (t: Throwable) {
+                closeThreadFailure.set(t)
+            }
+        }
+        session1CloseThread.start()
+
+        assertTrue(closeStarted.await(5, TimeUnit.SECONDS))
+
+        val competingThread = Thread {
+            try {
+                session2.withLock { session2.volumeForLocked(pinA, "1") }
+            } catch (t: Throwable) {
+                competingFailure.set(t)
+            } finally {
+                competingDone.countDown()
+            }
+        }
+        competingThread.start()
+
+        // Competing attempt must run and fail while close is still paused at barrier
+        assertTrue("competing attempt must complete while close is paused", competingDone.await(5, TimeUnit.SECONDS))
+        competingThread.join(5000)
+        assertFalse(competingThread.isAlive)
+
+        // Release close and let it complete its unconfirmed failure
+        closeFinish.countDown()
+        session1CloseThread.join(5000)
+        assertFalse(session1CloseThread.isAlive)
+        closeThreadFailure.get()?.let { throw it }
+
+        assertTrue(
+            "competing session blocked with BusyException",
+            competingFailure.get() is UsbExclusiveClaim.BusyException,
+        )
+        assertTrue("claim remains held fail-closed", claim.isHeld())
+        assertSame(closeErr, session1.close())
+
+        assertThrows(IllegalStateException::class.java) {
+            session1.withLock { session1.volumeForLocked(pinA, "1") }
+        }
+        assertThrows(UsbExclusiveClaim.BusyException::class.java) {
+            session2.withLock { session2.volumeForLocked(pinA, "1") }
+        }
     }
 
     private fun mounted(

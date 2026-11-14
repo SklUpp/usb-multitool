@@ -2,6 +2,11 @@ package usb.device
 
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -122,6 +127,53 @@ class UsbExclusiveClaimTest {
         val secondLease = claim.tryAcquire()
         secondLease.close()
         first.close()
+        assertFalse(claim.isHeld())
+    }
+
+    @Test
+    fun concurrentTryAcquireAllowsAtMostOneLiveLease() {
+        val claim = UsbExclusiveClaim()
+        val startBarrier = CountDownLatch(1)
+        val doneBarrier = CountDownLatch(2)
+        val winners = CopyOnWriteArrayList<UsbExclusiveClaim.Lease>()
+        val busyCount = AtomicInteger(0)
+        val otherErrors = CopyOnWriteArrayList<Throwable>()
+
+        val contender = {
+            Thread {
+                startBarrier.await()
+                try {
+                    winners.add(claim.tryAcquire())
+                } catch (busy: UsbExclusiveClaim.BusyException) {
+                    busyCount.incrementAndGet()
+                } catch (t: Throwable) {
+                    otherErrors.add(t)
+                } finally {
+                    doneBarrier.countDown()
+                }
+            }
+        }
+
+        val t1 = contender()
+        val t2 = contender()
+        t1.start()
+        t2.start()
+        startBarrier.countDown()
+        assertTrue(doneBarrier.await(5, TimeUnit.SECONDS))
+        t1.join()
+        t2.join()
+
+        assertTrue("no unexpected errors", otherErrors.isEmpty())
+        assertEquals("exactly one lease granted", 1, winners.size)
+        assertEquals("exactly one contender blocked by BusyException", 1, busyCount.get())
+        assertTrue("claim is held by winning lease", claim.isHeld())
+
+        winners.first().close()
+        assertFalse("closing winner frees claim", claim.isHeld())
+
+        val next = claim.tryAcquire()
+        assertTrue(claim.isHeld())
+        next.close()
         assertFalse(claim.isHeld())
     }
 }
