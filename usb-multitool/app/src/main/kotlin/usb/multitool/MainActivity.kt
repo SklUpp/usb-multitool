@@ -33,6 +33,9 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.SavedStateHandle
+import usb.ui.ShellTab
+import usb.ui.ShellTabPersistence
 import usb.ventoy.AutounattendBinding
 import usb.ventoy.AutounattendState
 import usb.ventoy.UnreadableProblem
@@ -173,7 +176,12 @@ private class SharedPreferencesRequestCodeStorage(
         prefs.edit().putInt(WINDOWS_IMPORT_NEXT_CODE_KEY, next).commit()
 }
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+class MainViewModel(
+    application: Application,
+    private val savedStateHandle: SavedStateHandle,
+) : AndroidViewModel(application) {
+    /** Unit tests may construct without a host-owned handle. */
+    constructor(application: Application) : this(application, SavedStateHandle())
     private companion object {
         const val LANGUAGE_KEY = "language"
         /** Persisted two-state theme; absent means the dark default. */
@@ -294,14 +302,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        val restoredTab = ShellTabPersistence.read(savedStateHandle) ?: ShellTab.Files
         val folder = readBackupFolder()
         state = state.copy(
+            tab = restoredTab,
             language = readLanguage(),
             darkTheme = readDarkTheme(),
             backupFolderUri = folder.uri,
             backupFolderName = folder.name,
             backupFolderUsable = folder.usable,
         )
+        // Seed the handle so a kill before any SelectTab still restores the same tab.
+        ShellTabPersistence.write(savedStateHandle, restoredTab)
         DiskService.initialize(application)
         // Fail closed: never auto-delete staging after restart (name ≠ proof of ownership).
         // Leftovers stay on disk; user must re-stage in this process. Notify only.
@@ -572,6 +584,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onIntent(intent: UiIntent) {
+        val previousTab = state.tab
         if (intent is UiIntent.SetLanguage) {
             languagePrefs.edit().putString(LANGUAGE_KEY, intent.language.name).apply()
         }
@@ -736,6 +749,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             completionResult?.effects?.forEach { effect -> handleEffect(effect) }
         }
         if (acceptedOperationIntent || completionGenerationAccepted) refreshFilesystemUsage(intent)
+        if (state.tab != previousTab) {
+            ShellTabPersistence.write(savedStateHandle, state.tab)
+        }
 
     }
     /** Post an intent to the main dispatcher; disk workers must never mutate state directly. */
