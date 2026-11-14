@@ -663,7 +663,7 @@ object FilesOperations {
                 rootsAfter = rootsAfter,
                 siblingTail = pending.drop(1),
             )
-            pending.removeFirst()
+            pending.removeAt(0)
         }
         onProgress?.invoke(sourceRoot)
     }
@@ -770,7 +770,7 @@ object FilesOperations {
                     rootsAfter = rootsAfter,
                     siblingTail = tailRels,
                 )
-                remaining.removeFirst()
+                remaining.removeAt(0)
             }
             onProgress?.invoke(sourcePath)
             return
