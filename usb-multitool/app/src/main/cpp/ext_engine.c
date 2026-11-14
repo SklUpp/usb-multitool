@@ -169,7 +169,8 @@ static void free_volume(ExtVolumeContext *v)
 static ExtVolumeContext *alloc_volume(uint64_t block_handle, bool read_only)
 {
 	UsbBlockOps *ops = usb_block_ops(block_handle);
-	if (!ops || ops->sector_size < 512 || ops->sector_count == 0) return NULL;
+	if (!ops || ops->sector_size < 512 || ops->sector_count == 0 ||
+	    ops->sector_count > UINT64_MAX / (uint64_t)ops->sector_size) return NULL;
 
 	ExtVolumeContext *v = calloc(1, sizeof(*v));
 	if (!v) return NULL;
@@ -428,6 +429,7 @@ int ext_engine_usage(uint64_t vol_handle, uint64_t *out_total_bytes,
 
 	if (stats.block_size == 0 ||
 	    stats.blocks_count > UINT64_MAX / (uint64_t)stats.block_size ||
+	    stats.blocks_count > v->bdev.part_size / (uint64_t)stats.block_size ||
 	    stats.free_blocks_count > stats.blocks_count) {
 		return -EIO;
 	}
