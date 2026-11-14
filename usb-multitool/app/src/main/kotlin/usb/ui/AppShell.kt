@@ -124,6 +124,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import usb.formatBinaryBytesPerSecond
 import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
 import usb.image.ReadbackProblem
@@ -215,15 +216,15 @@ fun AppShell(
                 logButtonFocus.requestFocusIfAttached("log open button")
             }
         }
-        LaunchedEffect(state.operation?.state, state.operation?.title) {
+        LaunchedEffect(state.operation?.token, state.operation?.state) {
             // Evaluate only when operation facts change. A later tab switch must not reopen a
             // status the user deliberately collapsed.
-            val operation = state.operation
-            if (
-                operation?.state == OperationState.Completed &&
-                operation.title.shellTab() != null &&
-                operation.title.shellTab() != state.tab
-            ) {
+            val operation = state.operation ?: return@LaunchedEffect
+            val isFinished = operation.state == OperationState.Completed ||
+                operation.state == OperationState.Failed ||
+                operation.state == OperationState.Partial
+            val ownerTab = operation.title.shellTab()
+            if (isFinished && ownerTab != null && ownerTab != state.tab) {
                 panels = panels.expandStatus()
             }
         }
@@ -317,7 +318,7 @@ fun AppShell(
                                 Modifier
                             },
                         ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     DeviceHeader(
                         state = state,
@@ -642,9 +643,9 @@ private fun ProjectVersionButton(versionName: String?) {
                 Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
             }
         },
-        contentPadding = PaddingValues(horizontal = 8.dp),
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
         modifier = Modifier
-            .heightIn(min = 48.dp)
+            .heightIn(min = 36.dp)
             .semantics { contentDescription = description },
     ) {
         Text(
@@ -690,19 +691,19 @@ private fun DeviceHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 2.dp),
+            .padding(top = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier.weight(1f),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
                 Text(
@@ -728,7 +729,10 @@ private fun DeviceHeader(
         }
 
         // Version and non-journal controls share one compact row. Journal remains a text action.
-        Column(horizontalAlignment = Alignment.End) {
+        Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -820,10 +824,10 @@ private fun LogOpenButton(
     TextButton(
         onClick = onOpenLog,
         modifier = Modifier
-            .heightIn(min = 48.dp)
+            .heightIn(min = 36.dp)
             .focusRequester(focusRequester)
             .semantics { contentDescription = "$label · $lineCount" },
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium)
     }
@@ -894,45 +898,382 @@ internal fun StatusLogPanel(
     }.joinToString(" · ")
     data class CancelRequest(val token: OperationToken, val name: String)
     var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
+    var showDetailsDialog by remember { mutableStateOf(false) }
     val cancelDescription = stringResource(R.string.action_cancel)
     val statusDescription = if (collapsed) stringResource(R.string.status_expand) else stringResource(R.string.status_collapse)
+    val detailsDescription = stringResource(R.string.status_title)
     fun requestCancel() {
         op?.takeIf { cancelable }?.let {
             cancelRequest = CancelRequest(it.token, operationName ?: title)
         }
     }
+    val circleDiameter = 64.dp
+    val circleRadius = 32.dp
     val statusSurface = Modifier
-        .then(if (collapsed) Modifier.size(144.dp) else Modifier.fillMaxWidth())
-        .then(if (collapsed) Modifier else Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp))
-        .combinedClickable(role = Role.Button, onClickLabel = statusDescription, onLongClickLabel = if (collapsed && cancelable) cancelDescription else null, onClick = if (collapsed) onExpandStatus else onCollapseStatus, onLongClick = if (collapsed && cancelable) ::requestCancel else null)
-        .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = accessibleMessage }
-    Column(modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)), horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(shape = if (collapsed) CircleShape else RoundedCornerShape(16.dp), color = container, modifier = statusSurface) {
+        .then(
             if (collapsed) {
-                Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Text(metric ?: title, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content, maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
-                    statusText?.takeIf { it != operationDetail }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis) }
-                    operationDetail?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f), maxLines = 1, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis) }
-                    if (cancelable) IconButton(onClick = ::requestCancel, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content) }
+                Modifier
+                    .size(circleDiameter)
+                    .clip(CircleShape)
+                    .combinedClickable(
+                        role = Role.Button,
+                        onClickLabel = statusDescription,
+                        onLongClickLabel = if (cancelable) cancelDescription else null,
+                        onClick = onExpandStatus,
+                        onLongClick = if (cancelable) ::requestCancel else null,
+                    )
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .height(circleDiameter)
+            },
+        )
+        .semantics {
+            liveRegion = LiveRegionMode.Polite
+            contentDescription = accessibleMessage
+        }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Surface(
+            shape = if (collapsed) CircleShape else RoundedCornerShape(circleRadius),
+            color = container,
+            modifier = statusSurface,
+        ) {
+            if (collapsed) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    // Line 1: Primary progress metric
+                    if (completed) {
+                        GlyphIcon(Glyph.Check, size = 20.dp, tint = content)
+                    } else if (failed) {
+                        Text(
+                            text = "!",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            textAlign = TextAlign.Center,
+                        )
+                    } else if (partial) {
+                        Text(
+                            text = "±",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            textAlign = TextAlign.Center,
+                        )
+                    } else if (cancelled) {
+                        Text(
+                            text = "✕",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            textAlign = TextAlign.Center,
+                        )
+                    } else if (op != null && op.bytesTotal > 0L) {
+                        Text(
+                            text = "${(op.fraction * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            textAlign = TextAlign.Center,
+                        )
+                    } else if (op != null && op.bytesDone > 0L) {
+                        Text(
+                            text = DeviceIdentity.formatCapacity(op.bytesDone.toULong()),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            textAlign = TextAlign.Center,
+                        )
+                    } else if (op != null) {
+                        Text(
+                            text = operationStateLabel(op.state),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.status_title),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+
+                    // Line 2: Secondary progress value / status text
+                    if (completed) {
+                        Text(
+                            text = stringResource(R.string.op_completed),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (failed) {
+                        Text(
+                            text = stringResource(R.string.op_failed),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (partial) {
+                        Text(
+                            text = stringResource(R.string.op_partial),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (cancelled) {
+                        Text(
+                            text = stringResource(R.string.op_cancelled),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (op?.bytesPerSecond != null && op.bytesPerSecond > 0L) {
+                        Text(
+                            text = formatBinaryBytesPerSecond(op.bytesPerSecond),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (op != null && op.bytesTotal > 0L && op.bytesDone > 0L) {
+                        Text(
+                            text = DeviceIdentity.formatCapacity(op.bytesDone.toULong()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (operationName != null) {
+                        Text(
+                            text = operationName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        Text(
+                            text = statusText ?: "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             } else {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = content, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            details.forEach { detail -> Text(detail, style = MaterialTheme.typography.labelSmall, color = content) }
-                            readbackNote?.takeIf { it !in details }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = content) }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 16.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (completed) {
+                            GlyphIcon(Glyph.Check, size = 20.dp, tint = content)
                         }
-                        metric?.let { Text(it, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = content) }
-                        if (cancelable) IconButton(onClick = ::requestCancel, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content) }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val primaryDetail = details.firstOrNull() ?: readbackNote
+                            if (primaryDetail != null) {
+                                Text(
+                                    text = primaryDetail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = content,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        metric?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = content,
+                            )
+                        }
+                        if (cancelable) {
+                            IconButton(
+                                onClick = ::requestCancel,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .semantics { contentDescription = cancelDescription },
+                            ) {
+                                GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
+                            }
+                        }
+                        IconButton(
+                            onClick = { showDetailsDialog = true },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics { contentDescription = detailsDescription },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Info, size = 18.dp, tint = content)
+                        }
+                        IconButton(
+                            onClick = onCollapseStatus,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics { contentDescription = statusDescription },
+                        ) {
+                            GlyphIcon(glyph = Glyph.ChevronDown, size = 18.dp, tint = content)
+                        }
                     }
-                    if (op != null && running && op.bytesTotal > 0L) LinearProgressIndicator(progress = { op.fraction }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape), color = MaterialTheme.colorScheme.primary, trackColor = content.copy(alpha = 0.2f))
+                    if (op != null && running) {
+                        if (op.bytesTotal > 0L) {
+                            LinearProgressIndicator(
+                                progress = { op.fraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.BottomCenter)
+                                    .height(3.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = content.copy(alpha = 0.2f),
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.BottomCenter)
+                                    .height(3.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = content.copy(alpha = 0.2f),
+                            )
+                        }
+                    }
                 }
             }
         }
     }
+    if (showDetailsDialog) {
+        val context = LocalContext.current
+        val fullDetailsText = buildList {
+            add(title)
+            if (op != null) {
+                add("#${op.token.value}")
+                if (op.bytesTotal > 0L) {
+                    add("${(op.fraction * 100).toInt()}% · ${DeviceIdentity.formatCapacity(op.bytesDone.toULong())} / ${DeviceIdentity.formatCapacity(op.bytesTotal.toULong())}")
+                } else if (op.bytesDone > 0L) {
+                    add(DeviceIdentity.formatCapacity(op.bytesDone.toULong()))
+                }
+                if (op.bytesPerSecond > 0L) {
+                    add(formatBinaryBytesPerSecond(op.bytesPerSecond))
+                }
+                op.errorMessage?.let(::add)
+                op.resultMessage?.let(::add)
+                op.readScanResult?.let { add(readScanSummary(it)) }
+                readbackNote?.let { if (it !in details) add(it) }
+            }
+            statusText?.takeIf { it != op?.errorMessage && it != op?.resultMessage }?.let(::add)
+        }.joinToString("\n")
+        AlertDialog(
+            onDismissRequest = { showDetailsDialog = false },
+            title = {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        text = fullDetailsText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("status", fullDetailsText))
+                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.LogCopied)))
+                    },
+                ) {
+                    Text(stringResource(R.string.log_copy_all))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDetailsDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
     cancelRequest?.let { request ->
-        AlertDialog(onDismissRequest = { cancelRequest = null }, title = { Text(stringResource(R.string.cancel_operation_title)) }, text = { Text(stringResource(R.string.cancel_operation_body, request.name)) }, confirmButton = { TextButton(onClick = { cancelRequest = null; onIntent(UiIntent.CancelOperation(request.token)) }) { Text(stringResource(R.string.cancel_operation_confirm)) } }, dismissButton = { TextButton(onClick = { cancelRequest = null }) { Text(stringResource(R.string.action_cancel)) } })
+        AlertDialog(
+            onDismissRequest = { cancelRequest = null },
+            title = { Text(stringResource(R.string.cancel_operation_title)) },
+            text = { Text(stringResource(R.string.cancel_operation_body, request.name)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        cancelRequest = null
+                        onIntent(UiIntent.CancelOperation(request.token))
+                    },
+                ) {
+                    Text(stringResource(R.string.cancel_operation_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { cancelRequest = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 /**
@@ -1586,6 +1927,7 @@ internal enum class Glyph {
     Usb,
     Shield,
     Info,
+    Check,
     Scan,
     Copy,
     Gpt,
@@ -1692,6 +2034,13 @@ internal fun GlyphIcon(
                         1.8f,
                     )
                 }
+                Glyph.Check -> drawPath(
+                    Path().apply {
+                        moveTo(4f, 12f); lineTo(9f, 17f); lineTo(20f, 6f)
+                    },
+                    tint,
+                    style = stroke,
+                )
                 Glyph.Scan -> {
                     drawPath(
                         Path().apply {
