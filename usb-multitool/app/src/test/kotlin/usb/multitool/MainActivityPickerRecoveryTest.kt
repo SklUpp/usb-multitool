@@ -79,6 +79,19 @@ class MainActivityPickerRecoveryTest {
         every { this@mockk.productName } returns productName
         every { this@mockk.serialNumber } returns serialNumber
     }
+    private fun dispatchActivityResult(
+        activity: MainActivity,
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?,
+    ) {
+        MainActivity::class.java.getDeclaredMethod(
+            "onActivityResult",
+            Int::class.javaPrimitiveType!!,
+            Int::class.javaPrimitiveType!!,
+            Intent::class.java,
+        ).apply { isAccessible = true }.invoke(activity, requestCode, resultCode, data)
+    }
 
     @Test
     fun backupFolderSavedActionFromDeadProcessFailsClosedWithActionLost() {
@@ -153,7 +166,7 @@ class MainActivityPickerRecoveryTest {
 
             // Live state has no matching device (detached / different attachment) -> fail closed.
             val resultIntent = Intent().setData(Uri.parse("content://usb.test/autounattend.xml"))
-            activity.onActivityResult(requestCode, Activity.RESULT_OK, resultIntent)
+            dispatchActivityResult(activity, requestCode, Activity.RESULT_OK, resultIntent)
 
             assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), vm.state.statusMessage)
             assertNull(vm.state.isoImportSafInFlight)
@@ -164,7 +177,7 @@ class MainActivityPickerRecoveryTest {
             assertFalse(afterResult.containsKey("usb.multitool.PENDING_WINDOWS_REQUEST"))
 
             vm.onIntent(UiIntent.Status(UiMessage.Raw("sentinel")))
-            activity.onActivityResult(requestCode, Activity.RESULT_OK, resultIntent)
+            dispatchActivityResult(activity, requestCode, Activity.RESULT_OK, resultIntent)
             assertEquals(UiMessage.Raw("sentinel"), vm.state.statusMessage)
         } finally {
             controller.destroy()
@@ -476,8 +489,8 @@ class MainActivityPickerRecoveryTest {
                 completedDispatches.get() >= requiredDispatches(),
             )
             assertEquals(uriNew.toString(), vm.state.backupUri)
-            assertNotNull(vm.state.gptBackupInspection)
-            assertEquals(uriNew.toString(), vm.state.gptBackupInspection?.uri)
+            assertNotNull(vm.state.backupInspection)
+            assertEquals(uriNew.toString(), vm.state.backupInspection?.uri)
             assertEquals(1, vm.state.logLines.count { it.contains("GPT backup picked:") })
         } finally {
             releaseOld.countDown()
