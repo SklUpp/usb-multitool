@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.CRC32
 import java.math.BigDecimal
+import java.math.BigInteger
 import usb.EngineMissingException
 import usb.device.BlockDevice
 import usb.requireLinkedEngine
@@ -1620,12 +1621,22 @@ internal object MiniJson {
     /** Number token retained verbatim so unrelated sections round-trip without precision loss. */
     private class RawNumber(private val token: String) : Number() {
         private val decimal by lazy { BigDecimal(token) }
-        override fun toByte(): Byte = decimal.toBigInteger().byteValueExact()
-        override fun toShort(): Short = decimal.toBigInteger().shortValueExact()
+        private fun BigInteger.toExactLong(min: Long, max: Long): Long {
+            if (this < BigInteger.valueOf(min) || this > BigInteger.valueOf(max)) {
+                throw ArithmeticException("BigInteger out of range")
+            }
+            return toLong()
+        }
+        override fun toByte(): Byte =
+            decimal.toBigInteger().toExactLong(Byte.MIN_VALUE.toLong(), Byte.MAX_VALUE.toLong()).toByte()
+        override fun toShort(): Short =
+            decimal.toBigInteger().toExactLong(Short.MIN_VALUE.toLong(), Short.MAX_VALUE.toLong()).toShort()
         override fun toDouble(): Double = decimal.toDouble()
         override fun toFloat(): Float = decimal.toFloat()
-        override fun toInt(): Int = decimal.toBigInteger().intValueExact()
-        override fun toLong(): Long = decimal.toBigInteger().longValueExact()
+        override fun toInt(): Int =
+            decimal.toBigInteger().toExactLong(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+        override fun toLong(): Long =
+            decimal.toBigInteger().toExactLong(Long.MIN_VALUE, Long.MAX_VALUE)
         override fun toString(): String = token
     }
 

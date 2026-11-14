@@ -4,15 +4,15 @@
 
 ## Текущий срез — 2026-11-14
 
-- Ветка `feature/android-usb-multitool`; CI [43519995761](https://github.com/SklUpp/usb-multitool/actions/runs/43519995761) для `4f19d47` прошёл Rust и host FAT/exFAT/NTFS/EXT/USB, скомпилировал Android Kotlin, затем завершился ошибкой: 1439 unit-тестов, 7 failed, 8 skipped. APK, lint и 16 KB alignment не выполнены.
-- Падения: `FilesListFreshnessTest` (3), `VentoyUiStateTest` (3), `StringResourceParityTest` (1). Исправления анализируются отдельно; успешный исход до проверки не заявлен.
+- Последний завершённый CI [43542337514](https://github.com/SklUpp/usb-multitool/actions/runs/43542337514) для `47cdceb`: Rust и host FAT/exFAT/NTFS/EXT/USB, unit tests, debug APK и 16 KB alignment прошли; `lintDebug` завершился ошибкой, финальный отдельный Kotlin compile step пропущен. Причина lint исследуется.
+- Предыдущий CI [43539280755](https://github.com/SklUpp/usb-multitool/actions/runs/43539280755): 1449 unit tests, 5 failed, 8 skipped; последующий запуск выше подтвердил исправление unit tests.
 - После `4f19d47` интегрированы прошедшие статическое независимое ревью UI-срезы полного отображения пути Ventoy, диагностики, доступности строки статусов, карты разделов и локализации. Фактический runtime и CI этих срезов пока не проверены.
 - Для USB BOT/sense 52 JVM-теста `BotSessionImplTest`, `UsbDiskTest`, `UsbDiskSessionTest` прошли локально; полный CI и аппаратная проверка не заменяются этим результатом.
 - Физические USB detach во время IN/OUT/sync, конкретные SAF provider faults/process death, загрузка Ventoy, установка Windows и TalkBack не проверялись.
 - `third_party/lwext4` и `third_party/ntfs-3g` — локальные получаемые исходники; не переносить в коммит и не удалять без отдельной причины.
-- Пользователь одобрил единый lifecycle списка `Stale / Loading / Loaded / Failed` вместо `filesPending` и session-bound SAF для выбора Ventoy-образа с телефона. Изменения объединены и прошли статическое ревью; сборка, тесты и устройство ещё не проверены.
+- Пользователь одобрил единый lifecycle списка `Stale / Loading / Loaded / Failed` вместо `filesPending` и session-bound SAF для выбора Ventoy-образа с телефона. Изменения объединены; unit tests и сборка APK прошли в CI `43542337514`, lint и проверка устройства остаются открытыми.
 - Обнаружены и остановлены конфликтные варианты: дублирующий Compose pending для SAF и перегрузка `filesPending` для отложенного reload. Ограничения и риски доведены до пользователя.
-- Одобрены передача исходного `PendingWindowsImport` в timeout координатора и упорядоченная доставка launch/cancel. Реализация объединена; проверка на устройстве и CI ещё не выполнены.
+- Одобрены передача исходного `PendingWindowsImport` в timeout координатора и упорядоченная доставка launch/cancel. Реализация объединена и входит в unit/сборку CI; проверка на устройстве не выполнена.
 
 ## Требования в работе
 
