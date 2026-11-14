@@ -3992,7 +3992,7 @@ object UiReducer {
             }
             releaseDeferredFilesListing(
                 result,
-                allowRelease = deferredReleaseAllowed(intent, accepted),
+                allowRelease = filesReleaseAllowed(intent, accepted),
             )
         }
             .let { result ->
@@ -4046,9 +4046,25 @@ object UiReducer {
         UiIntent.DismissDiskLayout,
         is UiIntent.SelectTab,
         is UiIntent.DeviceChanged,
+        UiIntent.ImportFolderPickOpened,
+        is UiIntent.Status,
         -> callbackAccepted
         else -> false
     }
+    private fun filesReleaseAllowed(intent: UiIntent, callbackAccepted: Boolean): Boolean =
+        callbackAccepted &&
+            when (intent) {
+                is UiIntent.OperationCompletionEffects,
+                is UiIntent.DeviceChanged,
+                is UiIntent.SelectTab,
+                UiIntent.DismissConfirmation,
+                UiIntent.ImportFolderPickOpened,
+                is UiIntent.Status,
+                is UiIntent.WindowsIsoImportFinished,
+                -> true
+                else -> false
+            }
+
     /** Start deferred Files load once current intent leaves attachment actionable. */
     private fun releaseDeferredFilesListing(
         result: ReduceResult,
@@ -4056,16 +4072,35 @@ object UiReducer {
     ): ReduceResult {
         if (!allowRelease) return result
         val state = result.state
+        if (state.pendingImportFolderPickLoad && state.filesPickMode == null) return result
+        val pickerKind =
+            if (state.pendingImportFolderPickLoad && state.filesPickMode != null) {
+                state.pendingImportFolderPick ?: state.deferredImportFolderPick
+            } else {
+                null
+            }
         if (state.filesListingState != FilesListingState.Stale ||
             state.tab != ShellTab.Files ||
             state.presence != DevicePresence.Ready ||
             !state.actionsEnabled ||
+            state.isoImportUsbInFlight != null ||
             state.selectedPartition() == null ||
             result.effects.isNotEmpty()
         ) {
             return result
         }
-        return filesStart(state)
+        val started = filesStart(state)
+        return if (pickerKind == null) {
+            started
+        } else {
+            started.copy(
+                state = started.state.copy(
+                    pendingImportFolderPick = pickerKind,
+                    pendingImportFolderPickLoad = false,
+                    deferredImportFolderPick = null,
+                ),
+            )
+        }
     }
 
     /**
@@ -4138,6 +4173,17 @@ object UiReducer {
     ): ReduceResult {
         if (!allowRelease) return result
         val next = result.state
+        if (next.filesPickMode != null) {
+            if (!next.actionsEnabled || next.filesListingState != FilesListingState.Loaded) return result
+            val pickerKind = next.pendingImportFolderPick ?: next.deferredImportFolderPick
+            return result.copy(
+                state = next.copy(
+                    pendingImportFolderPick = pickerKind,
+                    pendingImportFolderPickLoad = false,
+                    deferredImportFolderPick = null,
+                ),
+            )
+        }
         if (!next.pendingImportFolderPickLoad || !next.actionsEnabled) return result
         // The USB phase holds disk; SAF phase runs off worker and cannot clash.
         if (next.isoImportUsbInFlight != null) return result
