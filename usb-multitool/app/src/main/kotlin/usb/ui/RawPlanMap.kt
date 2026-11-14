@@ -85,7 +85,8 @@ internal fun RawPlanMap(
     val partitionColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     val bootColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
     val tableColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
-    val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    val trackColor = MaterialTheme.colorScheme.surfaceContainerLowest
+    val freeColor = MaterialTheme.colorScheme.surfaceVariant
     val snapTickColor = MaterialTheme.colorScheme.outline
 
     val partitionLabels = remember(geometry) {
@@ -136,6 +137,7 @@ internal fun RawPlanMap(
             bootColor = bootColor,
             tableColor = tableColor,
             trackColor = trackColor,
+            freeColor = freeColor,
             rangeColor = rangeColor,
             snapTickColor = snapTickColor,
         )
@@ -150,6 +152,7 @@ internal fun RawPlanMap(
             LegendItem(partitionColor, stringResource(R.string.raw_map_legend_partition))
             LegendItem(bootColor, stringResource(R.string.raw_map_legend_boot))
             LegendItem(tableColor, stringResource(R.string.raw_map_legend_table))
+            LegendItem(freeColor, stringResource(R.string.partitions_strip_free))
         }
 
         if (overlaps.isNotEmpty()) {
@@ -235,6 +238,7 @@ private fun RawUnifiedMap(
     bootColor: Color,
     tableColor: Color,
     trackColor: Color,
+    freeColor: Color,
     rangeColor: Color,
     snapTickColor: Color,
 ) {
@@ -311,9 +315,15 @@ private fun RawUnifiedMap(
                             segment.rawObjects.any { it.kind == RawObjectKind.BootArea } -> bootColor
                             segment.rawObjects.any { it.kind == RawObjectKind.TableArea } -> tableColor
                             segment.rawObjects.any { it.kind == RawObjectKind.Partition } -> partitionColor
-                            else -> trackColor
+                            else -> freeColor
                         }
                         drawRect(color, Offset(x, 0f), Size(w, size.height))
+                        drawRect(
+                            snapTickColor.copy(alpha = 0.35f),
+                            Offset(x, 0f),
+                            Size(w, size.height),
+                            style = Stroke(1.dp.toPx()),
+                        )
                     }
                     val rx = xForLba(startLba)
                     sectorCount?.let { count ->
@@ -333,13 +343,17 @@ private fun RawUnifiedMap(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     segments.forEachIndexed { index, segment ->
+                        val partitionText = stringResource(R.string.raw_map_legend_partition)
+                        val bootText = stringResource(R.string.raw_map_legend_boot)
+                        val tableText = stringResource(R.string.raw_map_legend_table)
+                        val freeText = stringResource(R.string.partitions_strip_free)
                         val label = segment.rawObjects.joinToString(" / ") { objectInSegment ->
                             objectInSegment.name ?: when (objectInSegment.kind) {
-                                RawObjectKind.Partition -> "Partition"
-                                RawObjectKind.BootArea -> "Boot area"
-                                RawObjectKind.TableArea -> "Table metadata"
+                                RawObjectKind.Partition -> partitionText
+                                RawObjectKind.BootArea -> bootText
+                                RawObjectKind.TableArea -> tableText
                             }
-                        }.ifEmpty { "Free space" }
+                        }.ifEmpty { freeText }
                         Box(
                             Modifier.width(with(density) { widthsPx[index].toDp() }).height(48.dp)
                                 .clickable { onStartChange(segment.startLba) }
