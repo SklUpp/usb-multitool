@@ -3,7 +3,6 @@ import usb.files.AttachmentChangedException
 import usb.files.AttachmentPin
 import usb.files.AttachmentState
 import usb.files.FilesVolumeSession
-import usb.files.MountedFilesVolume
 import usb.files.FilesOperationPolicy
 
 import android.Manifest
@@ -91,8 +90,6 @@ import usb.ui.UiReducer
 import usb.ui.WindowsImportRequestCodes
 import usb.ui.WindowsImportPickerCoordinator
 import usb.ui.AppLanguage
-import usb.device.UsbDiskSession
-import usb.device.UsbExclusiveClaim
 import usb.diagnostics.AppTraceLogger
 import usb.diagnostics.Diagnostics
 import usb.diagnostics.redactTrace
@@ -108,12 +105,9 @@ import usb.saf.SafArchiveTarget
 import usb.saf.SafBackupFolder
 import usb.saf.SafPositionalImage
 import usb.fs.UsbFsDirEntry
-import usb.fs.UsbFsVolume
-import usb.fs.FilesystemId
 import usb.fs.Filesystem
 import usb.fs.FormatCatalog
 import usb.fs.Formatter
-import usb.fs.PartitionVolumeSession
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageReason
@@ -407,14 +401,23 @@ class MainViewModel(
      * Ceiling: detach/onCleared can wait for one files operation; upgrade only if a single
      * FAT call ever becomes unbounded.
      */
-    private val filesSession =
+    private val filesSession: FilesVolumeSession =
         FilesVolumeSession(
             currentAttachment = { currentAttachmentPin() },
             openMounted = { partitionId, writable, pin, lease ->
-                openMountedFilesVolume(partitionId, writable, pin, lease)
+                usbOpenBoundary.openMountedFilesVolume(partitionId, writable, pin, lease)
             },
             claim = DiskController.get().usbClaim,
         )
+    private val usbOpenBoundary: UsbOpenBoundary by lazy {
+        UsbOpenBoundary(
+            currentAttachment = { attachment.snapshot() },
+            usbManager = { usbManager },
+            filesSession = filesSession,
+            trace = trace,
+            deviceKey = ::deviceKey,
+        )
+    }
     /** Key of the newest free-space request; a different key asks again. */
     @Volatile private var lastUsageKey: FilesystemUsageKey? = null
     /** Key whose measurement has not reported back yet; prevents duplicate requests. */
@@ -2687,148 +2690,9 @@ class MainViewModel(
         return error
     }
 
-    /**
-     * Open disk + filesystem for [partitionId]. Called only from [FilesVolumeSession]
-     * after any prior volume was closed. Failure path closes the disk claim.
-     */
-    private fun openMountedFilesVolume(
-        partitionId: String,
-        writable: Boolean,
-        pin: AttachmentPin,
-        lease: UsbExclusiveClaim.Lease,
-    ): MountedFilesVolume {
-        trace.log(
-            "volume.mount.start",
-            "part" to partitionId,
-            "writable" to writable,
-            "gen" to pin.attachGeneration,
-        )
-        val device = attachedDevice ?: throw DiskException.Disconnected()
-        val manager = usbManager ?: throw DiskException.Disconnected()
-        // Pin check before the USB claim: a paused operation must not open another stick.
-        requireAttachment(pin, device)
-        val disk = UsbDiskSession.open(manager, device, lease)
-        lateinit var mountedPartition: usb.partition.Partition
-        val volume = try {
-            val index = partitionId.toIntOrNull()
-                ?: throw IllegalArgumentException("invalid partition id $partitionId")
-            val table = PartitionTable.read(disk)
-            // A detach/re-attach can happen during the claim or table read: re-verify the pin
-            // against the live attachment before trusting this geometry or partition range.
-            requireAttachment(pin, device)
-            if (writable) requireWritableMountAllowed(table)
-            mountedPartition = table.partitions.getOrNull(index - 1)
-                ?: throw IllegalArgumentException("partition $partitionId no longer exists")
-            PartitionVolumeSession.open(
-                disk,
-                mountedPartition.startLba,
-                mountedPartition.sectorCount,
-                readOnly = !writable,
-            )
-        } catch (failure: Throwable) {
-            // PartitionVolumeSession already closes on mount failure; a second close is
-            // idempotent, but if it still throws keep the mount cause and suppress close.
-            try {
-                disk.close()
-            } catch (closeErr: Throwable) {
-                if (closeErr !== failure) failure.addSuppressed(closeErr)
-            }
-            trace.log(
-                "volume.mount.fail",
-                "part" to partitionId,
-                "writable" to writable,
-                "error" to (failure.message ?: failure.javaClass.simpleName),
-            )
-            throw failure
-        }
-        trace.log("volume.mount.ok", "part" to partitionId, "writable" to writable)
-        val mountedFilesystem = when (volume) {
-            is usb.fs.FatVolume -> when (volume.kind) {
-                usb.fs.FatKind.EXFAT -> usb.fs.FilesystemId.EXFAT
-                usb.fs.FatKind.FAT12, usb.fs.FatKind.FAT16, usb.fs.FatKind.FAT32 -> usb.fs.FilesystemId.FAT
-                usb.fs.FatKind.UNKNOWN -> null
-            }
-            is usb.fs.ExtVolume -> usb.fs.FilesystemId.EXT
-            is usb.fs.NtfsVolume -> usb.fs.FilesystemId.NTFS
-            else -> null
-        }
-        return MountedFilesVolume(
-            partitionId,
-            disk,
-            volume,
-            writable = writable,
-            startLba = mountedPartition.startLba,
-            sectorCount = mountedPartition.sectorCount,
-            sectorSize = disk.sectorSize,
-            filesystemId = mountedFilesystem,
-        )
-    }
-
-    /** Raw disk that owns the USB claim plus the live device it was opened for. */
-    private class RawUsbSession(val disk: UsbDisk, val device: UsbDevice)
-
-    /**
-     * Close the mounted files volume, revalidate the attachment, and open a raw disk while
-     * the exclusive USB claim is held.
-     *
-     * Close and claim are one files-session critical section, so a usage probe or files
-     * operation cannot mount the stick between them. [revalidate] then runs after the close
-     * (the umount/sync can take seconds) and before the open, against one atomic attachment
-     * snapshot, and returns the device to open or null to abort without opening. The same
-     * snapshot is checked once more right after the open: a detach/replug during the USB
-     * open closes the fresh disk and throws before the caller can mutate anything.
-     *
-     * The returned disk releases the claim when it is closed; null means [revalidate]
-     * aborted (the claim is already released, nothing was opened).
-     */
     private fun openRawDisk(
         revalidate: (AttachmentState.Snapshot<UsbDevice>) -> UsbDevice? = { it.device },
-    ): RawUsbSession? =
-        filesSession.openAfterCloseClaimed { lease ->
-            val pinned = attachment.snapshot()
-            val device = revalidate(pinned)
-            if (device == null) {
-                lease.close()
-                return@openAfterCloseClaimed null
-            }
-            val manager = usbManager ?: throw DiskException.Disconnected()
-            val disk =
-                try {
-                    UsbDiskSession.open(manager, device, lease)
-                } catch (failure: Throwable) {
-                    lease.close()
-                    throw failure
-                }
-            // Second fence: the open itself can straddle a detach/replug.
-            val live = attachment.snapshot()
-            if (live.generation != pinned.generation ||
-                deviceKey(live.device) != deviceKey(device)
-            ) {
-                var closeFailure: Throwable? = null
-                try {
-                    disk.close()
-                } catch (t: Throwable) {
-                    closeFailure = t
-                }
-                throw AttachmentChangedException().also { changed ->
-                    closeFailure?.let(changed::addSuppressed)
-                }
-            }
-            RawUsbSession(disk, device)
-        }
-
-    /** Fail unless [pin] still describes the live attachment opened for [device]. */
-    private fun requireAttachment(pin: AttachmentPin, device: UsbDevice) {
-        // One snapshot: never compare the pin against a device/generation pair from
-        // different publishes.
-        val live = attachment.snapshot()
-        if (live.generation != pin.attachGeneration ||
-            deviceKey(device) != pin.deviceKey ||
-            deviceKey(live.device) != pin.deviceKey
-        ) {
-            throw AttachmentChangedException()
-        }
-    }
+    ): UsbOpenBoundary.RawUsbSession? = usbOpenBoundary.openRawDisk(revalidate)
 
     /** Runs [action] with the partition selected at submit time, or reports why not. */
     private inline fun withPartitionId(action: (String) -> Unit) {
