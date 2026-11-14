@@ -433,20 +433,10 @@ class MainViewModel(
             deviceKey(live.device) == ticket.deviceKey
     }
 
-    /**
-     * Disown the running inspection. The SAF job is cancelled best-effort (a blocking provider
-     * may ignore it) so a stuck read cannot block a new import; the USB operation is asked to
-     * stop only when the device is really going away, otherwise it checks ownership and closes.
-     */
-    private fun cancelActiveInspection(cancelUsb: Boolean) {
-        val cancelled = inspectionOwner.cancel() ?: return
-        cancelled.safJob?.cancel()
-        if (cancelUsb) cancelled.usbHandle?.cancel()
-    }
 
     override fun onCleared() {
         // Detach/clear must not crash the process if umount/sync fails on a yanked stick.
-        cancelActiveInspection(cancelUsb = true)
+        inspectionOwner.cancel(cancelUsb = true)
         runCatching { closeFilesVolume(reportStatus = false) }
         _pickerEvents.close()
         super.onCleared()
@@ -687,7 +677,7 @@ class MainViewModel(
         if (intent is UiIntent.CancelWindowsIsoImport) {
             // Best-effort cancel the SAF read and disown its ticket; the reducer already
             // released the SAF guard, so a stuck provider cannot block the next import.
-            cancelActiveInspection(cancelUsb = false)
+            inspectionOwner.cancel(cancelUsb = false)
         }
         if (intent is UiIntent.CancelOperation) {
             trace.log(
@@ -1712,7 +1702,7 @@ class MainViewModel(
                 )
             }
 
-            UiEffect.CancelIsoImportInspection -> cancelActiveInspection(cancelUsb = false)
+            UiEffect.CancelIsoImportInspection -> inspectionOwner.cancel(cancelUsb = false)
 
             is UiEffect.LaunchWindowsImport,
             is UiEffect.CancelPendingWindowsImport -> {
@@ -2248,7 +2238,7 @@ class MainViewModel(
             return
         }
         if (isNewDevice) {
-            cancelActiveInspection(cancelUsb = true)
+            inspectionOwner.cancel(cancelUsb = true)
             usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
             activeHandle = null
         }
@@ -2649,7 +2639,7 @@ class MainViewModel(
         }
         lastUsageKey = null
         usageInFlightKey = null
-        cancelActiveInspection(cancelUsb = true)
+        inspectionOwner.cancel(cancelUsb = true)
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         // Keep handles registered until their workers finish real close; cancellation is not close.
         activeHandle = null

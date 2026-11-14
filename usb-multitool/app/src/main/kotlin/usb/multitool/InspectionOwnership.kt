@@ -19,7 +19,7 @@ internal data class InspectionTicket(
  * - [trackSafJob] is ticket-bound: registering a job for a ticket that no longer owns the
  *   slot cancels that job instead of storing it. A cancel racing `begin`/launch therefore
  *   neither leaks a job nobody can cancel nor lets an old job displace the new ticket's job.
- * - [cancel] disowns the slot once, returning the work to cancel outside the lock; a second
+ * - [cancel] disowns the slot once, then cancels tracked SAF work and optionally USB work outside the lock; a second
  *   cancel sees an empty slot.
  * - [release] frees the slot only for the owning ticket; a late release after a cancel or a
  *   newer ticket is a no-op, so it can never disown a newer inspection.
@@ -37,8 +37,20 @@ internal class InspectionOwnership {
     private var safJob: Job? = null
     private var usbHandle: OperationHandle? = null
 
-    /** Work captured by [cancel]; cancelled by the caller after the slot is already free. */
-    class Cancelled(val safJob: Job?, val usbHandle: OperationHandle?)
+    /** Disowns slot and cancels tracked work after clearing ownership. */
+    fun cancel(cancelUsb: Boolean) {
+        val cancelled =
+            synchronized(lock) {
+                if (active == null && safJob == null && usbHandle == null) return
+                val work = Cancelled(safJob, usbHandle)
+                clearLocked()
+                work
+            }
+        cancelled.safJob?.cancel()
+        if (cancelUsb) cancelled.usbHandle?.cancel()
+    }
+
+    private class Cancelled(val safJob: Job?, val usbHandle: OperationHandle?)
 
     fun begin(ticket: InspectionTicket): Boolean =
         synchronized(lock) {
@@ -81,17 +93,6 @@ internal class InspectionOwnership {
             if (active === ticket) clearLocked()
         }
     }
-
-    /** Disowns the slot; null when it was already free. */
-    fun cancel(): Cancelled? {
-        synchronized(lock) {
-            if (active == null && safJob == null && usbHandle == null) return null
-            val cancelled = Cancelled(safJob, usbHandle)
-            clearLocked()
-            return cancelled
-        }
-    }
-
     private fun clearLocked() {
         active = null
         safJob = null

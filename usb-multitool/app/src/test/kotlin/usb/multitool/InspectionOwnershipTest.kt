@@ -30,11 +30,13 @@ class InspectionOwnershipTest {
         override val token = usb.service.OperationTokenGenerator.next()
         override var state: OperationState = OperationState.Queued
         var cancelled = false
+        var onCancel: (() -> Unit)? = null
 
         override suspend fun await(): OperationState = OperationState.Completed
 
         override fun cancel() {
             cancelled = true
+            onCancel?.invoke()
         }
     }
 
@@ -62,7 +64,7 @@ class InspectionOwnershipTest {
         val second = ticket(generation = 2L)
 
         assertTrue(owner.begin(first))
-        assertTrue(owner.cancel() != null)
+        owner.cancel(cancelUsb = false)
         assertTrue(owner.begin(second))
 
         owner.release(first)
@@ -77,14 +79,14 @@ class InspectionOwnershipTest {
         assertTrue(owner.begin(only))
 
         // Cancel wins the race before the launched job is registered.
-        assertNull(requireNotNull(owner.cancel()).safJob)
+        owner.cancel(cancelUsb = false)
 
         val launched = job()
         owner.trackSafJob(only, launched)
 
         assertTrue(launched.isCancelled)
         assertNull(owner.active)
-        assertNull(owner.cancel())
+        owner.cancel(cancelUsb = false)
     }
 
     @Test
@@ -92,7 +94,7 @@ class InspectionOwnershipTest {
         val first = ticket()
         val second = ticket(generation = 2L)
         assertTrue(owner.begin(first))
-        owner.cancel()
+        owner.cancel(cancelUsb = false)
         assertTrue(owner.begin(second))
         val newJob = job()
         owner.trackSafJob(second, newJob)
@@ -101,9 +103,8 @@ class InspectionOwnershipTest {
         owner.trackSafJob(first, oldJob)
 
         assertTrue(oldJob.isCancelled)
-        assertFalse(newJob.isCancelled)
-        val cancelled = requireNotNull(owner.cancel())
-        assertSame(newJob, cancelled.safJob)
+        owner.cancel(cancelUsb = false)
+        assertTrue(newJob.isCancelled)
     }
 
     @Test
@@ -111,17 +112,19 @@ class InspectionOwnershipTest {
         val first = ticket()
         val second = ticket(generation = 2L)
         assertTrue(owner.begin(first))
-        owner.cancel()
+        owner.cancel(cancelUsb = false)
         assertTrue(owner.begin(second))
+
+        val current = FakeHandle()
+        owner.trackUsbHandle(second, current)
 
         val handle = FakeHandle()
         owner.trackUsbHandle(first, handle)
-
-        val cancelled = requireNotNull(owner.cancel())
-        assertNull(cancelled.usbHandle)
+        owner.cancel(cancelUsb = true)
         assertFalse(handle.cancelled)
-    }
+        assertTrue(current.cancelled)
 
+    }
     @Test
     fun releaseFreesTheSlotWithoutCancellingTheRunningJob() {
         val first = ticket()
@@ -141,7 +144,7 @@ class InspectionOwnershipTest {
     }
 
     @Test
-    fun cancelHandsOutTheWorkOnceAndLeavesOwnershipCancelled() {
+    fun cancelCancelsSafButOnlyCancelsUsbWhenRequested() {
         val only = ticket()
         val handle = FakeHandle()
         assertTrue(owner.begin(only))
@@ -149,12 +152,31 @@ class InspectionOwnershipTest {
         owner.trackSafJob(only, saf)
         owner.trackUsbHandle(only, handle)
 
-        val first = requireNotNull(owner.cancel())
-        assertSame(saf, first.safJob)
-        assertSame(handle, first.usbHandle)
-        assertFalse(handle.cancelled)
+        owner.cancel(cancelUsb = false)
 
-        assertNull(owner.cancel())
+        assertTrue(saf.isCancelled)
+        assertFalse(handle.cancelled)
+        assertNull(owner.active)
+        assertFalse(owner.owned(only))
+
+        val next = ticket(generation = 2L)
+        assertTrue(owner.begin(next))
+        val nextHandle = FakeHandle()
+        nextHandle.onCancel = { assertNull(owner.active) }
+        owner.trackUsbHandle(next, nextHandle)
+        owner.cancel(cancelUsb = true)
+        assertTrue(nextHandle.cancelled)
+        assertNull(owner.active)
+    }
+
+    @Test
+    fun cancelIsIdempotentAfterDisowning() {
+        val only = ticket()
+        assertTrue(owner.begin(only))
+
+        owner.cancel(cancelUsb = false)
+        owner.cancel(cancelUsb = true)
+
         assertNull(owner.active)
         assertFalse(owner.owned(only))
     }
@@ -171,7 +193,7 @@ class InspectionOwnershipTest {
             val canceller =
                 thread {
                     barrier.await()
-                    owner.cancel()?.safJob?.cancel()
+                    owner.cancel(cancelUsb = false)
                 }
             val registrar =
                 thread {
@@ -183,7 +205,7 @@ class InspectionOwnershipTest {
 
             assertTrue("run $it leaked an active SAF job", launched.isCancelled)
             assertNull("run $it kept the slot owned", owner.active)
-            assertNull("run $it left work registered", owner.cancel())
+            owner.cancel(cancelUsb = false)
         }
     }
 
@@ -201,13 +223,13 @@ class InspectionOwnershipTest {
             val canceller =
                 thread {
                     barrier.await()
-                    owner.cancel()
+                    owner.cancel(cancelUsb = false)
                 }
             beginner.join()
             canceller.join()
 
             assertNull(owner.active)
-            assertNull(owner.cancel())
+            owner.cancel(cancelUsb = false)
         }
     }
 }
