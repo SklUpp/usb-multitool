@@ -281,7 +281,12 @@ internal object VentoyTransitions {
             state.copy(
                 ventoyGlobalSettingsRequest = token,
                 ventoySettingsSource = source,
-                ventoyGlobalSettings = null,
+                // Refresh keeps displayed settings until newest answer lands. A different
+                // source must not inherit rows from previous file.
+                ventoyGlobalSettings =
+                    state.ventoyGlobalSettings.takeIf {
+                        state.ventoySettingsSource.sameTarget(source)
+                    },
                 ventoySettingsSourceLoading = true,
                 ventoySettingsSourceIdentity = device?.identity,
                 ventoySettingsSourceAttachGeneration = device?.attachGeneration,

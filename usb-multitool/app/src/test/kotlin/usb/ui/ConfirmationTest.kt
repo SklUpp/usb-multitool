@@ -62,6 +62,7 @@ class UiStateMachineTest {
                     FileEntry("ubuntu.iso", isDirectory = false, sizeBytes = 2_000_000_000uL),
                     FileEntry("docs", isDirectory = true, sizeBytes = 0uL),
                 ),
+            filesListingState = FilesListingState.Loaded,
             vtoyBypassChecks = true,
         )
     private fun terminal(base: AppUiState, progress: OperationProgress): ReduceResult {
@@ -288,8 +289,13 @@ class UiStateMachineTest {
 
     @Test
     fun listedFilesApplyOnlyToTheDisplayedPath() {
-        val state = ready().copy(currentPath = "/docs", files = emptyList(), filesListGeneration = 4L)
         val entries = listOf(FileEntry("manual.pdf", isDirectory = false, sizeBytes = 10uL))
+        val state = ready().copy(
+            currentPath = "/docs",
+            files = emptyList(),
+            filesListGeneration = 4L,
+            filesListingState = FilesListingState.Loading,
+        )
         val listed =
             UiIntent.FilesListed(
                 path = "/docs",
@@ -301,7 +307,7 @@ class UiStateMachineTest {
             )
         val applied = UiReducer.reduce(state, listed)
         assertEquals(entries, applied.state.files)
-        assertFalse(applied.state.filesPending)
+        assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
 
         val stale =
             UiReducer.reduce(
@@ -371,6 +377,47 @@ class UiStateMachineTest {
         assertTrue(result.effects.isEmpty())
         assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), result.state.statusMessage)
     }
+    @Test
+    fun partitionRoundTripRejectsLateOldListingAndDownloadBinding() {
+        val original =
+            ready().copy(
+                files = listOf(FileEntry("manual.pdf", false, 42uL)),
+                filesListingState = FilesListingState.Loaded,
+            )
+        val oldGeneration = original.filesListGeneration
+        val switchedAway = UiReducer.reduce(original, UiIntent.SelectPartition("2"))
+        val switchedBack = UiReducer.reduce(switchedAway.state, UiIntent.SelectPartition("1"))
+        val late =
+            UiReducer.reduce(
+                switchedBack.state,
+                UiIntent.FilesListed(
+                    path = "/",
+                    files = original.files,
+                    generation = oldGeneration,
+                    identity = device.identity,
+                    partitionId = "1",
+                    attachGeneration = device.attachGeneration,
+                ),
+            )
+        assertTrue(late.state.files.isEmpty())
+        assertEquals(FilesListingState.Loading, late.state.filesListingState)
+
+        val binding =
+            FilesDownloadBinding(
+                directory = "/",
+                name = "manual.pdf",
+                sizeBytes = 42uL,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                partitionId = "1",
+                startLba = 0uL,
+                sectorCount = 2048uL,
+            )
+        val download = UiReducer.reduce(late.state, UiIntent.DownloadFile(binding, "content://out/old"))
+        assertTrue(download.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), download.state.statusMessage)
+    }
+
     @Test
     fun downloadActionDisabledForDirectorySelection() {
         assertTrue(downloadActionEnabled(true, FileEntry("file.bin", false, 1uL)))

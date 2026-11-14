@@ -32,6 +32,13 @@ internal object FilesPickTransitions {
                 ?: return ReduceResult(
                     state.copy(statusMessage = UiReducer.presenceMessage(state.presence)),
                 )
+        if (intent.expectedIdentity != null || intent.expectedAttachGeneration != null) {
+            if (device.identity != intent.expectedIdentity ||
+                device.attachGeneration != intent.expectedAttachGeneration
+            ) {
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)))
+            }
+        }
         val explicit = intent.partitionId
         val partition =
             when {
@@ -78,6 +85,7 @@ internal object FilesPickTransitions {
                     FilesPickMode(
                         sessionId = session,
                         purpose = intent.purpose,
+                        launchSource = intent.launchSource,
                         returnTab = intent.returnTab,
                         target = intent.target,
                         identity = device.identity,
@@ -94,17 +102,32 @@ internal object FilesPickTransitions {
                         selectedPartitionId = partition.id,
                         currentPath = path,
                         files = emptyList(),
+                        filesListingState = FilesListingState.Loading,
                         filesError = null,
                         filesListGeneration = state.filesListGeneration + 1L,
-                        filesPending = true,
-                        pendingIsoImport = null,
                         deferredIsoImport = null,
                         isoImportError = null,
                         isoImportSafInFlight = null,
                         isoImportGeneration = state.isoImportGeneration + 1,
-                        statusMessage = null,
                     ),
-                    effects = listOf(UiEffect.LoadFiles(path = path)),
+                    effects = buildList {
+                        add(UiEffect.LoadFiles(path = path))
+                        if (intent.launchSource == FilesPickLaunchSource.Phone &&
+                            intent.purpose == FilesPickPurpose.WindowsImage
+                        ) {
+                            add(
+                                UiEffect.LaunchWindowsImport(
+                                    directory = path,
+                                    pickSessionId = session,
+                                    identity = device.identity,
+                                    attachGeneration = device.attachGeneration,
+                                    partitionId = partition.id,
+                                    startLba = requireNotNull(partition.startLba),
+                                    sectorCount = requireNotNull(partition.sectorCount),
+                                ),
+                            )
+                        }
+                    },
                 )
             }
         }
@@ -186,8 +209,8 @@ internal object FilesPickTransitions {
         if (!state.actionsEnabled) {
             return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
         }
-        // A stale row must not be confirmed while the listing is loading or failed.
-        if (state.filesPending || state.filesError != null) {
+        // A stale or failed listing cannot confirm a row; Loaded includes valid empty folders.
+        if (state.filesListingState != FilesListingState.Loaded) {
             return ReduceResult(
                 state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
@@ -241,7 +264,7 @@ internal object FilesPickTransitions {
             return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
         }
         val path = safePickPath(state.currentPath)
-        if (path == null || state.filesPending || state.filesError != null) {
+        if (path == null || state.filesListingState != FilesListingState.Loaded) {
             return ReduceResult(
                 state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )

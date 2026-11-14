@@ -15,6 +15,7 @@ class FilesErrorStateTest {
             selectedPartitionId = "1",
             currentPath = "/",
             filesListGeneration = 3L,
+            filesListingState = FilesListingState.Loading,
         )
 
     private fun AppUiState.listed(
@@ -54,11 +55,11 @@ class FilesErrorStateTest {
 
     @Test
     fun deepPathFailureFallsBackToRootReload() {
-        val deep = ready.copy(currentPath = "/docs", filesPending = true)
+        val deep = ready.copy(currentPath = "/docs", filesListingState = FilesListingState.Loading)
         val fallback =
             UiReducer.reduce(deep, deep.listFailed(message = "Path not found: /docs"))
         assertEquals("/", fallback.state.currentPath)
-        assertTrue(fallback.state.filesPending)
+        assertEquals(FilesListingState.Loading, fallback.state.filesListingState)
         assertNull(fallback.state.filesError)
         val load = fallback.effects.single() as UiEffect.LoadFiles
         assertEquals("/", load.path)
@@ -66,31 +67,26 @@ class FilesErrorStateTest {
 
     @Test
     fun deepPathIoErrorDoesNotFallback() {
-        val deep = ready.copy(currentPath = "/docs", filesPending = true)
+        val deep = ready.copy(currentPath = "/docs", filesListingState = FilesListingState.Loading)
         val failed = UiReducer.reduce(deep, deep.listFailed(message = "Read failed"))
         assertEquals("/docs", failed.state.currentPath)
         assertEquals("Read failed", failed.state.filesError)
-        assertFalse(failed.state.filesPending)
+        assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.effects.isEmpty())
     }
 
     @Test
     fun successAndNavigationClearTheError() {
-        val failed = ready.copy(filesError = "boom")
+        val failed = ready.copy(filesListingState = FilesListingState.Failed, filesError = "boom")
+        val listedState = UiReducer.reduce(failed, UiIntent.RefreshFiles).state
         assertNull(
-            UiReducer.reduce(failed, failed.listed(files = emptyList()))
-                .state
-                .filesError,
+            UiReducer.reduce(listedState, listedState.listed(files = emptyList())).state.filesError,
         )
         assertNull(
-            UiReducer.reduce(failed, UiIntent.OpenDirectory("/other"))
-                .state
-                .filesError,
+            UiReducer.reduce(failed, UiIntent.OpenDirectory("/other")).state.filesError,
         )
         assertNull(
-            UiReducer.reduce(failed, UiIntent.DeviceChanged(DevicePresence.Disconnected))
-                .state
-                .filesError,
+            UiReducer.reduce(failed, UiIntent.DeviceChanged(DevicePresence.Disconnected)).state.filesError,
         )
     }
 

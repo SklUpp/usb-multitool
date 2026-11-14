@@ -107,6 +107,13 @@ enum class OperationState {
     Partial,
 }
 
+/** Lifecycle of current directory listing; only Loading accepts list callbacks. */
+enum class FilesListingState {
+    Stale,
+    Loading,
+    Loaded,
+    Failed,
+}
 /** Authored, translatable text. [Raw] holds system or engine text and is shown unchanged. */
 sealed interface UiMessage {
     data class Key(
@@ -636,6 +643,7 @@ data class FilesDownloadBinding(
 
 /** True when binding still names exact visible file on current attachment/partition. */
 fun FilesDownloadBinding.matches(state: AppUiState): Boolean {
+    if (state.filesListingState != FilesListingState.Loaded) return false
     val device = state.device ?: return false
     if (device.identity != identity || device.attachGeneration != attachGeneration) return false
     if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
@@ -767,6 +775,11 @@ enum class FilesPickPurpose {
     VentoyConfig,
 }
 
+enum class FilesPickLaunchSource {
+    Files,
+    Phone,
+}
+
 /** File picks a regular file; Folder picks the folder that is currently open (root allowed). */
 enum class FilesPickTarget {
     File,
@@ -783,6 +796,7 @@ data class FilesPickMode(
     /** Unique id of this exact session; an older SAF/copy result can never join it. */
     val sessionId: String,
     val purpose: FilesPickPurpose,
+    val launchSource: FilesPickLaunchSource = FilesPickLaunchSource.Files,
     val returnTab: ShellTab,
     val target: FilesPickTarget,
     val identity: String?,
@@ -790,7 +804,7 @@ data class FilesPickMode(
     val partitionId: String,
     val startLba: ULong?,
     val sectorCount: ULong?,
-) {
+){
     /** Result pinned to exactly this session's attachment and partition geometry. */
     fun selection(
         path: String,
@@ -1114,24 +1128,13 @@ data class AppUiState(
     val currentPath: String = "/",
     val files: List<FileEntry> = emptyList(),
     /**
-     * Id of the newest directory-list request, bumped when the request is emitted (path
-     * change, tab entry, manual refresh, device change, finished mutation).
-     * [UiIntent.FilesListed] / [UiIntent.FilesListFailed] answers must echo this value
-     * together with path, selected partition, identity and attach generation; anything
-     * else is dropped, so a late answer never overwrites a newer one.
+     * Id of newest directory-list request. Answers echo this value plus path, selected
+     * partition, identity and attach generation; anything else is dropped.
      */
     val filesListGeneration: Long = 0L,
-    /**
-     * True while a real list for [currentPath] is outstanding. Empty [files] then means
-     * "not loaded yet", never "folder is empty". Cleared by a matching list result or a
-     * refresh/invalidations that defers mounting to the Files tab.
-     */
-    val filesPending: Boolean = false,
-    /**
-     * Real directory-list failure for [currentPath]. Set by [UiIntent.FilesListFailed] and
-     * cleared by a successful listing, a path change or a device change. Never inferred
-     * from status-message text.
-     */
+    /** Current directory listing lifecycle; Stale is deferred demand, Loading emitted LoadFiles. */
+    val filesListingState: FilesListingState = FilesListingState.Stale,
+    /** Real directory-list failure detail; non-null only after [FilesListingState.Failed]. */
     val filesError: String? = null,
     /**
      * Last read-only free-space measurement of one exact attachment + partition geometry.

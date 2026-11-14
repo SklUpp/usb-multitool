@@ -78,8 +78,11 @@ class FilesPickUiTest {
                     initialPath = path,
                 ),
             ).state
-        // Simulate the real host answering LoadFiles for the pinned folder.
-        return opened.copy(files = ready().files, filesPending = false, filesError = null)
+        return opened.copy(
+            files = ready().files,
+            filesListingState = FilesListingState.Loaded,
+            filesError = null,
+        )
     }
 
     @Test
@@ -105,6 +108,62 @@ class FilesPickUiTest {
         assertEquals(ShellTab.Ventoy, mode.returnTab)
         assertEquals(UiEffect.LoadFiles(path = "/"), result.effects.single())
     }
+    @Test
+    fun phonePickerFailureClosesPhoneLaunchButFilesFailureKeepsFilesPicker() {
+        val phoneOpened =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.BeginFilesPick(
+                    purpose = FilesPickPurpose.WindowsImage,
+                    returnTab = ShellTab.Ventoy,
+                    launchSource = FilesPickLaunchSource.Phone,
+                ),
+            ).state
+        val phoneSession = requireNotNull(phoneOpened.filesPickMode).sessionId
+        val phoneFailed =
+            UiReducer.reduce(
+                phoneOpened,
+                UiIntent.WindowsImportPickerFinished(
+                    pickSessionId = phoneSession,
+                    cancelled = false,
+                    failure = UiMessageKey.ImportPickerUnavailable,
+                    launchSource = FilesPickLaunchSource.Phone,
+                ),
+            )
+        assertNull(phoneFailed.state.filesPickMode)
+        assertEquals(ShellTab.Ventoy, phoneFailed.state.tab)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.ImportPickerUnavailable),
+            phoneFailed.state.statusMessage,
+        )
+
+        val filesOpened =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.BeginFilesPick(
+                    purpose = FilesPickPurpose.WindowsImage,
+                    returnTab = ShellTab.Ventoy,
+                ),
+            ).state
+        val filesSession = requireNotNull(filesOpened.filesPickMode).sessionId
+        val filesFailed =
+            UiReducer.reduce(
+                filesOpened,
+                UiIntent.WindowsImportPickerFinished(
+                    pickSessionId = filesSession,
+                    cancelled = false,
+                    failure = UiMessageKey.ImportPickerUnavailable,
+                    launchSource = FilesPickLaunchSource.Files,
+                ),
+            )
+        assertNotNull(filesFailed.state.filesPickMode)
+        assertEquals(ShellTab.Files, filesFailed.state.tab)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.ImportPickerUnavailable),
+            filesFailed.state.statusMessage,
+        )
+    }
+
 
     @Test
     fun beginFailsClosedWithoutPinnedPartition() {
@@ -225,7 +284,7 @@ class FilesPickUiTest {
     fun confirmationIsRejectedWhileListingIsPendingOrFailed() {
         val loading =
             UiReducer.reduce(
-                begun().copy(filesPending = true),
+                begun().copy(filesListingState = FilesListingState.Loading),
                 UiIntent.ConfirmFilesPickFile("win11.iso"),
             )
         assertNotNull(loading.state.filesPickMode)
@@ -237,7 +296,7 @@ class FilesPickUiTest {
 
         val failed =
             UiReducer.reduce(
-                begun().copy(filesPending = false, filesError = "read failed"),
+                begun().copy(filesListingState = FilesListingState.Failed, filesError = "read failed"),
                 UiIntent.ConfirmFilesPickFile("win11.iso"),
             )
         assertNotNull(failed.state.filesPickMode)
@@ -823,7 +882,7 @@ class FilesPickUiTest {
                 ),
             ).state
         val configState =
-            openedConfig.copy(files = ready().files, filesPending = false)
+            openedConfig.copy(files = ready().files, filesListingState = FilesListingState.Loaded)
         val config =
             UiReducer.reduce(configState, UiIntent.ConfirmFilesPickFile("ventoy.json")).state
 

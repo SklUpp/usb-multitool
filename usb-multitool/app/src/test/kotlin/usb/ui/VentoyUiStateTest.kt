@@ -830,6 +830,7 @@ class VentoyUiStateTest {
         val operationToken = OperationTokenGenerator.next()
         val base =
             withVentoy().copy(
+                tab = ShellTab.Ventoy,
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
@@ -856,18 +857,25 @@ class VentoyUiStateTest {
         assertTrue(consumed.state.pendingImportFolderPickLoad)
         assertTrue(consumed.effects.isEmpty())
 
-        val released =
-            UiReducer.reduce(
-                consumed.state,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Completed,
-                        token = operationToken,
-                        title = OperationTitle.ProbeDevice,
-                    ),
+        val progressed = UiReducer.reduce(
+            consumed.state,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = operationToken,
+                    title = OperationTitle.ProbeDevice,
                 ),
-            )
-
+            ),
+        )
+        val released = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = operationToken,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.ProbeDevice,
+                state = OperationState.Completed,
+            ),
+        )
         assertFalse(released.state.pendingImportFolderPickLoad)
         assertNull(released.state.deferredImportFolderPick)
         assertEquals(WindowsImportKind.Image, released.state.pendingImportFolderPick)
@@ -878,12 +886,59 @@ class VentoyUiStateTest {
         val effect = released.effects.single() as UiEffect.LoadVentoyFolders
         assertEquals(released.state.ventoyFoldersRequest, effect.requestToken)
     }
+    @Test
+    fun terminalCompletionReleasesDeferredFolderWhenFilesListingLoaded() {
+        val operationToken = OperationTokenGenerator.next()
+        val base =
+            withVentoy().copy(
+                tab = ShellTab.Ventoy,
+                filesListingState = FilesListingState.Loaded,
+                ventoyFolders = null,
+                deferredImportFolderPick = WindowsImportKind.Image,
+                pendingImportFolderPickLoad = true,
+                presence = DevicePresence.Busy,
+                operation =
+                    OperationProgress(
+                        token = operationToken,
+                        state = OperationState.Running,
+                        title = OperationTitle.ReadScan,
+                    ),
+            )
+        val progressed =
+            UiReducer.reduce(
+                base,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        token = operationToken,
+                        state = OperationState.Completed,
+                        title = OperationTitle.ReadScan,
+                    ),
+                ),
+            )
+        val released =
+            UiReducer.reduce(
+                progressed.state,
+                UiIntent.OperationCompletionEffects(
+                    token = operationToken,
+                    attachmentGeneration = requireNotNull(base.device).attachGeneration,
+                    title = OperationTitle.ReadScan,
+                    state = OperationState.Completed,
+                ),
+            )
+        assertEquals(FilesListingState.Loaded, released.state.filesListingState)
+        assertFalse(released.state.pendingImportFolderPickLoad)
+        assertNull(released.state.deferredImportFolderPick)
+        assertEquals(WindowsImportKind.Image, released.state.pendingImportFolderPick)
+        val effect = released.effects.single() as UiEffect.LoadVentoyFolders
+        assertEquals(released.state.ventoyFoldersRequest, effect.requestToken)
+    }
+
 
     @Test
     fun confirmationDismissReleasesDeferredReopen() {
         val prompt =
             UiReducer.reduce(
-                withVentoy(),
+                withVentoy().copy(tab = ShellTab.Ventoy),
                 UiIntent.RequestDestructive(DestructiveAction.WIPE),
             ).state
         assertNotNull(prompt.pendingConfirmation)
@@ -955,6 +1010,7 @@ class VentoyUiStateTest {
         val operationToken = OperationTokenGenerator.next()
         val base =
             withVentoy().copy(
+                tab = ShellTab.Files,
                 presence = DevicePresence.Busy,
                 operation =
                     OperationProgress(
@@ -975,50 +1031,54 @@ class VentoyUiStateTest {
                 ),
             ).state
 
-        val mutated =
-            UiReducer.reduce(
-                deferred,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Partial,
-                        token = operationToken,
-                        title = OperationTitle.DeleteEntry("gone.bin"),
-                        errorMessage = "partial",
-                    ),
+        val progressed = UiReducer.reduce(
+            deferred,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Partial,
+                    token = operationToken,
+                    title = OperationTitle.DeleteEntry("gone.bin"),
+                    errorMessage = "partial",
                 ),
-            )
-
-        // The same intent already mounts Files; the folder read must not run beside it, but
-        // an unrelated mutation on the same attachment must not drop the demand either.
+            ),
+        )
+        val mutated = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = operationToken,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.DeleteEntry("gone.bin"),
+                state = OperationState.Partial,
+            ),
+        )
         assertNull(mutated.state.ventoyFolders)
         assertEquals(WindowsImportKind.Image, mutated.state.deferredImportFolderPick)
         assertNull(mutated.state.pendingImportFolderPick)
-        assertTrue(mutated.state.pendingImportFolderPickLoad)
-        assertEquals(1, mutated.effects.count { it is UiEffect.LoadFiles })
-        assertTrue(mutated.effects.none { it is UiEffect.LoadVentoyFolders })
+        assertTrue(mutated.effects.single() is UiEffect.LoadFiles)
 
-        val quiet =
-            UiReducer.reduce(
-                mutated.state,
-                UiIntent.Status(UiMessage.Raw("settled")),
-            )
-
-        assertEquals(WindowsImportKind.Image, quiet.state.pendingImportFolderPick)
-        assertNull(quiet.state.deferredImportFolderPick)
-        assertFalse(quiet.state.pendingImportFolderPickLoad)
-        assertEquals(
-            mutated.state.ventoyFoldersRequest + 1L,
-            quiet.state.ventoyFoldersRequest,
+        val quiet = UiReducer.reduce(
+            mutated.state,
+            UiIntent.FilesListed(
+                path = mutated.state.currentPath,
+                files = emptyList(),
+                generation = mutated.state.filesListGeneration,
+                identity = device.identity,
+                partitionId = mutated.state.selectedPartitionId!!,
+                attachGeneration = device.attachGeneration,
+            ),
         )
-        val folderLoad =
-            quiet.effects.filterIsInstance<UiEffect.LoadVentoyFolders>().single()
-        assertEquals(quiet.state.ventoyFoldersRequest, folderLoad.requestToken)
+        assertEquals(WindowsImportKind.Image, quiet.state.pendingImportFolderPick)
+        assertFalse(quiet.state.pendingImportFolderPickLoad)
+        assertEquals(mutated.state.ventoyFoldersRequest + 1L, quiet.state.ventoyFoldersRequest)
+        assertTrue(quiet.effects.single() is UiEffect.LoadVentoyFolders)
+        assertEquals(quiet.state.ventoyFoldersRequest, mutated.state.ventoyFoldersRequest + 1L)
     }
 
     @Test
     fun refusedConfirmDoesNotSuppressRelease() {
         val deferred =
             withVentoy().copy(
+                tab = ShellTab.Ventoy,
                 deferredImportFolderPick = WindowsImportKind.Image,
                 pendingImportFolderPickLoad = true,
                 ventoyFolders = null,
@@ -1040,6 +1100,7 @@ class VentoyUiStateTest {
     fun manualFolderLoadDeduplicatesTheDeferredRelease() {
         val deferred =
             withVentoy().copy(
+                tab = ShellTab.Ventoy,
                 deferredImportFolderPick = WindowsImportKind.Image,
                 pendingImportFolderPickLoad = true,
                 ventoyFolders = null,
@@ -1047,19 +1108,35 @@ class VentoyUiStateTest {
 
         val loaded = UiReducer.reduce(deferred, UiIntent.LoadVentoyFolders)
 
-        // The manual refresh is the only USB work; the release must not add a second mount.
+        // Manual refresh owns the one folder mount; deferred picker waits for its response.
         assertEquals(1, loaded.effects.size)
         val effect = loaded.effects.single() as UiEffect.LoadVentoyFolders
         assertEquals(loaded.state.ventoyFoldersRequest, effect.requestToken)
-        assertEquals(WindowsImportKind.Image, loaded.state.pendingImportFolderPick)
-        assertNull(loaded.state.deferredImportFolderPick)
-        assertFalse(loaded.state.pendingImportFolderPickLoad)
+        assertNull(loaded.state.pendingImportFolderPick)
+        assertEquals(WindowsImportKind.Image, loaded.state.deferredImportFolderPick)
+        assertTrue(loaded.state.pendingImportFolderPickLoad)
+
+        val finished = UiReducer.reduce(
+            loaded.state,
+            UiIntent.VentoyFoldersLoaded(
+                folders = emptyList(),
+                error = null,
+                requestToken = loaded.state.ventoyFoldersRequest,
+                path = loaded.state.ventoyFolderPath,
+                epoch = loaded.state.ventoyCacheEpoch,
+            ),
+        )
+        assertEquals(WindowsImportKind.Image, finished.state.pendingImportFolderPick)
+        assertNull(finished.state.deferredImportFolderPick)
+        assertFalse(finished.state.pendingImportFolderPickLoad)
+        assertTrue(finished.effects.isEmpty())
     }
 
     @Test
     fun directInspectionBlocksDeferredReleaseUntilFinished() {
         val deferred =
             withVentoy().copy(
+                tab = ShellTab.Ventoy,
                 deferredImportFolderPick = WindowsImportKind.Image,
                 pendingImportFolderPickLoad = true,
                 ventoyFolders = null,
@@ -1483,7 +1560,7 @@ class VentoyUiStateTest {
                     attachGeneration = requireNotNull(ready.state.device).attachGeneration,
                 ),
             )
-        assertFalse(listed.state.filesPending)
+        assertEquals(FilesListingState.Loaded, listed.state.filesListingState)
         assertNotNull(listed.state.deferredIsoImport)
         assertTrue(listed.effects.none { it is UiEffect.ImportIso })
 
@@ -1560,7 +1637,7 @@ class VentoyUiStateTest {
                 ),
             ),
         ).state
-        val failed = UiReducer.reduce(
+        val progressed = UiReducer.reduce(
             running,
             UiIntent.OperationUpdated(
                 OperationProgress(
@@ -1569,6 +1646,15 @@ class VentoyUiStateTest {
                     title = OperationTitle.ImportTarget("win.iso"),
                     errorMessage = "import folder is gone",
                 ),
+            ),
+        )
+        val failed = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = importToken,
+                attachmentGeneration = requireNotNull(base.device).attachGeneration,
+                title = OperationTitle.ImportTarget("win.iso"),
+                state = OperationState.Failed,
             ),
         ).state
         assertTrue(failed.isoImportGeneration > base.isoImportGeneration)
@@ -2082,7 +2168,7 @@ class VentoyUiStateTest {
         assertTrue(stillBusy.effects.isEmpty())
         assertTrue(stillBusy.state.ventoyFoldersPending)
 
-        val released = UiReducer.reduce(
+        val progressed = UiReducer.reduce(
             stillBusy.state,
             UiIntent.OperationUpdated(
                 OperationProgress(
@@ -2090,6 +2176,15 @@ class VentoyUiStateTest {
                     token = scanToken,
                     title = OperationTitle.ReadScan,
                 ),
+            ),
+        )
+        val released = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = scanToken,
+                attachmentGeneration = requireNotNull(busy.device).attachGeneration,
+                title = OperationTitle.ReadScan,
+                state = OperationState.Completed,
             ),
         )
         val effect = released.effects.single() as UiEffect.LoadVentoyFolders

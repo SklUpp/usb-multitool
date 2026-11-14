@@ -39,7 +39,8 @@ class FilesListFreshnessTest {
             currentPath = path,
             files = files,
             filesListGeneration = generation,
-            filesPending = pending,
+            filesListingState =
+                if (pending) FilesListingState.Loading else FilesListingState.Loaded,
         )
 
     private fun AppUiState.listed(
@@ -92,7 +93,7 @@ class FilesListFreshnessTest {
 
         assertEquals("/ISO", refreshed.state.currentPath)
         assertTrue(refreshed.state.files.isEmpty())
-        assertTrue(refreshed.state.filesPending)
+        assertEquals(FilesListingState.Loading, refreshed.state.filesListingState)
         assertNull(refreshed.state.filesError)
         assertEquals(base.filesListGeneration + 1L, refreshed.state.filesListGeneration)
         val refreshedFiles = refreshed.effects.single() as UiEffect.LoadFiles
@@ -115,7 +116,7 @@ class FilesListFreshnessTest {
         // Missing selected partition must stay unselected; never retarget to another entry.
         assertNull(onlyOther.state.selectedPartitionId)
         assertEquals("/", onlyOther.state.currentPath)
-        assertFalse(onlyOther.state.filesPending)
+        assertEquals(FilesListingState.Stale, onlyOther.state.filesListingState)
         assertTrue(onlyOther.effects.none { it is UiEffect.LoadFiles })
     }
     @Test
@@ -130,7 +131,7 @@ class FilesListFreshnessTest {
             ),
         )
         assertNull(changed.state.selectedPartitionId)
-        assertFalse(changed.state.filesPending)
+        assertEquals(FilesListingState.Stale, changed.state.filesListingState)
         assertTrue(changed.effects.none { it is UiEffect.LoadFiles })
     }
 
@@ -149,7 +150,7 @@ class FilesListFreshnessTest {
             )
 
         assertNull(empty.state.selectedPartitionId)
-        assertFalse(empty.state.filesPending)
+        assertEquals(FilesListingState.Stale, empty.state.filesListingState)
         assertTrue(empty.effects.none { it is UiEffect.LoadFiles })
     }
 
@@ -157,7 +158,7 @@ class FilesListFreshnessTest {
     fun detachClearsPendingAndDoesNotLoad() {
         val base = ready(pending = true)
         val detached = UiReducer.reduce(base, UiIntent.DeviceChanged(DevicePresence.Disconnected))
-        assertFalse(detached.state.filesPending)
+        assertEquals(FilesListingState.Stale, detached.state.filesListingState)
         assertTrue(detached.state.files.isEmpty())
         assertTrue(detached.effects.isEmpty())
     }
@@ -169,7 +170,7 @@ class FilesListFreshnessTest {
         assertEquals(other.id, switched.state.selectedPartitionId)
         assertEquals("/", switched.state.currentPath)
         assertTrue(switched.state.files.isEmpty())
-        assertTrue(switched.state.filesPending)
+        assertEquals(FilesListingState.Loading, switched.state.filesListingState)
         assertEquals(5L, switched.state.filesListGeneration)
         val switchedFiles = switched.effects.single() as UiEffect.LoadFiles
         assertEquals("/", switchedFiles.path)
@@ -181,7 +182,7 @@ class FilesListFreshnessTest {
         val entries = listOf(FileEntry("a.txt", isDirectory = false, sizeBytes = 3uL))
         val applied = UiReducer.reduce(pending, pending.listed(files = entries))
         assertEquals(entries, applied.state.files)
-        assertFalse(applied.state.filesPending)
+        assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
         assertNull(applied.state.filesError)
     }
 
@@ -190,7 +191,7 @@ class FilesListFreshnessTest {
         val pending = ready(files = emptyList(), pending = true)
         val applied = UiReducer.reduce(pending, pending.listed(files = emptyList()))
         assertTrue(applied.state.files.isEmpty())
-        assertFalse(applied.state.filesPending)
+        assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
         assertNull(applied.state.filesError)
     }
 
@@ -199,7 +200,7 @@ class FilesListFreshnessTest {
         val onData = ready(files = emptyList(), pending = true, generation = 2L)
         val switched = UiReducer.reduce(onData, UiIntent.SelectPartition(other.id)).state
         assertEquals(3L, switched.filesListGeneration)
-        assertTrue(switched.filesPending)
+        assertEquals(FilesListingState.Loading, switched.filesListingState)
 
         val foreign =
             listOf(FileEntry("from-data.bin", isDirectory = false, sizeBytes = 9uL))
@@ -210,14 +211,14 @@ class FilesListFreshnessTest {
                 onData.listed(path = "/", files = foreign, generation = 2L, partitionId = data.id),
             )
         assertTrue(stale.state.files.isEmpty())
-        assertTrue(stale.state.filesPending)
+        assertEquals(FilesListingState.Loading, stale.state.filesListingState)
         assertNull(stale.state.filesError)
 
         val live =
             listOf(FileEntry("from-other.bin", isDirectory = false, sizeBytes = 4uL))
         val fresh = UiReducer.reduce(stale.state, stale.state.listed(files = live))
         assertEquals(live, fresh.state.files)
-        assertFalse(fresh.state.filesPending)
+        assertEquals(FilesListingState.Loaded, fresh.state.filesListingState)
     }
 
     @Test
@@ -247,12 +248,12 @@ class FilesListFreshnessTest {
                 ),
             )
         assertTrue(stale.state.files.isEmpty())
-        assertTrue(stale.state.filesPending)
+        assertEquals(FilesListingState.Loading, stale.state.filesListingState)
 
         val live = listOf(FileEntry("post-reattach.bin", isDirectory = false, sizeBytes = 2uL))
         val applied = UiReducer.reduce(stale.state, stale.state.listed(files = live))
         assertEquals(live, applied.state.files)
-        assertFalse(applied.state.filesPending)
+        assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
     }
 
     @Test
@@ -279,7 +280,7 @@ class FilesListFreshnessTest {
                 ),
             )
         assertTrue(stale.state.files.isEmpty())
-        assertTrue(stale.state.filesPending)
+        assertEquals(FilesListingState.Loading, stale.state.filesListingState)
     }
 
     @Test
@@ -287,7 +288,7 @@ class FilesListFreshnessTest {
         val pending = ready(files = emptyList(), pending = true, generation = 8L)
         val failed = UiReducer.reduce(pending, pending.listFailed(message = "I/O error"))
         assertEquals("I/O error", failed.state.filesError)
-        assertFalse(failed.state.filesPending)
+        assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.state.files.isEmpty())
     }
 
@@ -301,7 +302,7 @@ class FilesListFreshnessTest {
                 onData.listFailed(message = "late fail", generation = 2L, partitionId = data.id),
             )
         assertNull(stale.state.filesError)
-        assertTrue(stale.state.filesPending)
+        assertEquals(FilesListingState.Loading, stale.state.filesListingState)
     }
 
     @Test
@@ -310,7 +311,7 @@ class FilesListFreshnessTest {
         val opened = UiReducer.reduce(base, UiIntent.OpenDirectory("/docs"))
         assertEquals("/docs", opened.state.currentPath)
         assertTrue(opened.state.files.isEmpty())
-        assertTrue(opened.state.filesPending)
+        assertEquals(FilesListingState.Loading, opened.state.filesListingState)
         assertEquals(11L, opened.state.filesListGeneration)
         assertTrue(opened.effects.single() is UiEffect.LoadFiles)
     }
@@ -331,7 +332,7 @@ class FilesListFreshnessTest {
         assertEquals("/ISO", busy.state.currentPath)
         assertEquals(data.id, busy.state.selectedPartitionId)
         assertEquals(base.files, busy.state.files)
-        assertFalse(busy.state.filesPending)
+        assertEquals(FilesListingState.Loaded, busy.state.filesListingState)
         assertEquals(4L, busy.state.filesListGeneration)
         assertTrue(busy.effects.none { it is UiEffect.LoadFiles })
 
@@ -346,7 +347,7 @@ class FilesListFreshnessTest {
             )
         assertEquals("/ISO", readyAgain.state.currentPath)
         assertTrue(readyAgain.state.files.isEmpty())
-        assertTrue(readyAgain.state.filesPending)
+        assertEquals(FilesListingState.Loading, readyAgain.state.filesListingState)
         assertEquals(5L, readyAgain.state.filesListGeneration)
         val readyAgainFiles = readyAgain.effects.single() as UiEffect.LoadFiles
         assertEquals("/ISO", readyAgainFiles.path)
@@ -394,7 +395,7 @@ class FilesListFreshnessTest {
             ready(path = "/gone/after/format", files = emptyList(), pending = true, generation = 6L)
         val failed = UiReducer.reduce(pending, pending.listFailed(message = "Path not found: /gone/after/format"))
         assertEquals("/", failed.state.currentPath)
-        assertTrue(failed.state.filesPending)
+        assertEquals(FilesListingState.Loading, failed.state.filesListingState)
         assertNull(failed.state.filesError)
         assertEquals(7L, failed.state.filesListGeneration)
         val failedFiles = failed.effects.single() as UiEffect.LoadFiles
@@ -407,7 +408,7 @@ class FilesListFreshnessTest {
                 failed.state.listFailed(message = "I/O error"),
             )
         assertEquals("I/O error", rootFail.state.filesError)
-        assertFalse(rootFail.state.filesPending)
+        assertEquals(FilesListingState.Failed, rootFail.state.filesListingState)
         assertTrue(rootFail.effects.isEmpty())
     }
 
@@ -418,7 +419,7 @@ class FilesListFreshnessTest {
         val failed = UiReducer.reduce(pending, pending.listFailed(message = "disk read failed"))
         assertEquals("/ISO", failed.state.currentPath)
         assertEquals("disk read failed", failed.state.filesError)
-        assertFalse(failed.state.filesPending)
+        assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.effects.isEmpty())
     }
 
@@ -427,7 +428,7 @@ class FilesListFreshnessTest {
         val deep = ready(path = "/ISO", files = emptyList(), pending = true, generation = 2L)
         val atRoot = UiReducer.reduce(deep, UiIntent.NavigateUp).state
         assertEquals("/", atRoot.currentPath)
-        assertTrue(atRoot.filesPending)
+        assertEquals(FilesListingState.Loading, atRoot.filesListingState)
         val stale =
             UiReducer.reduce(
                 atRoot,
@@ -435,7 +436,7 @@ class FilesListFreshnessTest {
             )
         assertEquals("/", stale.state.currentPath)
         assertNull(stale.state.filesError)
-        assertTrue(stale.state.filesPending)
+        assertEquals(FilesListingState.Loading, stale.state.filesListingState)
     }
 
     @Test
@@ -451,7 +452,7 @@ class FilesListFreshnessTest {
                 ),
             )
         assertTrue(foreign.state.files.isEmpty())
-        assertTrue(foreign.state.filesPending)
+        assertEquals(FilesListingState.Loading, foreign.state.filesListingState)
     }
 
     @Test
@@ -469,7 +470,7 @@ class FilesListFreshnessTest {
         assertEquals("/ISO", permission.state.currentPath)
         assertEquals(data.id, permission.state.selectedPartitionId)
         assertEquals(device.capacityBytes, permission.state.device?.capacityBytes)
-        assertFalse(permission.state.filesPending)
+        assertEquals(FilesListingState.Loaded, permission.state.filesListingState)
         assertTrue(permission.effects.none { it is UiEffect.LoadFiles })
     }
 
@@ -650,7 +651,7 @@ class FilesListFreshnessTest {
         val failed =
             UiReducer.reduce(pending, pending.listFailed(message = "Path not found"))
         assertEquals("/", failed.state.currentPath)
-        assertTrue(failed.state.filesPending)
+        assertEquals(FilesListingState.Loading, failed.state.filesListingState)
         assertNull(failed.state.filesError)
         assertTrue(failed.effects.single() is UiEffect.LoadFiles)
     }
@@ -666,7 +667,7 @@ class FilesListFreshnessTest {
             )
         assertEquals("/ISO", failed.state.currentPath)
         assertEquals("directory listing failed", failed.state.filesError)
-        assertFalse(failed.state.filesPending)
+        assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.effects.isEmpty())
     }
 
@@ -684,7 +685,7 @@ class FilesListFreshnessTest {
         // The folder is kept; only its listing is re-read.
         assertEquals("/ISO", entered.state.currentPath)
         assertTrue(entered.state.files.isEmpty())
-        assertTrue(entered.state.filesPending)
+        assertEquals(FilesListingState.Loading, entered.state.filesListingState)
         assertEquals(base.filesListGeneration + 1L, entered.state.filesListGeneration)
         assertEquals("/ISO", (entered.effects.single() as UiEffect.LoadFiles).path)
     }
@@ -697,7 +698,7 @@ class FilesListFreshnessTest {
 
         assertTrue(again.effects.isEmpty())
         assertEquals(pending.filesListGeneration, again.state.filesListGeneration)
-        assertTrue(again.state.filesPending)
+        assertEquals(FilesListingState.Loading, again.state.filesListingState)
     }
 
     @Test
@@ -710,7 +711,7 @@ class FilesListFreshnessTest {
         val refreshed = UiReducer.reduce(pending, UiIntent.RefreshFiles)
 
         assertTrue(refreshed.state.files.isEmpty())
-        assertTrue(refreshed.state.filesPending)
+        assertEquals(FilesListingState.Loading, refreshed.state.filesListingState)
         assertEquals(staleGeneration + 1L, refreshed.state.filesListGeneration)
         assertEquals("/ISO", (refreshed.effects.single() as UiEffect.LoadFiles).path)
 
@@ -720,7 +721,7 @@ class FilesListFreshnessTest {
                 refreshed.state.listed(files = listOf(staleEntry), generation = staleGeneration),
             )
         assertTrue(late.state.files.isEmpty())
-        assertTrue(late.state.filesPending)
+        assertEquals(FilesListingState.Loading, late.state.filesListingState)
 
         val applied =
             UiReducer.reduce(
@@ -728,7 +729,7 @@ class FilesListFreshnessTest {
                 late.state.listed(files = listOf(freshEntry)),
             )
         assertEquals(listOf(freshEntry), applied.state.files)
-        assertFalse(applied.state.filesPending)
+        assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
     }
 
     @Test
@@ -748,7 +749,7 @@ class FilesListFreshnessTest {
         val refused = UiReducer.reduce(busy, UiIntent.RefreshFiles)
 
         assertEquals(listOf(keep), refused.state.files)
-        assertTrue(refused.state.filesPending)
+        assertEquals(FilesListingState.Loading, refused.state.filesListingState)
         assertTrue(refused.effects.isEmpty())
         assertEquals(UiMessage.Key(UiMessageKey.DeviceBusy), refused.state.statusMessage)
     }
@@ -775,12 +776,12 @@ class FilesListFreshnessTest {
         // No off-tab mount, but the listing is already invalid.
         assertTrue(changed.effects.isEmpty())
         assertTrue(changed.state.files.isEmpty())
-        assertFalse(changed.state.filesPending)
+        assertEquals(FilesListingState.Stale, changed.state.filesListingState)
         assertEquals(base.filesListGeneration + 1L, changed.state.filesListGeneration)
 
         val entered = UiReducer.reduce(changed.state, UiIntent.SelectTab(ShellTab.Files))
         assertEquals("/ISO", (entered.effects.single() as UiEffect.LoadFiles).path)
-        assertTrue(entered.state.filesPending)
+        assertEquals(FilesListingState.Loading, entered.state.filesListingState)
     }
 
     @Test
@@ -799,7 +800,7 @@ class FilesListFreshnessTest {
                     ),
             )
 
-        val done =
+        val progressed =
             UiReducer.reduce(
                 running,
                 UiIntent.OperationUpdated(
@@ -810,12 +811,116 @@ class FilesListFreshnessTest {
                     ),
                 ),
             )
-
+        assertEquals(FilesListingState.Loaded, progressed.state.filesListingState)
+        val done = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = token,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.Upload,
+                state = OperationState.Completed,
+            ),
+        )
         assertTrue(done.state.files.isEmpty())
-        assertTrue(done.state.filesPending)
+        assertEquals(FilesListingState.Loading, done.state.filesListingState)
         assertEquals(running.filesListGeneration + 1L, done.state.filesListGeneration)
         assertEquals("/ISO", (done.effects.single() as UiEffect.LoadFiles).path)
     }
+
+    @Test
+    fun ventoyWriteReloadsVisibleFolder() {
+        val token = OperationTokenGenerator.next()
+        val running =
+            ready(path = "/ISO", files = listOf(FileEntry("old.iso", isDirectory = false, sizeBytes = 1uL)))
+                .copy(
+                    operation = OperationProgress(
+                        state = OperationState.Running,
+                        token = token,
+                        title = OperationTitle.GenerateUnattendXml,
+                    ),
+                )
+
+        val progressed = UiReducer.reduce(
+            running,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = token,
+                    title = OperationTitle.GenerateUnattendXml,
+                ),
+            ),
+        )
+        val done = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = token,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.GenerateUnattendXml,
+                state = OperationState.Completed,
+            ),
+        )
+        assertTrue(done.state.files.isEmpty())
+        assertEquals(FilesListingState.Loading, done.state.filesListingState)
+        assertEquals("/ISO", (done.effects.single() as UiEffect.LoadFiles).path)
+    }
+
+    @Test
+    fun staleMutationCompletionKeepsReloadPendingUntilTakeoverFinishes() {
+        val mutation = OperationTokenGenerator.next()
+        val takeover = OperationTokenGenerator.next()
+        val base = ready(
+            path = "/ISO",
+            files = listOf(FileEntry("old.iso", isDirectory = false, sizeBytes = 1uL)),
+        )
+        val runningTakeover = UiReducer.reduce(
+            UiReducer.reduce(
+                base,
+                UiIntent.OperationBegan(
+                    OperationProgress(OperationState.Running, OperationTitle.Upload, mutation),
+                ),
+            ).state,
+            UiIntent.OperationBegan(
+                OperationProgress(OperationState.Running, OperationTitle.ReadScan, takeover),
+            ),
+        ).state
+
+        val staleCompletion = UiReducer.reduce(
+            runningTakeover,
+            UiIntent.OperationCompletionEffects(
+                token = mutation,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.Upload,
+                state = OperationState.Completed,
+            ),
+        )
+        assertTrue(staleCompletion.effects.isEmpty())
+        assertTrue(staleCompletion.state.files.isEmpty())
+        assertEquals(FilesListingState.Stale, staleCompletion.state.filesListingState)
+        assertEquals(takeover, staleCompletion.state.operation?.token)
+
+        val takeoverProgressed = UiReducer.reduce(
+            staleCompletion.state,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = takeover,
+                    title = OperationTitle.ReadScan,
+                ),
+            ),
+        )
+        val takeoverDone = UiReducer.reduce(
+            takeoverProgressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = takeover,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.ReadScan,
+                state = OperationState.Completed,
+            ),
+        )
+        assertEquals(FilesListingState.Loading, takeoverDone.state.filesListingState)
+        assertEquals("/ISO", (takeoverDone.effects.single() as UiEffect.LoadFiles).path)
+    }
+
     @Test
     fun failedMutationStillInvalidatesTheListing() {
         val token = OperationTokenGenerator.next()
@@ -830,22 +935,28 @@ class FilesListFreshnessTest {
                         ),
                 )
 
-        val failed =
-            UiReducer.reduce(
-                running,
-                UiIntent.OperationUpdated(
-                    OperationProgress(
-                        state = OperationState.Failed,
-                        token = token,
-                        title = OperationTitle.DeleteEntry("old.bin"),
-                        errorMessage = "delete failed",
-                    ),
+        val progressed = UiReducer.reduce(
+            running,
+            UiIntent.OperationUpdated(
+                OperationProgress(
+                    state = OperationState.Failed,
+                    token = token,
+                    title = OperationTitle.DeleteEntry("old.bin"),
+                    errorMessage = "delete failed",
                 ),
-            )
-
-        // A failed delete may still have removed the entry: never keep the old rows.
+            ),
+        )
+        val failed = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = token,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.DeleteEntry("old.bin"),
+                state = OperationState.Failed,
+            ),
+        )
         assertTrue(failed.state.files.isEmpty())
-        assertTrue(failed.state.filesPending)
+        assertEquals(FilesListingState.Loading, failed.state.filesListingState)
         assertEquals(running.filesListGeneration + 1L, failed.state.filesListGeneration)
         assertEquals("/ISO", (failed.effects.single() as UiEffect.LoadFiles).path)
     }
@@ -865,7 +976,7 @@ class FilesListFreshnessTest {
                         ),
                 )
 
-        val failed =
+        val progressed =
             UiReducer.reduce(
                 running,
                 UiIntent.OperationUpdated(
@@ -877,10 +988,18 @@ class FilesListFreshnessTest {
                     ),
                 ),
             )
-
+        val failed = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = token,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.DeleteEntry("old.bin"),
+                state = OperationState.Partial,
+            ),
+        )
         assertTrue(failed.effects.isEmpty())
         assertTrue(failed.state.files.isEmpty())
-        assertFalse(failed.state.filesPending)
+        assertEquals(FilesListingState.Stale, failed.state.filesListingState)
         assertEquals(running.filesListGeneration + 1L, failed.state.filesListGeneration)
     }
 
@@ -906,7 +1025,7 @@ class FilesListFreshnessTest {
 
             // The old state could not act; the state produced by this intent can, so the
             // list must be requested instead of showing "empty folder" after attach.
-            assertTrue("$probePresence -> Ready must load", readyState.state.filesPending)
+        assertEquals(FilesListingState.Loading, readyState.state.filesListingState)
             assertEquals("/ISO", (readyState.effects.single() as UiEffect.LoadFiles).path)
             assertEquals(probe.filesListGeneration + 1L, readyState.state.filesListGeneration)
         }
@@ -938,6 +1057,6 @@ class FilesListFreshnessTest {
             )
 
         assertTrue(readyState.effects.isEmpty())
-        assertFalse(readyState.state.filesPending)
+        assertEquals(FilesListingState.Stale, readyState.state.filesListingState)
     }
 }

@@ -40,7 +40,7 @@ class PhoneImportUiTest {
                 returnTab = ShellTab.Ventoy,
                 initialPath = "/ISO",
             ),
-        ).state.copy(filesPending = false)
+        ).state.copy(filesListingState = FilesListingState.Loaded)
         return opened to requireNotNull(opened.filesPickMode).sessionId
     }
 

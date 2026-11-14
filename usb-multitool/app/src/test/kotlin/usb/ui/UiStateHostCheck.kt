@@ -60,6 +60,7 @@ object UiStateHostCheck {
                     listOf(
                         FileEntry("win11.iso", isDirectory = false, sizeBytes = 5_000_000_000uL),
                     ),
+                filesListingState = FilesListingState.Loaded,
                 imageUri = "content://test/win11.iso",
                 imageName = "win11.iso",
                 imageSizeBytes = 1024L,
@@ -88,13 +89,14 @@ object UiStateHostCheck {
                 ),
             )
         require(listFailed.state.filesError == "Read failed")
+        val retry = UiReducer.reduce(listFailed.state, UiIntent.RefreshFiles)
         val listRecovered =
             UiReducer.reduce(
-                listFailed.state,
+                retry.state,
                 UiIntent.FilesListed(
                     path = "/",
                     files = emptyList(),
-                    generation = listFailed.state.filesListGeneration,
+                    generation = retry.state.filesListGeneration,
                     identity = device.identity,
                     partitionId = "1",
                     attachGeneration = device.attachGeneration,
