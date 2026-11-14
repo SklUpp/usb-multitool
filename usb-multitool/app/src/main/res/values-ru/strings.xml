@@ -759,6 +759,10 @@
     <string name="unattend_editor_help">Редактируйте полный текст файла ответов. Применить записывает точные байты после проверки; Отмена отбрасывает черновик. Неизвестные элементы остаются как введены.</string>
     <string name="unattend_editor_invalid">XML отклонён: нужен корректный unattend XML без DOCTYPE и ENTITY.</string>
     <string name="unattend_editor_destructive_ack">Я понимаю, что эти разделы могут стереть диски на целевом компьютере</string>
+    <string name="windows_selected_image">Выбранный образ:</string>
+    <string name="windows_copying_image">Копируется файл %1$s на раздел ventoy…</string>
+    <string name="windows_copying_generic">Копируется образ на раздел ventoy…</string>
+    <string name="windows_template_choose_source">Источник шаблона</string>
     <string name="raw_choose_stick">Выбрать файл на флешке…</string>
     <string name="raw_choose_phone">Выбрать файл на телефоне…</string>
     <string name="raw_stick_title">Файлы на флешке</string>

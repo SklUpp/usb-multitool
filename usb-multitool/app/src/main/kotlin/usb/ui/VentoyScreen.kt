@@ -138,7 +138,7 @@ fun VentoyScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         SectionCard(
             title = stringResource(R.string.ventoy_section_title),
@@ -225,16 +225,23 @@ fun VentoyScreen(
             }
         }
 
-        ImportFromPhoneCard(
+        GlobalSettingsCard(
             state = state,
             onIntent = onIntent,
-            onPickWindowsFile = onPickWindowsFile,
+            onPickVentoySettingsFile = onPickVentoySettingsFile,
         )
 
         AutounattendSection(
             state = state,
             onIntent = onIntent,
             onPickVentoySettingsFile = onPickVentoySettingsFile,
+            onPickWindowsFile = onPickWindowsFile,
+            leadingContent = {
+                WindowsImageBlock(
+                    state = state,
+                    onIntent = onIntent,
+                )
+            },
         )
     }
 }
@@ -291,9 +298,9 @@ private fun VentoyVersionRow(
         }
     }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.wrapContentWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         VentoyVersionFact(
             glyph = Glyph.Package,
@@ -304,20 +311,17 @@ private fun VentoyVersionRow(
             } else {
                 null
             },
-            modifier = Modifier.weight(1f),
         )
         VentoyVersionFact(
             glyph = Glyph.Usb,
             label = stringResource(R.string.ventoy_version_installed),
             value = state.installedVentoyRelease,
             readError = state.installedVentoyReadError,
-            modifier = Modifier.weight(1f),
         )
         VentoyVersionFact(
             glyph = Glyph.Cloud,
             label = stringResource(R.string.ventoy_version_upstream),
             value = state.upstreamVentoyRelease,
-            modifier = Modifier.weight(1f),
         )
         IconButton(
             onClick = {
@@ -330,7 +334,7 @@ private fun VentoyVersionRow(
             if (state.ventoyDownloadInFlight || state.ventoyUpstreamChecking) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             } else {
-                GlyphIcon(Glyph.Download, size = 20.dp)
+                GlyphIcon(Glyph.Download, size = 18.dp)
             }
         }
     }
@@ -419,32 +423,31 @@ private fun VentoyVersionFact(
     modifier: Modifier = Modifier,
     readError: String? = null,
     valueColor: Color? = null,
-){
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+) {
+    val errorText = stringResource(R.string.ventoy_version_error)
+    val naText = stringResource(R.string.ventoy_version_na)
+    val displayValue = when {
+        readError != null -> errorText
+        value != null -> value
+        else -> naText
+    }
+    val factDescription = "$label: ${readError ?: value ?: "n/a"}"
+    val errorDescription = readError
+
+    Row(
+        modifier = modifier.semantics(mergeDescendants = true) {
+            contentDescription = factDescription
+        },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Box(
-                modifier = Modifier.semantics { contentDescription = label },
-            ) {
-                GlyphIcon(
-                    glyph = glyph,
-                    size = 14.dp,
-                )
-            }
-        }
+        GlyphIcon(
+            glyph = glyph,
+            size = 14.dp,
+        )
         Text(
-            text = when {
-                readError != null -> stringResource(R.string.ventoy_version_error)
-                value != null -> value
-                else -> stringResource(R.string.ventoy_version_na)
-            },
-            style = MaterialTheme.typography.bodyMedium,
+            text = displayValue,
+            style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Bold,
             color = valueColor ?: if (readError != null) {
                 MaterialTheme.colorScheme.error
@@ -453,8 +456,8 @@ private fun VentoyVersionFact(
             },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = if (readError != null) {
-                Modifier.semantics { contentDescription = readError }
+            modifier = if (errorDescription != null) {
+                Modifier.semantics { contentDescription = errorDescription }
             } else {
                 Modifier
             },
@@ -482,122 +485,125 @@ private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
 
 
 /**
- * Phone-to-stick import. The install image is chosen inside the simplified Files picker
- * (folder navigation + phone copy); the XML keeps its own existing-folder dialog. A target
- * that already exists needs an explicit overwrite tick, and a template carrying destructive
- * sections needs a second one.
+ * Windows image selection and copy status block placed inside the unified Windows section.
+ * Phone import and device file selection via real callbacks, with
+ * honest copying progress and confirmation gates.
  */
 @Composable
-private fun ImportFromPhoneCard(
+private fun WindowsImageBlock(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
-    onPickWindowsFile: (WindowsImportKind, String?) -> Unit,
 ) {
-    // A picker opened for one attachment must close when identity/attach generation moves:
-    // the cached folder list and the pending file no longer belong to the visible stick.
     val sourceDialogIdentity = state.device?.identity
     val sourceDialogGeneration = state.device?.attachGeneration
     var imageSourcePrompt by remember(
         state.device?.identity,
         state.device?.attachGeneration,
     ) { mutableStateOf(false) }
-    var folderKind by remember(
-        state.device?.identity,
-        state.device?.attachGeneration,
-    ) { mutableStateOf<WindowsImportKind?>(null) }
-    // Last folder the user actually picked for the XML. Keyed to the attachment, not to
-    // ventoyCacheEpoch: an import bumps the epoch itself, which would erase the destination
-    // right after the copy it describes. Attach generation covers replug and detach.
-    var xmlDestination by remember(
-        state.device?.identity,
-        state.device?.attachGeneration,
-    ) { mutableStateOf<String?>(null) }
 
-    // The listing covers one folder level, so a remembered path usually lives in another
-    // folder: absence from it never proves deletion and never clears the destination.
-    //
-    // A reopen signal is different: the import failed because the directory is missing, and
-    // the reducer has just nulled the folder list; drop the destination before the picker
-    // appears so it cannot preselect a path that no longer exists while the list is unread.
-    LaunchedEffect(state.pendingImportFolderPick) {
-        val kind = state.pendingImportFolderPick ?: return@LaunchedEffect
-        if (kind == WindowsImportKind.Image) {
-            // The simplified Files picker owns image copies and its own vanished-folder
-            // recovery; do not open a second folder dialog over it.
-            onIntent(UiIntent.ImportFolderPickOpened)
-            return@LaunchedEffect
-        }
-        xmlDestination = null
-        folderKind = kind
-        onIntent(UiIntent.ImportFolderPickOpened)
+    val selectedImage = state.filesPickSelections[FilesPickPurpose.WindowsImage]
+    val operation = state.operation
+    val isOpActive = operation?.state == OperationState.Running || operation?.state == OperationState.Queued
+    val isImageImportTarget = isOpActive &&
+        operation?.title is OperationTitle.ImportTarget &&
+        state.filesPickMode?.purpose == FilesPickPurpose.WindowsImage
+
+    val isImageInspecting = (state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null) &&
+        state.filesPickMode?.purpose == FilesPickPurpose.WindowsImage
+
+    val copyingTarget = (operation?.title as? OperationTitle.ImportTarget)?.targetName
+        ?: selectedImage?.name
+
+    val statusText = when {
+        isImageImportTarget && copyingTarget != null ->
+            stringResource(R.string.windows_copying_image, copyingTarget)
+        isImageImportTarget ->
+            stringResource(R.string.windows_copying_generic)
+        isImageInspecting ->
+            stringResource(R.string.import_inspecting)
+        selectedImage != null ->
+            selectedImage.name.ifBlank { selectedImage.path }
+        else ->
+            stringResource(R.string.selection_not_selected)
     }
 
-    // The listing is one directory level, so a remembered path is normally in another
-    // folder: absence from it proves nothing and must not produce a "gone"/"unlisted" hint.
-    val xmlDest = xmlDestination
+    val chooseDescription = stringResource(R.string.import_choose)
 
-    // Every open re-reads the current folder: the stick may have changed since the tab was
-    // entered. A null list already has a read in flight (tab entry or picker reopen).
-    LaunchedEffect(folderKind) {
-        if (folderKind != null &&
-            state.ventoyFolders != null &&
-            !state.ventoyFoldersLoading
-        ) {
-            onIntent(UiIntent.LoadVentoyFolders)
-        }
-    }
-
-
-    SectionCard(
-        title = stringResource(R.string.import_title),
-        subtitle = stringResource(R.string.import_subtitle),
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ImportRow(
-            label = stringResource(R.string.import_image_label),
-            destination = state.filesPickSelections[FilesPickPurpose.WindowsImage]?.path,
-            enabled = state.actionsEnabled,
-            onClick = { imageSourcePrompt = true },
-        )
-        ImportRow(
-            label = stringResource(R.string.import_template_label),
-            hint = stringResource(R.string.import_template_hint),
-            destination = xmlDest,
-            enabled = state.actionsEnabled,
-            onClick = { folderKind = WindowsImportKind.XmlTemplate },
-        )
-        if (state.isoImportSafInFlight != null) {
-            // A provider read can hang; the user must be able to drop this attempt without
-            // waiting for it. USB work (if it already started) still ends on disk close.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.import_inspecting),
+                    text = stringResource(R.string.windows_selected_image),
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (selectedImage != null || isImageImportTarget) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(
+                onClick = { imageSourcePrompt = true },
+                enabled = state.actionsEnabled,
+                modifier = Modifier.semantics { contentDescription = chooseDescription },
+            ) {
+                GlyphIcon(Glyph.Folder, size = 20.dp)
+            }
+        }
+
+        if (state.filesPickMode?.purpose == FilesPickPurpose.WindowsImage) {
+            if (isImageInspecting) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.import_inspecting),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            }
+
+            state.isoImportError?.let { problem ->
+                Text(
+                    text = stringResource(unreadableText(problem)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
                 )
                 TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
-                    Text(stringResource(R.string.action_cancel))
+                    Text(stringResource(R.string.import_error_dismiss))
                 }
             }
         }
-        state.isoImportError?.let { problem ->
-            Text(
-                text = stringResource(unreadableText(problem)),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-            TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
-                Text(stringResource(R.string.import_error_dismiss))
-            }
-        }
     }
+
     if (imageSourcePrompt) {
         AlertDialog(
             onDismissRequest = { imageSourcePrompt = false },
-            title = { Text(stringResource(R.string.import_choose)) },
+            title = { Text(chooseDescription) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(
@@ -640,26 +646,7 @@ private fun ImportFromPhoneCard(
         )
     }
 
-    folderKind?.let {
-        ImportFolderDialog(
-            currentPath = state.ventoyFolderPath,
-            folders = state.ventoyFolders,
-            folderError = state.ventoyFoldersError,
-            loading = state.ventoyFoldersLoading,
-            blocked = !state.actionsEnabled,
-            onEnter = { onIntent(UiIntent.OpenVentoyFolder(it)) },
-            onUp = { onIntent(UiIntent.VentoyFolderUp) },
-            onRefresh = { onIntent(UiIntent.LoadVentoyFolders) },
-            onPick = { directory ->
-                folderKind = null
-                xmlDestination = directory
-                onPickWindowsFile(WindowsImportKind.XmlTemplate, directory)
-            },
-            onDismiss = { folderKind = null },
-        )
-    }
-
-    state.pendingIsoImport?.let { proposal ->
+    state.pendingIsoImport?.takeIf { it.kind == WindowsImportKind.Image }?.let { proposal ->
         ImportOverwriteDialog(
             proposal = proposal,
             actionsEnabled = state.actionsEnabled,
@@ -726,7 +713,7 @@ private fun ImportRow(
  * "unreadable", never "gone", and it never emits a hint about a remembered destination.
  */
 @Composable
-private fun ImportFolderDialog(
+internal fun ImportFolderDialog(
     currentPath: String,
     folders: List<String>?,
     folderError: FolderReadProblem?,

@@ -758,6 +758,10 @@
     <string name="unattend_editor_help">Edit the full answer-file text. Apply writes the exact bytes after validation; Cancel discards the draft. Unknown elements stay as typed.</string>
     <string name="unattend_editor_invalid">The XML is refused: it must be well-formed unattend XML without DOCTYPE or ENTITY declarations.</string>
     <string name="unattend_editor_destructive_ack">I understand these sections can erase disks on the target computer</string>
+    <string name="windows_selected_image">Selected image:</string>
+    <string name="windows_copying_image">Copying %1$s to Ventoy partition…</string>
+    <string name="windows_copying_generic">Copying image to Ventoy partition…</string>
+    <string name="windows_template_choose_source">Template source</string>
     <string name="raw_choose_stick">Choose a file on the stick…</string>
     <string name="raw_choose_phone">Choose a file on the phone…</string>
     <string name="raw_stick_title">Files on the stick</string>

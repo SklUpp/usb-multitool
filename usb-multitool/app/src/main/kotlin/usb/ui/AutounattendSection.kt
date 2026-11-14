@@ -101,13 +101,44 @@ internal fun AutounattendSection(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     onPickVentoySettingsFile: () -> Unit = {},
+    onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
+    leadingContent: (@Composable () -> Unit)? = null,
 ) {
     val template = state.windowsTemplatePath
     val document = (state.autounattendState as? AutounattendState.Parsed)?.document
-    var pickerOpen by remember { mutableStateOf(false) }
+    var pickerOpen by remember(
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf(false) }
+    var templateSourcePrompt by remember(
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf(false) }
     var generateOpen by remember { mutableStateOf(false) }
     var xmlEditorOpen by remember { mutableStateOf(false) }
+    var folderKind by remember(
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf<WindowsImportKind?>(null) }
 
+    LaunchedEffect(state.pendingImportFolderPick) {
+        val kind = state.pendingImportFolderPick ?: return@LaunchedEffect
+        if (kind == WindowsImportKind.Image) {
+            onIntent(UiIntent.ImportFolderPickOpened)
+            return@LaunchedEffect
+        }
+        folderKind = kind
+        onIntent(UiIntent.ImportFolderPickOpened)
+    }
+
+    LaunchedEffect(folderKind) {
+        if (folderKind != null &&
+            state.ventoyFolders != null &&
+            !state.ventoyFoldersLoading
+        ) {
+            onIntent(UiIntent.LoadVentoyFolders)
+        }
+    }
     LaunchedEffect(state.operation?.state, state.operation?.title) {
         if (xmlEditorOpen &&
             state.operation?.title == OperationTitle.WriteUnattendXml &&
@@ -147,6 +178,43 @@ internal fun AutounattendSection(
             )
         },
     ) {
+        if (leadingContent != null) {
+            leadingContent()
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 8.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            )
+        }
+        if (state.filesPickMode?.purpose != FilesPickPurpose.WindowsImage) {
+            val isXmlInspecting = state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
+            if (isXmlInspecting) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.import_inspecting),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            }
+
+            state.isoImportError?.let { problem ->
+                Text(
+                    text = stringResource(unreadableText(problem)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
+                    Text(stringResource(R.string.import_error_dismiss))
+                }
+            }
+        }
         // The template row is always present: "not selected yet" is a real answer, and a
         // selected path is shown as resolved even before the file has been read. The path
         // wraps instead of using InfoRow, which would ellipsize it to one line.
@@ -164,7 +232,7 @@ internal fun AutounattendSection(
         if (template == null) {
             EmptyHint(stringResource(R.string.unattend_no_template))
             Button(
-                onClick = { pickerOpen = true },
+                onClick = { templateSourcePrompt = true },
                 enabled = state.actionsEnabled,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -250,7 +318,7 @@ internal fun AutounattendSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(
-                    onClick = { pickerOpen = true },
+                    onClick = { templateSourcePrompt = true },
                     enabled = state.actionsEnabled,
                     modifier = Modifier
                         .weight(1f)
@@ -457,7 +525,7 @@ internal fun AutounattendSection(
         }
     }
 
-    GlobalSettingsCard(state, onIntent, onPickVentoySettingsFile)
+
 
     state.diskLayoutConfirmation?.let { confirmation ->
         LayoutConfirmDialog(
@@ -479,6 +547,61 @@ internal fun AutounattendSection(
                 pickerOpen = false
             },
             onDismiss = { pickerOpen = false },
+        )
+    }
+    if (templateSourcePrompt) {
+        AlertDialog(
+            onDismissRequest = { templateSourcePrompt = false },
+            title = { Text(stringResource(R.string.windows_template_choose_source)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            templateSourcePrompt = false
+                            pickerOpen = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.raw_choose_stick))
+                    }
+                    TextButton(
+                        onClick = {
+                            templateSourcePrompt = false
+                            folderKind = WindowsImportKind.XmlTemplate
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.raw_choose_phone))
+                    }
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    folderKind?.let {
+        ImportFolderDialog(
+            currentPath = state.ventoyFolderPath,
+            folders = state.ventoyFolders,
+            folderError = state.ventoyFoldersError,
+            loading = state.ventoyFoldersLoading,
+            blocked = !state.actionsEnabled,
+            onEnter = { onIntent(UiIntent.OpenVentoyFolder(it)) },
+            onUp = { onIntent(UiIntent.VentoyFolderUp) },
+            onRefresh = { onIntent(UiIntent.LoadVentoyFolders) },
+            onPick = { directory ->
+                folderKind = null
+                onPickWindowsFile(WindowsImportKind.XmlTemplate, directory)
+            },
+            onDismiss = { folderKind = null },
+        )
+    }
+    state.pendingIsoImport?.takeIf { it.kind == WindowsImportKind.XmlTemplate }?.let { proposal ->
+        ImportOverwriteDialog(
+            proposal = proposal,
+            actionsEnabled = state.actionsEnabled,
+            onReplace = { onIntent(UiIntent.ConfirmWindowsIsoImport(true)) },
+            onCancel = { onIntent(UiIntent.CancelWindowsIsoImport) },
         )
     }
 
@@ -526,7 +649,7 @@ internal fun AutounattendSection(
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GlobalSettingsCard(
+internal fun GlobalSettingsCard(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     onPickVentoySettingsFile: () -> Unit,
