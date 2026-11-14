@@ -83,7 +83,7 @@ class SafBackupFolder(
     fun listRootFiles(): List<SafDocument> = listChildren(rootDocumentUri)
 
     fun listChildren(parent: Uri): List<SafDocument> {
-        val parentId = DocumentsContract.getDocumentId(parent)
+        val parentId = parentDocumentId(parent)
         val childrenUri =
             DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
         val projection = arrayOf(
@@ -115,10 +115,7 @@ class SafBackupFolder(
     fun createSubfolder(name: String): Uri = createSubfolder(rootDocumentUri, name)
 
     fun createSubfolder(parent: Uri, name: String): Uri {
-        val parentUri = DocumentsContract.buildDocumentUriUsingTree(
-            treeUri,
-            DocumentsContract.getDocumentId(parent),
-        )
+        val parentUri = parentDocumentUri(parent)
         return requireNotNull(
             DocumentsContract.createDocument(
                 resolver,
@@ -134,10 +131,7 @@ class SafBackupFolder(
 
     fun createFile(parent: Uri, name: String, mimeType: String): Uri {
         // createDocument may return a non-tree URI; re-scope the parent for the next call.
-        val parentUri = DocumentsContract.buildDocumentUriUsingTree(
-            treeUri,
-            DocumentsContract.getDocumentId(parent),
-        )
+        val parentUri = parentDocumentUri(parent)
         return requireNotNull(
             DocumentsContract.createDocument(resolver, parentUri, mimeType, name),
         ) { "the provider refused to create file '$name'" }
@@ -154,7 +148,14 @@ class SafBackupFolder(
         require(created.authority == treeUri.authority) {
             "SAF provider returned foreign authority for folder: $name; retained returned document $created"
         }
-        val createdId = DocumentsContract.getDocumentId(created)
+        val createdId = try {
+            DocumentsContract.getDocumentId(created)
+        } catch (failure: Throwable) {
+            throw IllegalStateException(
+                "SAF provider returned invalid document URI for folder $name: $created; retained returned document $created",
+                failure,
+            )
+        }
         val scoped = documentUri(createdId)
         val document = try {
             queryDocument(scoped)
@@ -180,7 +181,14 @@ class SafBackupFolder(
         require(created.authority == treeUri.authority) {
             "SAF provider returned foreign authority for file: $name; retained returned document $created"
         }
-        val createdId = DocumentsContract.getDocumentId(created)
+        val createdId = try {
+            DocumentsContract.getDocumentId(created)
+        } catch (failure: Throwable) {
+            throw IllegalStateException(
+                "SAF provider returned invalid document URI for file $name: $created; retained returned document $created",
+                failure,
+            )
+        }
         val scoped = documentUri(createdId)
         val document = try {
             queryDocument(scoped)
@@ -191,17 +199,17 @@ class SafBackupFolder(
             )
         }
         require(
-            isNewRegularFile(document, scoped, treeUri.authority!!),
+            isNewRegularFile(document, scoped, treeUri.authority.orEmpty()),
         ) { "SAF provider did not create a new empty file: $name; retained returned document $created" }
         return scoped
     }
 
 
     fun openSyncedOutput(document: Uri): SafSyncedOutput =
-        SafSyncedOutput(resolver, documentUri(DocumentsContract.getDocumentId(document)))
+        SafSyncedOutput(resolver, scopedDocumentUri(document))
 
     fun openPositionalImage(document: Uri): SafPositionalImage =
-        SafPositionalImage(resolver, documentUri(DocumentsContract.getDocumentId(document)))
+        SafPositionalImage(resolver, scopedDocumentUri(document))
 
     /** Sequential write + fsync + close for checkpoint map documents. */
     fun writeTextAndSync(document: Uri, text: String) {
@@ -219,7 +227,7 @@ class SafBackupFolder(
 
     /** Bounded UTF-8 read with the same character cap the restore path applies. */
     fun readText(document: Uri, maxChars: Int): String {
-        val scoped = documentUri(DocumentsContract.getDocumentId(document))
+        val scoped = scopedDocumentUri(document)
         val input: InputStream = resolver.openInputStream(scoped)
             ?: throw IOException("cannot open $scoped for reading")
         return input.use { stream ->
@@ -243,14 +251,34 @@ class SafBackupFolder(
     fun deleteDocument(document: Uri): Boolean =
         DocumentsContract.deleteDocument(
             resolver,
-            documentUri(DocumentsContract.getDocumentId(document)),
+            scopedDocumentUri(document),
         )
 
     private fun documentUri(documentId: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
 
+    private fun parentDocumentId(parent: Uri): String {
+        require(parent.authority == treeUri.authority) {
+            "SAF parent has foreign authority: ${parent.authority}, expected ${treeUri.authority}"
+        }
+        return try {
+            DocumentsContract.getDocumentId(parent)
+        } catch (_: IllegalArgumentException) {
+            DocumentsContract.getTreeDocumentId(parent)
+        }
+    }
+
+    private fun parentDocumentUri(parent: Uri): Uri =
+        documentUri(parentDocumentId(parent))
+
+    private fun scopedDocumentUri(document: Uri): Uri {
+        require(document.authority == treeUri.authority) {
+            "SAF document has foreign authority: ${document.authority}, expected ${treeUri.authority}"
+        }
+        return documentUri(DocumentsContract.getDocumentId(document))
+    }
     private fun queryDocument(document: Uri): SafDocument? {
-        val scoped = documentUri(DocumentsContract.getDocumentId(document))
+        val scoped = scopedDocumentUri(document)
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
