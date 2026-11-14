@@ -17,6 +17,18 @@ data class FilesystemSpace(
     val usedBytes: ULong get() = totalBytes - freeBytes
 }
 
+/** Driver-reported mount access for one live filesystem handle. */
+enum class FilesystemAccess {
+    ReadOnly,
+    ReadWrite,
+    Unknown,
+}
+
+/** A mounted filesystem whose driver exposes its actual mount mode. */
+interface UsbFsAccessVolume {
+    val access: FilesystemAccess
+}
+
 /**
  * A mounted volume that can report its own free/total space read-only.
  * FAT/exFAT, EXT and NTFS implement it; other volumes simply are not queried.
@@ -28,6 +40,7 @@ interface UsbFsUsageVolume {
      */
     fun space(): FilesystemSpace
 }
+
 
 enum class FilesystemUsageReason {
     /** Volume type has no space query wired. */
@@ -74,6 +87,8 @@ data class FilesystemUsageKey(
 data class FilesystemUsageSnapshot(
     val key: FilesystemUsageKey,
     val usage: FilesystemUsage,
+    /** Driver-reported mode for same mounted handle; unknown when no handle fact exists. */
+    val access: FilesystemAccess = FilesystemAccess.Unknown,
 ) {
     fun matches(other: FilesystemUsageKey): Boolean = key == other
 }

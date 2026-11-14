@@ -5,6 +5,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <errno.h>
+
+#define EXT_ENGINE_CLEANUP_FAILED (-EUCLEAN)
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,8 +72,12 @@ int ext_engine_stat(uint64_t vol_handle, const char *path, ExtStat *out_stat);
 int ext_engine_read(uint64_t vol_handle, const char *path,
 		    uint64_t offset, void *buf, size_t count, size_t *out_read);
 int ext_engine_write(uint64_t vol_handle, const char *path,
-		     uint64_t offset, const void *buf, size_t count,
-		     bool create, size_t *out_written);
+                     uint64_t offset, const void *buf, size_t count,
+                     bool create, size_t *out_written);
+int ext_engine_write_exclusive(uint64_t vol_handle, const char *path,
+                               uint64_t offset, const void *buf, size_t count,
+                               bool create, bool exclusive_create,
+                               size_t *out_written);
 int ext_engine_mkdir(uint64_t vol_handle, const char *path);
 int ext_engine_delete(uint64_t vol_handle, const char *path);
 int ext_engine_rename(uint64_t vol_handle, const char *from, const char *to);

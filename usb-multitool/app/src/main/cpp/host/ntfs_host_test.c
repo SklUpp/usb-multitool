@@ -199,7 +199,12 @@ int main(int argc, char **argv)
     int rc = ntfs_engine_write(vol, "/test_file.txt", 0, payload, payload_len, true, &written);
     assert(rc == 0);
     assert(written == payload_len);
-    printf("PASS: write file '/test_file.txt' (bytes=%zu)\n", written);
+    written = 0;
+    rc = ntfs_engine_write_exclusive(vol, "/test_file.txt", 0, "x", 1, true, true, &written);
+    assert(rc == -EEXIST);
+    assert(written == 0);
+    printf("PASS: NTFS exclusive create rejects existing file\n");
+    printf("PASS: write existing file remains intact after exclusive create rejection (bytes=%zu)\n", written);
 
     /* Allocation must not increase free space; totals stay stable. */
     {

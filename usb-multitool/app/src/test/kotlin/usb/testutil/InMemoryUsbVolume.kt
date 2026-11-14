@@ -20,6 +20,16 @@ class InMemoryUsbVolume(
     var failAnyWrite: Boolean = false
 
     var failRenameFrom: String? = null
+    /** Insert this path just before rename destination check (create-new race). */
+    var occupyBeforeRenameTo: String? = null
+    /**
+     * When exclusiveCreate writes, plant [peerExclusiveCreateBytes] at the target first so
+     * the create fails as FR_EXIST without our ownership. Peer bytes must survive cleanup.
+     */
+    var occupyBeforeExclusiveCreate: Boolean = false
+    var peerExclusiveCreateBytes: ByteArray = byteArrayOf(0x50, 0x45, 0x45, 0x52)
+    var lastExclusiveCreatePath: String? = null
+        private set
     var failDeletePath: String? = null
     var unreadableDirectories: Set<String> = emptySet()
     var syncCount = 0
@@ -94,6 +104,11 @@ class InMemoryUsbVolume(
         val target = normalize(to)
         if (failRenameFrom == source) throw IOException("rename failed")
         val bytes = files[source] ?: throw IOException("no file $source")
+        occupyBeforeRenameTo?.let { occupy ->
+            if (normalize(occupy) == target && !files.containsKey(target)) {
+                putFile(target, byteArrayOf(0x72)) // race occupant
+            }
+        }
         if (files.containsKey(target)) throw IOException("target exists $target")
         files.remove(source)
         putFile(target, bytes)
@@ -112,12 +127,22 @@ class InMemoryUsbVolume(
         offset: Long,
         create: Boolean,
         plannedTotalSize: Long,
+        exclusiveCreate: Boolean,
     ) {
         val normalized = normalize(path)
         if (failAnyWrite) throw IOException("write failed")
         if (failWriteAtPath == normalized) throw IOException("write failed")
+        if (exclusiveCreate && create) {
+            lastExclusiveCreatePath = normalized
+            if (occupyBeforeExclusiveCreate && files[normalized] == null) {
+                putFile(normalized, peerExclusiveCreateBytes)
+            }
+        }
         val existing = files[normalized]
         if (existing == null && !create) throw IOException("missing $normalized")
+        if (exclusiveCreate && create && existing != null) {
+            throw IOException("exclusive create failed, already exists: $normalized")
+        }
         val base =
             if (existing == null) {
                 addParents(normalized)

@@ -27,11 +27,14 @@ internal data class ShellPanelState(
 /** Screen that owns operation details; null keeps auto-expansion conservative. */
 internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
     OperationTitle.Upload,
+    is OperationTitle.UploadBatch,
     is OperationTitle.ListPath,
     is OperationTitle.NewFolder,
     is OperationTitle.DeleteEntry,
+    is OperationTitle.DeleteBatch,
     is OperationTitle.RenameEntry,
     is OperationTitle.DownloadEntry,
+    is OperationTitle.DownloadBatch,
     -> ShellTab.Files
     OperationTitle.AutounattendXmlLink,
     OperationTitle.ReadXmlBindings,

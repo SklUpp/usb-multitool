@@ -13,7 +13,17 @@ class FilesOperationPolicyTest {
     fun requireChildNameAcceptsSingleEntryName() {
         assertEquals("ubuntu.iso", FilesOperationPolicy.requireChildName("ubuntu.iso", "upload"))
         assertEquals("ubuntu.iso", FilesOperationPolicy.requireChildName("dir/ubuntu.iso", "upload"))
-        assertEquals("ubuntu.iso", FilesOperationPolicy.requireChildName(" ubuntu.iso ", "upload"))
+    }
+
+    @Test
+    fun requireChildNameRejectsWhitespaceAlteredNames() {
+        for (raw in listOf(" ubuntu.iso", "ubuntu.iso ", " ubuntu.iso ", "victim ")) {
+            val error =
+                assertThrows(IllegalArgumentException::class.java) {
+                    FilesOperationPolicy.requireChildName(raw, "upload")
+                }
+            assertTrue(error.message!!.contains("invalid file name"))
+        }
     }
 
     @Test
@@ -39,6 +49,24 @@ class FilesOperationPolicyTest {
         assertEquals(
             "Cannot delete \"ISO\": directory is not empty — remove its contents first",
             message,
+        )
+    }
+
+    @Test
+    fun resolveInsideTreeRejectsDotDotAndJoinsSafely() {
+        assertEquals("/docs/a.bin", FilesOperationPolicy.resolveInsideTree("/docs", "a.bin"))
+        assertEquals("/a/b", FilesOperationPolicy.resolveInsideTree("/", "a", "b"))
+        assertThrows(IllegalArgumentException::class.java) {
+            FilesOperationPolicy.resolveInsideTree("/docs", "..")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            FilesOperationPolicy.resolveInsideTree("/docs", "a/b")
+        }
+        assertFalse(FilesOperationPolicy.isSafeRelativePath("../x"))
+        assertTrue(FilesOperationPolicy.isSafeRelativePath("a/b"))
+        assertEquals(
+            "Cannot replace nonempty directory \"/docs\": skip or cancel (merge/replace refused)",
+            FilesOperationPolicy.nonemptyDirectoryRefuseMessage("/docs"),
         )
     }
 

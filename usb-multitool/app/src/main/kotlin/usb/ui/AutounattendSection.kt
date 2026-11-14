@@ -21,7 +21,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -180,10 +179,6 @@ internal fun AutounattendSection(
     ) {
         if (leadingContent != null) {
             leadingContent()
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 8.dp),
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-            )
         }
         if (state.filesPickMode?.purpose != FilesPickPurpose.WindowsImage) {
             val isXmlInspecting = state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
@@ -218,11 +213,26 @@ internal fun AutounattendSection(
         // The template row is always present: "not selected yet" is a real answer, and a
         // selected path is shown as resolved even before the file has been read. The path
         // wraps instead of using InfoRow, which would ellipsize it to one line.
-        Text(
-            text = stringResource(R.string.unattend_template_label),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.unattend_template_label),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = stringResource(
+                    if (template == null) R.string.unattend_status_not_selected
+                    else R.string.unattend_status_selected,
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
             text = template?.let(VentoySetup::resolveXmlPath)
                 ?: stringResource(R.string.selection_not_selected),
@@ -231,12 +241,30 @@ internal fun AutounattendSection(
         )
         if (template == null) {
             EmptyHint(stringResource(R.string.unattend_no_template))
-            Button(
-                onClick = { templateSourcePrompt = true },
-                enabled = state.actionsEnabled,
-                modifier = Modifier.fillMaxWidth(),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(stringResource(R.string.unattend_choose_template))
+                Button(
+                    onClick = { templateSourcePrompt = true },
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
+                    Text(stringResource(R.string.unattend_choose_template))
+                }
+                Button(
+                    onClick = { generateOpen = true },
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
+                    Text(stringResource(R.string.unattend_generate))
+                }
             }
         } else {
             when (val file = state.autounattendState) {
@@ -605,19 +633,24 @@ internal fun AutounattendSection(
         )
     }
 
-    if (generateOpen && template != null) {
+    if (generateOpen) {
+        val generateTarget =
+            template
+                ?: state.windowsSelectedImages.firstOrNull()?.let { VentoySetup.suggestedXmlPath(it) }
+                ?: "autounattend.xml"
         GenerateDialog(
-            template = template,
+            template = generateTarget,
             document = document,
             selectedImages = state.windowsSelectedImages,
             actionsEnabled = state.actionsEnabled,
             onGenerate = { params, allowDestructive, sha ->
                 onIntent(
                     UiIntent.RequestGenerateAutounattend(
-                        xmlName = template,
+                        // Create-new reseals name via allocateXmlPath when overwriteXml=false.
+                        xmlName = generateTarget,
                         params = params,
                         imagePaths = state.windowsSelectedImages,
-                        overwriteXml = document != null,
+                        overwriteXml = template != null && document != null,
                         allowDestructiveTemplate = allowDestructive,
                         expectedTemplateSha256 = sha,
                     ),
@@ -932,7 +965,12 @@ private fun GlobalSettingsEditorDialog(
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                 }
                 Text(stringResource(R.string.settings_editor_help), style = MaterialTheme.typography.bodySmall)
-                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     VentoyControlCatalog.known.forEach { known ->
                         KnownControlRow(known, entries, state.pendingVentoyControls, state.actionsEnabled, onIntent)
                     }
@@ -944,13 +982,17 @@ private fun GlobalSettingsEditorDialog(
                             onDelete = { drafts.removeAt(index) },
                         )
                     }
-                    OutlinedButton(
+                    IconButton(
                         onClick = {
                             drafts.add(EditorPairDraft("new:${drafts.size}", null, "", "", ""))
                         },
                         enabled = state.actionsEnabled,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(stringResource(R.string.settings_add)) }
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Add setting row" },
+                    ) {
+                        GlyphIcon(Glyph.Plus)
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.settings_cancel)) }
@@ -1196,7 +1238,13 @@ private fun EditablePairRow(
                 }
             },
         )
-        IconButton(onClick = onDelete, enabled = actionsEnabled) { GlyphIcon(Glyph.Trash, size = 18.dp) }
+        IconButton(
+            onClick = onDelete,
+            enabled = actionsEnabled && (draft.key.isNotBlank() || draft.value.isNotBlank()),
+            modifier = Modifier.semantics {
+                contentDescription = "Delete setting row"
+            },
+        ) { GlyphIcon(Glyph.Trash, size = 18.dp) }
     }
 }
 
@@ -1311,7 +1359,6 @@ private fun KnownControlRow(
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
             ) { Text(stringResource(R.string.settings_remove)) }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -1356,7 +1403,6 @@ private fun ExtraControlRow(
             enabled = actionsEnabled,
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
         ) { Text(stringResource(R.string.settings_remove)) }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 

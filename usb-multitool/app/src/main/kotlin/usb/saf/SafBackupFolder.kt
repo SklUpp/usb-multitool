@@ -27,52 +27,24 @@ data class SafDocument(
     val sizeBytes: Long?,
 )
 
-internal fun deleteCreatedDocument(
-    delete: (Uri) -> Boolean,
-    created: Uri,
-    originalFailure: Throwable,
-) {
-    try {
-        if (!delete(created)) {
-            originalFailure.addSuppressed(
-                IOException("SAF provider refused deletion of operation-owned document $created"),
-            )
-        }
-    } catch (cleanupFailure: Throwable) {
-        originalFailure.addSuppressed(cleanupFailure)
-    }
-}
-/** Tracks exact URIs returned by this operation; display names never authorize cleanup. */
-internal class SafOperationDocuments(private val delete: (Uri) -> Boolean) {
-    private val owned = LinkedHashSet<Uri>()
 
-    fun own(uri: Uri): Uri {
-        owned += uri
-        return uri
-    }
-
-    fun cleanup(): Throwable? {
-        var failure: Throwable? = null
-        for (uri in owned.toList().asReversed()) {
-            try {
-                check(delete(uri)) { "SAF provider refused deletion of operation-owned document $uri" }
-            } catch (cause: Throwable) {
-                if (failure == null) failure = cause else failure.addSuppressed(cause)
-            }
-        }
-        owned.clear()
-        return failure
-    }
-}
 /**
  * Thin platform adapter for a user-selected SAF tree. It owns document placement and
  * byte sync only; rescue naming, validation and the durable engine boundary live in
  * [usb.diagnostics.BackupArchive] and [usb.diagnostics.RescueArchiveOperations].
  *
- * New documents are opened read-write only after the provider's createDocument contract
- * verifies a newly generated ID and empty regular file. Checkpoint maps remain append-only.
+ * New documents are opened read-write only after authority, ID and metadata checks. These checks
+ * validate shape, not exclusive ownership. Existing IDs may still be returned by a nonconforming
+ * provider; a concurrent writer may also change a valid returned document after checks. Rejected responses are retained rather than deleted.
  */
+internal fun isNewRegularFile(document: SafDocument?, scoped: Uri, authority: String): Boolean =
+    document != null &&
+        document.uri == scoped &&
+        document.uri.authority == authority &&
+        !document.isDirectory &&
+        (document.sizeBytes == null || document.sizeBytes == 0L)
 class SafBackupFolder(
+
     private val resolver: ContentResolver,
     val treeUri: Uri,
 ) {
@@ -140,15 +112,22 @@ class SafBackupFolder(
         }
     }
 
-    fun createSubfolder(name: String): Uri =
-        requireNotNull(
+    fun createSubfolder(name: String): Uri = createSubfolder(rootDocumentUri, name)
+
+    fun createSubfolder(parent: Uri, name: String): Uri {
+        val parentUri = DocumentsContract.buildDocumentUriUsingTree(
+            treeUri,
+            DocumentsContract.getDocumentId(parent),
+        )
+        return requireNotNull(
             DocumentsContract.createDocument(
                 resolver,
-                rootDocumentUri,
+                parentUri,
                 DocumentsContract.Document.MIME_TYPE_DIR,
                 name,
             ),
         ) { "the provider refused to create folder '$name'" }
+    }
 
     fun createRootFile(name: String, mimeType: String): Uri =
         createFile(rootDocumentUri, name, mimeType)
@@ -164,44 +143,59 @@ class SafBackupFolder(
         ) { "the provider refused to create file '$name'" }
     }
     /**
-     * DocumentsProvider contract guarantees createDocument returns a newly generated,
-     * immutable document ID. Verify returned metadata before any write probe; do not
-     * infer ownership from display-name uniqueness.
+     * Validate returned authority, ID and metadata before any write probe. The platform contract
+     * promises a new ID for conforming providers, but metadata cannot prove ownership otherwise;
+     * never infer ownership from display-name uniqueness.
      */
-    fun createExclusiveSubfolder(name: String): Uri {
-        val created = createSubfolder(name)
-        return try {
-            val createdId = DocumentsContract.getDocumentId(created)
-            val document = queryDocument(created)
-            require(
-                document != null &&
-                    DocumentsContract.getDocumentId(document.uri) == createdId &&
-                    document.isDirectory,
-            ) { "SAF provider did not create a new folder: $name" }
-            created
-        } catch (failure: Throwable) {
-            deleteCreatedDocument(::deleteDocument, created, failure)
-            throw failure
+    fun createExclusiveSubfolder(name: String): Uri = createExclusiveSubfolder(rootDocumentUri, name)
+
+    fun createExclusiveSubfolder(parent: Uri, name: String): Uri {
+        val created = createSubfolder(parent, name)
+        require(created.authority == treeUri.authority) {
+            "SAF provider returned foreign authority for folder: $name; retained returned document $created"
         }
+        val createdId = DocumentsContract.getDocumentId(created)
+        val scoped = documentUri(createdId)
+        val document = try {
+            queryDocument(scoped)
+        } catch (failure: Throwable) {
+            throw IllegalStateException(
+                "SAF provider query failed for folder $name; retained returned document $created",
+                failure,
+            )
+        }
+        require(
+            document != null &&
+                document.uri == scoped &&
+                document.uri.authority == treeUri.authority &&
+                DocumentsContract.getDocumentId(document.uri) == createdId &&
+                document.isDirectory,
+        ) { "SAF provider did not create a new folder: $name; retained returned document $created" }
+        // Always return tree-scoped URI — never the raw createDocument URI.
+        return scoped
     }
 
     fun createExclusiveFile(parent: Uri, name: String, mimeType: String): Uri {
         val created = createFile(parent, name, mimeType)
-        return try {
-            val createdId = DocumentsContract.getDocumentId(created)
-            val document = queryDocument(created)
-            require(
-                document != null &&
-                    DocumentsContract.getDocumentId(document.uri) == createdId &&
-                    !document.isDirectory &&
-                    document.sizeBytes == 0L,
-            ) { "SAF provider did not create a new empty file: $name" }
-            created
-        } catch (failure: Throwable) {
-            deleteCreatedDocument(::deleteDocument, created, failure)
-            throw failure
+        require(created.authority == treeUri.authority) {
+            "SAF provider returned foreign authority for file: $name; retained returned document $created"
         }
+        val createdId = DocumentsContract.getDocumentId(created)
+        val scoped = documentUri(createdId)
+        val document = try {
+            queryDocument(scoped)
+        } catch (failure: Throwable) {
+            throw IllegalStateException(
+                "SAF provider query failed for file $name; retained returned document $created",
+                failure,
+            )
+        }
+        require(
+            isNewRegularFile(document, scoped, treeUri.authority!!),
+        ) { "SAF provider did not create a new empty file: $name; retained returned document $created" }
+        return scoped
     }
+
 
     fun openSyncedOutput(document: Uri): SafSyncedOutput =
         SafSyncedOutput(resolver, documentUri(DocumentsContract.getDocumentId(document)))

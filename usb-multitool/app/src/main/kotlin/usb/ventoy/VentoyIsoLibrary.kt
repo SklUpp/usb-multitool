@@ -112,16 +112,16 @@ object VentoyIsoLibrary {
 
         operation.mutationAttempted = true
 
-        val nonce = "${System.currentTimeMillis()}-${System.nanoTime()}"
-        val temp = uniqueChild(volume, directory, ".$name.import-$nonce")
-        val backup = uniqueChild(volume, directory, ".$name.bak-$nonce")
+        // Fixed-length temps: never embed [name] so near-255 LFN stems stay valid.
+        val temp = uniqueShortChild(volume, directory, "i")
+        val backup = uniqueShortChild(volume, directory, "b")
         val cleanupErrors = ArrayList<Throwable>()
         fun cleanupFailure(error: Throwable) {
             cleanupErrors.add(error)
             runCatching { onCleanupFailure(error) }
         }
 
-        var tempTouched = false
+        var tempOwned = false
         var backupMoved = false
         var targetMoved = false
         var committed = false
@@ -163,22 +163,37 @@ object VentoyIsoLibrary {
                             "Stream is larger than the provider-reported $expected bytes",
                         )
                     }
-                    tempTouched = true
+                    if (!created) {
+                        // Phase 1: exclusive empty create — ownership only after success.
+                        volume.write(
+                            path = temp,
+                            data = ByteArray(0),
+                            create = true,
+                            exclusiveCreate = true,
+                        )
+                        tempOwned = true
+                        created = true
+                    }
                     val data = if (read == buffer.size) buffer else buffer.copyOf(read)
                     volume.write(
                         path = temp,
                         data = data,
                         offset = written,
-                        create = !created,
+                        create = false,
                         plannedTotalSize = expected ?: (written + read),
                     )
-                    created = true
                     written += read
                     operation.report(written)
                 }
                 if (!created) {
-                    tempTouched = true
-                    volume.write(path = temp, data = ByteArray(0), create = true)
+                    volume.write(
+                        path = temp,
+                        data = ByteArray(0),
+                        create = true,
+                        exclusiveCreate = true,
+                    )
+                    tempOwned = true
+                    created = true
                 }
                 if (written == 0L) throw ImageEmptyException("Selected file is empty")
                 if (expected != null && written != expected) {
@@ -229,7 +244,7 @@ object VentoyIsoLibrary {
             if (!committed) {
                 if (targetMoved) safe(cleanupErrors, onCleanupFailure) { removeIfPresent(volume, target) }
                 if (backupMoved) safe(cleanupErrors, onCleanupFailure) { volume.rename(backup, target) }
-                if (tempTouched) safe(cleanupErrors, onCleanupFailure) { removeIfPresent(volume, temp) }
+                if (tempOwned) safe(cleanupErrors, onCleanupFailure) { removeIfPresent(volume, temp) }
                 safe(cleanupErrors, onCleanupFailure) { volume.sync() }
             }
             cleanupErrors.forEach(failure::addSuppressed)
@@ -259,6 +274,13 @@ object VentoyIsoLibrary {
             candidate = child("-$suffix")
         }
         return candidate
+    }
+
+    /** Fixed-length unique sibling; never embeds the destination basename. */
+    private fun uniqueShortChild(volume: UsbFsVolume, dir: String, kind: String): String {
+        val nonce = "${System.currentTimeMillis().toString(36)}-${System.nanoTime().toString(36)}"
+        val base = ".x$kind-$nonce"
+        return uniqueChild(volume, dir, base)
     }
 
     private fun removeIfPresent(volume: UsbFsVolume, path: String) {

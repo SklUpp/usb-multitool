@@ -9,6 +9,11 @@ class MountedFilesVolume(
     private val disk: UsbDisk,
     val volume: UsbFsVolume,
     val writable: Boolean,
+    /** Exact geometry and filesystem identity used for this mount; null means unverified. */
+    val startLba: ULong? = null,
+    val sectorCount: ULong? = null,
+    val sectorSize: Int? = null,
+    val filesystemId: usb.fs.FilesystemId? = null,
 ): AutoCloseable {
     private var closeFailure: Throwable? = null
     init {

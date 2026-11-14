@@ -356,7 +356,8 @@ Java_usb_fs_FatFsNative_nativeRead(JNIEnv *env, jclass, jlong volume, jstring pa
 
 extern "C" JNIEXPORT jint JNICALL
 Java_usb_fs_FatFsNative_nativeWrite(JNIEnv *env, jclass, jlong volume, jstring path, jlong offset,
-				    jbyteArray data, jlong plannedTotalSize, jboolean create)
+					    jbyteArray data, jlong plannedTotalSize, jboolean create,
+					    jboolean exclusiveCreate)
 {
 	std::string p = from_jstring(env, path);
 	if (!data) {
@@ -369,9 +370,20 @@ Java_usb_fs_FatFsNative_nativeWrite(JNIEnv *env, jclass, jlong volume, jstring p
 		env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte *>(buf.data()));
 	}
 	size_t wrote = 0;
+	int createMode = create ? (exclusiveCreate ? 2 : 1) : 0;
 	int rc = fat_engine_write_file(static_cast<uint64_t>(volume), p.c_str(),
 				       static_cast<uint64_t>(offset), buf.data(), buf.size(), &wrote,
-				       static_cast<uint64_t>(plannedTotalSize), create ? 1 : 0);
+				       static_cast<uint64_t>(plannedTotalSize), createMode);
+    if (rc == FAT_ENGINE_CLEANUP_FAILED) {
+        throw_fat(env, "usb/fs/FatFsException",
+                  ("exclusive create cleanup failed; temporary file may remain: " + p).c_str());
+        return -1;
+    }
+    if (rc == 8 && exclusiveCreate) {
+        throw_fat(env, "usb/fs/FileExistsException",
+                  ("exclusive create failed, already exists: " + p).c_str());
+        return -1;
+    }
 	if (rc == FAT_ENGINE_FILE_TOO_LARGE) {
 		throw_fat(env, "usb/fs/FileTooLargeException",
 			  "file exceeds filesystem size limit");

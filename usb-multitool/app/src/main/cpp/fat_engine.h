@@ -39,6 +39,7 @@ typedef struct FatStat {
 
 /* Engine-local status outside FatFs FRESULT range. */
 #define FAT_ENGINE_FILE_TOO_LARGE 100
+#define FAT_ENGINE_CLEANUP_FAILED 101
 
 /* Max file size accepted before create. FAT12/16/32: 4GiB-1; exFAT: effectively unlimited here. */
 uint64_t fat_engine_max_file_size(FatFsKind kind);
@@ -86,8 +87,8 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 			 void *buf, size_t len, size_t *out_read);
 /* Rejects size > filesystem limit before creating destination. */
 int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
-			  const void *buf, size_t len, size_t *out_written,
-			  uint64_t planned_total_size, int create);
+                          const void *buf, size_t len, size_t *out_written,
+                          uint64_t planned_total_size, int create_mode);
 
 int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
 		    FatMkfsType type, uint32_t au_size_bytes);

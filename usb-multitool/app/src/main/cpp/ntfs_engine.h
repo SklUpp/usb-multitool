@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <errno.h>
+
+#define NTFS_ENGINE_CLEANUP_FAILED (-EUCLEAN)
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,6 +84,10 @@ int ntfs_engine_read(uint64_t vol_handle, const char *path,
 int ntfs_engine_write(uint64_t vol_handle, const char *path,
                       uint64_t offset, const void *buf, size_t count,
                       bool create, size_t *out_written);
+int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
+                                uint64_t offset, const void *buf, size_t count,
+                                bool create, bool exclusive_create,
+                                size_t *out_written);
 
 /* Create a directory. Returns 0 on success, -EROFS on RO mount, -EEXIST if present. */
 int ntfs_engine_mkdir(uint64_t vol_handle, const char *path);

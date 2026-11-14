@@ -165,6 +165,9 @@ fun AppShell(
     /** Opens OpenDocument for a read-only phone-side Ventoy settings import. */
     onPickVentoySettingsFile: () -> Unit = {},
     onRequestDownload: (FilesDownloadBinding) -> Unit = {},
+    onRequestBatchDownload: (FilesBatchSelection) -> Unit = {},
+    /** Opens OpenMultipleDocuments into the pinned current Files directory. */
+    onRequestBatchUpload: () -> Unit = {},
     onPickBackup: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
@@ -386,6 +389,8 @@ fun AppShell(
                                     onIntent = onIntent,
                                     modifier = Modifier.fillMaxSize(),
                                     onRequestDownload = onRequestDownload,
+                                    onRequestBatchDownload = onRequestBatchDownload,
+                                    onRequestBatchUpload = onRequestBatchUpload,
                                     onRequestDeviceImage = onPickWindowsImage,
                                 )
                                 ShellTab.Ventoy -> VentoyScreen(
@@ -875,9 +880,12 @@ internal fun StatusLogPanel(
         operationDetail?.let(::add)
         statusText?.takeIf { it != operationDetail }?.let(::add)
     }
+    val batchCurrentFile = op?.title?.reportsCurrentFileBytes() == true
     val metric = when {
         op == null -> null
         completed -> "✓"
+        op.bytesTotal > 0L && batchCurrentFile ->
+            stringResource(R.string.op_batch_current_file_pct, (op.fraction * 100).toInt())
         op.bytesTotal > 0L -> "${(op.fraction * 100).toInt()}%"
         op.bytesDone > 0L -> DeviceIdentity.formatCapacity(op.bytesDone.toULong())
         else -> operationStateLabel(op.state)
@@ -978,6 +986,18 @@ internal fun StatusLogPanel(
                             fontWeight = FontWeight.Bold,
                             color = content,
                             textAlign = TextAlign.Center,
+                        )
+                    } else if (op != null && op.bytesTotal > 0L && batchCurrentFile) {
+                        Text(
+                            text = stringResource(
+                                R.string.op_batch_current_file_pct,
+                                (op.fraction * 100).toInt(),
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = content,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
                         )
                     } else if (op != null && op.bytesTotal > 0L) {
                         Text(
@@ -1198,7 +1218,15 @@ internal fun StatusLogPanel(
             add(title)
             if (op != null) {
                 add("#${op.token.value}")
-                if (op.bytesTotal > 0L) {
+                if (op.bytesTotal > 0L && batchCurrentFile) {
+                    add(
+                        stringResource(
+                            R.string.op_batch_current_file_bytes,
+                            DeviceIdentity.formatCapacity(op.bytesDone.toULong()),
+                            DeviceIdentity.formatCapacity(op.bytesTotal.toULong()),
+                        ),
+                    )
+                } else if (op.bytesTotal > 0L) {
                     add("${(op.fraction * 100).toInt()}% · ${DeviceIdentity.formatCapacity(op.bytesDone.toULong())} / ${DeviceIdentity.formatCapacity(op.bytesTotal.toULong())}")
                 } else if (op.bytesDone > 0L) {
                     add(DeviceIdentity.formatCapacity(op.bytesDone.toULong()))

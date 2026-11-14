@@ -2,6 +2,7 @@ package usb.fs
 
 import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.fail
 import org.junit.Test
 import usb.device.BlockDevice
@@ -76,6 +77,17 @@ class FsIoGuardTest {
     fun ntfsWriteRejectsNegativeOffset() {
         val vol: UsbFsVolume = NtfsVolume(handle = 0L, device = NoWriteDevice, readOnly = false)
         expectIae { vol.write("/a.bin", ByteArray(16), offset = -1L) }
+    }
+
+    @Test
+    fun extAndNtfsVolumesRetainDeviceAndAccessMode() {
+        val ext = ExtVolume(handle = 0L, device = NoWriteDevice, readOnly = false)
+        val ntfs = NtfsVolume(handle = 0L, device = NoWriteDevice, readOnly = true)
+
+        assertSame(NoWriteDevice, ext.device)
+        assertEquals(FilesystemAccess.ReadWrite, ext.access)
+        assertSame(NoWriteDevice, ntfs.device)
+        assertEquals(FilesystemAccess.ReadOnly, ntfs.access)
     }
 
     @Test

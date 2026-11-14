@@ -3,6 +3,9 @@ package usb.files
 import usb.device.UsbExclusiveClaim
 import usb.fs.CloseAfterSuccessException
 import usb.fs.UsbFsVolume
+import usb.fs.FilesystemUsageKey
+import usb.fs.FilesystemUsageProbe
+import usb.fs.FilesystemUsageSnapshot
 import usb.fs.mergeCloseFailure
 import usb.operation.DiskOperation
 import usb.operation.OperationState
@@ -281,6 +284,44 @@ class FilesVolumeSession(
         acquireSink?.invoke(epoch)
         return opened.volume
     }
+
+    /** Measures pinned partition, remounting once when cached geometry differs. */
+    fun filesystemUsageForLocked(
+        pin: AttachmentPin?,
+        partitionId: String,
+        key: FilesystemUsageKey,
+    ): FilesystemUsageSnapshot {
+        if (pin == null || currentAttachment() != pin || pin.attachGeneration != key.attachGeneration) {
+            throw AttachmentChangedException()
+        }
+        var volume = volumeForLocked(pin, partitionId, writable = false)
+        var current = mounted ?: throw AttachmentChangedException()
+        if (!mountMatches(current, pin, partitionId, volume, key)) {
+            when (val closed = closeLockedResult()) {
+                is CloseEpochResult.ClosedFailed -> throw closed.error
+                else -> Unit
+            }
+            volume = volumeForLocked(pin, partitionId, writable = false)
+            current = mounted ?: throw AttachmentChangedException()
+            if (!mountMatches(current, pin, partitionId, volume, key)) {
+                throw AttachmentChangedException()
+            }
+        }
+        return FilesystemUsageProbe.measureLocked(volume, key)
+    }
+
+    private fun mountMatches(
+        current: Mounted,
+        pin: AttachmentPin,
+        partitionId: String,
+        volume: UsbFsVolume,
+        key: FilesystemUsageKey,
+    ): Boolean = current.pin == pin && current.volume.volume === volume &&
+        current.volume.partitionId == partitionId &&
+        current.volume.startLba == key.partitionStartLba &&
+        current.volume.sectorCount == key.partitionSectorCount &&
+        current.volume.sectorSize == key.sectorSize &&
+        current.volume.filesystemId == key.filesystem
 
     private fun refuseRemount(closeErr: Throwable): IllegalStateException =
         IllegalStateException(

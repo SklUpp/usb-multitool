@@ -16,6 +16,11 @@ import usb.device.UsbDisk
 import usb.device.UsbExclusiveClaim
 import usb.fs.CloseAfterSuccessException
 import usb.fs.UsbFsDirEntry
+import usb.fs.FilesystemId
+import usb.fs.FilesystemSpace
+import usb.fs.FilesystemUsage
+import usb.fs.UsbFsUsageVolume
+import usb.fs.FilesystemUsageKey
 import usb.fs.UsbFsVolume
 import usb.operation.DiskOperation
 import usb.operation.OperationState
@@ -1242,6 +1247,74 @@ class FilesVolumeSessionTest {
         assertFalse(claim.isHeld())
     }
 
+    @Test
+    fun usageOpensPinnedMountAndMeasuresUnderSessionLock() {
+        var opens = 0
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                opens++
+                mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+            },
+        )
+        val key = FilesystemUsageKey(1L, pinA.deviceKey, 2048uL, 4096uL, 512, FilesystemId.FAT)
+        val snapshot = session.withLock { session.filesystemUsageForLocked(pinA, "1", key) }
+        assertTrue(snapshot.usage is FilesystemUsage.Known)
+        assertEquals(1, opens)
+        session.close()
+    }
+
+    @Test
+    fun usageRemountsCachedGeometryAndPublishesFreshUsage() {
+        var opens = 0
+        val events = mutableListOf<String>()
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                opens++
+                mounted(
+                    partitionId, writable, events, volumeClose = null, diskClose = null, lease = lease,
+                    sectorCount = if (opens == 1) 4096uL else 1uL,
+                    usageSpace = FilesystemSpace(2uL, 1uL),
+                )
+            },
+        )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val key = FilesystemUsageKey(1L, pinA.deviceKey, 2048uL, 1uL, 512, FilesystemId.FAT)
+        val snapshot = session.withLock { session.filesystemUsageForLocked(pinA, "1", key) }
+        assertEquals(FilesystemSpace(2uL, 1uL), (snapshot.usage as FilesystemUsage.Known).space)
+        assertEquals(2, opens)
+        assertEquals(listOf("volume", "disk"), events)
+        session.close()
+        assertEquals(listOf("volume", "disk", "volume", "disk"), events)
+    }
+
+    @Test
+    fun geometryRemountCloseFailureLatchesAndBlocksFreshOpen() {
+        var opens = 0
+        val closeFailure = IOException("close failed")
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                opens++
+                mounted(
+                    partitionId, writable, volumeClose = closeFailure, diskClose = null, lease = lease,
+                    sectorCount = 4096uL,
+                )
+            },
+        )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val key = FilesystemUsageKey(1L, pinA.deviceKey, 2048uL, 1uL, 512, FilesystemId.FAT)
+        assertSame(closeFailure, assertThrows(IOException::class.java) {
+            session.withLock { session.filesystemUsageForLocked(pinA, "1", key) }
+        })
+        assertEquals(1, opens)
+        assertThrows(IllegalStateException::class.java) {
+            session.withLock { session.filesystemUsageForLocked(pinA, "1", key) }
+        }
+        assertEquals(1, opens)
+    }
+
     private fun mounted(
         partitionId: String,
         writable: Boolean,
@@ -1251,6 +1324,11 @@ class FilesVolumeSessionTest {
         lease: UsbExclusiveClaim.Lease? = null,
         beforeVolumeClose: (() -> Unit)? = null,
         closeDiskBeforeVolumeClose: Boolean = false,
+        startLba: ULong? = 2048uL,
+        sectorCount: ULong? = 4096uL,
+        sectorSize: Int? = 512,
+        filesystemId: FilesystemId? = FilesystemId.FAT,
+        usageSpace: FilesystemSpace = FilesystemSpace(4096uL, 2048uL),
     ): MountedFilesVolume {
         lateinit var disk: UsbDisk
         val bot =
@@ -1263,7 +1341,8 @@ class FilesVolumeSessionTest {
             }
         disk = UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL), lease = lease)
         val volume =
-            object : UsbFsVolume {
+            object : UsbFsVolume, UsbFsUsageVolume {
+                override fun space(): FilesystemSpace = usageSpace
                 override fun list(path: String) = emptyList<UsbFsDirEntry>()
                 override fun stat(path: String) = error("unused")
                 override fun statOrNull(path: String) = null
@@ -1277,6 +1356,7 @@ class FilesVolumeSessionTest {
                     offset: Long,
                     create: Boolean,
                     plannedTotalSize: Long,
+                    exclusiveCreate: Boolean,
                 ) = Unit
                 override fun sync() = Unit
                 override fun close() {
@@ -1286,7 +1366,10 @@ class FilesVolumeSessionTest {
                     if (volumeClose != null) throw volumeClose
                 }
             }
-        return MountedFilesVolume(partitionId, disk, volume, writable).also {
+        return MountedFilesVolume(
+            partitionId, disk, volume, writable,
+            startLba, sectorCount, sectorSize, filesystemId,
+        ).also {
             if (lease != null) it.bindLease(lease)
         }
     }

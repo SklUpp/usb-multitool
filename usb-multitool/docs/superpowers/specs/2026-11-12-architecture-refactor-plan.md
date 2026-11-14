@@ -10,14 +10,44 @@
 - Обязательны единое владение USB, identity и attach generation, точная геометрия, epoch-fence, неподтверждённый close latch, destructive confirmation, sync/close, cancellation, readback и честные `Partial`/`Failed`/`Completed`. `OperationExecutor` сохраняет владение очередью и итоговым вердиктом.
 - `FilesVolumeSession` уже содержит pin и epoch-fence; `UiEffect` уже типизирован. Не внедрять повторно. Latch не сбрасывается по одному detach без доказательства безопасности native-движков.
 
-## Порядок
+## Порядок декомпозиции и кэширования
 
-1. Зафиксировать детерминированными тестами гонки attachment snapshot и параллельного открытия USB; устранить их общей границей владения, включая usage probe, filesystem и direct-disk операции. Сохранить порядок закрытия и обработку ошибок. Независимо проверить до интеграции.
-2. Выделить владельца inspection-ticket и его жизненный цикл, только если это не создаёт второго владельца USB. SAF cancellation не снимает USB guard до фактического завершения и закрытия; поздние callback и process death не пересекают сессии.
-3. По одному отделять сценарии picker и SAF backup от Activity/ViewModel: Android lifecycle и launcher остаются с соответствующим владельцем; reducer сохраняет единую точку переходов. Не смешивать инспекцию импорта с инспекцией restore.
-4. Выделять domain handlers и чистые переходы reducer по отдельности, когда это улучшает локальность и тестируемость. Разные политики close/cancel/Partial не сводить к универсальному submit-wrapper.
-5. Остановиться на естественных границах: не создавать однопроходные прокси и классы ради размера файлов; не переносить ownership staging, подтверждений или операций без проверяемой необходимости.
+### Обязательные условия и инварианты
 
+- **CI Gate**: декомпозиция архитектуры начинается строго **после** прохождения полного CI текущим рабочим деревом (проверка отправленного SHA).
+- **Единый общепроцессный владелец USB (Single Claim)**: на протяжении всех срезов действует строго **одно общепроцессное владение USB** (`UsbExclusiveClaim`) и единая сессия файловых операций `FilesVolumeSession` (mount lock, generation pin, epoch fence, close latch). Создание вторых владельцев USB, параллельных очередей или параллельных планировщиков категорически запрещено.
+- **Одобренный кэш SAF**: пользователь утвердил реализацию двухфазного SAF-кэша (полное сохранение во внутреннее app-private временное хранилище перед передачей в целевой SAF-документ; при сбое передачи после мутации — честный `Partial`). Реализация кэша согласована **строго после завершения всех 7 срезов декомпозиции**. Никакой код кэша не должен предшествовать границе декомпозиции.
+
+### Последовательные архитектурные срезы
+
+1. **Фиксация базового состояния и контракта гонок владения**:
+   - Файлы: `app/src/test/kotlin/usb/files/FilesVolumeSessionTest.kt`, `app/src/test/kotlin/usb/device/UsbExclusiveClaimTest.kt`, тесты attachment-state.
+   - Детерминированные барьерные тесты: параллельный зонд usage probe против прямого открытия USB (raw open), detach/replug во время медленного открытия, сбой close с последующим конкурирующим открытием. Работа строго через существующий `UsbExclusiveClaim` без введения второго владельца.
+   - *Приёмка*: не более одной активной аренды USB; устаревший attachment не может выполнять мутации; сбой или неподтверждённое закрытие блокирует следующее открытие. Поведение `Busy` сохраняется.
+2. **Уточнение границы использования файловой системы и владения**:
+   - Файлы: `app/src/main/kotlin/usb/files/FilesystemUsageProbe.kt`, `app/src/main/kotlin/usb/files/FilesVolumeSession.kt`, `app/src/main/kotlin/usb/multitool/MainActivity.kt`.
+   - Трассировка путей usage probe, монтирования томов и прямого открытия диска строго через общий claim и session lock. Устраняются только обходы этой границы без добавления параллельного планировщика. Сохранение атомарных snapshots подключения и pre/post-open валидации.
+   - *Приёмка*: тесты гонок из среза 1 проходят; файловый том закрывается строго до закрытия диска; ошибки сохраняют порядок primary/suppressed и close latch. Результаты зонда и политика конкуренции не меняют видимого поведения.
+3. **Разделение терминальных эффектов и владения отображением**:
+   - Файлы: `app/src/main/kotlin/usb/multitool/MainActivity.kt`, `app/src/main/kotlin/usb/service/OperationExecutor.kt`, `app/src/test/kotlin/usb/service/OperationExecutorTest.kt`, `app/src/test/kotlin/usb/ui/OperationProgressMapperTest.kt`.
+   - Характеризация `MainViewModel.onIntent` и `OperationCompletionEffects`. Разделение токена владения отображаемым прогрессом и отменой от обязательной обработки завершения операций. Владение очередью и итоговый вердикт остаются в `OperationExecutor`.
+   - *Приёмка*: тесты чередования (завершение старой операции после отображения новой, disconnect/reconnect, отмена в очереди, мутация с последующей отменой). Устаревший прогресс не может заменить текущий UI; обязательные эффекты завершения не теряются и не дублируются; эффекты старого подключения не влияют на новое.
+4. **Изоляция жизненного цикла инспекции без смены владельца USB**:
+   - Файлы: `app/src/main/kotlin/usb/multitool/InspectionOwnership.kt`, `app/src/main/kotlin/usb/multitool/MainActivity.kt`, `app/src/test/kotlin/usb/multitool/InspectionOwnershipTest.kt`.
+   - Повторное использование существующего владельца тикетов. Вынос оставшегося связного учёта тикетов из ViewModel только при подтверждении реальной границы в точках вызова.
+   - *Приёмка*: отмена до регистрации, поздние обратные вызовы, освобождение старых тикетов и смена подключения не влияют на новые тикеты. Отмена операции не освобождает аренду USB до фактического завершения блокирующей работы и закрытия ресурсов.
+5. **Пошаговое выделение сценариев picker и SAF backup**:
+   - Файлы: `app/src/main/kotlin/usb/ui/FilesPickTransitions.kt`, `app/src/main/kotlin/usb/multitool/MainActivity.kt`, `app/src/test/kotlin/usb/ui/FilesPickUiTest.kt`, `app/src/test/kotlin/usb/multitool/MainActivityPickerRecoveryTest.kt`.
+   - Вынесение по одному связному сценарию picker или SAF-backup. Регистрация ActivityResultLauncher и жизненный цикл Android сохраняются в их текущем владельце. Инспекция импорта строго отделена от инспекции restore.
+   - *Приёмка*: FIFO порядок запуска/отмены, идентификация исходного запроса, привязка к подключению (attachment pin), таймауты, отмена и отклонение устаревших результатов подтверждаются тестами. Ни один принадлежащий провайдеру URI не удаляется рефакторингом.
+6. **Инкрементальное выделение чистых переходов reducer и связных обработчиков**:
+   - Файлы: `app/src/main/kotlin/usb/ui/UiReducer.kt`, `app/src/main/kotlin/usb/ui/AppShell.kt`, `app/src/test/kotlin/usb/ui/UiEffectTypingTest.kt`, доменные файлы переходов и тестов.
+   - Перенос по одному законченному доменному переходу за раз с сохранением верхнеуровневого контракта редуктора и типизированных эффектов `UiEffect`. Обработчик выделяется только при реальном улучшении локальности без создания однопроходных прокси.
+   - *Приёмка*: тесты подтверждают идентичность следующего состояния и упорядоченных эффектов при одинаковых входных данных; устаревшие обратные вызовы игнорируются. Сохраняются индивидуальные политики отмены, sync, close, readback и `Partial`.
+7. **Повторный аудит и остановка на естественных границах**:
+   - Файл: `docs/superpowers/specs/2026-11-12-architecture-refactor-plan.md`.
+   - Фиксация выполненных срезов, ревизий CI, остаточной связности и обоснования, почему дальнейшее дробление нецелесообразно. Переход к реализации утверждённого SAF-кэша.
+   - *Приёмка*: утверждение о завершении декомпозиции опирается на отсутствие остаточной связности, а не на размер файлов; никакой код кэша не добавляется до этой точки.
 ## Проверка
 
 Каждый срез: тесты наблюдаемого поведения и гонок, независимое ревью, соответствующие локальные лёгкие host-проверки; Android build/unit/lint и 16 KB alignment в CI. Для опасных путей нужны физические USB detach/claim, ошибки файловых движков и провайдера SAF; CI не заменяет их. Не утверждать проверку Ventoy boot, Windows installation или TalkBack без отдельного испытания.
@@ -58,24 +88,33 @@ Ventoy: независимая проверка показала, что VTOYEFI
 
 Интегрированные срезы, их commit SHA и прежние проверки перенесены в [состояние проекта](2026-11-14-project-progress.md). Записи выше фиксируют исходный архитектурный аудит и могут быть устаревшими; фактический статус сверять с текущим кодом и состоянием проекта.
 
-## Архитектурный аудит — 2026-11-13
+## Архитектурный аудит и текущий статус — 2026-11-14
 
-Срез аудита: `62336d6` и незавершённые worktree. Исторические находки не являются утверждением о текущем HEAD; см. состояние проекта.
+Срез аудита: интеграция `MergeDiskAccess`, `FixSafOwnership` и текущее live tree на `feature/android-usb-multitool`. Полный CI на текущем дереве ещё не запущен; последний подтверждённый CI — запуск [43590020532](https://github.com/SklUpp/usb-multitool/actions/runs/43590020532) для `b42154c`.
 
-### Приоритеты и границы
+### Фактический статус компонентов
 
-1. **Android orchestration.** `MainViewModel` по-прежнему связывает USB attachment, Files, SAF, Ventoy, Raw, backup, progress и lifecycle (`app/src/main/kotlin/usb/multitool/MainActivity.kt:171-5665`). Это повышает цену проверки изменений и риск междоменного взаимодействия. Уже есть `AttachmentState`, `InspectionOwnership`, `DiskController`, `FilesVolumeSession` и typed intents/effects; не создавать их дубликаты. `WindowsImportPickerCoordinator` интегрирован в `c96810e` после статического независимого ревью; registration launcher и разрешения остаются в Activity. Сборка и runtime ещё не проверены.
-2. **Reducer и оболочка.** `UiReducer.kt` всё ещё связывает несколько доменов и общую lifecycle-политику; `AppShell.kt` смешивает shell/dialogs и Android side effects. Сохранять единый верхнеуровневый контракт и выделять только целостные transitions или screen-independent shell с сохранением accessibility и lifecycle, не делить по размеру.
-3. **Files и SAF.** Незавершённая реализация conflict/resume не интегрирована. Контракт должен связывать согласие с точным SAF parent/name/document ID и type, отделять созданный каталог от родителя, повторно проверять attachment/geometry в queued операции и сохранять факт мутации до provider вызова. Отмена/ошибка после мутации — честный `Partial`; удаление чужого дерева при directory Replace не разрешено. `FilesVolumeSession` остаётся единым владельцем mount/lock/epoch/claim/close latch.
-4. **Операции и статус.** Незавершённая token-ветка не принята: вытеснение отображаемой операции может подавить обязательные completion effects прежней операции. Разделить владение отображением, адресную отмену и выполнение обязательных completion effects; token не заменяет attachment generation. Измерение использования файловой системы выполняется вне общей очереди (`MainActivity.kt:2622-2694`); возможное пересечение с raw-операцией требует проверки на уровне shared claim/очереди и теста, физическая порча не доказана. Binding должен использовать единый immutable snapshot устройства и геометрии.
-5. **SectorForge/JNI.** `rust/sf-bridge/src/lib.rs:157-190` формирует полный snapshot карты; `app/src/main/cpp/sf_bridge_jni.cpp:127-147` выделяет JNI-массив. Фрагментация может увеличить объём памяти; размер `count * 3` должен проверяться до преобразования в `jsize`. Ограничение без явного incomplete/failure запрещено: карта checkpoint не должна выглядеть полной после усечения. Также проанализировать единое владение run/BridgeCtx при конкурентных `execute/blocks/free`; штатный Kotlin caller последователен, production race не воспроизведён. Проверить attach/detach JNI threads и checked arithmetic для Rust callback seek; это граничные риски, а не доказанная потеря данных.
-6. **SAF/native boundaries.** Обработка неудачи persistable URI grant должна различать transient и persisted право, не объявляя неподтверждённое постоянным. Direct FAT block close и повторный native mount вне `FilesVolumeSession` — риски публичной границы, не доказанные сбои штатного UI. SAF positional capability уже проверяется fail-closed; очистка допустима только для точно принадлежащих операции URI. Не добавлять глобальный registry или удаление, не доказав их семантику с close latch.
-7. **Build/test.** Текущий CI содержит native host/Rust/unit, APK, lint и 16 KB alignment; это не проверка физического USB, SAF provider faults/process death, Ventoy boot, Windows Setup или TalkBack. Rust artifact/CMake provenance необходимо сохранять fail-closed. Нужны поведенческие проверки orchestration, ошибки провайдера, изменения attachment и ограничений JNI, не тесты текста исходников.
+1. **Владение диском и сессии (DiskAccess & Session)**:
+   - `MergeDiskAccess` интегрирован (18 файлов, 0 конфликтов, clean post-merge review). Параметры `device` конструкторов EXT/NTFS восстановлены, тестовые фикстуры приведены к единому контракту. Scoped JVM-тесты `FilesVolumeSessionTest`, `FilesystemUsageTest`, `FilesystemUsageUiTest`, `FilesScreenModelTest`, `AutounattendRawWriteUiTest`, `XmlPathTest` прошли успешно (exit 0).
+   - Нативный EXT host: чистая временная копия pinned `lwext4` (commit 58bcf89) с обоими tracked-патчами подтвердила создание O_EXCL и сохранение существующего файла (exit 0).
+   - Нативный NTFS host: чистая временная копия pinned `ntfs-3g` с tracked `mkntfs` патчем и временным (temp-only) изменением пути `/tmp` на `$PREFIX/tmp` в тестовой копии прошла 46 проверок (exit 0).
 
-### Порядок
+2. **Files и SAF ownership**:
+   - Мультивыбор, пакетные операции скачивания/удаления и per-conflict prompt интегрированы в исходном коде (`FilesScreen.kt`, `FilesOperations.kt`).
+   - `SafBackupFolder.kt`: деструктивное рекурсивное удаление отвергнутых документов и SAF-архивов устранено; пути возвращаются при ошибках; no-op ownership abstraction удалена. Независимое статическое ревью пройдено.
+   - Scoped unit-тесты SAF (`SafBackupFolderOwnershipTest`, `SafAvailableBytesTest`) **только скомпилированы** (`:app:compileDebugUnitTestKotlin` exit 0); локальное выполнение заблокировано ограничениями Termux/Bionic Conscrypt/Robolectric, запуск тестов отложен до CI.
 
-Завершить и независимо проверить Files; безопасно интегрировать проверенный Windows picker; устранить противоречие token completion ownership; затем оценивать изолированные срезы SectorForge/JNI, shared USB scheduling, оставшиеся доменные handlers и shell/reducer. Каждый срез сохраняет sync/close, read-back, cancellation, `Partial` и process-wide fail-closed latch. Любая новая зависимость или системная установка требует отдельного согласования. Утверждение «декомпозиция завершена» возможно только после повторного аудита, когда оставшиеся разделения не дают измеримой локальности или безопасности.
+3. **Открытые неизвестные (Outstanding Unknowns)**:
+   - Причина первого отказа raw SAF measurement при выборе файла с телефона не выяснена.
+   - Фактическое состояние RO/RW смонтированных томов (в коде присутствуют флаги политики и драйвера, но переход в честный `ReadWrite` на физическом оборудовании не подтверждён).
+   - Отказ измерения свободного места Files на реальном оборудовании (fallback присутствует, но устранение причины на живых ФС не доказано).
+   - Обязательность первого запроса общей папки резервных копий (отсутствует в исходных требованиях `New file (1).txt`).
+   - Гарантии свежести `queryDocument` против невалидных провайдеров и гонки конкурентного писателя в архивные каталоги.
+   - Физические отказы USB во время передачи / sync, смерть процесса, загрузка Ventoy, установка Windows остаются непроверенными.
 
+### Приоритеты и границы исполнения
+
+Сначала запустить и подтвердить полный CI текущего дерева. Затем строго по порядку выполнить 7 срезов декомпозиции с сохранением единого общепроцессного владения USB (`UsbExclusiveClaim`). Реализацию одобренного двухфазного SAF-кэша выполнять строго после завершения декомпозиции.
 ### Предыдущие решения и источники
 
 SAF prior art: [SimpleStorage](https://github.com/anggrayudi/SimpleStorage) — Kotlin recursive copy/conflicts, но его sealed `StorageFile` не принимает наш `FilesVolume` напрямую; [FSAF](https://github.com/K1rakishou/Fuck-Storage-Access-Framework) предоставляет custom manager seam, совместимость exact-ID/Partial/USB ownership не доказана; [libaums](https://github.com/magnusja/libaums) заявляет FAT32 и не заменяет все имеющиеся файловые системы. Поиск не подтверждает готовую безопасную замену всего backend; зависимости не добавлялись.

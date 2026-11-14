@@ -77,6 +77,15 @@
     <string name="partitions_info_name_label">Имя</string>
     <string name="partitions_write_state_label">Состояние записи</string>
     <string name="partitions_write_ro">Защита EFI от записи активна</string>
+    <string name="partitions_write_policy_ro">Запись запрещена политикой приложения</string>
+    <string name="partitions_write_driver_ro">Файловый драйвер смонтирован только для чтения; состояние носителя неизвестно</string>
+    <string name="partitions_write_driver_rw">Файловый драйвер смонтирован для чтения и записи; состояние носителя неизвестно</string>
+    <string name="files_write_policy_label">RO · политика</string>
+    <string name="files_write_driver_ro_label">RO · драйвер</string>
+    <string name="files_write_driver_rw_label">RW · драйвер</string>
+    <string name="partitions_write_policy_label">RO · политика</string>
+    <string name="partitions_write_driver_ro_label">RO · драйвер</string>
+    <string name="partitions_write_driver_rw_label">RW · драйвер</string>
     <string name="partitions_write_unknown">Состояние записи не проверено</string>
     <string name="efi_write_policy_allowed">Запись разрешена</string>
     <string name="efi_write_policy_protected">Защищён от записи</string>
@@ -225,13 +234,16 @@
     <string name="files_copy_from_phone">Копировать с телефона</string>
     <string name="files_save_to_phone">Сохранить на телефон</string>
     <string name="files_write_ro">Защита EFI от записи активна</string>
+    <string name="files_write_policy_ro">Запись запрещена политикой приложения</string>
+    <string name="files_write_driver_ro">Файловый драйвер смонтирован только для чтения; состояние носителя неизвестно</string>
+    <string name="files_write_driver_rw">Файловый драйвер смонтирован для чтения и записи; состояние носителя неизвестно</string>
     <string name="files_write_unknown">Состояние записи не проверено</string>
     <string name="files_current_path">Текущая папка: %1$s</string>
     <string name="files_statuses">Статусы</string>
     <string name="files_statuses_expanded">Статусы развёрнуты</string>
     <string name="files_statuses_collapsed">Статусы свёрнуты</string>
     <string name="files_status_general">Статус</string>
-    <string name="files_delete_folder_confirm">Удалить папку %1$s? Она должна быть пустой — непустые папки отклоняются.</string>
+    <string name="files_delete_folder_confirm">Удалить папку %1$s со всем содержимым? Это действие нельзя отменить.</string>
     <string name="files_delete_confirm">Удалить %1$s?</string>
     <string name="files_open_folder">Открыть папку</string>
     <string name="files_select_file">Выбрать файл</string>
@@ -744,6 +756,8 @@
     <string name="unattend_problem_layout_size">Разметка слишком велика для целевого диска</string>
     <string name="unattend_problem_partition_label">Метка раздела пустая, длиннее 32 символов или содержит управляющие символы</string>
     <string name="unattend_refresh">Обновить</string>
+    <string name="unattend_status_not_selected">Не выбран</string>
+    <string name="unattend_status_selected">Выбран</string>
     <string name="unattend_scope_limited">Поиск образов ограничен: %1$s; образы вне этого не появятся в меню Ventoy, даже если привязаны.</string>
     <string name="unattend_template_label">Файл шаблона</string>
     <string name="unattend_title">Настройки установки Windows (.xml)</string>
@@ -820,4 +834,11 @@
     <string name="settings_source_status_error">Не JSON или не читается</string>
     <string name="settings_source_partial">Запись не удалась после открытия документа; он может быть обрезан. Откат невозможен.</string>
     <string name="settings_write_partial">Запись настроек не завершена. Подготовленные значения сохранены; повторите после проверки причины выше.</string>
+<string name="action_skip">Пропустить</string>
+<string name="files_delete_recursive_confirm">Удалить %1$d элементов? Папки в выборе удаляются рекурсивно со всем содержимым. Это действие нельзя отменить.</string>
+<string name="op_download_batch">Скачивание %1$d записей</string>
+<string name="op_upload_batch">Загрузка %1$d записей</string>
+<string name="op_delete_batch">Удаление %1$d записей</string>
+<string name="op_batch_current_file_pct">файл %1$d%%</string>
+<string name="op_batch_current_file_bytes">Текущий файл · %1$s / %2$s</string>
 </resources>

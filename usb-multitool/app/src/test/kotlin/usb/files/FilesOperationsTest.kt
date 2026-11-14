@@ -23,7 +23,7 @@ class FilesOperationsTest {
         override fun delete(path: String) { events += "delete:$path" }
         override fun rename(from: String, to: String) { events += "rename:$from:$to" }
         override fun read(path: String, offset: Long, length: Int) = ByteArray(0)
-        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) = Unit
+        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long, exclusiveCreate: Boolean) = Unit
         override fun sync() { events += "sync" }
         override fun close() = Unit
     }

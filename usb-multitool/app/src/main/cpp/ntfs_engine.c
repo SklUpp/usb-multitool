@@ -650,9 +650,32 @@ static void split_path(const char *path, char *parent, size_t parent_sz, const c
     }
 }
 
-int ntfs_engine_write(uint64_t vol_handle, const char *path,
-		      uint64_t offset, const void *buf, size_t count,
-		      bool create, size_t *out_written)
+static int delete_created_file(NtfsVolumeContext *v, const char *path, ntfs_inode *owned)
+{
+    char parent[512];
+    const char *filename = NULL;
+    split_path(path, parent, sizeof(parent), &filename);
+    if (!filename || !*filename) { ntfs_inode_close(owned); return -EINVAL; }
+    ntfs_inode *dir = ntfs_pathname_to_inode(v->vol, NULL, parent);
+    if (!dir) { ntfs_inode_close(owned); return -EIO; }
+    ntfschar *uname = NULL;
+    int ulen = ntfs_mbstoucs(filename, &uname);
+    if (ulen < 0 || !uname) {
+        ntfs_inode_close(dir);
+        ntfs_inode_close(owned);
+        return -EINVAL;
+    }
+    errno = 0;
+    int rc = ntfs_delete(v->vol, path, owned, dir, uname, (u8)ulen);
+    int saved = errno;
+    free(uname);
+    if (rc != 0) return saved ? -saved : -EIO;
+    return 0;
+}
+
+int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
+                                uint64_t offset, const void *buf, size_t count,
+                                bool create, bool exclusive_create, size_t *out_written)
 {
 	NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
 	if (!v || !v->vol || !path || !out_written) return -EINVAL;
@@ -663,78 +686,95 @@ int ntfs_engine_write(uint64_t vol_handle, const char *path,
 	 * reports the full length as written; refuse instead of faking success. */
 	if (NVolReadOnly(v->vol)) return -EROFS;
 
-	int created = 0;
-	errno = 0;
-	ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
-	if (!ni) {
-		int e = errno;
-		if (!create) return (e == ENOENT) ? -ENOENT : -EIO;
-		if (e != 0 && e != ENOENT) return -EIO;
+    int created = 0;
+    errno = 0;
+    ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
+    if (!ni) {
+        int e = errno;
+        if (!create) return (e == ENOENT) ? -ENOENT : -EIO;
+        if (e != 0 && e != ENOENT) return -EIO;
 
-		char parent[512];
-		const char *filename = NULL;
-		split_path(path, parent, sizeof(parent), &filename);
-		if (!filename || !*filename) return -EINVAL;
+        char parent[512];
+        const char *filename = NULL;
+        split_path(path, parent, sizeof(parent), &filename);
+        if (!filename || !*filename) return -EINVAL;
 
-		errno = 0;
-		ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
-		if (!dir_ni) return (errno == ENOENT) ? -ENOENT : -EIO;
-		{
-			int deny = refuse_system_parent(dir_ni);
-			if (deny != 0) {
-				ntfs_inode_close(dir_ni);
-				return deny;
-			}
-		}
+        errno = 0;
+        ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
+        if (!dir_ni) return (errno == ENOENT) ? -ENOENT : -EIO;
+        int deny = refuse_system_parent(dir_ni);
+        if (deny != 0) {
+            ntfs_inode_close(dir_ni);
+            return deny;
+        }
 
+        ntfschar *uname = NULL;
+        int ulen = ntfs_mbstoucs(filename, &uname);
+        if (ulen < 0 || !uname) {
+            ntfs_inode_close(dir_ni);
+            return -EINVAL;
+        }
 
-		ntfschar *uname = NULL;
-		int ulen = ntfs_mbstoucs(filename, &uname);
-		if (ulen < 0 || !uname) {
-			ntfs_inode_close(dir_ni);
-			return -EINVAL;
-		}
-
-		ni = ntfs_create(dir_ni, 0, uname, (u8)ulen, S_IFREG);
-		free(uname);
-		ntfs_inode_close(dir_ni);
-		if (!ni) return -EIO;
-		created = 1;
-	}
+        errno = 0;
+        ni = ntfs_create(dir_ni, 0, uname, (u8)ulen, S_IFREG);
+        int create_errno = errno;
+        free(uname);
+        ntfs_inode_close(dir_ni);
+        if (!ni) return create_errno == EEXIST ? -EEXIST : -EIO;
+        created = 1;
+    } else if (exclusive_create) {
+        ntfs_inode_close(ni);
+        return -EEXIST;
+    }
 
 	if (ni->mft_no < FILE_first_user) {
 		ntfs_inode_close(ni);
 		return -EPERM;
 	}
 
-	ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-	if (!na) {
-		ntfs_inode_close(ni);
-		return -EIO;
-	}
+    ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+    if (!na) {
+        if (created) {
+            int cleanup = delete_created_file(v, path, ni);
+            if (cleanup != 0) return NTFS_ENGINE_CLEANUP_FAILED;
+        } else {
+            ntfs_inode_close(ni);
+        }
+        return -EIO;
+    }
 
-	/* create=true on an existing file at offset 0 matches FAT FA_CREATE_ALWAYS:
-	 * replace contents. Non-zero offset keeps append/overwrite-at-offset. */
-	if (create && !created && offset == 0) {
-		if (ntfs_attr_truncate(na, 0) != 0) {
-			ntfs_attr_close(na);
-			ntfs_inode_close(ni);
-			return -EIO;
-		}
-	}
+    /* create=true on an existing file at offset 0 matches FAT FA_CREATE_ALWAYS. */
+    if (create && !created && offset == 0) {
+        if (ntfs_attr_truncate(na, 0) != 0) {
+            ntfs_attr_close(na);
+            ntfs_inode_close(ni);
+            return -EIO;
+        }
+    }
 
-	s64 written = 0;
-	if (count > 0) {
-		written = ntfs_attr_pwrite(na, (s64)offset, (s64)count, buf);
-	}
-	ntfs_attr_close(na);
-	ntfs_inode_close(ni);
-
-	if (written < 0) return -EIO;
-	*out_written = (size_t)written;
-	return 0;
+    s64 written = 0;
+    if (count > 0) written = ntfs_attr_pwrite(na, (s64)offset, (s64)count, buf);
+    ntfs_attr_close(na);
+    if (written < 0 || (size_t)written != count) {
+        if (created) {
+            int cleanup = delete_created_file(v, path, ni);
+            if (cleanup != 0) return NTFS_ENGINE_CLEANUP_FAILED;
+        } else {
+            ntfs_inode_close(ni);
+        }
+        return -EIO;
+    }
+    ntfs_inode_close(ni);
+    *out_written = (size_t)written;
+    return 0;
 }
 
+int ntfs_engine_write(uint64_t vol_handle, const char *path, uint64_t offset,
+                      const void *buf, size_t count, bool create, size_t *out_written)
+{
+    return ntfs_engine_write_exclusive(vol_handle, path, offset, buf, count,
+                                       create, false, out_written);
+}
 int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
 {
     NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;

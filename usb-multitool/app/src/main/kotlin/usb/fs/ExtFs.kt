@@ -129,6 +129,7 @@ object ExtFs {
         offset: Long,
         data: ByteArray,
         create: Boolean,
+        exclusiveCreate: Boolean,
     ): Int
     @JvmStatic internal external fun nativeMkdir(handle: Long, path: String)
     @JvmStatic internal external fun nativeDelete(handle: Long, path: String)
@@ -139,7 +140,9 @@ class ExtVolume internal constructor(
     private val handle: Long,
     val device: BlockDevice,
     val readOnly: Boolean,
-) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
+) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume, UsbFsAccessVolume {
+    override val access: FilesystemAccess =
+        if (readOnly) FilesystemAccess.ReadOnly else FilesystemAccess.ReadWrite
     // Every native operation shares this monitor with close; callbacks run outside registryLock.
     @Volatile private var open: Boolean = true
 
@@ -199,10 +202,11 @@ class ExtVolume internal constructor(
         offset: Long,
         create: Boolean,
         plannedTotalSize: Long,
+        exclusiveCreate: Boolean,
     ) {
         ensureWritable()
         requireIoRange(offset, data.size, MAX_FAT_EXT_IO_BYTES)
-        val wrote = ExtFs.nativeWrite(handle, path, offset, data, create)
+        val wrote = ExtFs.nativeWrite(handle, path, offset, data, create, exclusiveCreate)
         if (wrote < 0 || wrote != data.size) {
             throw ExtException("short write on $path: $wrote of ${data.size}")
         }

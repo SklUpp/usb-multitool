@@ -1,0 +1,29 @@
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -942,9 +942,10 @@
+ 	bool is_goal = false;
+ 	uint32_t imode = EXT4_INODE_MODE_DIRECTORY;
+ 	uint32_t next_inode;
++	bool created_goal = false;
+ 
+ 	int r;
+ 	int len;
+ 	struct ext4_mountpoint *mp = ext4_get_mount(path);
+ 	struct ext4_dir_search_result result;
+ 	struct ext4_inode_ref ref;
+@@ -1023,8 +1023,15 @@
+ 			}
+ 
+ 			ext4_fs_put_inode_ref(&child_ref);
++			if (is_goal)
++				created_goal = true;
+ 			continue;
+ 		}
++		if (is_goal && (f->flags & O_EXCL) && !created_goal) {
++			ext4_dir_destroy_result(&ref, &result);
++			r = EEXIST;
++			break;
++		}
+ 
+ 		if (parent_inode)
+ 			*parent_inode = ref.index;

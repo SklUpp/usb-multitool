@@ -116,7 +116,6 @@ import usb.fs.Formatter
 import usb.fs.PartitionVolumeSession
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsageKey
-import usb.fs.FilesystemUsageProbe
 import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.ui.filesystemUsageKey
@@ -125,6 +124,10 @@ import usb.ui.fatChildPath
 import usb.ui.RawMeasureError
 import usb.ui.rawSourceKey
 import usb.ui.FilesDownloadBinding
+import usb.ui.FilesBatchSelection
+import usb.ui.FilesBatchItem
+import usb.ui.FilesConflict
+import usb.ui.FilesConflictDecision
 import usb.ui.PartitionBinding
 import usb.ui.PartitionRef
 import usb.ui.PartitionRole
@@ -152,6 +155,7 @@ import usb.ventoy.VentoyOperations
 import usb.ventoy.VentoyLayout
 import usb.ventoy.VentoySetup
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -212,6 +216,39 @@ class MainViewModel(
     private var rawMeasureRunning = false
     /** Latest source waiting for a blocked provider pass to return; never starts in parallel. */
     private var pendingRawMeasureEffect: UiEffect.MeasureRawSource? = null
+    /**
+     * Parked batch transfer waiting for ResolveFilesBatchConflict. USB lock is released
+     * before dialog; ContinueFilesBatch re-acquires with fresh pin. Never second USB owner.
+     */
+    private var parkedBatchWork: ParkedFilesBatch? = null
+
+    private sealed class ParkedFilesBatch {
+        abstract val selection: FilesBatchSelection?
+        data class Download(
+            override val selection: FilesBatchSelection,
+            val treeUri: String,
+            val cursor: usb.files.FilesOperations.BatchDownloadCursor,
+            val conflict: FilesConflict,
+        ) : ParkedFilesBatch()
+        data class UploadDocs(
+            val directory: String,
+            val remainingUris: List<String>,
+            val identity: String,
+            val attachGeneration: Long,
+            val partitionId: String,
+            val startLba: ULong?,
+            val sectorCount: ULong?,
+            val conflict: FilesConflict,
+        ) : ParkedFilesBatch() {
+            override val selection: FilesBatchSelection? get() = null
+        }
+    }
+
+    private class FilesBatchConflictPark(
+        val conflict: FilesConflict,
+        val cursor: usb.files.FilesOperations.BatchDownloadCursor? = null,
+        val remainingUris: List<String> = emptyList(),
+    ) : Exception("batch conflict parked: ${conflict.pathLabel}")
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
     private val operationGenerations = java.util.concurrent.ConcurrentHashMap<OperationToken, Long>()
@@ -1456,25 +1493,20 @@ class MainViewModel(
                 var preparedFolder: SafBackupFolder? = null
                 var preparedArchive: Uri? = null
                 var preparedImage: Uri? = null
-                var ownedDocuments: usb.saf.SafOperationDocuments? = null
                 submitReadOnlyDiskOperation(
                     OperationTitle.RescueBackup,
                     beforeOpen = { snapshot ->
                         requirePinnedBackupAttachment(snapshot)
                         val folder = requireBackupFolder()
                         preparedFolder = folder
-                        val owned = usb.saf.SafOperationDocuments { uri -> folder.deleteDocument(uri) }
-                        ownedDocuments = owned
                         val folderName = BackupArchive.folderName("${timestamp()}-${System.nanoTime()}")
-                        val archive = owned.own(folder.createExclusiveSubfolder(folderName))
+                        val archive = folder.createExclusiveSubfolder(folderName)
                         preparedArchive = archive
                         try {
-                            val imageUri = owned.own(
-                                folder.createExclusiveFile(
-                                    archive,
-                                    BackupArchive.IMAGE_NAME,
-                                    "application/octet-stream",
-                                ),
+                            val imageUri = folder.createExclusiveFile(
+                                archive,
+                                BackupArchive.IMAGE_NAME,
+                                "application/octet-stream",
                             )
                             preparedImage = imageUri
                             val image = folder.openPositionalImage(imageUri)
@@ -1488,16 +1520,16 @@ class MainViewModel(
                             )
                         } catch (failure: Throwable) {
                             runCatching { prepared?.close() }.onFailure(failure::addSuppressed)
-                            runCatching { owned.cleanup() }.getOrNull()?.let(failure::addSuppressed)
+                            failure.addSuppressed(
+                                IOException(
+                                    "SAF backup retained after setup failure: " +
+                                        "$archive${preparedImage?.let { ", $it" } ?: ""}",
+                                ),
+                            )
                             throw failure
                         }
                     },
-                    onOpenFailure = {
-                        runCatching { prepared?.close() }
-                        ownedDocuments?.cleanup()?.let { cleanup ->
-                            android.util.Log.w("UsbMultitool", "SAF rescue cleanup failed", cleanup)
-                        }
-                    },
+                    onOpenFailure = { runCatching { prepared?.close() } },
                 ) { disk, operation, _ ->
                     val folder = requireNotNull(preparedFolder)
                     val archiveUri = requireNotNull(preparedArchive)
@@ -1547,7 +1579,12 @@ class MainViewModel(
                     } catch (failure: Throwable) {
                         if (!operation.mutationAttempted) {
                             prepared?.let { runCatching { it.close() }.onFailure(failure::addSuppressed) }
-                            ownedDocuments?.cleanup()?.let(failure::addSuppressed)
+                            failure.addSuppressed(
+                                java.io.IOException(
+                                    "SAF backup retained after failure: " +
+                                        "$archiveUri${preparedImage?.let { ", $it" } ?: ""}",
+                                ),
+                            )
                         }
                         throw failure
                     } finally {
@@ -1832,10 +1869,13 @@ class MainViewModel(
             is UiEffect.LoadAutounattendCandidates ->
                 loadAutounattendCandidates(effect.xmlName, effect.requestGeneration)
 
+            is UiEffect.DeleteBatch -> deleteBatch(effect.selection)
+            is UiEffect.DownloadBatch -> downloadBatch(effect.selection, effect.treeUri)
+            is UiEffect.UploadBatchDocs -> uploadBatchDocs(effect)
+            is UiEffect.ContinueFilesBatch -> continueFilesBatch(effect.decision)
             is UiEffect.GenerateAutounattend -> generateAutounattend(effect)
 
             is UiEffect.WriteAutounattendRaw -> writeAutounattendRaw(effect)
-
             is UiEffect.CheckVentoyUpstream -> checkVentoyUpstream(effect.requestToken)
             is UiEffect.DownloadVentoyRelease ->
                 downloadVentoyRelease(effect.requestToken, effect.upstreamVersion)
@@ -2678,6 +2718,7 @@ class MainViewModel(
         // Pin check before the USB claim: a paused operation must not open another stick.
         requireAttachment(pin, device)
         val disk = UsbDiskSession.open(manager, device, lease)
+        lateinit var mountedPartition: usb.partition.Partition
         val volume = try {
             val index = partitionId.toIntOrNull()
                 ?: throw IllegalArgumentException("invalid partition id $partitionId")
@@ -2686,12 +2727,12 @@ class MainViewModel(
             // against the live attachment before trusting this geometry or partition range.
             requireAttachment(pin, device)
             if (writable) requireWritableMountAllowed(table)
-            val partition = table.partitions.getOrNull(index - 1)
+            mountedPartition = table.partitions.getOrNull(index - 1)
                 ?: throw IllegalArgumentException("partition $partitionId no longer exists")
             PartitionVolumeSession.open(
                 disk,
-                partition.startLba,
-                partition.sectorCount,
+                mountedPartition.startLba,
+                mountedPartition.sectorCount,
                 readOnly = !writable,
             )
         } catch (failure: Throwable) {
@@ -2711,7 +2752,26 @@ class MainViewModel(
             throw failure
         }
         trace.log("volume.mount.ok", "part" to partitionId, "writable" to writable)
-        return MountedFilesVolume(partitionId, disk, volume, writable = writable)
+        val mountedFilesystem = when (volume) {
+            is usb.fs.FatVolume -> when (volume.kind) {
+                usb.fs.FatKind.EXFAT -> usb.fs.FilesystemId.EXFAT
+                usb.fs.FatKind.FAT12, usb.fs.FatKind.FAT16, usb.fs.FatKind.FAT32 -> usb.fs.FilesystemId.FAT
+                usb.fs.FatKind.UNKNOWN -> null
+            }
+            is usb.fs.ExtVolume -> usb.fs.FilesystemId.EXT
+            is usb.fs.NtfsVolume -> usb.fs.FilesystemId.NTFS
+            else -> null
+        }
+        return MountedFilesVolume(
+            partitionId,
+            disk,
+            volume,
+            writable = writable,
+            startLba = mountedPartition.startLba,
+            sectorCount = mountedPartition.sectorCount,
+            sectorSize = disk.sectorSize,
+            filesystemId = mountedFilesystem,
+        )
     }
 
     /** Raw disk that owns the USB claim plus the live device it was opened for. */
@@ -2860,8 +2920,7 @@ class MainViewModel(
                         null
                     } else {
                         try {
-                            val volume = filesSession.volumeForLocked(pin, partitionId)
-                            FilesystemUsageProbe.measureLocked(volume, key)
+                            filesSession.filesystemUsageForLocked(pin, partitionId, key)
                         } catch (failure: Throwable) {
                             FilesystemUsageSnapshot(
                                 key,
@@ -2871,7 +2930,7 @@ class MainViewModel(
                     }
                 } ?: return@launch
             withContext(Dispatchers.Main.immediate) {
-                onIntent(UiIntent.FilesystemUsageResulted(generation, snapshot.key, snapshot.usage))
+                onIntent(UiIntent.FilesystemUsageResulted(generation, snapshot.key, snapshot.usage, snapshot.access))
             }
         }
     }
@@ -2967,6 +3026,54 @@ class MainViewModel(
         }
     }
 
+    private fun deleteBatch(selection: FilesBatchSelection) {
+        if (!selection.matches(state)) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return
+        }
+        withWritablePartitionId { partitionId ->
+            if (partitionId != selection.partitionId) {
+                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+                return@withWritablePartitionId
+            }
+            val pin = currentAttachmentPin()
+            submitFilesOperation(
+                title = OperationTitle.DeleteBatch(selection.items.size),
+                onSuccess = {
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(
+                                UiMessageKey.DeletedPath,
+                                listOf("${selection.items.size} entries"),
+                            ),
+                        ),
+                    )
+                },
+            ) { operation ->
+                require(selection.matches(state)) { "batch delete target changed" }
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
+                    for (item in selection.items) {
+                        if (!operation.isActive()) {
+                            throw kotlinx.coroutines.CancellationException("Delete cancelled")
+                        }
+                        val target = fatChildPath(selection.directory, item.name)
+                        try {
+                            FilesOperations.deleteRecursively(
+                                volume = volume,
+                                target = target,
+                                operation = operation,
+                            )
+                        } catch (failure: Throwable) {
+                            throw userVisibleDeleteError(item.name, target, failure)
+                        }
+                    }
+                    // Commit only after every selected root deleted; mutationAttempted
+                    // from first delete keeps mid-cancel as Partial, not Completed.
+                    operation.commitReached = true
+                }
+            }
+        }
+    }
     private fun renameEntry(path: String, from: String, to: String, binding: PartitionBinding) {
         val target = fatChildPath(path, from)
         val renamed = fatChildPath(path, to)
@@ -3695,8 +3802,10 @@ class MainViewModel(
                     }
                 } ?: return
                 val disk = raw.disk
-                val exists =
-                    try {
+                val resolvedTargetName: String
+                val exists: Boolean
+                try {
+                    val pair =
                         usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
                             if (destinationDirectory != null && directory != "/") {
                                 val chosen = volume.statOrNull(directory)
@@ -3706,18 +3815,34 @@ class MainViewModel(
                                     )
                                 }
                             }
-                            volume.statOrNull(target) != null
+                            if (kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                                // WIN-06: never collide with an existing template; number from image stem.
+                                val imageHint =
+                                    state.windowsSelectedImages.firstOrNull() ?: name
+                                val allocated =
+                                    usb.ventoy.VentoySetup.allocateXmlPath(
+                                        volume = volume,
+                                        imagePath = imageHint,
+                                        directory = directory,
+                                    )
+                                val allocatedName = allocated.substringAfterLast('/')
+                                allocatedName to false
+                            } else {
+                                name to (volume.statOrNull(target) != null)
+                            }
                         }
-                    } finally {
-                        disk.close()
-                    }
+                    resolvedTargetName = pair.first
+                    exists = pair.second
+                } finally {
+                    disk.close()
+                }
                 if (inspectionOwner.owned(ticket)) {
                     post(
                         UiIntent.WindowsIsoImportInspected(
                             uri = uri,
                             name = name,
                             sizeBytes = sizeBytes,
-                            targetName = name,
+                            targetName = resolvedTargetName,
                             exists = exists,
                             generation = ticket.generation,
                             kind = kind,
@@ -4332,6 +4457,59 @@ class MainViewModel(
         }
     }
 
+    private fun writeAutounattendRaw(effect: UiEffect.WriteAutounattendRaw) {
+        val xmlName = effect.xmlName
+        val expected = attachment.snapshot()
+        val expectedAttach = expected.generation
+        val expectedKey = deviceKey(expected.device)
+        val opTitle = OperationTitle.WriteUnattendXml
+        val op = object : DiskOperation(name = opTitle.logLabel) {
+            @Volatile var result: String? = null
+            override suspend fun run() {
+                val raw = openRawDisk { live ->
+                    require(live.generation == expectedAttach) { "USB attach generation changed" }
+                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                    live.device ?: throw DiskException.Disconnected()
+                } ?: throw AttachmentChangedException()
+                val disk = raw.disk
+                try {
+                    usb.ventoy.VentoySetup.writeAutounattendRaw(
+                        disk = disk, xmlName = xmlName, rawBytes = effect.rawBytes,
+                        overwriteXml = effect.overwriteXml,
+                        allowDestructiveTemplate = effect.allowDestructiveTemplate,
+                        expectedTemplateSha256 = effect.expectedTemplateSha256,
+                        onMutation = { mutationAttempted = true },
+                    )
+                    if (mutationAttempted) commitReached = true
+                    result = "Wrote ${usb.ventoy.VentoySetup.xmlPath(xmlName)}"
+                } finally { disk.close() }
+            }
+        }
+        val token = nextOperationToken()
+        val handle = DiskController.get().submit(op, token)
+        activeHandles.add(handle)
+        onIntent(UiIntent.OperationBegan(OperationProgress(
+            state = OperationState.Queued, title = opTitle, token = token, cancelable = false,
+        )))
+        publishOperationStarted(handle, opTitle, token, cancelable = false)
+        scope.launch {
+            try {
+                val outcome = handle.await()
+                val mappedState = usb.ui.serviceOperationUiState(outcome)
+                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                onIntent(UiIntent.OperationUpdated(OperationProgress(
+                    state = mappedState, title = opTitle, token = token,
+                    errorMessage = message, resultMessage = op.result, cancelable = false,
+                )))
+                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                    onIntent(UiIntent.LoadAutounattend(xmlName))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
+                }
+            } finally { activeHandles.remove(handle) }
+        }
+    }
+
     private fun generateAutounattend(effect: UiEffect.GenerateAutounattend) {
         val xmlName = effect.xmlName
         val params = effect.autounattendParams
@@ -4344,6 +4522,7 @@ class MainViewModel(
         val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
             @Volatile var result: String? = null
+            @Volatile var generatedXmlPath: String? = null
 
             override suspend fun run() {
                 val raw = openRawDisk { live ->
@@ -4353,21 +4532,58 @@ class MainViewModel(
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
                 try {
+                    // Integrity: confirmed plan must match the UI-proposed xmlName first.
+                    // Never invent a plan hash when the effect carries null.
+                    val confirmedPlan = effect.expectedPlanSha256
+                    if (confirmedPlan != null) {
+                        val proposed =
+                            usb.ventoy.autounattendPlanSha256(xmlName, params, imagePaths)
+                        if (confirmedPlan != proposed) {
+                            throw usb.ventoy.VentoySetup.PlanChangedException(
+                                "The generation plan changed; confirm it again",
+                            )
+                        }
+                    }
+                    val writeName: String =
+                        if (!overwriteXml) {
+                            // WIN-06 create-new: allocate under /ventoy from selected image stem.
+                            val imageHint = imagePaths.firstOrNull() ?: xmlName
+                            usb.ventoy.VentoySetup.allocateXmlPath(
+                                disk = disk,
+                                imagePath = imageHint,
+                            )
+                        } else {
+                            xmlName
+                        }
+                    // Resolve once; GenerateResult keeps basename only.
+                    val resolvedWrite = usb.ventoy.VentoySetup.xmlPath(writeName)
+                    // Pass confirmed plan through. create-new may change the path component;
+                    // generateAutounattend still receives the confirmed hash (or null) and
+                    // must not treat a resealed path as a new confirmation.
+                    // When create-new allocates a different name, reseal only after the
+                    // original confirmation checked above; null stays null.
+                    val writePlan =
+                        if (!overwriteXml && confirmedPlan != null) {
+                            usb.ventoy.autounattendPlanSha256(resolvedWrite, params, imagePaths)
+                        } else {
+                            confirmedPlan
+                        }
                     usb.ventoy.VentoySetup.generateAutounattend(
                         disk = disk,
-                        xmlName = xmlName,
+                        xmlName = resolvedWrite,
                         params = params,
                         imagePaths = imagePaths,
                         overwriteXml = overwriteXml,
                         allowDestructiveTemplate = effect.allowDestructiveTemplate,
                         expectedTemplateSha256 = effect.expectedTemplateSha256,
-                        expectedPlanSha256 = effect.expectedPlanSha256,
+                        expectedPlanSha256 = writePlan,
                         // Preserve imported layouts without editor-only capacity metadata; validate size only on explicit layout Set.
                         requireDeclaredDiskSize = params.intents.diskLayout == usb.ventoy.XmlFieldIntent.Set,
                         onMutation = { mutationAttempted = true },
                     )
                     if (mutationAttempted) commitReached = true
-                    result = "Wrote ${usb.ventoy.VentoySetup.xmlPath(xmlName)}"
+                    generatedXmlPath = resolvedWrite
+                    result = "Wrote $resolvedWrite"
                 } finally {
                     disk.close()
                 }
@@ -4405,6 +4621,9 @@ class MainViewModel(
                     ),
                 )
                 if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                    op.generatedXmlPath?.let { path ->
+                        onIntent(UiIntent.WindowsTemplateImported(path))
+                    }
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
                 } else if (state.operation?.token == token && message != null) {
@@ -4415,83 +4634,6 @@ class MainViewModel(
             }
         }
     }
-
-    private fun writeAutounattendRaw(effect: UiEffect.WriteAutounattendRaw) {
-        val xmlName = effect.xmlName
-        val expected = attachment.snapshot()
-        val expectedAttach = expected.generation
-        val expectedKey = deviceKey(expected.device)
-        val opTitle = OperationTitle.WriteUnattendXml
-        val label = opTitle.logLabel
-        val op = object : DiskOperation(name = label) {
-            @Volatile var result: String? = null
-
-            override suspend fun run() {
-                val raw = openRawDisk { live ->
-                    require(live.generation == expectedAttach) { "USB attach generation changed" }
-                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
-                    live.device ?: throw DiskException.Disconnected()
-                } ?: throw AttachmentChangedException()
-                val disk = raw.disk
-                try {
-                    usb.ventoy.VentoySetup.writeAutounattendRaw(
-                        disk = disk,
-                        xmlName = xmlName,
-                        rawBytes = effect.rawBytes,
-                        overwriteXml = effect.overwriteXml,
-                        allowDestructiveTemplate = effect.allowDestructiveTemplate,
-                        expectedTemplateSha256 = effect.expectedTemplateSha256,
-                        onMutation = { mutationAttempted = true },
-                    )
-                    if (mutationAttempted) commitReached = true
-                    result = "Wrote ${usb.ventoy.VentoySetup.xmlPath(xmlName)}"
-                } finally {
-                    disk.close()
-                }
-            }
-        }
-        val token = nextOperationToken()
-        val handle = DiskController.get().submit(op, token)
-        activeHandles.add(handle)
-        onIntent(
-            UiIntent.OperationBegan(
-                OperationProgress(
-                    state = OperationState.Queued,
-                    title = opTitle,
-                    token = token,
-                    cancelable = false,
-                ),
-            ),
-        )
-        publishOperationStarted(handle, opTitle, token, cancelable = false)
-        scope.launch {
-            try {
-                val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
-                onIntent(
-                    UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = opTitle,
-                            token = token,
-                            errorMessage = message,
-                            resultMessage = op.result,
-                            cancelable = false,
-                        ),
-                    ),
-                )
-                if (state.operation?.token == token && mappedState == OperationState.Completed) {
-                    onIntent(UiIntent.LoadAutounattend(xmlName))
-                } else if (state.operation?.token == token && message != null) {
-                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
-                }
-            } finally {
-                activeHandles.remove(handle)
-            }
-        }
-    }
-
 
 
     private fun checkVentoyUpstream(requestToken: Long) {
@@ -5395,6 +5537,467 @@ class MainViewModel(
         }
     }
 
+    private fun downloadBatch(selection: FilesBatchSelection, treeUri: String) {
+        if (!selection.matches(state)) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return
+        }
+        parkedBatchWork = null
+        val resolver = getApplication<Application>().contentResolver
+        val pin = currentAttachmentPin()
+        val rootNames = selection.items.map { it.name }
+        var parkCursor = usb.files.FilesOperations.BatchDownloadCursor(remainingRoots = rootNames)
+        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
+        submitFilesOperation(
+            title = OperationTitle.DownloadBatch(selection.items.size),
+            onSuccess = {
+                onIntent(
+                    UiIntent.Status(
+                        UiMessage.Key(UiMessageKey.SavedFile, listOf("${selection.items.size} entries")),
+                    ),
+                )
+            },
+            onTerminal = { _, _ -> Unit },
+        ) { operation ->
+            require(selection.matches(state)) { "batch download target changed" }
+            val volume = filesSession.volumeForLocked(pin, selection.partitionId)
+            val tree = Uri.parse(treeUri)
+            val folder = SafBackupFolder(resolver, tree)
+            val destParent = DocumentsContract.buildDocumentUriUsingTree(
+                tree,
+                DocumentsContract.getTreeDocumentId(tree),
+            )
+            try {
+                FilesOperations.downloadChildren(
+                    resolver = resolver,
+                    volume = volume,
+                    parentPath = selection.directory,
+                    names = rootNames,
+                    destTree = folder,
+                    destParent = destParent,
+                    operation = operation,
+                    conflict = { conflict ->
+                        val park =
+                            FilesBatchConflictPark(
+                                conflict = conflict,
+                                cursor = parkCursor,
+                            )
+                        lastPark.set(park)
+                        throw park
+                    },
+                    onCursor = { parkCursor = it },
+                )
+            } catch (park: FilesBatchConflictPark) {
+                lastPark.compareAndSet(null, park)
+                throw park
+            }
+        }.also { handle ->
+            watchBatchPark(
+                handle = handle,
+                lastPark = lastPark,
+                stillValid = { selection.matches(state) },
+                onPark = { park ->
+                    parkedBatchWork =
+                        ParkedFilesBatch.Download(
+                            selection = selection,
+                            treeUri = treeUri,
+                            cursor = park.cursor ?: parkCursor,
+                            conflict = park.conflict,
+                        )
+                    onIntent(UiIntent.FilesBatchConflict(park.conflict))
+                },
+            )
+        }
+    }
+
+    private fun uploadBatchDocsPinMatches(
+        identity: String,
+        attachGeneration: Long,
+        partitionId: String,
+        directory: String,
+        startLba: ULong?,
+        sectorCount: ULong?,
+    ): Boolean {
+        val device = state.device ?: return false
+        if (device.identity != identity || device.attachGeneration != attachGeneration) return false
+        if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
+        val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+        return partition.startLba == startLba && partition.sectorCount == sectorCount
+    }
+
+    private fun uploadBatchDocs(effect: UiEffect.UploadBatchDocs) {
+        if (!uploadBatchDocsPinMatches(
+                identity = effect.identity,
+                attachGeneration = effect.attachGeneration,
+                partitionId = effect.partitionId,
+                directory = effect.directory,
+                startLba = effect.startLba,
+                sectorCount = effect.sectorCount,
+            )
+        ) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+            return
+        }
+        parkedBatchWork = null
+        val resolver = getApplication<Application>().contentResolver
+        val remaining = effect.uris.toMutableList()
+        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
+        withWritablePartitionId { partitionId ->
+            if (partitionId != effect.partitionId) {
+                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+                return@withWritablePartitionId
+            }
+            val pin = currentAttachmentPin()
+            submitFilesOperation(
+                title = OperationTitle.UploadBatch(effect.uris.size),
+                onSuccess = {
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(
+                                UiMessageKey.UploadedFile,
+                                listOf("${effect.uris.size}", effect.directory),
+                            ),
+                        ),
+                    )
+                },
+            ) { operation ->
+                require(
+                    uploadBatchDocsPinMatches(
+                        identity = effect.identity,
+                        attachGeneration = effect.attachGeneration,
+                        partitionId = effect.partitionId,
+                        directory = effect.directory,
+                        startLba = effect.startLba,
+                        sectorCount = effect.sectorCount,
+                    ),
+                ) { "batch upload target changed" }
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
+                    try {
+                        FilesOperations.uploadDocuments(
+                            resolver = resolver,
+                            uris = remaining.map(Uri::parse),
+                            destDir = effect.directory,
+                            volume = volume,
+                            operation = operation,
+                            chunkBytes = TransferTuning.jniCapBytes,
+                            conflict = { conflict ->
+                                val park =
+                                    FilesBatchConflictPark(
+                                        conflict = conflict,
+                                        remainingUris = remaining.toList(),
+                                    )
+                                lastPark.set(park)
+                                throw park
+                            },
+                            onDocumentSettled = { uri ->
+                                remaining.remove(uri.toString())
+                            },
+                        )
+                    } catch (park: FilesBatchConflictPark) {
+                        lastPark.compareAndSet(null, park)
+                        throw park
+                    }
+                }
+            }.also { handle ->
+                watchBatchPark(
+                    handle = handle,
+                    lastPark = lastPark,
+                    stillValid = {
+                        uploadBatchDocsPinMatches(
+                            identity = effect.identity,
+                            attachGeneration = effect.attachGeneration,
+                            partitionId = effect.partitionId,
+                            directory = effect.directory,
+                            startLba = effect.startLba,
+                            sectorCount = effect.sectorCount,
+                        )
+                    },
+                    onPark = { park ->
+                        parkedBatchWork =
+                            ParkedFilesBatch.UploadDocs(
+                                directory = effect.directory,
+                                remainingUris = park.remainingUris.ifEmpty { remaining.toList() },
+                                identity = effect.identity,
+                                attachGeneration = effect.attachGeneration,
+                                partitionId = effect.partitionId,
+                                startLba = effect.startLba,
+                                sectorCount = effect.sectorCount,
+                                conflict = park.conflict,
+                            )
+                        onIntent(UiIntent.FilesBatchConflict(park.conflict))
+                    },
+                )
+            }
+        }
+    }
+
+    private fun continueFilesBatch(decision: FilesConflictDecision) {
+        val parked = parkedBatchWork
+        parkedBatchWork = null
+        if (parked == null) return
+        when (parked) {
+            is ParkedFilesBatch.Download -> {
+                if (!parked.selection.matches(state)) {
+                    onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+                    return
+                }
+                when (decision) {
+                    FilesConflictDecision.Cancel -> {
+                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CancelledStatus)))
+                    }
+                    FilesConflictDecision.Skip,
+                    FilesConflictDecision.ReplaceFile,
+                    -> resumeParkedDownload(parked, decision)
+                }
+            }
+            is ParkedFilesBatch.UploadDocs -> {
+                when (decision) {
+                    FilesConflictDecision.Cancel -> {
+                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CancelledStatus)))
+                    }
+                    FilesConflictDecision.Skip,
+                    FilesConflictDecision.ReplaceFile,
+                    -> resumeParkedUpload(parked, decision)
+                }
+            }
+        }
+    }
+
+    private fun resumeParkedDownload(
+        parked: ParkedFilesBatch.Download,
+        decision: FilesConflictDecision,
+    ) {
+        val selection = parked.selection
+        val resolver = getApplication<Application>().contentResolver
+        val pin = currentAttachmentPin()
+        var parkCursor = parked.cursor
+        val conflictLabel = parked.conflict.pathLabel
+        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
+        submitFilesOperation(
+            title = OperationTitle.DownloadBatch(selection.items.size),
+            onSuccess = {
+                onIntent(
+                    UiIntent.Status(
+                        UiMessage.Key(UiMessageKey.SavedFile, listOf("${selection.items.size} entries")),
+                    ),
+                )
+            },
+        ) { operation ->
+            require(selection.matches(state)) { "batch download target changed" }
+            val volume = filesSession.volumeForLocked(pin, selection.partitionId)
+            val tree = Uri.parse(parked.treeUri)
+            val folder = SafBackupFolder(resolver, tree)
+            val destParent = DocumentsContract.buildDocumentUriUsingTree(
+                tree,
+                DocumentsContract.getTreeDocumentId(tree),
+            )
+            var first = true
+            FilesOperations.downloadChildren(
+                resolver = resolver,
+                volume = volume,
+                parentPath = selection.directory,
+                names = parkCursor.remainingRoots,
+                destTree = folder,
+                destParent = destParent,
+                operation = operation,
+                resume = parkCursor,
+                conflict = { conflict ->
+                    if (first && conflict.pathLabel == conflictLabel) {
+                        first = false
+                        if (conflict.isDirectory && decision == FilesConflictDecision.ReplaceFile) {
+                            throw IOException(
+                                FilesOperationPolicy.directoryConflictSkipOnlyMessage(conflict.pathLabel),
+                            )
+                        }
+                        decision
+                    } else {
+                        val park =
+                            FilesBatchConflictPark(
+                                conflict = conflict,
+                                cursor = parkCursor,
+                            )
+                        lastPark.set(park)
+                        throw park
+                    }
+                },
+                onCursor = { parkCursor = it },
+            )
+        }.also { handle ->
+            watchBatchPark(
+                handle = handle,
+                lastPark = lastPark,
+                stillValid = { selection.matches(state) },
+                onPark = { park ->
+                    parkedBatchWork =
+                        ParkedFilesBatch.Download(
+                            selection = selection,
+                            treeUri = parked.treeUri,
+                            cursor = park.cursor ?: parkCursor,
+                            conflict = park.conflict,
+                        )
+                    onIntent(UiIntent.FilesBatchConflict(park.conflict))
+                },
+            )
+        }
+    }
+
+    private fun resumeParkedUpload(
+        parked: ParkedFilesBatch.UploadDocs,
+        decision: FilesConflictDecision,
+    ) {
+        if (!uploadBatchDocsPinMatches(
+                identity = parked.identity,
+                attachGeneration = parked.attachGeneration,
+                partitionId = parked.partitionId,
+                directory = parked.directory,
+                startLba = parked.startLba,
+                sectorCount = parked.sectorCount,
+            )
+        ) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+            return
+        }
+        val resolver = getApplication<Application>().contentResolver
+        val remaining = parked.remainingUris.toMutableList()
+        // Capture before onDocumentSettled mutates remaining; success must not report 0.
+        val resumeBatchCount = remaining.size
+        val conflictLabel = parked.conflict.pathLabel
+        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
+        withWritablePartitionId { partitionId ->
+            if (partitionId != parked.partitionId) {
+                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+                return@withWritablePartitionId
+            }
+            val pin = currentAttachmentPin()
+            submitFilesOperation(
+                title = OperationTitle.UploadBatch(resumeBatchCount),
+                onSuccess = {
+                    onIntent(
+                        UiIntent.Status(
+                            UiMessage.Key(
+                                UiMessageKey.UploadedFile,
+                                listOf("$resumeBatchCount", parked.directory),
+                            ),
+                        ),
+                    )
+                },
+            ) { operation ->
+                require(
+                    uploadBatchDocsPinMatches(
+                        identity = parked.identity,
+                        attachGeneration = parked.attachGeneration,
+                        partitionId = parked.partitionId,
+                        directory = parked.directory,
+                        startLba = parked.startLba,
+                        sectorCount = parked.sectorCount,
+                    ),
+                ) { "batch upload target changed" }
+                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
+                    var first = true
+                    FilesOperations.uploadDocuments(
+                        resolver = resolver,
+                        uris = remaining.map(Uri::parse),
+                        destDir = parked.directory,
+                        volume = volume,
+                        operation = operation,
+                        chunkBytes = TransferTuning.jniCapBytes,
+                        conflict = { conflict ->
+                            if (first && conflict.pathLabel == conflictLabel) {
+                                first = false
+                                if (conflict.isDirectory && decision == FilesConflictDecision.ReplaceFile) {
+                                    throw IOException(
+                                        FilesOperationPolicy.directoryConflictSkipOnlyMessage(
+                                            conflict.pathLabel,
+                                        ),
+                                    )
+                                }
+                                decision
+                            } else {
+                                val park =
+                                    FilesBatchConflictPark(
+                                        conflict = conflict,
+                                        remainingUris = remaining.toList(),
+                                    )
+                                lastPark.set(park)
+                                throw park
+                            }
+                        },
+                        onDocumentSettled = { uri ->
+                            remaining.remove(uri.toString())
+                        },
+                    )
+                }
+            }.also { handle ->
+                watchBatchPark(
+                    handle = handle,
+                    lastPark = lastPark,
+                    stillValid = {
+                        uploadBatchDocsPinMatches(
+                            identity = parked.identity,
+                            attachGeneration = parked.attachGeneration,
+                            partitionId = parked.partitionId,
+                            directory = parked.directory,
+                            startLba = parked.startLba,
+                            sectorCount = parked.sectorCount,
+                        )
+                    },
+                    onPark = { park ->
+                        parkedBatchWork =
+                            ParkedFilesBatch.UploadDocs(
+                                directory = parked.directory,
+                                remainingUris = park.remainingUris.ifEmpty { remaining.toList() },
+                                identity = parked.identity,
+                                attachGeneration = parked.attachGeneration,
+                                partitionId = parked.partitionId,
+                                startLba = parked.startLba,
+                                sectorCount = parked.sectorCount,
+                                conflict = park.conflict,
+                            )
+                        onIntent(UiIntent.FilesBatchConflict(park.conflict))
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * Parallel observer for parked conflicts. Park may land as Failed (no prior mutation)
+     * or Partial (after mutationAttempted via markPartialIfMutated). Cancelled with a park
+     * cause is also recovered. Dialog must appear; Partial honesty for real failures stays.
+     * [lastPark] is filled before the park exception escapes the op body so Partial
+     * terminals still surface the dialog without reflecting into OperationHandle.
+     * [stillValid] rejects stale parks after detach/partition change cleared the pin.
+     */
+    private fun watchBatchPark(
+        handle: OperationHandle,
+        lastPark: java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>,
+        stillValid: () -> Boolean,
+        onPark: (FilesBatchConflictPark) -> Unit,
+    ) {
+        scope.launch {
+            val outcome = handle.await()
+            fun fromThrowable(cause: Throwable?): FilesBatchConflictPark? {
+                var cur: Throwable? = cause
+                var depth = 0
+                while (cur != null && depth < 8) {
+                    if (cur is FilesBatchConflictPark) return cur
+                    cur = cur.cause
+                    depth++
+                }
+                return null
+            }
+            // lastPark is primary (filled before park escapes). Failed may also carry park
+            // as cause. Partial/Cancelled rely on lastPark — sealed outcomes have no cause.
+            val park =
+                lastPark.get()
+                    ?: (outcome as? usb.operation.OperationState.Failed)?.let {
+                        fromThrowable(it.cause)
+                    }
+            if (park != null && stillValid()) {
+                onPark(park)
+            }
+        }
+    }
     private fun contentInfo(resolver: ContentResolver, uri: Uri): Pair<String?, Long?> {
         val columns = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         val cursor = try {
@@ -6388,6 +6991,108 @@ class MainActivity : ComponentActivity() {
 
     /** Exact source selected before SAF destination; stale callback is rejected, never retargeted. */
     private var pendingDownloadBinding: FilesDownloadBinding? = null
+    /** Multi/dir download pin before OpenDocumentTree; cleared on detach/result. */
+    private var pendingBatchDownload: FilesBatchSelection? = null
+    /** Upload pin before OpenMultipleDocuments; cleared on detach/result. */
+    private var pendingBatchUploadDirectory: String? = null
+    private var pendingBatchUploadIdentity: String? = null
+    private var pendingBatchUploadAttach: Long = Long.MIN_VALUE
+    private var pendingBatchUploadPartition: String? = null
+    private var pendingBatchUploadStart: String? = null
+    private var pendingBatchUploadCount: String? = null
+
+    private val batchDownloadTreeLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri: Uri? ->
+        val selection = pendingBatchDownload
+        pendingBatchDownload = null
+        if (uri == null) return@registerForActivityResult
+        if (selection == null) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return@registerForActivityResult
+        }
+        if (!selection.matches(viewModel.state)) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return@registerForActivityResult
+        }
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.onIntent(UiIntent.DownloadBatch(selection, uri.toString()))
+    }
+
+    private val batchUploadDocsLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris: List<Uri> ->
+        val directory = pendingBatchUploadDirectory
+        val identity = pendingBatchUploadIdentity
+        val attach = pendingBatchUploadAttach
+        val partition = pendingBatchUploadPartition
+        val start = pendingBatchUploadStart?.toULongOrNull()
+        val count = pendingBatchUploadCount?.toULongOrNull()
+        pendingBatchUploadDirectory = null
+        pendingBatchUploadIdentity = null
+        pendingBatchUploadAttach = Long.MIN_VALUE
+        pendingBatchUploadPartition = null
+        pendingBatchUploadStart = null
+        pendingBatchUploadCount = null
+        if (uris.isEmpty()) return@registerForActivityResult
+        if (directory == null || identity == null || partition == null || attach == Long.MIN_VALUE) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return@registerForActivityResult
+        }
+        val live = viewModel.state
+        val device = live.device
+        val livePartition = live.partitions.firstOrNull { it.id == partition }
+        if (device == null || device.identity != identity || device.attachGeneration != attach ||
+            live.selectedPartitionId != partition || live.currentPath != directory ||
+            livePartition == null || livePartition.startLba != start || livePartition.sectorCount != count
+        ) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+            return@registerForActivityResult
+        }
+        viewModel.onIntent(
+            UiIntent.UploadBatchDocs(
+                directory = directory,
+                uris = uris.map { it.toString() },
+                identity = identity,
+                attachGeneration = attach,
+                partitionId = partition,
+                startLba = start,
+                sectorCount = count,
+            ),
+        )
+    }
+
+    private fun launchBatchUpload() {
+        val live = viewModel.state
+        val device = live.device
+        val partition = live.selectedPartition()
+        if (device == null || partition == null) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+            return
+        }
+        pendingBatchUploadDirectory = live.currentPath
+        pendingBatchUploadIdentity = device.identity
+        pendingBatchUploadAttach = device.attachGeneration
+        pendingBatchUploadPartition = partition.id
+        pendingBatchUploadStart = partition.startLba?.toString()
+        pendingBatchUploadCount = partition.sectorCount?.toString()
+        runCatching { batchUploadDocsLauncher.launch(arrayOf("*/*")) }
+            .onFailure {
+                pendingBatchUploadDirectory = null
+                pendingBatchUploadIdentity = null
+                pendingBatchUploadAttach = Long.MIN_VALUE
+                pendingBatchUploadPartition = null
+                pendingBatchUploadStart = null
+                pendingBatchUploadCount = null
+                viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
+            }
+    }
+
     private var pendingUsbPermissionKey: String? = null
     private var pendingUsbPermissionToken: String? = null
     private var deniedUsbPermissionKey: String? = null
@@ -6435,6 +7140,13 @@ class MainActivity : ComponentActivity() {
                         pendingUsbPermissionKey = null
                         pendingUsbPermissionToken = null
                         deniedUsbPermissionKey = null
+                        pendingBatchDownload = null
+                        pendingBatchUploadDirectory = null
+                        pendingBatchUploadIdentity = null
+                        pendingBatchUploadAttach = Long.MIN_VALUE
+                        pendingBatchUploadPartition = null
+                        pendingBatchUploadStart = null
+                        pendingBatchUploadCount = null
                     }
                     viewModel.onUsbDeviceDetached(device)
                 }
@@ -6544,7 +7256,48 @@ class MainActivity : ComponentActivity() {
                 FilesDownloadBinding(directory, name, size, identity, generation, partition, start, count)
             } else null
         }
-        val savedState = savedInstanceState
+        pendingBatchDownload = savedInstanceState?.let { saved ->
+            val directory = saved.getString(STATE_PENDING_BATCH_DIRECTORY) ?: return@let null
+            val identity = saved.getString(STATE_PENDING_BATCH_IDENTITY) ?: return@let null
+            val partition = saved.getString(STATE_PENDING_BATCH_PARTITION) ?: return@let null
+            val generation = saved.getLong(STATE_PENDING_BATCH_ATTACH, Long.MIN_VALUE)
+            val names = saved.getStringArray(STATE_PENDING_BATCH_NAMES) ?: return@let null
+            val dirs = saved.getBooleanArray(STATE_PENDING_BATCH_DIRS) ?: return@let null
+            val sizes = saved.getStringArray(STATE_PENDING_BATCH_SIZES) ?: return@let null
+            if (generation == Long.MIN_VALUE || names.size != dirs.size || names.size != sizes.size) return@let null
+            val items = names.indices.map { index ->
+                FilesBatchItem(names[index], dirs[index], sizes[index].toULongOrNull() ?: return@let null)
+            }
+            FilesBatchSelection(
+                directory = directory,
+                items = items,
+                identity = identity,
+                attachGeneration = generation,
+                partitionId = partition,
+                startLba = saved.getString(STATE_PENDING_BATCH_START)?.toULongOrNull(),
+                sectorCount = saved.getString(STATE_PENDING_BATCH_COUNT)?.toULongOrNull(),
+            )
+        }
+        savedInstanceState?.let { saved ->
+            pendingBatchUploadDirectory = saved.getString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY)
+            pendingBatchUploadIdentity = saved.getString(STATE_PENDING_BATCH_UPLOAD_IDENTITY)
+            pendingBatchUploadPartition = saved.getString(STATE_PENDING_BATCH_UPLOAD_PARTITION)
+            pendingBatchUploadStart = saved.getString(STATE_PENDING_BATCH_UPLOAD_START)
+            pendingBatchUploadCount = saved.getString(STATE_PENDING_BATCH_UPLOAD_COUNT)
+            val attach = saved.getLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, Long.MIN_VALUE)
+            pendingBatchUploadAttach = if (
+                pendingBatchUploadDirectory != null && pendingBatchUploadIdentity != null &&
+                pendingBatchUploadPartition != null && attach != Long.MIN_VALUE
+            ) attach else {
+                pendingBatchUploadDirectory = null
+                pendingBatchUploadIdentity = null
+                pendingBatchUploadPartition = null
+                pendingBatchUploadStart = null
+                pendingBatchUploadCount = null
+                Long.MIN_VALUE
+            }
+        }
+         val savedState = savedInstanceState
         // Windows picker state is restored as one fenced context; coordinator owns its
         // request-code, timeout, and saved-state invariants.
         when (windowsImportCoordinator.restore(savedInstanceState)) {
@@ -6605,6 +7358,17 @@ class MainActivity : ComponentActivity() {
                     pendingDownloadBinding = binding
                     downloadLauncher.launch(binding.name)
                 },
+                onRequestBatchDownload = { selection ->
+                    pendingBatchDownload = selection
+                    runCatching { batchDownloadTreeLauncher.launch(null) }
+                        .onFailure {
+                            pendingBatchDownload = null
+                            viewModel.onIntent(
+                                UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)),
+                            )
+                        }
+                },
+                onRequestBatchUpload = { launchBatchUpload() },
                 onPickWindowsFile = { kind, directory ->
                     // Images and XML templates may have any name or MIME type; filtering hid
                     // real files, and the host validates the content, not the extension.
@@ -6704,6 +7468,27 @@ class MainActivity : ComponentActivity() {
             outState.putString(STATE_PENDING_DOWNLOAD_PARTITION, binding.partitionId)
             binding.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
             binding.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
+        }
+        pendingBatchDownload?.let { selection ->
+            outState.putString(STATE_PENDING_BATCH_DIRECTORY, selection.directory)
+            outState.putStringArray(STATE_PENDING_BATCH_NAMES, selection.items.map { it.name }.toTypedArray())
+            outState.putBooleanArray(STATE_PENDING_BATCH_DIRS, selection.items.map { it.isDirectory }.toBooleanArray())
+            outState.putStringArray(STATE_PENDING_BATCH_SIZES, selection.items.map { it.sizeBytes.toString() }.toTypedArray())
+            outState.putString(STATE_PENDING_BATCH_IDENTITY, selection.identity)
+            outState.putLong(STATE_PENDING_BATCH_ATTACH, selection.attachGeneration)
+            outState.putString(STATE_PENDING_BATCH_PARTITION, selection.partitionId)
+            selection.startLba?.let { outState.putString(STATE_PENDING_BATCH_START, it.toString()) }
+            selection.sectorCount?.let { outState.putString(STATE_PENDING_BATCH_COUNT, it.toString()) }
+        }
+        if (pendingBatchUploadDirectory != null && pendingBatchUploadIdentity != null &&
+            pendingBatchUploadPartition != null && pendingBatchUploadAttach != Long.MIN_VALUE
+        ) {
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY, pendingBatchUploadDirectory)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_IDENTITY, pendingBatchUploadIdentity)
+            outState.putLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, pendingBatchUploadAttach)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_PARTITION, pendingBatchUploadPartition)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_START, pendingBatchUploadStart)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, pendingBatchUploadCount)
         }
         backupFolderLaunches.pending?.let { pending ->
             outState.putString(STATE_PENDING_FOLDER_ACTION, pending.action.name)
@@ -6837,6 +7622,21 @@ class MainActivity : ComponentActivity() {
         private const val STATE_PENDING_DOWNLOAD_PARTITION = "usb.multitool.PENDING_DOWNLOAD_PARTITION"
         private const val STATE_PENDING_DOWNLOAD_START = "usb.multitool.PENDING_DOWNLOAD_START"
         private const val STATE_PENDING_DOWNLOAD_COUNT = "usb.multitool.PENDING_DOWNLOAD_COUNT"
+        private const val STATE_PENDING_BATCH_DIRECTORY = "usb.multitool.PENDING_BATCH_DIRECTORY"
+        private const val STATE_PENDING_BATCH_NAMES = "usb.multitool.PENDING_BATCH_NAMES"
+        private const val STATE_PENDING_BATCH_DIRS = "usb.multitool.PENDING_BATCH_DIRS"
+        private const val STATE_PENDING_BATCH_SIZES = "usb.multitool.PENDING_BATCH_SIZES"
+        private const val STATE_PENDING_BATCH_IDENTITY = "usb.multitool.PENDING_BATCH_IDENTITY"
+        private const val STATE_PENDING_BATCH_ATTACH = "usb.multitool.PENDING_BATCH_ATTACH"
+        private const val STATE_PENDING_BATCH_PARTITION = "usb.multitool.PENDING_BATCH_PARTITION"
+        private const val STATE_PENDING_BATCH_START = "usb.multitool.PENDING_BATCH_START"
+        private const val STATE_PENDING_BATCH_COUNT = "usb.multitool.PENDING_BATCH_COUNT"
+        private const val STATE_PENDING_BATCH_UPLOAD_DIRECTORY = "usb.multitool.PENDING_BATCH_UPLOAD_DIRECTORY"
+        private const val STATE_PENDING_BATCH_UPLOAD_IDENTITY = "usb.multitool.PENDING_BATCH_UPLOAD_IDENTITY"
+        private const val STATE_PENDING_BATCH_UPLOAD_ATTACH = "usb.multitool.PENDING_BATCH_UPLOAD_ATTACH"
+        private const val STATE_PENDING_BATCH_UPLOAD_PARTITION = "usb.multitool.PENDING_BATCH_UPLOAD_PARTITION"
+        private const val STATE_PENDING_BATCH_UPLOAD_START = "usb.multitool.PENDING_BATCH_UPLOAD_START"
+        private const val STATE_PENDING_BATCH_UPLOAD_COUNT = "usb.multitool.PENDING_BATCH_UPLOAD_COUNT"
         private const val STATE_PENDING_FOLDER_ACTION = "usb.multitool.PENDING_FOLDER_ACTION"
         private const val STATE_PENDING_FOLDER_IDENTITY =
             "usb.multitool.PENDING_FOLDER_IDENTITY"

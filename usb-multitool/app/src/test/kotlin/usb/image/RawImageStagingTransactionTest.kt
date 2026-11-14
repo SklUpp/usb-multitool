@@ -126,6 +126,6 @@ class RawImageStagingTransactionTest {
         override fun mkdir(path: String) = Unit
         override fun delete(path: String) = Unit
         override fun rename(from: String, to: String) = Unit
-        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) = Unit
+        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long, exclusiveCreate: Boolean) = Unit
     }
 }

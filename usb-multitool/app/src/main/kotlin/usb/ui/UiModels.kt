@@ -2,6 +2,7 @@ package usb.ui
 
 import usb.service.OperationToken
 import usb.fs.FilesystemId
+import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageSnapshot
 import usb.fs.FormatCatalog
@@ -654,6 +655,71 @@ fun FilesDownloadBinding.matches(state: AppUiState): Boolean {
     return entry.sizeBytes == sizeBytes
 }
 
+/** One selected listing entry captured before a batch picker or confirmation. */
+data class FilesBatchItem(
+    val name: String,
+    val isDirectory: Boolean,
+    val sizeBytes: ULong,
+)
+
+/**
+ * Immutable multi-select snapshot for batch download/delete/upload confirmations.
+ * Every field must still describe the live listing before a mutation effect is emitted.
+ */
+data class FilesBatchSelection(
+    val directory: String,
+    val items: List<FilesBatchItem>,
+    val identity: String,
+    val attachGeneration: Long,
+    val partitionId: String,
+    val startLba: ULong?,
+    val sectorCount: ULong?,
+)
+
+/** True when selection still names exact visible entries on current attachment/partition. */
+fun FilesBatchSelection.matches(state: AppUiState): Boolean {
+    if (state.filesListingState != FilesListingState.Loaded) return false
+    val device = state.device ?: return false
+    if (device.identity != identity || device.attachGeneration != attachGeneration) return false
+    if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
+    val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    if (partition.startLba != startLba || partition.sectorCount != sectorCount) return false
+    if (items.isEmpty()) return false
+    val seen = HashSet<String>(items.size)
+    for (item in items) {
+        val name = item.name
+        if (name.isBlank() || name == "." || name == ".." || '/' in name || '\\' in name || '\u0000' in name) {
+            return false
+        }
+        if (!seen.add(name)) return false
+        val entry = state.files.singleOrNull { it.name == name } ?: return false
+        if (entry.isDirectory != item.isDirectory || entry.sizeBytes != item.sizeBytes) return false
+    }
+    return true
+}
+
+/** Batch download uses a SAF tree when more than one entry or any directory is selected. */
+fun FilesBatchSelection.requiresTreeDestination(): Boolean =
+    items.size != 1 || items.single().isDirectory
+
+enum class FilesConflictDecision {
+    Skip,
+    ReplaceFile,
+    Cancel,
+}
+
+/**
+ * One name collision discovered during batch transfer. [destinationEmpty] is non-null only for
+ * directory destinations (true = verified empty and reusable; false = nonempty, fail-closed).
+ */
+data class FilesConflict(
+    val pathLabel: String,
+    val name: String,
+    val isDirectory: Boolean,
+    val destinationEmpty: Boolean? = null,
+)
+
+
 
 data class PartitionTab(
     val id: String,
@@ -686,13 +752,16 @@ data class PartitionTab(
 data class FreeRegionUi(val startLba: ULong, val sectorCount: ULong)
 
 /**
- * Partition-level write state shown on the Files screen. Only a verified fact is reported:
- * [ReadOnly] means guaranteed EFI write protection. Browsing always opens the volume
- * read-only and a writable mount is created per mutation, so the current state has no
- * confirmed writable fact; every unprotected partition is [Unknown], never claimed as RW.
+ * Partition write state shown in Files. EFI policy remains authoritative; otherwise the
+ * badge reflects driver access of the currently mounted handle, or Unknown before measurement.
  */
 enum class PartitionWriteAccess {
+    /** Application EFI policy blocks mutation; not a driver mount report. */
     ReadOnly,
+    /** Filesystem driver mounted handle read-only; physical medium state remains unknown. */
+    DriverReadOnly,
+    /** Filesystem driver mounted handle read-write; physical medium may still reject writes. */
+    ReadWrite,
     Unknown,
 }
 
@@ -705,10 +774,22 @@ data class FileEntry(
         get() = !isDirectory && name.endsWith(".iso", ignoreCase = true)
 }
 
-/** SAF download is valid only for regular entries; directories must be navigated, not exported. */
+/** SAF CreateDocument download is valid only for a single regular file. */
 fun FileEntry.canDownload(): Boolean = !isDirectory
 fun downloadActionEnabled(canAct: Boolean, selection: FileEntry?): Boolean =
     canAct && selection?.canDownload() == true
+
+/** Batch download allows folders; tree destination is required when [FilesBatchSelection.requiresTreeDestination]. */
+fun filesBatchDownloadEnabled(canAct: Boolean, items: List<FilesBatchItem>): Boolean =
+    canAct && items.isNotEmpty()
+
+/** Rename stays single-entry only (file or directory); multi-select never renames. */
+fun filesBatchRenameEnabled(canWrite: Boolean, items: List<FilesBatchItem>): Boolean =
+    canWrite && items.size == 1
+
+/** Batch delete allows folders; caller still confirms before mutation. */
+fun filesBatchDeleteEnabled(canWrite: Boolean, items: List<FilesBatchItem>): Boolean =
+    canWrite && items.isNotEmpty()
 
 /** Path shown relative to the root of a mounted volume, with both slashes: "/" or "/a/b/". */
 fun folderPathLabel(path: String): String {
@@ -1009,6 +1090,22 @@ sealed interface OperationTitle {
     data class ImportTarget(val targetName: String) : OperationTitle {
         override val logLabel: String get() = "Import $targetName"
     }
+
+    data class DownloadBatch(val count: Int) : OperationTitle {
+        override val logLabel: String get() = "Download $count entries"
+    }
+
+    data class UploadBatch(val count: Int) : OperationTitle {
+        override val logLabel: String get() = "Upload $count entries"
+    }
+
+    data class DeleteBatch(val count: Int) : OperationTitle {
+        override val logLabel: String get() = "Delete $count entries"
+    }
+
+    /** True when [OperationProgress] bytes are per current file, not the whole batch. */
+    fun reportsCurrentFileBytes(): Boolean =
+        this is DownloadBatch || this is UploadBatch
 }
 
 data class OperationProgress(
@@ -1140,6 +1237,11 @@ data class AppUiState(
     val filesListingState: FilesListingState = FilesListingState.Stale,
     /** Real directory-list failure detail; non-null only after [FilesListingState.Failed]. */
     val filesError: String? = null,
+    /**
+     * Active batch name conflict awaiting Skip/ReplaceFile/Cancel. Cleared by
+     * ResolveFilesBatchConflict; continuation parks outside AppUiState.
+     */
+    val pendingFilesBatchConflict: FilesConflict? = null,
     /**
      * Last read-only free-space measurement of one exact attachment + partition geometry.
      * Rendered only while its key still matches the live selection; invalidated on a new
@@ -1499,17 +1601,19 @@ data class AppUiState(
     }
 
     /**
-     * Guaranteed write state of [partition] on this attachment, never a mount mode.
-     * EFI protection is authoritative: without the explicit override the answer is
-     * [PartitionWriteAccess.ReadOnly]. Everything else is [PartitionWriteAccess.Unknown]
-     * because browsing mounts read-only and a writable mount exists only per mutation.
+     * Write state for [partition]. EFI policy blocks writes before driver facts; otherwise
+     * report only access from a matching mounted-handle measurement.
      */
-    fun partitionWriteAccess(partition: PartitionTab): PartitionWriteAccess =
-        if (!isEfiWriteAllowed(partition)) {
-            PartitionWriteAccess.ReadOnly
-        } else {
-            PartitionWriteAccess.Unknown
+    fun partitionWriteAccess(partition: PartitionTab): PartitionWriteAccess {
+        if (!isEfiWriteAllowed(partition)) return PartitionWriteAccess.ReadOnly
+        val key = filesystemUsageKey(partition)
+        val access = filesystemUsage?.takeIf { key != null && it.matches(key) }?.access
+        return when (access) {
+            FilesystemAccess.ReadOnly -> PartitionWriteAccess.DriverReadOnly
+            FilesystemAccess.ReadWrite -> PartitionWriteAccess.ReadWrite
+            null, FilesystemAccess.Unknown -> PartitionWriteAccess.Unknown
         }
+    }
 
     /** Write-protected system partitions (ESP, EFI type, or VTOYEFI name). */
     val efiPartitions: List<PartitionTab>
@@ -1653,11 +1757,14 @@ fun normalizeFatPath(path: String): String {
 /** Absolute FAT path of [name] inside directory [parent]; root is "/". */
 fun fatChildPath(parent: String, name: String): String {
     val base = parent.trim().trim('/')
-    val leaf = name.trim().trim('/')
+    // Never silently trim [name]: padding/slash canonicalization would retarget
+    // a distinct USB sibling (e.g. EXT `victim` vs `victim `).
+    require(name.isNotEmpty() && name == name.trim() && '/' !in name && '\\' !in name) {
+        "invalid child name \"$name\""
+    }
     return when {
-        leaf.isEmpty() -> if (base.isEmpty()) "/" else "/$base"
-        base.isEmpty() -> "/$leaf"
-        else -> "/$base/$leaf"
+        base.isEmpty() -> "/$name"
+        else -> "/$base/$name"
     }
 }
 

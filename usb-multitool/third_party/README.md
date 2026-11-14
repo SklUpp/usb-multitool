@@ -37,9 +37,8 @@ commit recorded in `UPSTREAM.md`.
 - Tag fallback: `v1.0.0` (`890484c72dbb321535127625c3686e51f1f424b9`) if the tip moves
 - Unpack into: `third_party/lwext4/`
 - License: GPL-2.0-or-later
-- Bridge: `ext4_blockdev` callbacks → `usb_partition_read` / `usb_partition_write`
-
-- Local patch (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
+- Local patches (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
+- `scripts/patches/lwext4-o-excl-existing.patch` — preserve upstream's nullable `parent_inode` guard and make `O_CREAT|O_EXCL` return `EEXIST` for an existing entry.
 
 ## SectorForge (`sf-core` rescue engine)
 

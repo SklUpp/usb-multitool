@@ -229,11 +229,11 @@ int main(void)
 	printf("PASS: usage total=%llu free=%llu\n",
 	       (unsigned long long)total_bytes, (unsigned long long)free_bytes);
 
-	assert(ext_engine_mkdir(vol, "/data") == 0);
-	const char *payload = "hello-ext";
-	size_t wrote = 0;
-	assert(ext_engine_write(vol, "/data/a.txt", 0, payload, strlen(payload), true, &wrote) == 0);
-	assert(wrote == strlen(payload));
+    assert(ext_engine_mkdir(vol, "/data") == 0);
+    const char *payload = "hello-ext";
+    size_t wrote = 0;
+    assert(ext_engine_write(vol, "/data/a.txt", 0, payload, strlen(payload), true, &wrote) == 0);
+    assert(wrote == strlen(payload));
 
 	/* Root listing must report file sizes (no double-slash). */
 	assert(ext_engine_write(vol, "/root.txt", 0, "XYZ", 3, true, &wrote) == 0);
@@ -264,6 +264,27 @@ int main(void)
 
 	char buf[64] = {0};
 	size_t got = 0;
+    const char *exclusive_payload = "exclusive-new";
+    wrote = 0;
+    assert(ext_engine_write_exclusive(vol, "/exclusive.txt", 0, exclusive_payload,
+                                      strlen(exclusive_payload), true, true, &wrote) == 0);
+    assert(wrote == strlen(exclusive_payload));
+    memset(buf, 0, sizeof(buf));
+    got = 0;
+    assert(ext_engine_read(vol, "/exclusive.txt", 0, buf, sizeof(buf), &got) == 0);
+    assert(got == strlen(exclusive_payload));
+    assert(memcmp(buf, exclusive_payload, got) == 0);
+    printf("PASS: EXT exclusive create creates absent file once\n");
+	wrote = 0;
+	assert(ext_engine_write_exclusive(vol, "/root.txt", 0, "x", 1, true, true, &wrote) != 0);
+	assert(wrote == 0);
+	printf("PASS: EXT exclusive create rejects existing file\n");
+	memset(buf, 0, sizeof(buf));
+	got = 0;
+	assert(ext_engine_read(vol, "/root.txt", 0, buf, sizeof(buf), &got) == 0);
+	assert(got == 3);
+	assert(memcmp(buf, "XYZ", 3) == 0);
+	memset(buf, 0, sizeof(buf));
 	assert(ext_engine_read(vol, "/data/a.txt", 0, buf, sizeof(buf) - 1, &got) == 0);
 	assert(got == strlen(payload));
 	assert(strcmp(buf, payload) == 0);
@@ -306,7 +327,7 @@ int main(void)
 	err = 0;
 	vol = ext_engine_mount(block, false, &err);
 	assert(vol != 0);
-	assert(ext_engine_mkdir(vol, "/rw") == 0);
+    assert(ext_engine_mkdir(vol, "/rw") == 0);
 	assert(ext_engine_sync(vol) == 0);
 	assert(ext_engine_close(vol) == 0);
 	err = 0;
@@ -470,7 +491,7 @@ int main(void)
 	err = 0;
 	vol = ext_engine_mount(block, false, &err);
 	assert(vol != 0 && err == 0);
-	assert(ext_engine_mkdir(vol, "/before") == 0);
+    assert(ext_engine_mkdir(vol, "/before") == 0);
 	assert(ext_engine_sync(vol) == 0);
 	ctx.fail_writes = 1;
 	assert(ext_engine_close(vol) != 0);
@@ -479,7 +500,7 @@ int main(void)
 	err = 0;
 	vol = ext_engine_mount(block, false, &err);
 	assert(vol != 0 && err == 0);
-	assert(ext_engine_mkdir(vol, "/after-uaf-guard") == 0);
+    assert(ext_engine_mkdir(vol, "/after-uaf-guard") == 0);
 	size_t uw = 0;
 	assert(ext_engine_write(vol, "/after-uaf-guard/x.txt", 0, "ok", 2, true, &uw) == 0);
 	assert(uw == 2);
@@ -518,7 +539,7 @@ int main(void)
 	err = 0;
 	vol = ext_engine_mount(block, false, &err);
 	assert(vol != 0 && err == 0);
-	assert(ext_engine_mkdir(vol, "/noj") == 0);
+    assert(ext_engine_mkdir(vol, "/noj") == 0);
 	assert(ext_engine_close(vol) == 0);
 	usb_block_unregister(block);
 	close(ctx.fd);

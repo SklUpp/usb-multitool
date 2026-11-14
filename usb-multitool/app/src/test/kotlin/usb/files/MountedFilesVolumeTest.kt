@@ -15,7 +15,7 @@ class MountedFilesVolumeTest {
             override fun delete(path: String) = Unit
             override fun rename(from: String, to: String) = Unit
             override fun read(path: String, offset: Long, length: Int) = ByteArray(0)
-            override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) = Unit
+            override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long, exclusiveCreate: Boolean) = Unit
             override fun sync() = Unit
             override fun close() = Unit
         }

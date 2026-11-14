@@ -44,6 +44,9 @@
 7. **Поля раздела:** в «Информации о разделе» показать имя, метку, EFI, загрузочный флаг, фактический RO/RW, файловую систему и свободное место; размер и LBA оттуда убрать. В списке разделов сохранить физический размер и диапазон блоков. Границы и проверки LBA в коде обязательны.
 8. **Backup image/GPT:** общая пользовательская папка допустима как вариант, её обязательность не установлена. До решения не навязывать выбор при первом старте.
 9. **SAF-конфликты:** каждый конфликт файла обрабатывается отдельно; Replace файла допускается только после явного предупреждения о риске, последующая неопределённая запись даёт `Partial`. Replace непустого дерева остаётся запрещённым до отдельного решения.
+
+**FILE multi-select implemented contract:** batch delete/download/upload pin `FilesBatchSelection` (directory + items + identity/attach/partition geometry) before picker and again before each mutation; stale pin → `FilesPickTargetInvalid`/`TargetChanged`, never retarget. Multi/dir download uses `OpenDocumentTree`; single file keeps `CreateDocument`. Conflicts: file Skip/ReplaceFile/Cancel; directory Skip/Cancel only (empty dest dir may be reused as container — not replace). Nonempty dest dir never replaced. Cancel before mutation → Cancelled; after mutationAttempted → Partial. One USB owner via `submitFilesOperation`/`filesSession`; conflict dialog parks work and releases the lock before UI. Multi rename not offered.
+
 10. **Текст и контраст:** основной текст контрастен в светлой и тёмной теме; функциональные цветовые индикаторы RO, предупреждений и схемы сохраняются, где пользователь их прямо запросил.
 
 ## Открытые продуктовые решения

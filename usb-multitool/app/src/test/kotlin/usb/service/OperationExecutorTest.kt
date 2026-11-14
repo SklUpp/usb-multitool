@@ -66,6 +66,7 @@ class OperationExecutorTest {
                 offset: Long,
                 create: Boolean,
                 plannedTotalSize: Long,
+                exclusiveCreate: Boolean,
             ) = Unit
             // rename may create both links and still fail; post-rename sync failure
             // leaves the change on disk.

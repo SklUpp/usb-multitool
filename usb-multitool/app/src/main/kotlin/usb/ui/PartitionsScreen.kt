@@ -766,12 +766,16 @@ fun PartitionsScreen(
                 val isSelected = partition.id == state.selectedPartitionId
                 val access = state.partitionWriteAccess(partition)
                 val accessLabel = when (access) {
-                    PartitionWriteAccess.ReadOnly -> "RO"
+                    PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
+                    PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
+                    PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
                     PartitionWriteAccess.Unknown -> "—"
                 }
                 val accessDescription = stringResource(
                     when (access) {
-                        PartitionWriteAccess.ReadOnly -> R.string.partitions_write_ro
+                        PartitionWriteAccess.ReadOnly -> R.string.partitions_write_policy_ro
+                        PartitionWriteAccess.DriverReadOnly -> R.string.partitions_write_driver_ro
+                        PartitionWriteAccess.ReadWrite -> R.string.partitions_write_driver_rw
                         PartitionWriteAccess.Unknown -> R.string.partitions_write_unknown
                     },
                 )
@@ -850,9 +854,9 @@ fun PartitionsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = when (access) {
-                                PartitionWriteAccess.ReadOnly ->
+                                PartitionWriteAccess.ReadOnly, PartitionWriteAccess.DriverReadOnly ->
                                     MaterialTheme.colorScheme.error
-                                PartitionWriteAccess.Unknown ->
+                                PartitionWriteAccess.ReadWrite, PartitionWriteAccess.Unknown ->
                                     MaterialTheme.colorScheme.onSurface
                             },
                             modifier = Modifier.semantics {
@@ -1002,7 +1006,9 @@ fun PartitionsScreen(
                 InteractiveInfoRow(
                     label = stringResource(R.string.partitions_write_state_label),
                     value = when (access) {
-                        PartitionWriteAccess.ReadOnly -> "RO"
+                        PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
+                        PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
+                        PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
                         PartitionWriteAccess.Unknown -> "—"
                     },
                     enabled = false,

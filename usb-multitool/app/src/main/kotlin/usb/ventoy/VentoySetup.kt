@@ -7,6 +7,7 @@ import usb.fs.FatFs
 import usb.fs.UsbFsVolume
 import usb.partition.VirtualPartition
 import java.security.MessageDigest
+import java.io.IOException
 
 /**
  * Windows setup bindings on the real Ventoy data partition (partition 1).
@@ -622,123 +623,158 @@ object VentoySetup {
         onMutation: () -> Unit = {},
     ): GenerateResult =
         withVolume(disk) { volume ->
-            val path = requireXmlName(xmlName)
-            val validation =
-                Autounattend.validate(
-                    params,
-                    requireDeclaredDiskSize = requireDeclaredDiskSize &&
-                        params.intents.diskLayout == XmlFieldIntent.Set,
-                )
-            if (validation.problems.isNotEmpty()) {
-                throw UnattendValidationException(validation)
-            }
-            val existing = readBytes(volume, path)
-            if (existing != null && !overwriteXml) {
-                throw XmlOverwriteRequiredException(
-                    "$path already exists; the XML write needs its own confirmation",
-                )
-            }
-            val existingInspection =
-                existing?.takeIf { it.isNotEmpty() }?.let { WindowsTemplate.inspect(it) }
-            if (existingInspection != null) {
-                requireAcknowledgedTemplate(
-                    inspection = existingInspection,
-                    bytes = existing,
-                    allowDestructive = allowDestructiveTemplate,
-                    expectedSha256 = expectedTemplateSha256,
-                )
-            } else if (expectedTemplateSha256 != null) {
-                throw TemplateChangedException(
-                    "The XML was removed after inspection; re-open it before writing",
-                )
-            }
-            val actualPlanSha256 = autounattendPlanSha256(xmlName, params, imagePaths)
-            if (expectedPlanSha256 != null && expectedPlanSha256 != actualPlanSha256) {
-                throw PlanChangedException("The generation plan changed; confirm it again")
-            }
-            for (image in imagePaths) {
-                val entry = volume.statOrNull(image)
-                    ?: throw NotOnVentoyPartitionException(
-                        "\"$image\" is not on the Ventoy data partition",
-                    )
-                if (entry.isDirectory) throw NotOnVentoyPartitionException("\"$image\" is a directory")
-            }
-            val existingJsonBytes: ByteArray?
-            val existingJson: String?
-            if (imagePaths.isEmpty()) {
-                existingJsonBytes = null
-                existingJson = readText(volume, CONFIG_PATH)
-            } else {
-                existingJsonBytes = readTextBytes(volume, CONFIG_PATH)
-                existingJson = existingJsonBytes?.let { String(it, Charsets.UTF_8) }
-            }
-            val mergedJson =
-                if (imagePaths.isEmpty()) {
-                    existingJson
-                } else {
-                    WindowsSetup.mergeAutoInstall(
-                        existingJson = existingJson,
-                        imagePaths = imagePaths,
-                        templatePath = path,
-                        options = options,
-                        overwrite = false,
-                    )
-                }
-            val generated = Autounattend.generate(existing, params)
-            val markers = WindowsTemplate.inspect(generated).destructiveMarkers
-            if (markers.isNotEmpty()) {
-                if (expectedPlanSha256 == null) {
-                    throw PlanChangedException(
-                        "Destructive XML needs an acknowledged plan hash before writing",
-                    )
-                }
-                val requestedLayout = params.diskLayout
-                val layoutMarkers = mutableSetOf<String>()
-                if (requestedLayout?.writeLayout == true) {
-                    layoutMarkers.add("DiskConfiguration")
-                    layoutMarkers.add("CreatePartitions")
-                    layoutMarkers.add("ModifyPartitions")
-                    layoutMarkers.add("ImageInstall")
-                    if (requestedLayout.wipe) layoutMarkers.add("WillWipeDisk")
-                }
-                val alreadyAcknowledged =
-                    existingInspection?.destructiveMarkers.orEmpty().toSet()
-                val unexpected =
-                    markers.filterNot { it in alreadyAcknowledged || it in layoutMarkers }
-                if (unexpected.isNotEmpty()) {
-                    throw DestructiveTemplateRequiresOptInException(
-                        unexpected,
-                        "Generated XML gained destructive sections not covered by the " +
-                            "acknowledged template or layout: " + unexpected.joinToString(", "),
-                    )
-                }
-            }
-            onMutation()
-            ensureDirectory(volume, VENTOY_DIR)
-            ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
-            backupGenerationFiles(
+            generateAutounattend(
                 volume = volume,
-                xmlPath = path,
-                existingXml = existing,
+                xmlName = xmlName,
+                params = params,
                 imagePaths = imagePaths,
-                existingJsonBytes = existingJsonBytes,
+                overwriteXml = overwriteXml,
+                allowDestructiveTemplate = allowDestructiveTemplate,
+                expectedTemplateSha256 = expectedTemplateSha256,
+                expectedPlanSha256 = expectedPlanSha256,
+                requireDeclaredDiskSize = requireDeclaredDiskSize,
+                options = options,
+                onMutation = onMutation,
             )
-            replaceFile(volume, path, generated)
-            if (imagePaths.isNotEmpty() && mergedJson != null) {
-                replaceFile(volume, CONFIG_PATH, mergedJson.toByteArray(Charsets.UTF_8))
-            }
-            val links = WindowsSetup.parseLinks(mergedJson)
-            val bindings =
-                links
-                    .filter { link -> link.templates.any { it.equals(path, ignoreCase = true) } }
-                    .map { link ->
-                        AutounattendBinding(
-                            imagePath = link.image,
-                            bound = volume.statOrNull(link.image) != null,
-                        )
-                    }
-            GenerateResult(path.substringAfterLast('/'), validation, bindings)
         }
+
+    /** Volume-level generate for host tests without mounting FatFs. */
+    internal fun generateAutounattend(
+        volume: UsbFsVolume,
+        xmlName: String,
+        params: AutounattendParams,
+        imagePaths: List<String> = emptyList(),
+        overwriteXml: Boolean = false,
+        allowDestructiveTemplate: Boolean = false,
+        expectedTemplateSha256: String? = null,
+        expectedPlanSha256: String? = null,
+        requireDeclaredDiskSize: Boolean = false,
+        options: SetupOptions = SetupOptions(),
+        onMutation: () -> Unit = {},
+    ): GenerateResult {
+        val path = requireXmlName(xmlName)
+        val validation =
+            Autounattend.validate(
+                params,
+                requireDeclaredDiskSize = requireDeclaredDiskSize &&
+                    params.intents.diskLayout == XmlFieldIntent.Set,
+            )
+        if (validation.problems.isNotEmpty()) {
+            throw UnattendValidationException(validation)
+        }
+        val existing = readBytes(volume, path)
+        if (existing != null && !overwriteXml) {
+            throw XmlOverwriteRequiredException(
+                "$path already exists; the XML write needs its own confirmation",
+            )
+        }
+        val existingInspection =
+            existing?.takeIf { it.isNotEmpty() }?.let { WindowsTemplate.inspect(it) }
+        if (existingInspection != null) {
+            requireAcknowledgedTemplate(
+                inspection = existingInspection,
+                bytes = existing,
+                allowDestructive = allowDestructiveTemplate,
+                expectedSha256 = expectedTemplateSha256,
+            )
+        } else if (expectedTemplateSha256 != null) {
+            throw TemplateChangedException(
+                "The XML was removed after inspection; re-open it before writing",
+            )
+        }
+        val actualPlanSha256 = autounattendPlanSha256(xmlName, params, imagePaths)
+        if (expectedPlanSha256 != null && expectedPlanSha256 != actualPlanSha256) {
+            throw PlanChangedException("The generation plan changed; confirm it again")
+        }
+        for (image in imagePaths) {
+            val entry = volume.statOrNull(image)
+                ?: throw NotOnVentoyPartitionException(
+                    "\"$image\" is not on the Ventoy data partition",
+                )
+            if (entry.isDirectory) throw NotOnVentoyPartitionException("\"$image\" is a directory")
+        }
+        val existingJsonBytes: ByteArray?
+        val existingJson: String?
+        if (imagePaths.isEmpty()) {
+            existingJsonBytes = null
+            existingJson = readText(volume, CONFIG_PATH)
+        } else {
+            existingJsonBytes = readTextBytes(volume, CONFIG_PATH)
+            existingJson = existingJsonBytes?.let { String(it, Charsets.UTF_8) }
+        }
+        val mergedJson =
+            if (imagePaths.isEmpty()) {
+                existingJson
+            } else {
+                WindowsSetup.mergeAutoInstall(
+                    existingJson = existingJson,
+                    imagePaths = imagePaths,
+                    templatePath = path,
+                    options = options,
+                    overwrite = false,
+                )
+            }
+        val generated = Autounattend.generate(existing, params)
+        val markers = WindowsTemplate.inspect(generated).destructiveMarkers
+        if (markers.isNotEmpty()) {
+            if (expectedPlanSha256 == null) {
+                throw PlanChangedException(
+                    "Destructive XML needs an acknowledged plan hash before writing",
+                )
+            }
+            val requestedLayout = params.diskLayout
+            val layoutMarkers = mutableSetOf<String>()
+            if (requestedLayout?.writeLayout == true) {
+                layoutMarkers.add("DiskConfiguration")
+                layoutMarkers.add("CreatePartitions")
+                layoutMarkers.add("ModifyPartitions")
+                layoutMarkers.add("ImageInstall")
+                if (requestedLayout.wipe) layoutMarkers.add("WillWipeDisk")
+            }
+            val alreadyAcknowledged =
+                existingInspection?.destructiveMarkers.orEmpty().toSet()
+            val unexpected =
+                markers.filterNot { it in alreadyAcknowledged || it in layoutMarkers }
+            if (unexpected.isNotEmpty()) {
+                throw DestructiveTemplateRequiresOptInException(
+                    unexpected,
+                    "Generated XML gained destructive sections not covered by the " +
+                        "acknowledged template or layout: " + unexpected.joinToString(", "),
+                )
+            }
+        }
+        onMutation()
+        ensureDirectory(volume, VENTOY_DIR)
+        ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
+        backupGenerationFiles(
+            volume = volume,
+            xmlPath = path,
+            existingXml = existing,
+            imagePaths = imagePaths,
+            existingJsonBytes = existingJsonBytes,
+        )
+        if (existing == null) {
+            createNewFile(volume, path, generated)
+        } else {
+            replaceFile(volume, path, generated)
+        }
+        if (imagePaths.isNotEmpty() && mergedJson != null) {
+            replaceFile(volume, CONFIG_PATH, mergedJson.toByteArray(Charsets.UTF_8))
+        }
+        val links = WindowsSetup.parseLinks(mergedJson)
+        val bindings =
+            links
+                .filter { link -> link.templates.any { it.equals(path, ignoreCase = true) } }
+                .map { link ->
+                    AutounattendBinding(
+                        imagePath = link.image,
+                        bound = volume.statOrNull(link.image) != null,
+                    )
+                }
+        return GenerateResult(path.substringAfterLast('/'), validation, bindings)
+    }
+
+
 
     data class RawWriteResult(
         val xmlName: String,
@@ -819,8 +855,10 @@ object VentoySetup {
         ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
         if (existing != null) {
             backupBeforeReplace(volume, path, existing)
+            replaceFile(volume, path, rawBytes)
+        } else {
+            createNewFile(volume, path, rawBytes)
         }
-        replaceFile(volume, path, rawBytes)
         return RawWriteResult(
             xmlName = path.substringAfterLast('/'),
             path = path,
@@ -831,6 +869,8 @@ object VentoySetup {
 
 
     class XmlOverwriteRequiredException(message: String) : Exception(message)
+    class XmlNameRaceException(message: String, cause: Throwable? = null) : Exception(message, cause)
+    class XmlNameExhaustedException(message: String) : Exception(message)
     class TemplateChangedException(message: String) : Exception(message)
     class PlanChangedException(message: String) : Exception(message)
     class TemplateTooLargeException(message: String) : Exception(message)
@@ -1013,18 +1053,144 @@ object VentoySetup {
         return volume.use(block)
     }
 
+    /**
+     * Fixed-length unique sibling under [parent]. Never embeds the target basename so
+     * near-255 LFN stems still get a valid temp/backup name on FAT.
+     */
+    private fun uniqueShortSibling(
+        volume: UsbFsVolume,
+        parent: String,
+        kind: String,
+    ): String {
+        val nonce = "${System.currentTimeMillis().toString(36)}-${System.nanoTime().toString(36)}"
+        // ".x<kind>-<nonce>" stays well under 255 UTF-16 units regardless of target name.
+        val base = ".x$kind-$nonce"
+        fun path(suffix: String): String =
+            if (parent == "/") "/$base$suffix" else "$parent/$base$suffix"
+        var candidate = path("")
+        var n = 0
+        while (pathOccupied(volume, candidate)) {
+            n++
+            if (n > 16) throw IOException("cannot allocate a temporary name under $parent")
+            candidate = path("-$n")
+        }
+        return candidate
+    }
+
+    /**
+     * Write [bytes] only when [path] is absent. Temp file + rename; never moves an
+     * existing target aside. rename fails closed if the destination appears (race).
+     */
+    private fun createNewFile(volume: UsbFsVolume, path: String, bytes: ByteArray) {
+        if (pathOccupied(volume, path)) {
+            // Caller already chose create-new; occupancy here is a race, not a confirm prompt.
+            throw XmlNameRaceException(
+                "$path appeared before create; refusing to overwrite",
+            )
+        }
+        val parent = path.substringBeforeLast('/', "/")
+        val temp = uniqueShortSibling(volume, parent, "t")
+        var tempOwned = false
+        var renamed = false
+        try {
+            // Phase 1: FA_CREATE_NEW empty — ownership only after this returns.
+            // FR_EXIST / FileExistsException means a peer owns [temp]; never delete it.
+            volume.write(
+                path = temp,
+                data = ByteArray(0),
+                create = true,
+                exclusiveCreate = true,
+            )
+            tempOwned = true
+            // Phase 2: fill our owned temp (open-existing; no truncate race).
+            if (bytes.isNotEmpty()) {
+                volume.write(path = temp, data = bytes, offset = 0L, create = false)
+            }
+            volume.sync()
+            // Recheck under the same volume session before the exclusive rename.
+            if (pathOccupied(volume, path)) {
+                throw XmlNameRaceException(
+                    "$path appeared before create; refusing to overwrite",
+                )
+            }
+            volume.rename(temp, path)
+            renamed = true
+            volume.sync()
+        } catch (failure: Throwable) {
+            if (!renamed && tempOwned) {
+                // Owned temp only — never delete a peer. Surface cleanup faults.
+                runCatching {
+                    if (volume.statOrNull(temp) != null) volume.delete(temp)
+                }.exceptionOrNull()?.let(failure::addSuppressed)
+            }
+            if (failure is XmlNameRaceException || failure is XmlOverwriteRequiredException) {
+                throw failure
+            }
+            if (!renamed && isExclusiveCreateConflict(failure)) {
+                // Peer owns the temp (or destination); do not delete peer bytes.
+                throw XmlNameRaceException(
+                    "temporary name for $path already claimed; refusing to overwrite",
+                    failure,
+                )
+            }
+            if (!renamed && pathOccupied(volume, path)) {
+                throw XmlNameRaceException(
+                    "$path appeared before create; refusing to overwrite",
+                    failure,
+                )
+            }
+            // After rename the bytes are at [path]; a sync failure is durability, not a race.
+            throw failure
+        }
+    }
+
+    private fun isExclusiveCreateConflict(failure: Throwable): Boolean {
+        val msg = failure.message.orEmpty()
+        return msg.contains("exclusive create failed", ignoreCase = true) ||
+            (
+                msg.contains("already exists", ignoreCase = true) &&
+                    failure::class.java.simpleName.contains("Exists", ignoreCase = true)
+            )
+    }
+
+    /** Case-insensitive occupancy (FAT); true for file or directory. */
+    private fun pathOccupied(volume: UsbFsVolume, path: String): Boolean {
+        // Prefer f_stat first: FatFs list returns LFN `fname` only, so an 8.3
+        // short-alias collision would look free on list alone.
+        if (volume.statOrNull(path) != null) return true
+        val name = path.substringAfterLast('/')
+        val parent = path.substringBeforeLast('/', "/")
+        if (parent != "/") {
+            val parentEntry = volume.statOrNull(parent) ?: return false
+            if (!parentEntry.isDirectory) return true
+        }
+        return try {
+            volume.list(parent).any { it.name.equals(name, ignoreCase = true) }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     /** Write [bytes] through a hidden temp file; restore the previous file on failure. */
     private fun replaceFile(volume: UsbFsVolume, path: String, bytes: ByteArray) {
         val parent = path.substringBeforeLast('/', "/")
-        val name = path.substringAfterLast('/')
-        val nonce = "${System.currentTimeMillis()}-${System.nanoTime()}"
-        val temp = "$parent/.$name.tmp-$nonce"
-        val backup = "$parent/.$name.bak-$nonce"
-        volume.write(path = temp, data = bytes, create = true)
-        volume.sync()
+        val temp = uniqueShortSibling(volume, parent, "t")
+        val backup = uniqueShortSibling(volume, parent, "b")
+        var tempOwned = false
         var backedUp = false
         var moved = false
         try {
+            volume.write(
+                path = temp,
+                data = ByteArray(0),
+                create = true,
+                exclusiveCreate = true,
+            )
+            tempOwned = true
+            if (bytes.isNotEmpty()) {
+                volume.write(path = temp, data = bytes, offset = 0L, create = false)
+            }
+            volume.sync()
             if (volume.statOrNull(path) != null) {
                 volume.rename(path, backup)
                 backedUp = true
@@ -1033,13 +1199,30 @@ object VentoySetup {
             moved = true
             volume.sync()
         } catch (failure: Throwable) {
-            if (moved) runCatching { volume.delete(path) }
-            if (backedUp) runCatching { volume.rename(backup, path) }
-            runCatching { if (volume.statOrNull(temp) != null) volume.delete(temp) }
+            if (moved) {
+                runCatching { volume.delete(path) }.exceptionOrNull()?.let(failure::addSuppressed)
+            }
+            if (backedUp) {
+                runCatching { volume.rename(backup, path) }.exceptionOrNull()?.let(failure::addSuppressed)
+            }
+            if (tempOwned) {
+                runCatching { if (volume.statOrNull(temp) != null) volume.delete(temp) }
+                    .exceptionOrNull()
+                    ?.let(failure::addSuppressed)
+            }
             throw failure
         }
         if (backedUp) {
-            runCatching { volume.delete(backup); volume.sync() }
+            // Primary write succeeded; leftover backup must not be silent — surface for Partial.
+            try {
+                volume.delete(backup)
+                volume.sync()
+            } catch (cleanup: Throwable) {
+                throw IOException(
+                    "wrote $path but failed to remove backup $backup; disk may need cleanup",
+                    cleanup,
+                )
+            }
         }
     }
 
@@ -1065,6 +1248,54 @@ object VentoySetup {
 
     /** Same resolver under an explicit name for UI display before writing. */
     fun resolveXmlPath(xmlName: String): String = XmlPath.resolve(xmlName)
+
+    /**
+     * WIN-06: first free `<dir>/<image-stem>.xml` / `_N.xml` on the volume.
+     * Default dir is `/ventoy`. Probe only — write must still create-new; a later
+     * race throws [XmlNameRaceException] (or import already-exists) instead of overwriting.
+     */
+    fun allocateXmlPath(
+        disk: BlockDevice,
+        imagePath: String,
+        directory: String = "/$VENTOY_DIR",
+    ): String =
+        withVolume(disk) { volume -> allocateXmlPath(volume, imagePath, directory) }
+
+    /** Volume-level allocator for host tests without mounting FatFs. */
+    internal fun allocateXmlPath(
+        volume: UsbFsVolume,
+        imagePath: String,
+        directory: String = "/$VENTOY_DIR",
+    ): String {
+        val dir = VentoyIsoLibrary.normalizeDirectory(directory)
+        val stem = XmlPath.imageStem(imagePath)
+        for (name in XmlPath.numberedXmlNames(stem)) {
+            val candidate = if (dir == "/") "/$name" else "$dir/$name"
+            require(!candidate.equals(CONFIG_PATH, ignoreCase = true)) {
+                "XML target must not be the Ventoy config file $CONFIG_PATH"
+            }
+            if (!pathOccupied(volume, candidate)) return candidate
+        }
+        throw XmlNameExhaustedException(
+            "no free XML name under $dir for stem \"$stem\" " +
+                "(filesystem name length exhausted at ${XmlPath.MAX_LFN_UNITS} UTF-16 units)",
+        )
+    }
+
+    /** Pure first candidate from an image path; does not inspect the volume. */
+    fun suggestedXmlPath(
+        imagePath: String,
+        directory: String = "/$VENTOY_DIR",
+    ): String {
+        val dir = VentoyIsoLibrary.normalizeDirectory(directory)
+        val name = "${XmlPath.imageStem(imagePath)}.xml"
+        val candidate = if (dir == "/") "/$name" else "$dir/$name"
+        require(!candidate.equals(CONFIG_PATH, ignoreCase = true)) {
+            "XML target must not be the Ventoy config file $CONFIG_PATH"
+        }
+        return candidate
+    }
+
 
     private fun xmlTarget(input: String): String = XmlPath.resolve(input)
 
@@ -1100,15 +1331,34 @@ object VentoySetup {
             uniqueBackupName(volume, CONFIG_BACKUP_PATH)
         }
 
+    /**
+     * Prefer `<basename>.bak-<nonce>` so recovery stays associated with the source.
+     * Fall back to a fixed-length `.xk-*` sibling only when that preferred name would
+     * exceed [XmlPath.MAX_LFN_UNITS] (near-limit generated XML stems).
+     */
     private fun uniqueBackupName(volume: UsbFsVolume, path: String): String {
-        val nonce = "${System.currentTimeMillis()}-${System.nanoTime()}"
-        var candidate = "$path.bak-$nonce"
-        var suffix = 0
-        while (volume.statOrNull(candidate) != null) {
-            suffix++
-            candidate = "$path.bak-$nonce-$suffix"
+        val parent = path.substringBeforeLast('/', "/")
+        val base = path.substringAfterLast('/')
+        val nonce = "${System.currentTimeMillis().toString(36)}-${System.nanoTime().toString(36)}"
+        val preferredName = "$base.bak-$nonce"
+        if (preferredName.length <= XmlPath.MAX_LFN_UNITS) {
+            fun child(suffix: String): String =
+                if (parent == "/") "/$preferredName$suffix" else "$parent/$preferredName$suffix"
+            var candidate = child("")
+            var n = 0
+            while (pathOccupied(volume, candidate)) {
+                n++
+                if (n > 16) break
+                candidate = child("-$n")
+            }
+            if (n <= 16 &&
+                candidate.substringAfterLast('/').length <= XmlPath.MAX_LFN_UNITS &&
+                !pathOccupied(volume, candidate)
+            ) {
+                return candidate
+            }
         }
-        return candidate
+        return uniqueShortSibling(volume, parent, "k")
     }
 
     private fun requireXmlName(name: String): String = XmlPath.resolve(name)

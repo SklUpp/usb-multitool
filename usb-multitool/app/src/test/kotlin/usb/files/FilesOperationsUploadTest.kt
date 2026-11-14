@@ -15,36 +15,38 @@ import usb.fs.UsbFsVolume
 import usb.operation.DiskOperation
 
 class FilesOperationsUploadTest {
-    @Test fun firstWriteFailureStillCleansCreatedTarget() {
+    @Test fun firstWriteFailureDoesNotDeleteUnownedTarget() {
         val v = FakeVolume(writeFailure = IllegalStateException("write"))
         val primary = kotlin.runCatching {
             FilesOperations.upload(ByteArrayInputStream(byteArrayOf(1)), "/x", v, DiskOperation("u"), 4)
         }.exceptionOrNull()!!
         assertEquals("write", primary.message)
-        assertEquals(1, v.deleteCount)
+        assertEquals(0, v.deleteCount)
     }
 
-    @Test fun emptyWriteFailureStillCleansCreatedTarget() {
+    @Test fun emptyWriteFailureDoesNotDeleteUnownedTarget() {
         val v = FakeVolume(writeFailure = IllegalStateException("empty"))
         val primary = kotlin.runCatching {
             FilesOperations.upload(ByteArrayInputStream(ByteArray(0)), "/x", v, DiskOperation("u"), 4)
         }.exceptionOrNull()!!
         assertEquals("empty", primary.message)
-        assertEquals(1, v.deleteCount)
+        assertEquals(0, v.deleteCount)
     }
 
     @Test fun cleanupStatFailureKeepsPrimaryAndReportsWarning() {
         val cleanup = IllegalStateException("stat")
         val primary = IllegalStateException("write")
-        val v = FakeVolume(writeFailure = primary, statFailureAfterWrite = cleanup)
+        val v = FakeVolume(writeFailure = primary, statFailureAfterWrite = cleanup, failAfterFirstWrite = true)
         var warning: Throwable? = null
         val thrown = kotlin.runCatching {
-            FilesOperations.upload(ByteArrayInputStream(byteArrayOf(1)), "/x", v, DiskOperation("u"), 4) { warning = it }
+            FilesOperations.upload(ByteArrayInputStream(byteArrayOf(1, 2)), "/x", v, DiskOperation("u"), 1,
+                onCleanupFailure = { warning = it })
         }.exceptionOrNull()!!
         assertSame(primary, thrown)
         assertSame(cleanup, warning)
         assertSame(cleanup, thrown.suppressed.single())
     }
+
 
     @Test fun uploadWritesChunkSizedBlocksAndPreservesContent() {
         val chunk = 1024 * 1024
@@ -138,6 +140,39 @@ class FilesOperationsUploadTest {
 
         assertTrue(failure is kotlinx.coroutines.CancellationException)
         assertEquals(1, volume.writes.size)
+        assertEquals(1, volume.deleteCount)
+    }
+
+    @Test fun cancellationDuringEofReadDoesNotCreateEmptyTarget() {
+        var active = true
+        val volume = RecordingVolume()
+        val input = object : java.io.InputStream() {
+            override fun read(): Int { active = false; return -1 }
+            override fun read(b: ByteArray, off: Int, len: Int): Int { active = false; return -1 }
+        }
+        val failure = runCatching {
+            FilesOperations.upload(input, "/x", volume, DiskOperation("cancel-eof", active = { active }), 4)
+        }.exceptionOrNull()
+        assertTrue(failure is kotlinx.coroutines.CancellationException)
+        assertTrue(volume.writes.isEmpty())
+    }
+
+    @Test fun cancellationDuringFinalReadCleansCreatedTarget() {
+        var active = true
+        var reads = 0
+        val volume = RecordingVolume()
+        val input = object : java.io.InputStream() {
+            override fun read(): Int = error("unexpected")
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (reads++ == 0) { b[off] = 1; return 1 }
+                active = false
+                return -1
+            }
+        }
+        val failure = runCatching {
+            FilesOperations.upload(input, "/x", volume, DiskOperation("cancel-final", active = { active }), 4)
+        }.exceptionOrNull()
+        assertTrue(failure is kotlinx.coroutines.CancellationException)
         assertEquals(1, volume.deleteCount)
     }
 
@@ -259,7 +294,7 @@ class FilesOperationsUploadTest {
         override fun delete(path: String) { deleteCount++ }
         override fun rename(from: String, to: String) = Unit
         override fun read(path: String, offset: Long, length: Int) = ByteArray(0)
-        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) {
+        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long, exclusiveCreate: Boolean) {
             writes += Write(offset, data.copyOf(), create)
             written = true
             writeHook?.invoke()
@@ -292,7 +327,7 @@ class FilesOperationsUploadTest {
         override fun delete(path: String) = Unit
         override fun rename(from: String, to: String) = Unit
         override fun read(path: String, offset: Long, length: Int) = ByteArray(0)
-        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) {
+        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long, exclusiveCreate: Boolean) {
             writeCount++
             plannedTotals += plannedTotalSize
             written = true
@@ -304,6 +339,7 @@ class FilesOperationsUploadTest {
     private class FakeVolume(
         private val writeFailure: Throwable? = null,
         private val statFailureAfterWrite: Throwable? = null,
+        private val failAfterFirstWrite: Boolean = false,
     ) : UsbFsVolume {
         var deleteCount = 0
         var writeAttempted = false
@@ -318,9 +354,10 @@ class FilesOperationsUploadTest {
         override fun delete(path: String) { deleteCount++ }
         override fun rename(from: String, to: String) = Unit
         override fun read(path: String, offset: Long, length: Int) = byteArrayOf(1)
-        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long) {
+        override fun write(path: String, data: ByteArray, offset: Long, create: Boolean, plannedTotalSize: Long, exclusiveCreate: Boolean) {
+            val previous = writeAttempted
             writeAttempted = true
-            writeFailure?.let { throw it }
+            if (!failAfterFirstWrite || previous) writeFailure?.let { throw it }
         }
         override fun sync() = Unit
         override fun close() = Unit

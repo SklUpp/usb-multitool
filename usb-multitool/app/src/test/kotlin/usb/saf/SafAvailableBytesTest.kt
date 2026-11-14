@@ -12,6 +12,7 @@ import java.lang.reflect.Proxy
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -133,47 +134,21 @@ class SafAvailableBytesTest {
     }
 
     @Test
-    fun operationCleanupDeletesOnlyExactOwnedUrisInReverseOrder() {
-        val deleted = mutableListOf<String>()
-        val owned = SafOperationDocuments { deleted += it.toString(); true }
-        val archive = android.net.Uri.parse("content://tree/run")
-        val image = android.net.Uri.parse("content://tree/run/image.img")
-        owned.own(archive)
-        owned.own(image)
-        owned.cleanup()
-        assertEquals(listOf(image.toString(), archive.toString()), deleted)
-        owned.cleanup()
-        assertEquals(2, deleted.size)
+    fun newRegularFileAllowsUnknownSizeAfterIdentityProof() {
+        val uri = android.net.Uri.parse("content://tree/new")
+        assertTrue(isNewRegularFile(SafDocument(uri, "new", false, null), uri, "tree"))
     }
 
     @Test
-    fun preflightFailureLeavesUnownedUserDocumentUntouched() {
-        val deleted = mutableListOf<String>()
-        val owned = SafOperationDocuments { deleted += it.toString(); true }
-        owned.own(android.net.Uri.parse("content://tree/run"))
-        owned.cleanup()
-        assertEquals(listOf("content://tree/run"), deleted)
-        assertFalse(deleted.contains("content://tree/existing"))
+    fun newRegularFileRejectsDirectoryEvenWhenSizeUnknown() {
+        val uri = android.net.Uri.parse("content://tree/new-dir")
+        assertFalse(isNewRegularFile(SafDocument(uri, "new-dir", true, null), uri, "tree"))
     }
 
     @Test
-    fun providerDeleteFalseIsReturnedAsCleanupFailure() {
-        val owned = SafOperationDocuments { false }
-        owned.own(android.net.Uri.parse("content://tree/run"))
-        val failure = owned.cleanup()
-        assertEquals("SAF provider refused deletion of operation-owned document content://tree/run", failure?.message)
-    }
-
-    @Test
-    fun exclusiveCreateCleanupFalsePreservesOriginalFailureAndAddsDiagnostic() {
-        val original = IllegalStateException("metadata mismatch")
-        val created = android.net.Uri.parse("content://tree/new-file")
-        deleteCreatedDocument({ false }, created, original)
-        assertEquals("metadata mismatch", original.message)
-        assertEquals(1, original.suppressed.size)
-        assertEquals(
-            "SAF provider refused deletion of operation-owned document $created",
-            original.suppressed.single().message,
-        )
+    fun newRegularFileRejectsForeignUriEvenWhenSizeUnknown() {
+        val returned = android.net.Uri.parse("content://other/new")
+        val scoped = android.net.Uri.parse("content://tree/new")
+        assertFalse(isNewRegularFile(SafDocument(returned, "new", false, null), scoped, "tree"))
     }
 }

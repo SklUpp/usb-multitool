@@ -270,6 +270,7 @@ object NtfsFs {
         offset: Long,
         data: ByteArray,
         create: Boolean,
+        exclusiveCreate: Boolean,
     ): Int
     @JvmStatic internal external fun nativeMkdir(handle: Long, path: String)
     @JvmStatic internal external fun nativeDelete(handle: Long, path: String)
@@ -284,7 +285,9 @@ class NtfsVolume internal constructor(
     private val handle: Long,
     val device: BlockDevice,
     val readOnly: Boolean,
-) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
+) : Closeable, AutoCloseable, UsbFsVolume, UsbFsUsageVolume, UsbFsAccessVolume {
+    override val access: FilesystemAccess =
+        if (readOnly) FilesystemAccess.ReadOnly else FilesystemAccess.ReadWrite
     @Volatile private var open: Boolean = true
 
     fun isOpen(): Boolean = open
@@ -343,17 +346,17 @@ class NtfsVolume internal constructor(
     }
 
 
-    @Synchronized
     override fun write(
         path: String,
         data: ByteArray,
         offset: Long,
         create: Boolean,
         plannedTotalSize: Long,
+        exclusiveCreate: Boolean,
     ) {
         ensureWritable()
         requireIoRange(offset, data.size, MAX_NTFS_IO_BYTES)
-        val wrote = NtfsFs.nativeWrite(handle, path, offset, data, create)
+        val wrote = NtfsFs.nativeWrite(handle, path, offset, data, create, exclusiveCreate)
         if (wrote < 0 || wrote != data.size) {
             throw NtfsException("short write on $path: $wrote of ${data.size}")
         }

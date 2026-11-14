@@ -67,7 +67,10 @@ data class FatDirEntry(
     val attrib: Byte = 0,
 )
 
-class FatFsException(message: String) : Exception(message)
+open class FatFsException(message: String) : Exception(message)
+
+/** FatFs FR_EXIST — exclusive create lost the race. */
+class FileExistsException(message: String) : FatFsException(message)
 
 class FileTooLargeException(message: String) : Exception(message)
 
@@ -156,6 +159,7 @@ object FatFsNative {
         data: ByteArray,
         plannedTotalSize: Long,
         create: Boolean,
+        exclusiveCreate: Boolean,
     ): Int
     @JvmStatic external fun nativeMkfs(blockHandle: Long, sectorSize: Int, sectorCount: Long, type: Int, auSizeBytes: Int)
     @JvmStatic external fun nativeSetLabel(blockHandle: Long, sectorSize: Int, sectorCount: Long, label: String)
@@ -171,7 +175,9 @@ class FatVolume internal constructor(
     private val volumeHandle: Long,
     private val blockHandle: Long,
     private val ownsBlock: Boolean,
-) : AutoCloseable, UsbFsVolume, UsbFsUsageVolume {
+): AutoCloseable, UsbFsVolume, UsbFsUsageVolume, UsbFsAccessVolume {
+    /** FatFs binding has no read-only mount flag; driver mode is therefore unknown. */
+    override val access: FilesystemAccess = FilesystemAccess.Unknown
     @Volatile private var open = true
 
     fun isOpen(): Boolean = open
@@ -245,12 +251,22 @@ class FatVolume internal constructor(
         offset: Long,
         create: Boolean,
         plannedTotalSize: Long,
+        exclusiveCreate: Boolean,
     ) {
         ensureOpen()
         requireIoRange(offset, data.size, MAX_FAT_EXT_IO_BYTES)
         val planned = resolvePlannedTotal(offset, data.size, plannedTotalSize)
         requireWithinFileLimit(planned, FatFsNative.nativeMaxFileSize(kind.code), kind)
-        val wrote = FatFsNative.nativeWrite(volumeHandle, path, offset, data, planned, create)
+        val wrote =
+            FatFsNative.nativeWrite(
+                volumeHandle,
+                path,
+                offset,
+                data,
+                planned,
+                create,
+                exclusiveCreate,
+            )
         requireFullWrite(wrote, data.size)
     }
 

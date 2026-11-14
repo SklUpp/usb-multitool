@@ -3,11 +3,13 @@ package usb.ventoy
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.operation.DiskOperation
 import usb.testutil.InMemoryUsbVolume
 
 /**
@@ -251,7 +253,7 @@ class VentoySetupTest {
 
         assertTrue(byteArrayOf(1, 2).contentEquals(requireNotNull(volume.fileBytes("/ventoy/autounattend.xml"))))
         assertTrue(byteArrayOf(3, 4).contentEquals(requireNotNull(volume.fileBytes(VentoySetup.CONFIG_PATH))))
-        assertTrue(volume.paths().none { it.contains(".bak-") || it.contains("ventoy_backup") })
+        assertTrue(volume.paths().none { it.contains(".bak-") || it.contains(".xk-") || it.contains("ventoy_backup") })
     }
 
     @Test
@@ -324,7 +326,7 @@ class VentoySetupTest {
             )
         }
         assertArrayEquals(previous, requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")))
-        assertTrue(volume.paths().none { it.contains(".bak-") })
+        assertTrue(volume.paths().none { it.contains(".bak-") || it.contains(".xk-") })
     }
 
     @Test
@@ -352,5 +354,291 @@ class VentoySetupTest {
         }
         assertArrayEquals(previous, requireNotNull(volume.fileBytes("/ventoy/autounattend.xml")))
     }
+
+    @Test
+    fun allocateXmlPathUsesImageStemThenSuffix() {
+        val volume =
+            InMemoryUsbVolume(
+                mapOf(
+                    "/ventoy/Win11.xml" to byteArrayOf(1),
+                    "/ventoy/Win11_1.xml" to byteArrayOf(2),
+                ),
+            )
+        assertEquals(
+            "/ventoy/Win11_2.xml",
+            VentoySetup.allocateXmlPath(volume, "/ISO/Win11.iso"),
+        )
+        assertEquals("/ventoy/Fresh.xml", VentoySetup.allocateXmlPath(volume, "/ISO/Fresh.wim"))
+        assertEquals("/ventoy/Win11.xml", VentoySetup.suggestedXmlPath("/ISO/Win11.iso"))
+        volume.mkdir("/custom")
+        volume.putFile("/custom/Win11.xml", byteArrayOf(3))
+        assertEquals(
+            "/custom/Win11_1.xml",
+            VentoySetup.allocateXmlPath(volume, "/ISO/Win11.iso", "/custom"),
+        )
+    }
+
+    @Test
+    fun allocateXmlPathSkipsCaseInsensitiveCollision() {
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/win11.xml" to byteArrayOf(1)))
+        assertEquals(
+            "/ventoy/Win11_1.xml",
+            VentoySetup.allocateXmlPath(volume, "/ISO/Win11.iso"),
+        )
+    }
+
+    @Test
+    fun createNewRawWriteLeavesExistingPeerUntouchedOnRace() {
+        val occupant = byteArrayOf(9, 9, 9)
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/Win11.xml" to occupant))
+        volume.occupyBeforeRenameTo = "/ventoy/Win11_1.xml"
+        // Pretend allocate chose _1, then a peer created it before rename.
+        val body =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        assertThrows(VentoySetup.XmlNameRaceException::class.java) {
+            VentoySetup.writeAutounattendRaw(
+                volume = volume,
+                xmlName = "Win11_1.xml",
+                rawBytes = body,
+                overwriteXml = false,
+            )
+        }
+        assertArrayEquals(occupant, requireNotNull(volume.fileBytes("/ventoy/Win11.xml")))
+        assertArrayEquals(byteArrayOf(0x72), requireNotNull(volume.fileBytes("/ventoy/Win11_1.xml")))
+        // Short exclusive temps use `.xt-…`; destination race must leave none behind.
+        assertTrue(volume.paths().none { it.contains(".xt-") || it.contains(".tmp-") })
+    }
+
+    @Test
+    fun createNewRawWriteRefusesExistingWithoutOverwrite() {
+        val previous =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/Win11.xml" to previous))
+        val edited =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize"/>
+            </unattend>
+            """.trimIndent().toByteArray()
+        assertThrows(VentoySetup.XmlOverwriteRequiredException::class.java) {
+            VentoySetup.writeAutounattendRaw(
+                volume = volume,
+                xmlName = "Win11.xml",
+                rawBytes = edited,
+                overwriteXml = false,
+            )
+        }
+        assertArrayEquals(previous, requireNotNull(volume.fileBytes("/ventoy/Win11.xml")))
+    }
+
+    @Test
+    fun allocateXmlPathContinuesPast999WhenFree() {
+        val files = HashMap<String, ByteArray>()
+        files["/ventoy/Long.xml"] = byteArrayOf(0)
+        for (n in 1..1000) {
+            files["/ventoy/Long_$n.xml"] = byteArrayOf(n.toByte())
+        }
+        val volume = InMemoryUsbVolume(files)
+        assertEquals(
+            "/ventoy/Long_1001.xml",
+            VentoySetup.allocateXmlPath(volume, "/ISO/Long.iso"),
+        )
+    }
+
+    @Test
+    fun allocateXmlPathNearLfnLimitUsesShortTempsOnWrite() {
+        // 240-char stem → 244-char `.xml` name; still under 255.
+        val stem = "W".repeat(240)
+        val volume = InMemoryUsbVolume()
+        val path = VentoySetup.allocateXmlPath(volume, "/ISO/$stem.iso")
+        assertEquals("/ventoy/$stem.xml", path)
+        assertTrue(path.substringAfterLast('/').length <= XmlPath.MAX_LFN_UNITS)
+        val body =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        VentoySetup.writeAutounattendRaw(
+            volume = volume,
+            xmlName = path,
+            rawBytes = body,
+            overwriteXml = false,
+        )
+        assertArrayEquals(body, requireNotNull(volume.fileBytes(path)))
+        // Temp siblings must stay short — never `.$stem.tmp-…`.
+        assertTrue(volume.paths().none { it.substringAfterLast('/').length > XmlPath.MAX_LFN_UNITS })
+        assertTrue(volume.paths().none { it.contains(".$stem") })
+    }
+
+
+
+
+    @Test
+    fun exclusiveCreateConflictNeverDeletesPeerTemp() {
+        val volume = InMemoryUsbVolume()
+        volume.occupyBeforeExclusiveCreate = true
+        volume.peerExclusiveCreateBytes = byteArrayOf(0x50, 0x45, 0x45, 0x52)
+        val body =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        assertThrows(VentoySetup.XmlNameRaceException::class.java) {
+            VentoySetup.writeAutounattendRaw(
+                volume = volume,
+                xmlName = "Fresh.xml",
+                rawBytes = body,
+                overwriteXml = false,
+            )
+        }
+        val peerPath = requireNotNull(volume.lastExclusiveCreatePath)
+        assertArrayEquals(
+            volume.peerExclusiveCreateBytes,
+            requireNotNull(volume.fileBytes(peerPath)),
+        )
+        assertTrue(volume.statOrNull("/ventoy/Fresh.xml") == null)
+    }
+
+    @Test
+    fun longXmlBackupFallsBackToShortSibling() {
+        val stem = "W".repeat(240)
+        val path = "/ventoy/$stem.xml"
+        val previous = byteArrayOf(1, 2, 3)
+        val volume = InMemoryUsbVolume(mapOf(path to previous))
+        val backup = VentoySetup.backupBeforeReplace(volume, path, previous)
+        assertTrue(
+            "near-LFN stem must use short .xk- backup, got $backup",
+            backup.substringAfterLast('/').startsWith(".xk-"),
+        )
+        assertTrue(backup.substringAfterLast('/').length <= XmlPath.MAX_LFN_UNITS)
+        assertArrayEquals(previous, requireNotNull(volume.fileBytes(backup)))
+    }
+
+    @Test
+    fun generateCreateNewUsesAllocatedImageNameAndPlan() {
+        // Selected image → allocate → generate create-new with resealed plan.
+        val selectedImage = "/ISO/Win11_23H2_English_x64.iso"
+        val volume =
+            InMemoryUsbVolume(
+                mapOf(
+                    selectedImage to byteArrayOf(1),
+                    "/ventoy/Win11_23H2_English_x64.xml" to
+                        """
+                        <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+                        """.trimIndent().toByteArray(),
+                ),
+            )
+        val allocated = VentoySetup.allocateXmlPath(volume, selectedImage)
+        assertEquals("/ventoy/Win11_23H2_English_x64_1.xml", allocated)
+        val params = AutounattendParams(computerName = "PC-ONE")
+        // UI seals plan to suggested name; host reseals after allocate.
+        val uiSuggested = VentoySetup.suggestedXmlPath(selectedImage)
+        assertEquals("/ventoy/Win11_23H2_English_x64.xml", uiSuggested)
+        val confirmedUiPlan = autounattendPlanSha256(uiSuggested, params, listOf(selectedImage))
+        val writePlan = autounattendPlanSha256(allocated, params, listOf(selectedImage))
+        assertNotEquals(confirmedUiPlan, writePlan)
+        var mutated = false
+        val result =
+            VentoySetup.generateAutounattend(
+                volume = volume,
+                xmlName = allocated,
+                params = params,
+                imagePaths = listOf(selectedImage),
+                overwriteXml = false,
+                expectedPlanSha256 = writePlan,
+                onMutation = { mutated = true },
+            )
+        assertTrue(mutated)
+        assertEquals("Win11_23H2_English_x64_1.xml", result.xmlName)
+        assertTrue(volume.fileBytes(allocated) != null)
+        assertTrue(volume.paths().none { it.contains(".xt-") })
+        assertArrayEquals(
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray(),
+            requireNotNull(volume.fileBytes(uiSuggested)),
+        )
+        // Stale pre-allocate UI plan must not write over the new file.
+        assertThrows(VentoySetup.PlanChangedException::class.java) {
+            VentoySetup.generateAutounattend(
+                volume = volume,
+                xmlName = allocated,
+                params = params,
+                imagePaths = listOf(selectedImage),
+                overwriteXml = true,
+                expectedTemplateSha256 =
+                    WindowsTemplate.sha256(requireNotNull(volume.fileBytes(allocated))),
+                expectedPlanSha256 = confirmedUiPlan,
+                onMutation = {},
+            )
+        }
+    }
+
+    @Test
+    fun generateRejectsStalePlanHashBeforeMutation() {
+        val volume = InMemoryUsbVolume(mapOf("/ISO/Win11.iso" to byteArrayOf(1)))
+        val params = AutounattendParams(computerName = "PC-ONE")
+        var mutated = false
+        assertThrows(VentoySetup.PlanChangedException::class.java) {
+            VentoySetup.generateAutounattend(
+                volume = volume,
+                xmlName = "/ventoy/Win11.xml",
+                params = params,
+                imagePaths = listOf("/ISO/Win11.iso"),
+                overwriteXml = false,
+                expectedPlanSha256 = "deadbeef",
+                onMutation = { mutated = true },
+            )
+        }
+        assertFalse(mutated)
+        assertTrue(volume.statOrNull("/ventoy/Win11.xml") == null)
+        assertTrue(volume.paths().none { it.contains(".xt-") || it.contains(".bak-") })
+    }
+
+    @Test
+    fun importXmlUsesShortTempsAndSelectedImageStem() {
+        // Mimic MainActivity inspect: allocate from selected image, then import under that name.
+        val selectedImage = "/ISO/Win11.iso"
+        val volume =
+            InMemoryUsbVolume(
+                mapOf(
+                    "/ventoy/Win11.xml" to
+                        """
+                        <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+                        """.trimIndent().toByteArray(),
+                ),
+            )
+        val allocated = VentoySetup.allocateXmlPath(volume, selectedImage)
+        assertEquals("/ventoy/Win11_1.xml", allocated)
+        val xml =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize"/>
+            </unattend>
+            """.trimIndent().toByteArray()
+        val operation = DiskOperation("import-xml")
+        VentoyIsoLibrary.import(
+            volume = volume,
+            input = xml.inputStream(),
+            rawName = allocated.substringAfterLast('/'),
+            operation = operation,
+            importDirectory = "/ventoy",
+            overwrite = false,
+        )
+        assertArrayEquals(xml, requireNotNull(volume.fileBytes(allocated)))
+        assertTrue(operation.mutationAttempted)
+        assertTrue(operation.commitReached)
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".xb-") })
+        assertArrayEquals(
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray(),
+            requireNotNull(volume.fileBytes("/ventoy/Win11.xml")),
+        )
+    }
+
+
 
 }

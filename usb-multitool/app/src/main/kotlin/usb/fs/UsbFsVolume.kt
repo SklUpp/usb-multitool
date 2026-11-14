@@ -41,6 +41,11 @@ interface UsbFsVolume : AutoCloseable {
         offset: Long = 0L,
         create: Boolean = true,
         plannedTotalSize: Long = offset + data.size.toLong(),
+        /**
+         * When true with [create], refuse if [path] already exists.
+         * FatFs, EXT and NTFS use native atomic create; no silent probe+truncate.
+         */
+        exclusiveCreate: Boolean = false,
     )
     fun sync()
 }

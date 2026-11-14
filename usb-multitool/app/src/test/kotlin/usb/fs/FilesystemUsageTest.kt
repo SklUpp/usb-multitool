@@ -36,6 +36,15 @@ class FilesystemUsageTest {
         assertTrue(known.measuredAtMillis > 0L)
     }
 
+
+    @Test fun driverAccessIsCarriedWithUsage() = runBlocking {
+        val volume = usageVolume(
+            provider = { FilesystemSpace(totalBytes = 4uL, freeBytes = 2uL) },
+            access = FilesystemAccess.ReadOnly,
+        )
+        val snapshot = FilesystemUsageProbe.measure(volume, key)
+        assertEquals(FilesystemAccess.ReadOnly, snapshot.access)
+    }
     @Test fun volumeWithoutUsageQueryIsUnknownNotZero() = runBlocking {
         val snapshot = FilesystemUsageProbe.measure(plainVolume(), key)
 
@@ -163,9 +172,13 @@ class FilesystemUsageTest {
         }
     }
 
-    private fun usageVolume(provider: () -> FilesystemSpace): UsbFsVolume =
-        object : UsbFsVolume, UsbFsUsageVolume {
+    private fun usageVolume(
+        access: FilesystemAccess = FilesystemAccess.Unknown,
+        provider: () -> FilesystemSpace,
+    ): UsbFsVolume =
+        object : UsbFsVolume, UsbFsUsageVolume, UsbFsAccessVolume {
             override fun space(): FilesystemSpace = provider()
+            override val access: FilesystemAccess = access
             override fun list(path: String) = error("unused")
             override fun stat(path: String) = error("unused")
             override fun statOrNull(path: String) = error("unused")
@@ -179,6 +192,7 @@ class FilesystemUsageTest {
                 offset: Long,
                 create: Boolean,
                 plannedTotalSize: Long,
+                exclusiveCreate: Boolean,
             ) = error("unused")
             override fun sync() = error("unused")
             override fun close() = error("unused")
@@ -198,6 +212,7 @@ class FilesystemUsageTest {
             offset: Long,
             create: Boolean,
             plannedTotalSize: Long,
+            exclusiveCreate: Boolean,
         ) = error("unused")
         override fun sync() = error("unused")
         override fun close() = error("unused")

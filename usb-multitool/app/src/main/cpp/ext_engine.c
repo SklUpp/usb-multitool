@@ -577,52 +577,74 @@ int ext_engine_read(uint64_t vol_handle, const char *path, uint64_t offset,
 	return 0;
 }
 
-int ext_engine_write(uint64_t vol_handle, const char *path, uint64_t offset,
-		     const void *buf, size_t count, bool create,
-		     size_t *out_written)
+int ext_engine_write_exclusive(uint64_t vol_handle, const char *path, uint64_t offset,
+                               const void *buf, size_t count, bool create,
+                               bool exclusive_create, size_t *out_written)
 {
-	ExtVolumeContext *v = from_handle(vol_handle);
-	if (!v || !v->mounted || !path || !buf || !out_written) return -EINVAL;
-	*out_written = 0;
-	if (v->read_only) return -EROFS;
+    ExtVolumeContext *v = from_handle(vol_handle);
+    if (!v || !v->mounted || !path || !out_written || (!buf && count != 0)) return -EINVAL;
+    *out_written = 0;
+    if (v->read_only) return -EROFS;
 
-	char full[EXT_PATH_MAX];
-	int j = join_path(full, sizeof(full), v, path);
-	if (j != 0) return j;
+    char full[EXT_PATH_MAX];
+    int j = join_path(full, sizeof(full), v, path);
+    if (j != 0) return j;
 
-	/* create+offset0 → truncate ("w+b"); else open existing for r/w. */
-	const char *flags;
-	if (create && offset == 0) {
-		flags = "w+b";
-	} else if (create) {
-		flags = "r+b";
-	} else {
-		flags = "r+b";
-	}
+    /* O_EXCL is passed to lwext4's atomic directory insertion path. */
+    const char *flags;
+    if (exclusive_create) {
+        flags = NULL;
+    } else if (create && offset == 0) {
+        flags = "w+b";
+    } else {
+        flags = "r+b";
+    }
 
-	ext4_file f;
-	int rc = ext4_fopen(&f, full, flags);
-	if (rc != EOK && create && offset != 0) {
-		/* Missing file with append: create then seek. */
-		rc = ext4_fopen(&f, full, "w+b");
-	}
-	if (rc != EOK) return map_lw(rc);
-
-	if (offset != 0) {
-		rc = ext4_fseek(&f, (int64_t)offset, SEEK_SET);
-		if (rc != EOK) {
-			ext4_fclose(&f);
-			return map_lw(rc);
-		}
-	}
-	size_t wrote = 0;
-	rc = ext4_fwrite(&f, buf, count, &wrote);
-	ext4_fclose(&f);
-	if (rc != EOK) return map_lw(rc);
-	*out_written = wrote;
-	return 0;
+    ext4_file f;
+    int rc;
+    if (exclusive_create) {
+        rc = ext4_fopen2(&f, full, O_RDWR | O_CREAT | O_EXCL);
+    } else {
+        rc = ext4_fopen(&f, full, flags);
+    }
+    if (rc != EOK && create && offset != 0 && !exclusive_create) {
+        /* Missing file with append: create then seek. */
+        rc = ext4_fopen(&f, full, "w+b");
+    }
+    if (rc != EOK) return map_lw(rc);
+    if (offset != 0) {
+        rc = ext4_fseek(&f, (int64_t)offset, SEEK_SET);
+        if (rc != EOK) {
+            ext4_fclose(&f);
+            if (exclusive_create) {
+                int cleanup = ext4_fremove(full);
+                if (cleanup != EOK) return EXT_ENGINE_CLEANUP_FAILED;
+            }
+            return map_lw(rc);
+        }
+    }
+    size_t wrote = 0;
+    rc = ext4_fwrite(&f, buf, count, &wrote);
+    int close_rc = ext4_fclose(&f);
+    if (rc != EOK || close_rc != EOK || wrote != count) {
+        if (exclusive_create) {
+            int cleanup = ext4_fremove(full);
+            if (cleanup != EOK) return EXT_ENGINE_CLEANUP_FAILED;
+        }
+        if (rc != EOK) return map_lw(rc);
+        if (close_rc != EOK) return map_lw(close_rc);
+        return -EIO;
+    }
+    *out_written = wrote;
+    return 0;
 }
 
+int ext_engine_write(uint64_t vol_handle, const char *path, uint64_t offset,
+                     const void *buf, size_t count, bool create, size_t *out_written)
+{
+    return ext_engine_write_exclusive(vol_handle, path, offset, buf, count,
+                                      create, false, out_written);
+}
 int ext_engine_mkdir(uint64_t vol_handle, const char *path)
 {
 	ExtVolumeContext *v = from_handle(vol_handle);

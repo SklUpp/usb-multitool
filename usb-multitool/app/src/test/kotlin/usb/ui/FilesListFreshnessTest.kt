@@ -1004,6 +1004,86 @@ class FilesListFreshnessTest {
     }
 
     @Test
+    fun completedBatchDeleteInvalidatesListingLikeOtherMutations() {
+        val token = OperationTokenGenerator.next()
+        val running =
+            ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
+                .copy(
+                    operation =
+                        OperationProgress(
+                            state = OperationState.Running,
+                            token = token,
+                            title = OperationTitle.DeleteBatch(2),
+                        ),
+                )
+        val progressed =
+            UiReducer.reduce(
+                running,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Completed,
+                        token = token,
+                        title = OperationTitle.DeleteBatch(2),
+                    ),
+                ),
+            )
+        val done = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = token,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.DeleteBatch(2),
+                state = OperationState.Completed,
+            ),
+        )
+        assertTrue(done.state.files.isEmpty())
+        assertEquals(FilesListingState.Loading, done.state.filesListingState)
+        assertEquals(running.filesListGeneration + 1L, done.state.filesListGeneration)
+        assertEquals("/ISO", (done.effects.single() as UiEffect.LoadFiles).path)
+    }
+
+    @Test
+    fun partialBatchUploadInvalidatesListing() {
+        val token = OperationTokenGenerator.next()
+        val running =
+            ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))
+                .copy(
+                    operation =
+                        OperationProgress(
+                            state = OperationState.Running,
+                            token = token,
+                            title = OperationTitle.UploadBatch(3),
+                        ),
+                )
+        val progressed =
+            UiReducer.reduce(
+                running,
+                UiIntent.OperationUpdated(
+                    OperationProgress(
+                        state = OperationState.Partial,
+                        token = token,
+                        title = OperationTitle.UploadBatch(3),
+                        errorMessage = "partial",
+                    ),
+                ),
+            )
+        val done = UiReducer.reduce(
+            progressed.state,
+            UiIntent.OperationCompletionEffects(
+                token = token,
+                attachmentGeneration = device.attachGeneration,
+                title = OperationTitle.UploadBatch(3),
+                state = OperationState.Partial,
+            ),
+        )
+        assertTrue(done.state.files.isEmpty())
+        assertEquals(FilesListingState.Loading, done.state.filesListingState)
+        assertEquals(running.filesListGeneration + 1L, done.state.filesListGeneration)
+        assertEquals("/ISO", (done.effects.single() as UiEffect.LoadFiles).path)
+    }
+
+
+    @Test
     fun probeStatesToReadyLoadFilesOnTheDefaultTab() {
         for (probePresence in listOf(DevicePresence.Busy, DevicePresence.PermissionRequired)) {
             val probe =

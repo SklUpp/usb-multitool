@@ -43,6 +43,17 @@ open class DiskOperation(
         bytesDone = bytes
     }
 
+    /**
+     * Start progress for the next file in a batch (or a single transfer).
+     * Resets [bytesDone] before publishing [bytesTotal] so the UI never shows a
+     * false aggregate (e.g. previous file's done over the next file's smaller total).
+     * Pass [total] &lt; 0 when size is unknown (indeterminate / bytes-only).
+     */
+    fun beginCurrentFile(total: Long) {
+        bytesDone = 0L
+        bytesTotal = total
+    }
+
     suspend fun awaitInactive() {
         inactive.await()
     }

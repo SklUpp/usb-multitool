@@ -14,14 +14,18 @@ package usb.files
 object FilesOperationPolicy {
     /**
      * Last path segment of [rawName], or IllegalArgumentException when it is not a
-     * single FAT entry name: blank, `.`/`..`, a `\` separator, or a NUL byte.
+     * single entry name: blank, leading/trailing whitespace, `.`/`..`, a `\` separator,
+     * or a NUL byte.
+     * Never silently trims — a name that would change under trim is rejected so
+     * recursive delete/upload cannot retarget a distinct sibling (e.g. EXT `victim `).
      * Mirrors UiReducer.validEntryName at the policy boundary (UI gating is not enough
      * for SAF-reported display names).
      */
     fun requireChildName(rawName: String, source: String): String {
-        val name = rawName.substringAfterLast('/').trim()
+        val name = rawName.substringAfterLast('/')
         require(
             name.isNotEmpty() &&
+                name == name.trim() &&
                 name != "." &&
                 name != ".." &&
                 '\\' !in name &&
@@ -42,6 +46,47 @@ object FilesOperationPolicy {
         if (message.contains("Directory not empty")) {
             "Cannot delete \"$name\": directory is not empty — remove its contents first"
         } else null
+
+    /**
+     * Join [basePath] with relative [childSegments] staying inside the tree.
+     * Rejects blank/`.`/`..` segments and separators so SAF or USB names cannot escape.
+     */
+    fun resolveInsideTree(basePath: String, vararg childSegments: String): String {
+        var current = normalizeVolumePath(basePath)
+        for (raw in childSegments) {
+            require('/' !in raw && '\\' !in raw) {
+                "invalid path segment \"$raw\" under $current"
+            }
+            val segment = requireChildName(raw, "path under $current")
+            current = if (current == "/") "/$segment" else "$current/$segment"
+        }
+        return current
+    }
+
+    /** Absolute volume path with a single leading slash and no trailing slash (except root). */
+    fun normalizeVolumePath(path: String): String {
+        val trimmed = path.trim().trim('/')
+        return if (trimmed.isEmpty()) "/" else "/$trimmed"
+    }
+
+    /** True when [relative] has no empty/`.`/`..` segment and no backslash/NUL. */
+    fun isSafeRelativePath(relative: String): Boolean {
+        if (relative.isEmpty() || relative.startsWith('/') || '\\' in relative || '\u0000' in relative) {
+            return false
+        }
+        return relative.split('/').all { part ->
+            part.isNotEmpty() && part != "." && part != ".." && '\\' !in part && '\u0000' !in part
+        }
+    }
+
+    fun nonemptyDirectoryRefuseMessage(pathLabel: String): String =
+        "Cannot replace nonempty directory \"$pathLabel\": skip or cancel (merge/replace refused)"
+
+    fun replaceFileWarningMessage(pathLabel: String): String =
+        "Replace existing file \"$pathLabel\"? New contents are staged before replacement."
+
+    fun directoryConflictSkipOnlyMessage(pathLabel: String): String =
+        "Directory \"$pathLabel\" already exists and is not empty; only Skip or Cancel are allowed"
 
     fun publishOperationProgress(quiet: Boolean): Boolean = !quiet
 

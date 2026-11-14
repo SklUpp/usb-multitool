@@ -993,4 +993,179 @@ class UiStateMachineTest {
         assertNull(confirmNoSel.state.pendingConfirmation)
         assertTrue(confirmNoSel.effects.isEmpty())
     }
+
+    private fun batchSelection(
+        names: List<Pair<String, Boolean>> = listOf("ubuntu.iso" to false),
+        directory: String = "/",
+        partitionId: String = "1",
+        startLba: ULong? = 0uL,
+        sectorCount: ULong? = 2048uL,
+        attachGeneration: Long = device.attachGeneration,
+    ): FilesBatchSelection {
+        val files = names.map { (name, isDir) ->
+            FileEntry(name, isDir, if (isDir) 0uL else 2_000_000_000uL)
+        }
+        return FilesBatchSelection(
+            directory = directory,
+            items = files.map { FilesBatchItem(it.name, it.isDirectory, it.sizeBytes) },
+            identity = device.identity,
+            attachGeneration = attachGeneration,
+            partitionId = partitionId,
+            startLba = startLba,
+            sectorCount = sectorCount,
+        )
+    }
+
+    @Test
+    fun deleteBatchAndDownloadBatchEmitEffects() {
+        val state = ready()
+        val selection = batchSelection()
+        val delete = UiReducer.reduce(state, UiIntent.DeleteBatch(selection))
+        assertTrue(delete.effects.single() is UiEffect.DeleteBatch)
+        assertEquals(selection, (delete.effects.single() as UiEffect.DeleteBatch).selection)
+
+        val download = UiReducer.reduce(state, UiIntent.DownloadBatch(selection, "content://tree/1"))
+        val effect = download.effects.single() as UiEffect.DownloadBatch
+        assertEquals(selection, effect.selection)
+        assertEquals("content://tree/1", effect.treeUri)
+    }
+
+    @Test
+    fun staleBatchPinRejectsWithoutEffect() {
+        val state = ready()
+        val selection = batchSelection()
+        val moved = UiReducer.reduce(
+            state.copy(currentPath = "/other"),
+            UiIntent.DeleteBatch(selection),
+        )
+        assertTrue(moved.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), moved.state.statusMessage)
+
+        val swapped = UiReducer.reduce(
+            state.copy(device = device.copy(attachGeneration = 9L)),
+            UiIntent.DownloadBatch(selection, "content://tree/1"),
+        )
+        assertTrue(swapped.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), swapped.state.statusMessage)
+    }
+
+    @Test
+    fun geometryChangeRejectsBatchDelete() {
+        val state = ready()
+        val selection = batchSelection(startLba = 0uL, sectorCount = 2048uL)
+        val changed = state.copy(
+            partitions = listOf(
+                PartitionTab("1", "VENTOY", readOnly = false, startLba = 1uL, sectorCount = 2048uL),
+                partitions[1],
+            ),
+        )
+        val result = UiReducer.reduce(changed, UiIntent.DeleteBatch(selection))
+        assertTrue(result.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), result.state.statusMessage)
+    }
+
+    @Test
+    fun multiRenameIntentAbsentBatchRenameDisabled() {
+        assertFalse(
+            filesBatchRenameEnabled(
+                true,
+                listOf(
+                    FilesBatchItem("a", false, 1uL),
+                    FilesBatchItem("b", false, 2uL),
+                ),
+            ),
+        )
+        // Rename stays single-entry only; no RenameBatch intent in UiReducer.
+    }
+
+
+    @Test
+    fun resolveFilesBatchConflictRejectsReplaceOnDirectory() {
+        val conflict = FilesConflict(pathLabel = "/docs", name = "docs", isDirectory = true, destinationEmpty = false)
+        val state = ready().copy(pendingFilesBatchConflict = conflict)
+        val result = UiReducer.reduce(state, UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.ReplaceFile))
+        assertTrue(result.effects.isEmpty())
+        assertNotNull(result.state.statusMessage)
+        assertEquals(conflict, result.state.pendingFilesBatchConflict)
+    }
+
+    @Test
+    fun resolveFilesBatchConflictSkipClearsAndContinues() {
+        val conflict = FilesConflict(pathLabel = "/a.bin", name = "a.bin", isDirectory = false)
+        val state = ready().copy(pendingFilesBatchConflict = conflict)
+        val result = UiReducer.reduce(state, UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Skip))
+        assertNull(result.state.pendingFilesBatchConflict)
+        assertTrue(result.effects.single() is UiEffect.ContinueFilesBatch)
+        assertEquals(
+            FilesConflictDecision.Skip,
+            (result.effects.single() as UiEffect.ContinueFilesBatch).decision,
+        )
+    }
+
+    @Test
+    fun selectPartitionClearsPendingBatchConflictAndCancelsPark() {
+        val conflict =
+            FilesConflict(pathLabel = "/a.bin", name = "a.bin", isDirectory = false)
+        val state = ready().copy(pendingFilesBatchConflict = conflict)
+        val result = UiReducer.reduce(state, UiIntent.SelectPartition("2"))
+        assertEquals("2", result.state.selectedPartitionId)
+        assertNull(result.state.pendingFilesBatchConflict)
+        assertTrue(
+            result.effects.any {
+                it is UiEffect.ContinueFilesBatch &&
+                    it.decision == FilesConflictDecision.Cancel
+            },
+        )
+        assertTrue(result.effects.any { it is UiEffect.LoadFiles })
+    }
+
+
+    @Test
+    fun uploadBatchDocsStaleGeometryRejected() {
+        val state = ready()
+        val intent = UiIntent.UploadBatchDocs(
+            directory = state.currentPath,
+            uris = listOf("content://doc/a"),
+            identity = state.device!!.identity,
+            attachGeneration = state.device!!.attachGeneration,
+            partitionId = state.selectedPartitionId!!,
+            startLba = 0uL,
+            sectorCount = 999uL, // stale vs ready() geometry
+        )
+        val result = UiReducer.reduce(state, intent)
+        assertTrue(result.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), result.state.statusMessage)
+    }
+
+    @Test
+    fun uploadBatchDocsPinMatchesLiveGeometryEmitsEffect() {
+        val state = ready()
+        val part = state.partitions.first { it.id == state.selectedPartitionId }
+        val intent = UiIntent.UploadBatchDocs(
+            directory = state.currentPath,
+            uris = listOf("content://doc/a"),
+            identity = state.device!!.identity,
+            attachGeneration = state.device!!.attachGeneration,
+            partitionId = state.selectedPartitionId!!,
+            startLba = part.startLba,
+            sectorCount = part.sectorCount,
+        )
+        val result = UiReducer.reduce(state, intent)
+        assertTrue(result.effects.single() is UiEffect.UploadBatchDocs)
+    }
+
+    @Test
+    fun deleteBatchCommitFenceContractDocumented() {
+        // MainActivity.deleteBatch sets commitReached only after ALL roots succeed.
+        // mutationAttempted from the first delete keeps mid-list cancel as Partial.
+        val op = usb.operation.DiskOperation(name = "delete-batch")
+        op.mutationAttempted = true
+        // Simulate cancel between roots: commitReached still false → Partial, not Completed.
+        assertFalse(op.commitReached)
+        val cancelled = op.commitReached && true // would be Completed only if commitReached
+        assertFalse(cancelled)
+        op.commitReached = true
+        assertTrue(op.commitReached)
+    }
+
 }

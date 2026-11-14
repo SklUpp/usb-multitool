@@ -77,6 +77,15 @@
     <string name="partitions_info_name_label">Name</string>
     <string name="partitions_write_state_label">Write state</string>
     <string name="partitions_write_ro">EFI write protection is active</string>
+    <string name="partitions_write_policy_ro">Application write policy blocks writes</string>
+    <string name="partitions_write_driver_ro">Filesystem driver mounted read-only; medium write state unknown</string>
+    <string name="partitions_write_driver_rw">Filesystem driver mounted read-write; medium write state unknown</string>
+    <string name="files_write_policy_label">RO · policy</string>
+    <string name="files_write_driver_ro_label">RO · driver</string>
+    <string name="files_write_driver_rw_label">RW · driver</string>
+    <string name="partitions_write_policy_label">RO · policy</string>
+    <string name="partitions_write_driver_ro_label">RO · driver</string>
+    <string name="partitions_write_driver_rw_label">RW · driver</string>
     <string name="partitions_write_unknown">Write state not verified</string>
     <string name="efi_write_policy_allowed">Write permission allowed</string>
     <string name="efi_write_policy_protected">Write-protected</string>
@@ -225,13 +234,16 @@
     <string name="files_copy_from_phone">Copy from phone</string>
     <string name="files_save_to_phone">Save to phone</string>
     <string name="files_write_ro">EFI write protection is active</string>
+    <string name="files_write_policy_ro">Application write policy blocks writes</string>
+    <string name="files_write_driver_ro">Filesystem driver mounted read-only; medium write state unknown</string>
+    <string name="files_write_driver_rw">Filesystem driver mounted read-write; medium write state unknown</string>
     <string name="files_write_unknown">Write state not verified</string>
     <string name="files_current_path">Current folder: %1$s</string>
     <string name="files_statuses">Statuses</string>
     <string name="files_statuses_expanded">Statuses expanded</string>
     <string name="files_statuses_collapsed">Statuses collapsed</string>
     <string name="files_status_general">Status</string>
-    <string name="files_delete_folder_confirm">Delete folder %1$s? It must be empty — non-empty folders are refused.</string>
+    <string name="files_delete_folder_confirm">Delete folder %1$s and all of its contents? This cannot be undone.</string>
     <string name="files_delete_confirm">Delete %1$s?</string>
     <string name="files_open_folder">Open folder</string>
     <string name="files_select_file">Select file</string>
@@ -744,6 +756,8 @@
     <string name="unattend_problem_partition_label">A partition label is empty, longer than 32 characters, or contains control characters</string>
     <string name="unattend_refresh">Refresh</string>
     <string name="unattend_scope_limited">Image discovery is narrowed by %1$s; images outside it will not appear in the Ventoy menu even if bound.</string>
+    <string name="unattend_status_not_selected">Not selected</string>
+    <string name="unattend_status_selected">Selected</string>
     <string name="unattend_template_label">Template file</string>
     <string name="unattend_title">Windows setup settings (.xml)</string>
     <string name="unattend_help_title">Windows setup settings</string>
@@ -819,4 +833,11 @@
     <string name="settings_source_status_error">Not valid JSON / unreadable</string>
     <string name="settings_source_partial">The write failed after the document was opened; it may be truncated. No rollback is possible.</string>
     <string name="settings_write_partial">The settings write did not complete. Staged values are kept; retry after checking the cause above.</string>
+<string name="action_skip">Skip</string>
+<string name="files_delete_recursive_confirm">Delete %1$d items? Folders in the selection are removed recursively with all contents. This cannot be undone.</string>
+<string name="op_download_batch">Download %1$d entries</string>
+<string name="op_upload_batch">Upload %1$d entries</string>
+<string name="op_delete_batch">Delete %1$d entries</string>
+<string name="op_batch_current_file_pct">file %1$d%%</string>
+<string name="op_batch_current_file_bytes">Current file · %1$s / %2$s</string>
 </resources>

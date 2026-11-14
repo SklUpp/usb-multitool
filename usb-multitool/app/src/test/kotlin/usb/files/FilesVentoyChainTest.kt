@@ -134,7 +134,7 @@ class FilesVentoyChainTest {
 
         assertEquals(3, renameCount)
         assertArrayEquals(original, backing.read("/ISO/windows.iso", length = original.size))
-        assertTrue(backing.paths().none { it.contains(".import-") || it.contains(".bak-") })
+        assertTrue(backing.paths().none { it.contains(".xi-") || it.contains(".xb-") || it.contains(".import-") })
         assertTrue(operation.mutationAttempted)
         assertFalse(operation.commitReached)
         assertTrue(backing.syncCount > beforeFailure)

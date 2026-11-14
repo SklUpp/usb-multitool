@@ -190,6 +190,7 @@ apply_patch_idempotent "$NTFS_MKNTFS_PATCH" "$TP/ntfs-3g" -p1
 
 echo "Fetching lwext4..."
 LWEXT4_UMOUNT_PATCH="$ROOT/scripts/patches/lwext4-umount-teardown-on-fini-fail.patch"
+LWEXT4_O_EXCL_PATCH="$ROOT/scripts/patches/lwext4-o-excl-existing.patch"
 if ! have_marker "$TP/lwext4/include/ext4.h"; then
   # Commit pin first; the documented v1.0.0 tag is the only fallback, and it
   # carries its own commit pin.
@@ -201,7 +202,9 @@ if ! have_marker "$TP/lwext4/include/ext4.h"; then
   have_marker "$TP/lwext4/include/ext4.h" || { echo "lwext4 fetch failed"; exit 1; }
 fi
 [[ -f "$LWEXT4_UMOUNT_PATCH" ]] || { echo "lwext4 umount patch missing at $LWEXT4_UMOUNT_PATCH" >&2; exit 1; }
+[[ -f "$LWEXT4_O_EXCL_PATCH" ]] || { echo "lwext4 O_EXCL patch missing at $LWEXT4_O_EXCL_PATCH" >&2; exit 1; }
 apply_patch_idempotent "$LWEXT4_UMOUNT_PATCH" "$TP/lwext4" -p1
+apply_patch_idempotent "$LWEXT4_O_EXCL_PATCH" "$TP/lwext4" -p1
 
 echo "Fetching F3 v10.0..."
 if ! have_marker "$TP/f3/src/f3probe.c"; then

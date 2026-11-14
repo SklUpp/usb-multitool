@@ -372,7 +372,8 @@ Java_usb_fs_ExtFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path,
 
 JNIEXPORT jint JNICALL
 Java_usb_fs_ExtFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
-                              jlong offset, jbyteArray data, jboolean create)
+                              jlong offset, jbyteArray data, jboolean create,
+                              jboolean exclusiveCreate)
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
     if (!w || !data) return -1;
@@ -382,12 +383,18 @@ Java_usb_fs_ExtFs_nativeWrite(JNIEnv *env, jclass, jlong handle, jstring path,
     std::vector<uint8_t> buf(static_cast<size_t>(len));
     env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte *>(buf.data()));
     size_t wrote = 0;
-    int rc = ext_engine_write(w->vol_handle, p.c_str(),
-                              static_cast<uint64_t>(offset), buf.data(),
-                              static_cast<size_t>(len), create != JNI_FALSE, &wrote);
+    int rc = exclusiveCreate != JNI_FALSE
+        ? ext_engine_write_exclusive(w->vol_handle, p.c_str(),
+                                     static_cast<uint64_t>(offset), buf.data(),
+                                     static_cast<size_t>(len), create != JNI_FALSE,
+                                     true, &wrote)
+        : ext_engine_write(w->vol_handle, p.c_str(),
+                           static_cast<uint64_t>(offset), buf.data(),
+                           static_cast<size_t>(len), create != JNI_FALSE, &wrote);
     if (rc != 0) {
-        throw_ext(env, rc == -EROFS ? "write rejected: EXT volume is mounted read-only"
-                                    : "write failed");
+        throw_ext(env, rc == EXT_ENGINE_CLEANUP_FAILED
+            ? ("exclusive create cleanup failed; file may remain: " + p).c_str()
+            : (rc == -EROFS ? "write rejected: EXT volume is mounted read-only" : "write failed"));
         return -1;
     }
     return static_cast<jint>(wrote);

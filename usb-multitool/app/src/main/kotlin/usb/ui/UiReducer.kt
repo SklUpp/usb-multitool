@@ -4,6 +4,7 @@ import usb.fs.FR_NO_FILE
 import usb.fs.FR_NO_PATH
 import usb.fs.FilesystemId
 import usb.fs.FilesystemUsage
+import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageSnapshot
 import usb.fs.FormatCatalog
@@ -670,6 +671,40 @@ sealed class UiIntent {
         val uri: String,
     ) : UiIntent()
 
+    /** Delete every entry in [selection] after UI confirmation; reducer re-checks pin/write. */
+    data class DeleteBatch(val selection: FilesBatchSelection) : UiIntent()
+
+    /** Copy [selection] into SAF tree [treeUri]; requires [FilesBatchSelection.matches]. */
+    data class DownloadBatch(
+        val selection: FilesBatchSelection,
+        val treeUri: String,
+    ) : UiIntent()
+
+    /**
+     * Upload pinned SAF documents into [directory] on the captured partition geometry.
+     * Pin fields must still match before the effect is emitted.
+     */
+    data class UploadBatchDocs(
+        val directory: String,
+        val uris: List<String>,
+        val identity: String,
+        val attachGeneration: Long,
+        val partitionId: String,
+        val startLba: ULong?,
+        val sectorCount: ULong?,
+    ) : UiIntent()
+
+    /** Host parked a batch name collision; UI shows Skip/Replace(file)/Cancel. */
+    data class FilesBatchConflict(val conflict: FilesConflict) : UiIntent()
+
+    /**
+     * Answer [AppUiState.pendingFilesBatchConflict]. ReplaceFile is rejected for directories.
+     * Releases dialog state then emits [UiEffect.ContinueFilesBatch] for the host to resume
+     * with a fresh pin — never holds the USB lock across the dialog.
+     */
+    data class ResolveFilesBatchConflict(val decision: FilesConflictDecision) : UiIntent()
+
+
     /**
      * Result of a real FAT list of [path] on [partitionId]. Applied only while that path,
      * partition, identity, attach generation and [generation] still match the display.
@@ -721,6 +756,8 @@ sealed class UiIntent {
         val generation: Long,
         val key: FilesystemUsageKey,
         val usage: FilesystemUsage,
+        /** Driver mount mode only; not physical USB write capability. */
+        val access: FilesystemAccess = FilesystemAccess.Unknown,
     ) : UiIntent()
 }
 
@@ -766,6 +803,27 @@ sealed interface UiEffect {
     data class UploadFile(val path: String, val uri: String) : UiEffect
 
     data class DownloadFile(val binding: FilesDownloadBinding, val uri: String) : UiEffect
+
+    data class DeleteBatch(val selection: FilesBatchSelection) : UiEffect
+
+    data class DownloadBatch(val selection: FilesBatchSelection, val treeUri: String) : UiEffect
+
+    data class UploadBatchDocs(
+        val directory: String,
+        val uris: List<String>,
+        val identity: String,
+        val attachGeneration: Long,
+        val partitionId: String,
+        val startLba: ULong?,
+        val sectorCount: ULong?,
+    ) : UiEffect
+
+    /**
+     * Resume a parked batch transfer after the conflict dialog. Host re-acquires USB,
+     * re-pins selection, then applies [decision]. Never a second USB owner.
+     */
+    data class ContinueFilesBatch(val decision: FilesConflictDecision) : UiEffect
+
 
     data class StageUsbImageForRawWrite(
         val path: String,
@@ -1101,6 +1159,7 @@ object UiReducer {
                     // operation and orphan it from Cancel; report only why nothing changed.
                     ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
                 } else {
+                    val clearConflict = state.pendingFilesBatchConflict != null
                     ReduceResult(
                         state.copy(
                             selectedPartitionId = intent.partitionId,
@@ -1120,9 +1179,18 @@ object UiReducer {
                             deferredIsoImport = null,
                             isoImportError = null,
                             isoImportGeneration = state.isoImportGeneration + 1,
+                            // Stale conflict belongs to previous partition pin — drop dialog.
+                            pendingFilesBatchConflict = null,
                             // Ventoy/XML catalogs are stick-scoped, not partition-scoped.
                         ),
-                        effects = listOf(UiEffect.LoadFiles(path = "/")),
+                        effects =
+                            buildList {
+                                add(UiEffect.LoadFiles(path = "/"))
+                                // Discard parked USB work held for the old partition conflict.
+                                if (clearConflict) {
+                                    add(UiEffect.ContinueFilesBatch(FilesConflictDecision.Cancel))
+                                }
+                            },
                     )
                 }
 
@@ -1431,6 +1499,8 @@ object UiReducer {
                             else -> emptyList()
                         },
                         filesError = if (probingRetain) state.filesError else null,
+                        pendingFilesBatchConflict =
+                            if (keepVentoy && !pickLost) state.pendingFilesBatchConflict else null,
                         filesListGeneration = filesGeneration,
                         filesListingState = when {
                             loadFilesNow -> FilesListingState.Loading
@@ -4075,6 +4145,113 @@ object UiReducer {
                         )
 
                 }
+
+            is UiIntent.DeleteBatch -> {
+                val block = writeBlockMessage(state)
+                when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    !intent.selection.matches(state) ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                        )
+                    block != null ->
+                        ReduceResult(state.copy(statusMessage = block))
+                    else ->
+                        ReduceResult(
+                            state.copy(pendingFilesBatchConflict = null),
+                            effects = listOf(UiEffect.DeleteBatch(intent.selection)),
+                        )
+                }
+            }
+
+            is UiIntent.DownloadBatch ->
+                when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    !intent.selection.matches(state) ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                        )
+                    else ->
+                        ReduceResult(
+                            state.copy(pendingFilesBatchConflict = null),
+                            effects = listOf(UiEffect.DownloadBatch(intent.selection, intent.treeUri)),
+                        )
+                }
+
+            is UiIntent.UploadBatchDocs -> {
+                val block = writeBlockMessage(state)
+                val pinOk = uploadBatchDocsPinMatches(state, intent)
+                when {
+                    state.filesPickMode != null ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        )
+                    !state.actionsEnabled ->
+                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    !pinOk ->
+                        ReduceResult(
+                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)),
+                        )
+                    block != null ->
+                        ReduceResult(state.copy(statusMessage = block))
+                    intent.uris.isEmpty() ->
+                        ReduceResult(state)
+                    else ->
+                        ReduceResult(
+                            state.copy(pendingFilesBatchConflict = null),
+                            effects =
+                                listOf(
+                                    UiEffect.UploadBatchDocs(
+                                        directory = intent.directory,
+                                        uris = intent.uris,
+                                        identity = intent.identity,
+                                        attachGeneration = intent.attachGeneration,
+                                        partitionId = intent.partitionId,
+                                        startLba = intent.startLba,
+                                        sectorCount = intent.sectorCount,
+                                    ),
+                                ),
+                        )
+                }
+            }
+
+            is UiIntent.FilesBatchConflict ->
+                ReduceResult(state.copy(pendingFilesBatchConflict = intent.conflict))
+
+            is UiIntent.ResolveFilesBatchConflict -> {
+                val pending = state.pendingFilesBatchConflict
+                when {
+                    pending == null ->
+                        ReduceResult(state)
+                    intent.decision == FilesConflictDecision.ReplaceFile && pending.isDirectory ->
+                        ReduceResult(
+                            state.copy(
+                                statusMessage =
+                                    UiMessage.Raw(
+                                        usb.files.FilesOperationPolicy.directoryConflictSkipOnlyMessage(
+                                            pending.pathLabel,
+                                        ),
+                                    ),
+                            ),
+                        )
+                    else ->
+                        ReduceResult(
+                            state.copy(pendingFilesBatchConflict = null),
+                            effects = listOf(UiEffect.ContinueFilesBatch(intent.decision)),
+                        )
+                }
+            }
+
             is UiIntent.FilesListed ->
                 if (!filesListMatches(
                         state,
@@ -4170,7 +4347,11 @@ object UiReducer {
                     else ->
                         ReduceResult(
                             state.copy(
-                                filesystemUsage = FilesystemUsageSnapshot(intent.key, intent.usage),
+                                filesystemUsage = FilesystemUsageSnapshot(
+                                    intent.key,
+                                    intent.usage,
+                                    intent.access,
+                                ),
                             ),
                         )
                 }
@@ -4588,9 +4769,11 @@ object UiReducer {
             is OperationTitle.ImportTarget,
             is OperationTitle.FormatTarget,
             is OperationTitle.DeleteEntry,
+            is OperationTitle.DeleteBatch,
             is OperationTitle.RenameEntry,
             is OperationTitle.NewFolder,
             OperationTitle.Upload,
+            is OperationTitle.UploadBatch,
             OperationTitle.BindImagesToUnattendXml,
             OperationTitle.UnbindImageFromUnattendXml,
             OperationTitle.GenerateUnattendXml,
@@ -4615,9 +4798,11 @@ object UiReducer {
                 OperationTitle.BindImagesToUnattendXml,
                 OperationTitle.UnbindImageFromUnattendXml,
                 OperationTitle.Upload,
+                is OperationTitle.UploadBatch,
                 is OperationTitle.ImportTarget,
                 is OperationTitle.FormatTarget,
                 is OperationTitle.DeleteEntry,
+                is OperationTitle.DeleteBatch,
                 is OperationTitle.RenameEntry,
                 is OperationTitle.NewFolder,
                 -> true
@@ -4719,6 +4904,23 @@ object UiReducer {
         } else {
             null
         }
+
+    /** True when UploadBatchDocs still names the live directory + partition geometry. */
+    private fun uploadBatchDocsPinMatches(
+        state: AppUiState,
+        intent: UiIntent.UploadBatchDocs,
+    ): Boolean {
+        val device = state.device ?: return false
+        if (device.identity != intent.identity || device.attachGeneration != intent.attachGeneration) {
+            return false
+        }
+        if (state.selectedPartitionId != intent.partitionId || state.currentPath != intent.directory) {
+            return false
+        }
+        val partition = state.partitions.firstOrNull { it.id == intent.partitionId } ?: return false
+        return partition.startLba == intent.startLba && partition.sectorCount == intent.sectorCount
+    }
+
 
     /** Invalidate current rows and fence every older directory response. */
     private fun filesInvalidate(state: AppUiState): AppUiState =

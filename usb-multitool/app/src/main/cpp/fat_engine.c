@@ -499,7 +499,7 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 
 int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 			  const void *buf, size_t len, size_t *out_written,
-			  uint64_t planned_total_size, int create)
+			  uint64_t planned_total_size, int create_mode)
 {
 	FatVolume *v;
 	FIL fil;
@@ -507,6 +507,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	FRESULT fr;
 	UINT bw = 0;
 	BYTE mode;
+	int exclusive_new = 0;
 
 	if (!path || (!buf && len > 0) || !out_written) return (int)FR_INVALID_PARAMETER;
 	*out_written = 0;
@@ -528,7 +529,10 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
-	if (create) {
+	if (create_mode == 2) {
+		mode = FA_WRITE | FA_CREATE_NEW;
+		exclusive_new = 1;
+	} else if (create_mode) {
 		mode = FA_WRITE | FA_CREATE_ALWAYS;
 	} else {
 		mode = FA_WRITE | FA_OPEN_EXISTING;
@@ -544,24 +548,35 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		fr = f_lseek(&fil, (FSIZE_t)offset);
 		if (fr != FR_OK) {
 			f_close(&fil);
+			if (exclusive_new) {
+				FRESULT unlink_fr = f_unlink(full);
+				vol_note_fr(v, fr);
+				pthread_mutex_unlock(&g_fat_mu);
+				return unlink_fr == FR_OK ? map_fr(fr) : FAT_ENGINE_CLEANUP_FAILED;
+			}
 			vol_note_fr(v, fr);
 			pthread_mutex_unlock(&g_fat_mu);
 			return map_fr(fr);
 		}
 	}
-	if (len > 0) {
-		fr = f_write(&fil, buf, (UINT)len, &bw);
-	}
+	if (len > 0) fr = f_write(&fil, buf, (UINT)len, &bw);
 	if (fr == FR_OK) fr = f_sync(&fil);
-	f_close(&fil);
+	{
+		FRESULT close_fr = f_close(&fil);
+		if (fr == FR_OK) fr = close_fr;
+	}
+	if (fr != FR_OK || (len > 0 && bw < len)) {
+		FRESULT unlink_fr = FR_OK;
+		if (exclusive_new) unlink_fr = f_unlink(full);
+		*out_written = 0;
+		vol_note_fr(v, fr == FR_OK ? FR_DISK_ERR : fr);
+		pthread_mutex_unlock(&g_fat_mu);
+		if (exclusive_new && unlink_fr != FR_OK) return FAT_ENGINE_CLEANUP_FAILED;
+		return (fr == FR_OK && bw < len) ? (int)FR_DISK_ERR : map_fr(fr);
+	}
 	*out_written = (size_t)bw;
 	vol_note_fr(v, fr);
 	pthread_mutex_unlock(&g_fat_mu);
-	if (fr == FR_OK && bw < len) {
-		/* Disk full / truncated write: surface as disk error so callers do not
-		 * treat partial success as complete. */
-		return (int)FR_DISK_ERR;
-	}
 	return map_fr(fr);
 }
 
@@ -704,3 +719,4 @@ FatFsKind fat_engine_probe(uint64_t block_handle, uint32_t sector_size, uint64_t
 	}
 	return FAT_KIND_UNKNOWN;
 }
+                            

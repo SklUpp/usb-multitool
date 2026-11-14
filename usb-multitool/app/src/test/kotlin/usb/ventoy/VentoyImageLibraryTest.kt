@@ -30,7 +30,7 @@ class VentoyImageLibraryTest {
         assertEquals(4L, outcome.bytes)
         assertFalse(outcome.replaced)
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), volume.fileBytes("/ISO/win.img"))
-        assertTrue(volume.paths().none { it.contains(".import-") || it.contains(".bak-") })
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".xb-") || it.contains(".import-") })
         assertTrue(operation.mutationAttempted)
         assertTrue(operation.commitReached)
     }
@@ -50,7 +50,7 @@ class VentoyImageLibraryTest {
         }
         assertArrayEquals(byteArrayOf(9, 9), volume.fileBytes("/ISO/win.img"))
         assertFalse(operation.mutationAttempted)
-        assertTrue(volume.paths().none { it.contains(".import-") || it.contains(".bak-") })
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".xb-") || it.contains(".import-") })
     }
 
     @Test
@@ -65,7 +65,7 @@ class VentoyImageLibraryTest {
         )
         assertTrue(outcome.replaced)
         assertArrayEquals(byteArrayOf(1, 2, 3), volume.fileBytes("/ISO/win.img"))
-        assertTrue(volume.paths().none { it.contains(".import-") || it.contains(".bak-") })
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".xb-") || it.contains(".import-") })
     }
 
     @Test
@@ -148,7 +148,7 @@ class VentoyImageLibraryTest {
             VentoyIsoLibrary.import(volume, stream, "win.img", operation, overwrite = true)
         }
         assertArrayEquals(byteArrayOf(9, 9), volume.fileBytes("/ISO/win.img"))
-        assertTrue(volume.paths().none { it.contains(".import-") || it.contains(".bak-") })
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".xb-") || it.contains(".import-") })
     }
 
     @Test
@@ -176,7 +176,7 @@ class VentoyImageLibraryTest {
             )
         }
         assertArrayEquals(byteArrayOf(9, 9), volume.fileBytes("/ISO/win.img"))
-        assertTrue(volume.paths().none { it.contains(".import-") || it.contains(".bak-") })
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".xb-") || it.contains(".import-") })
     }
 
     @Test
@@ -262,7 +262,7 @@ class VentoyImageLibraryTest {
         // No folder, no target, and the operation never reached a mutation.
         assertNull(volume.statOrNull("/Gone"))
         assertNull(volume.fileBytes("/Gone/win.img"))
-        assertTrue(volume.paths().none { it.contains(".import-") })
+        assertTrue(volume.paths().none { it.contains(".xi-") || it.contains(".import-") })
         assertFalse(operation.mutationAttempted)
         assertFalse(operation.commitReached)
     }

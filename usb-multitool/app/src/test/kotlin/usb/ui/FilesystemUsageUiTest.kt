@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.fs.FilesystemId
 import usb.fs.FilesystemSpace
+import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageReason
@@ -143,6 +144,22 @@ class FilesystemUsageUiTest {
         )
         val usage = requireNotNull(published.state.filesystemUsage).usage
         assertEquals(FilesystemUsageReason.EngineMissing, (usage as FilesystemUsage.Unavailable).reason)
+    }
+
+    @Test
+    fun matchingAnswerCarriesDriverAccessIntoState() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
+        val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
+        val published = UiReducer.reduce(
+            requested.state,
+            UiIntent.FilesystemUsageResulted(
+                1L,
+                key,
+                space(free = 1uL, total = 2uL),
+                FilesystemAccess.ReadWrite,
+            ),
+        )
+        assertEquals(FilesystemAccess.ReadWrite, requireNotNull(published.state.filesystemUsage).access)
     }
 
     @Test

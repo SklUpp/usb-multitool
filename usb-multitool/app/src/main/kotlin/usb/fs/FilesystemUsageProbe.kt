@@ -36,7 +36,8 @@ object FilesystemUsageProbe {
             is UsbFsUsageVolume -> measureUsage(volume)
             else -> FilesystemUsage.Unavailable(FilesystemUsageReason.UnsupportedFilesystem)
         }
-        return FilesystemUsageSnapshot(key, usage)
+        val access = (volume as? UsbFsAccessVolume)?.access ?: FilesystemAccess.Unknown
+        return FilesystemUsageSnapshot(key, usage, access)
     }
 
     private fun measureUsage(volume: UsbFsUsageVolume): FilesystemUsage =
