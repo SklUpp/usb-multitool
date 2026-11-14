@@ -425,7 +425,7 @@ private fun FilesPickScreen(
     // Two-step file choice: a tap only marks the row; the explicit button confirms it.
     // Path or attachment changes make the old row meaningless, so they reset the mark.
     val selectsFile = mode.target == FilesPickTarget.File
-    val listingUsable = state.filesError == null && !state.filesPending
+    val listingUsable = state.filesListingState == FilesListingState.Loaded
     // Folder mode never owns a selected file row; only file picks allocate this state.
     // Geometry is a key too: a pin that no longer names this partition cannot keep a row.
     val selectedPickState =
@@ -500,7 +500,7 @@ private fun FilesPickScreen(
                     if (mode.target == FilesPickTarget.Folder) {
                         OutlinedButton(
                             onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
-                            enabled = canAct && !state.filesPending,
+                            enabled = canAct && listingUsable,
                         ) {
                             Text(stringResource(R.string.import_folder_use))
                         }
@@ -618,11 +618,14 @@ private fun FilesPickScreen(
         }
 
         when {
-            state.filesError != null -> item(key = "pick-error") {
-                EmptyHint(state.filesError.orEmpty())
+            state.filesListingState == FilesListingState.Failed -> item(key = "pick-error") {
+                EmptyHint(state.filesError ?: stringResource(R.string.import_folder_read_failed))
             }
-            state.filesPending -> item(key = "pick-loading") {
+            state.filesListingState == FilesListingState.Loading -> item(key = "pick-loading") {
                 EmptyHint(stringResource(R.string.files_listing))
+            }
+            state.filesListingState == FilesListingState.Stale -> item(key = "pick-not-loaded") {
+                EmptyHint(stringResource(R.string.import_folder_not_loaded))
             }
             entries.isEmpty() -> item(key = "pick-empty") {
                 EmptyHint(stringResource(R.string.files_empty_folder))
@@ -735,9 +738,21 @@ private fun FolderCard(
                         modifier = Modifier.padding(16.dp),
                     )
                 }
-                state.filesPending -> item(key = "loading") {
+                state.filesListingState == FilesListingState.Loading -> item(key = "loading") {
                     EmptyHint(
                         stringResource(R.string.files_listing),
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+                state.filesListingState == FilesListingState.Failed -> item(key = "error") {
+                    EmptyHint(
+                        state.filesError ?: stringResource(R.string.import_folder_read_failed),
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+                state.filesListingState == FilesListingState.Stale -> item(key = "not-loaded") {
+                    EmptyHint(
+                        stringResource(R.string.import_folder_not_loaded),
                         modifier = Modifier.padding(16.dp),
                     )
                 }
@@ -748,15 +763,9 @@ private fun FolderCard(
                             .padding(vertical = 32.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        val readError = state.filesError
                         Text(
-                            text = readError ?: stringResource(R.string.files_empty_folder),
+                            text = stringResource(R.string.files_empty_folder),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (readError != null) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
                         )
                     }
                 }

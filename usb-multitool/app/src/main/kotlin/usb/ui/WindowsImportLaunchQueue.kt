@@ -9,9 +9,15 @@ data class PendingWindowsImport(
     val directory: String?,
     /** Pick session for an image; null for the independent XML flow. */
     val pickSessionId: String?,
+    /** Origin of this exact SAF launch; not inferred from FilesPickMode. */
+    val launchSource: FilesPickLaunchSource = FilesPickLaunchSource.Files,
     /** Attachment the user chose the file for; a different stick must reject it. */
     val identity: String?,
     val attachGeneration: Long,
+    /** Optional partition pin for simplified Files image sessions. */
+    val partitionId: String? = null,
+    val startLba: ULong? = null,
+    val sectorCount: ULong? = null,
     /** Legacy result code; the system returns it, so duplicates cannot take a newer context. */
     val requestCode: Int,
 )
@@ -114,6 +120,10 @@ class WindowsImportLaunchQueue(
         pickSessionId: String?,
         identity: String?,
         attachGeneration: Long,
+        partitionId: String? = null,
+        startLba: ULong? = null,
+        sectorCount: ULong? = null,
+        launchSource: FilesPickLaunchSource = FilesPickLaunchSource.Files,
     ): WindowsImportLaunch {
         if (pending != null) return WindowsImportLaunch.Busy
         return when (val reserved = codes.reserve()) {
@@ -126,8 +136,12 @@ class WindowsImportLaunchQueue(
                         kind = kind,
                         directory = directory,
                         pickSessionId = pickSessionId,
+                        launchSource = launchSource,
                         identity = identity,
                         attachGeneration = attachGeneration,
+                        partitionId = partitionId,
+                        startLba = startLba,
+                        sectorCount = sectorCount,
                         requestCode = reserved.value,
                     )
                 pending = context

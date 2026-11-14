@@ -1,6 +1,6 @@
 # Модель взаимодействия Android и USB-накопителя
 
-**Статус:** фактическая политика и целевое поведение после BOT/sense-аудита; срез исследования: 2026-11-14. Локально выполнены JVM-тесты USB-слоя; физический USB не проверялся. Gradle offline остановился из-за отсутствующего в кэше `aapt2`.
+**Статус:** фактическая политика и целевое поведение после BOT/sense-аудита. Текущие проверки и ограничения ведутся отдельно в [состоянии проекта](2026-11-14-project-progress.md).
 
 ## Цель и границы
 
@@ -220,18 +220,6 @@ FAT/exFAT, NTFS и EXT сохраняют собственные проверк�
 
 Не гарантируются успешное завершение каждой операции, идентичность физического medium по одному serial, неизменность внешнего SAF-документа и сохранность данных при неисправной прошивке или потере питания. Android bulk API не даёт надёжной STALL-vs-timeout классификации. Успешный CSW или `SYNCHRONIZE CACHE` не является доказательством flash durability.
 
-## Поведенческие тесты и команды проверки
+## Проверка поведения
 
-Добавлены/обновлены малые JVM-регрессии в `app/src/test/kotlin/usb/device/`:
-
-- `BotSessionImplTest.kt`: typed structural/non-meaningful CSW failure без ownership close;
-- `UsbDiskTest.kt`: invalid residue/full-transfer mismatch close, no replay неизвестной OUT после UA, primary/recovery paths;
-- `UsbDiskSessionTest.kt`: NOT READY не считается готовностью.
-
-Локальный `kotlinc` с Android SDK 36 и JUnit выполнил `BotSessionImplTest`, `UsbDiskTest`, `UsbDiskSessionTest`: 52 теста, успешно. Gradle offline остановился на `:app:compileDebugNavigationResources`: в кэше нет `com.android.tools.build:aapt2:8.13.2-14304508`. Полная сборка, lint и физический USB не проверялись. Команды для подходящего CI-окружения:
-
-```sh
-./gradlew :app:testDebugUnitTest --no-daemon
-./gradlew :app:compileDebugKotlin --no-daemon
-./gradlew :app:lintDebug --no-daemon
-```
+Проверять BOT structural/non-meaningful CSW, запрет неизвестного OUT replay, восстановление и сохранение первичной ошибки, отказ при `NOT READY`, корректность close/latch и `Partial`. Результаты и точный проверенный срез — в [состоянии проекта](2026-11-14-project-progress.md).

@@ -54,24 +54,13 @@ Ventoy: независимая проверка показала, что VTOYEFI
 
 Политика восстановления после latch требует отдельного решения. SectorForge и ранее начатые UI/Raw/Ventoy ветки интегрировать только после совместного ревью и проверок, не смешивая с механическим рефакторингом.
 
-## Выполненные срезы
+## Исторический прогресс
 
-- `aabd137`: переходы файлового picker вынесены из `UiReducer` в `FilesPickTransitions`; host UI JUnit — 354 теста, host check — PASS. CI для этого commit прошёл unit, сборку debug APK, lint, Kotlin и проверку 16 KB alignment.
-- `787ae35`: инспекция получила ticket-bound владельца задач; независимое ревью и scoped host-прогон девяти тестов прошли. CI [43105775045](https://github.com/SklUpp/usb-multitool/actions/runs/43105775045) прошёл host, unit, сборку debug APK, lint, Kotlin и проверку 16 KB alignment. USB-guard сохраняется до окончания операции и закрытия диска.
-- `cbb266f`: интегрированы `ExtCloseGuard`, `FixMbrGeometry`, `FixGzipSize`, `FixBulkReset`, `FatTeardownFix` (11/11 нативных тестов пройдены на хосте), `AppVersionUi` (6 файлов) и `RobolectricLifecycle` (Robolectric 4.17, 3 теста POST_NOTIFICATIONS + SAF `ContentUriImageSourceTest`).
-- `5a83a00`: `FixFilesPolicy` (ревью **correct**) — запрет `\`, NUL, `.`/`..` в `FilesOperationPolicy.requireChildName`, точный allowlist в `isMissingDirectoryListError`, удалён мёртвый `isAbsentPathError`.
-- `8893e1d`: `FixFatBounds` — защита от отрицательных `offset`/`length` и переполнения `offset + size` в `FatVolume` и `resolvePlannedTotal`.
-- `9ddf0de` + `f53c303`: `DecomposeReducer` — вынесены 36 чистых переходов в `PartitionTransitions.kt`, `RawTransitions.kt`, `RescueBackupTransitions.kt`, `VentoyTransitions.kt` (`UiReducer.kt` 4843 → 3972 строк); ревью `ReviewBulkReset` подтвердило 100% эквивалентность всех 108 ветвей.
-- `e8186df`: `FixNativeJni` (ревью **correct**) — `requireIoRange` (8 MiB FAT/EXT, 16 MiB NTFS), `ensureWritable()` в `ExtVolume`, проброс `-EIO` из `ntfs_engine_sync`, удалены мёртвые `fs_bridge.c`, `ddrescue_bridge.c` и `DdrescueNative`.
-- `e84fc21`: объединены `UsbOwnershipFix` (процессный `UsbExclusiveClaim`, атомарный `AttachmentState<UsbDevice>`, `openRawDisk(revalidate)` на всех 19 путях) и `DecomposeBackupFlow` (`BackupFolderLaunch.kt` с каноническим trimmed serial и проверкой pin на открываемом snapshot).
-- `af7ee39`: `TraceLogExport` — кольцевой лог `AppTraceLogger` (`trace.log`/`trace.log.1` 2×512 KiB в `filesDir/trace`, `redactTrace` для паролей/токенов/Bearer/query) и экспорт в SAF с экрана журнала.
-- `adf0f5f`: `FixVentoyReadback` (ревью **correct, 0 findings**) — `disk.sync()` перенесён до всех readback-проверок в `VentoyLayout.kt`, `requirePart2Written` проверяет весь диапазон Part2 (65536 секторов) чанками по 64 KiB.
-- `f53c303`: `VentoyStorageFix` (ревью **correct**) — перенос ассетов/staging Ventoy в app-private storage, удаление стартового запроса `MANAGE_EXTERNAL_STORAGE`, XZ-кап 64 MiB и gzip-кап 512 MiB, диалог предупреждения загрузки релиза, маскировка пароля Autounattend с иконкой Eye/EyeOff и SHA-256 в плане, удаление дублей `sync`, пакетная очистка 2×17 KiB и слайдеры производительности в `DiagnosticsScreen`.
-- `cea754b`: `FixFetchSha256` (ревью `ReviewNativeJni` + рецепт объединения цепочки `ff16p1..p4`) — проверка SHA-256 и commit-pin в `scripts/fetch-third-party.sh`.
+Интегрированные срезы, их commit SHA и прежние проверки перенесены в [состояние проекта](2026-11-14-project-progress.md). Записи выше фиксируют исходный архитектурный аудит и могут быть устаревшими; фактический статус сверять с текущим кодом и состоянием проекта.
 
-## Повторный аудит всего проекта — 2026-11-13
+## Архитектурный аудит — 2026-11-13
 
-Срез: live `62336d6` и отдельно незавершённые worktree. Два независимых read-only скаута: `agent://AuditFilesArchitecture` (Files/SAF, USB, native и Rust) и `agent://AuditUiArchitecture` (Android, UI, Ventoy, тесты и CI). Никакие сборки и runtime-сценарии в этом аудите не запускались. Разделы выше фиксируют историческое состояние на момент прошлой проверки и не являются утверждением о текущем HEAD: в частности, ранее отмеченные EXT double-close, USB reset, FAT teardown, Ventoy app-private storage, SHA pins и полный readback позднее исправлялись; статус реализации указан в списке выполненных срезов и в состоянии проекта.
+Срез аудита: `62336d6` и незавершённые worktree. Исторические находки не являются утверждением о текущем HEAD; см. состояние проекта.
 
 ### Приоритеты и границы
 

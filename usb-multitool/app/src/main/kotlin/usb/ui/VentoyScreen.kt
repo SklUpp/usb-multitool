@@ -495,6 +495,12 @@ private fun ImportFromPhoneCard(
 ) {
     // A picker opened for one attachment must close when identity/attach generation moves:
     // the cached folder list and the pending file no longer belong to the visible stick.
+    val sourceDialogIdentity = state.device?.identity
+    val sourceDialogGeneration = state.device?.attachGeneration
+    var imageSourcePrompt by remember(
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf(false) }
     var folderKind by remember(
         state.device?.identity,
         state.device?.attachGeneration,
@@ -550,14 +556,7 @@ private fun ImportFromPhoneCard(
             label = stringResource(R.string.import_image_label),
             destination = state.filesPickSelections[FilesPickPurpose.WindowsImage]?.path,
             enabled = state.actionsEnabled,
-            onClick = {
-                onIntent(
-                    UiIntent.BeginFilesPick(
-                        purpose = FilesPickPurpose.WindowsImage,
-                        returnTab = ShellTab.Ventoy,
-                    ),
-                )
-            },
+            onClick = { imageSourcePrompt = true },
         )
         ImportRow(
             label = stringResource(R.string.import_template_label),
@@ -594,6 +593,51 @@ private fun ImportFromPhoneCard(
                 Text(stringResource(R.string.import_error_dismiss))
             }
         }
+    }
+    if (imageSourcePrompt) {
+        AlertDialog(
+            onDismissRequest = { imageSourcePrompt = false },
+            title = { Text(stringResource(R.string.import_choose)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            imageSourcePrompt = false
+                            onIntent(
+                                UiIntent.BeginFilesPick(
+                                    purpose = FilesPickPurpose.WindowsImage,
+                                    returnTab = ShellTab.Ventoy,
+                                    launchSource = FilesPickLaunchSource.Files,
+                                    expectedIdentity = sourceDialogIdentity,
+                                    expectedAttachGeneration = sourceDialogGeneration,
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.raw_choose_stick))
+                    }
+                    TextButton(
+                        onClick = {
+                            imageSourcePrompt = false
+                            onIntent(
+                                UiIntent.BeginFilesPick(
+                                    purpose = FilesPickPurpose.WindowsImage,
+                                    returnTab = ShellTab.Ventoy,
+                                    launchSource = FilesPickLaunchSource.Phone,
+                                    expectedIdentity = sourceDialogIdentity,
+                                    expectedAttachGeneration = sourceDialogGeneration,
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.raw_choose_phone))
+                    }
+                }
+            },
+            confirmButton = {},
+        )
     }
 
     folderKind?.let {

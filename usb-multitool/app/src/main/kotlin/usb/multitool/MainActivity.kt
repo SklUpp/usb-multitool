@@ -127,6 +127,7 @@ import usb.ui.PartitionRef
 import usb.ui.PartitionRole
 import usb.ui.PartitionTab
 import usb.ui.matches
+import usb.ui.safePickPath
 import usb.ui.toTableScheme
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
@@ -188,13 +189,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var state by mutableStateOf(AppUiState())
         private set
 
-    /**
-     * Reducer-side cancellation of a pending SAF launch. The queue lives in the Activity,
-     * so the effect crosses this flow; replay covers a recreation before collection starts.
-     * The payload is the pick session, so a late cancel cannot clear a newer launch.
-     */
-    private val _pickerCancellations = Channel<String>(Channel.UNLIMITED)
-    val pickerCancellations: Flow<String> = _pickerCancellations.receiveAsFlow()
+    /** Reducer picker events share one FIFO channel so launch/cancel ordering is explicit. */
+    private val _pickerEvents = Channel<UiEffect>(Channel.UNLIMITED)
+    val pickerEvents: Flow<UiEffect> = _pickerEvents.receiveAsFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     /** Survives ViewModel scope cancellation so completion can still release the handle. */
@@ -402,7 +399,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Detach/clear must not crash the process if umount/sync fails on a yanked stick.
         cancelActiveInspection(cancelUsb = true)
         runCatching { closeFilesVolume(reportStatus = false) }
-        _pickerCancellations.close()
+        _pickerEvents.close()
         super.onCleared()
         scope.cancel()
     }
@@ -1664,8 +1661,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             UiEffect.CancelIsoImportInspection -> cancelActiveInspection(cancelUsb = false)
 
+            is UiEffect.LaunchWindowsImport,
             is UiEffect.CancelPendingWindowsImport -> {
-                _pickerCancellations.trySend(effect.pickSessionId)
+                _pickerEvents.trySend(effect)
             }
 
             is UiEffect.ImportIso -> {
@@ -6076,8 +6074,30 @@ class MainActivity : ComponentActivity() {
     private val windowsImportCoordinator: WindowsImportPickerCoordinator by lazy {
         WindowsImportPickerCoordinator(
             queue = usb.ui.WindowsImportLaunchQueue(requestCodeAllocator(applicationContext)),
-            onTimeout = {
-                viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerTimedOut)))
+            onTimeout = { context ->
+                context.pickSessionId?.let { session ->
+                    viewModel.onIntent(
+                        UiIntent.WindowsImportPickerFinished(
+                            pickSessionId = session,
+                            cancelled = false,
+                            failure = UiMessageKey.ImportPickerTimedOut,
+                            launchSource = context.launchSource,
+                        ),
+                    )
+                } ?: viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerTimedOut)))
+            },
+            onInvalidated = { context ->
+                val session = context.pickSessionId
+                if (session != null && viewModel.state.filesPickMode?.sessionId == session) {
+                    viewModel.onIntent(
+                        UiIntent.WindowsImportPickerFinished(
+                            pickSessionId = session,
+                            cancelled = false,
+                            failure = UiMessageKey.FilesPickTargetInvalid,
+                            launchSource = context.launchSource,
+                        ),
+                    )
+                }
             },
         )
     }
@@ -6086,23 +6106,42 @@ class MainActivity : ComponentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         val context = windowsImportCoordinator.takeResult(requestCode) ?: return
-        if (resultCode != android.app.Activity.RESULT_OK) {
+        val session = context.pickSessionId
+        val uri = data?.data
+        if (resultCode != android.app.Activity.RESULT_OK || uri == null) {
             viewModel.traceEvent("picker.windows_import.cancel", "requestCode" to requestCode)
+            session?.let {
+                viewModel.onIntent(
+                    UiIntent.WindowsImportPickerFinished(
+                        pickSessionId = it,
+                        cancelled = true,
+                        launchSource = context.launchSource,
+                    ),
+                )
+            }
             return
         }
-        val uri = data?.data ?: return
-        viewModel.traceEvent(
-            "picker.windows_import",
-            "uri" to uri.toString(),
-            "kind" to context.kind,
-        )
         val liveDevice = viewModel.state.device
+        val livePartition = context.partitionId?.let { id ->
+            viewModel.state.partitions.firstOrNull { it.id == id }
+        }
         if (context.identity != liveDevice?.identity ||
-            context.attachGeneration != (liveDevice?.attachGeneration ?: 0L)
+            context.attachGeneration != (liveDevice?.attachGeneration ?: 0L) ||
+            (context.partitionId != null &&
+                (livePartition == null ||
+                    livePartition.startLba != context.startLba ||
+                    livePartition.sectorCount != context.sectorCount))
         ) {
-            viewModel.onIntent(
-                UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
-            )
+            session?.let {
+                viewModel.onIntent(
+                    UiIntent.WindowsImportPickerFinished(
+                        pickSessionId = it,
+                        cancelled = false,
+                        failure = UiMessageKey.FilesPickTargetInvalid,
+                        launchSource = context.launchSource,
+                    ),
+                )
+            } ?: viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return
         }
         runCatching {
@@ -6120,20 +6159,114 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    /** Fails closed if a picker is already open; stores the context before launching. */
+    /** Launch reducer-owned phone effect only while exact session/pin/path remains live. */
+    private fun launchPinnedWindowsImport(effect: UiEffect.LaunchWindowsImport) {
+        fun liveMatches(): Boolean {
+            val current = viewModel.state
+            val mode = current.filesPickMode ?: return false
+            val device = current.device ?: return false
+            val partition = current.partitions.firstOrNull { it.id == effect.partitionId }
+                ?: return false
+            return mode.sessionId == effect.pickSessionId &&
+                mode.purpose == usb.ui.FilesPickPurpose.WindowsImage &&
+                mode.matches(current) &&
+                current.currentPath == safePickPath(effect.directory) &&
+                device.identity == effect.identity &&
+                device.attachGeneration == effect.attachGeneration &&
+                partition.startLba == effect.startLba &&
+                partition.sectorCount == effect.sectorCount
+        }
+        if (!liveMatches()) return
+        val start = windowsImportCoordinator.begin(
+            kind = effect.kind,
+            directory = effect.directory,
+            pickSessionId = effect.pickSessionId,
+            identity = effect.identity,
+            attachGeneration = effect.attachGeneration,
+            partitionId = effect.partitionId,
+            startLba = effect.startLba,
+            sectorCount = effect.sectorCount,
+            launchSource = usb.ui.FilesPickLaunchSource.Phone,
+        )
+        when (start) {
+            usb.ui.WindowsImportLaunch.Busy -> {
+                viewModel.onIntent(
+                    UiIntent.WindowsImportPickerFinished(
+                        effect.pickSessionId,
+                        cancelled = false,
+                        failure = UiMessageKey.ImportPickerBusy,
+                        launchSource = usb.ui.FilesPickLaunchSource.Phone,
+                    ),
+                )
+                return
+            }
+            usb.ui.WindowsImportLaunch.Exhausted -> {
+                viewModel.onIntent(
+                    UiIntent.WindowsImportPickerFinished(
+                        effect.pickSessionId,
+                        cancelled = false,
+                        failure = UiMessageKey.ImportPickerExhausted,
+                        launchSource = usb.ui.FilesPickLaunchSource.Phone,
+                    ),
+                )
+                return
+            }
+            usb.ui.WindowsImportLaunch.StorageFailed -> {
+                viewModel.onIntent(
+                    UiIntent.WindowsImportPickerFinished(
+                        effect.pickSessionId,
+                        cancelled = false,
+                        failure = UiMessageKey.ImportPickerUnavailable,
+                        launchSource = usb.ui.FilesPickLaunchSource.Phone,
+                    ),
+                )
+                return
+            }
+            is usb.ui.WindowsImportLaunch.Starting -> Unit
+        }
+        val context = (start as usb.ui.WindowsImportLaunch.Starting).context
+        if (!liveMatches()) {
+            windowsImportCoordinator.cancelByPickSession(effect.pickSessionId)
+            viewModel.onIntent(
+                UiIntent.WindowsImportPickerFinished(
+                    effect.pickSessionId,
+                    cancelled = false,
+                    failure = UiMessageKey.FilesPickTargetInvalid,
+                    launchSource = usb.ui.FilesPickLaunchSource.Phone,
+                ),
+            )
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        if (runCatching { startActivityForResult(intent, context.requestCode) }.isFailure) {
+            windowsImportCoordinator.launchFailed(context.requestCode)
+            viewModel.onIntent(
+                UiIntent.WindowsImportPickerFinished(
+                    effect.pickSessionId,
+                    cancelled = false,
+                    failure = UiMessageKey.ImportPickerUnavailable,
+                    launchSource = usb.ui.FilesPickLaunchSource.Phone,
+                ),
+            )
+        }
+    }
+
+    /** Fails closed if a picker is already open; stores context before launching. */
     private fun launchWindowsImport(
         kind: usb.ui.WindowsImportKind,
         directory: String?,
         pickSessionId: String?,
     ) {
-        val start =
-            windowsImportCoordinator.begin(
-                kind = kind,
-                directory = directory,
-                pickSessionId = pickSessionId,
-                identity = viewModel.state.device?.identity,
-                attachGeneration = viewModel.state.device?.attachGeneration ?: 0L,
-            )
+        val start = windowsImportCoordinator.begin(
+            kind = kind,
+            directory = directory,
+            pickSessionId = pickSessionId,
+            identity = viewModel.state.device?.identity,
+            attachGeneration = viewModel.state.device?.attachGeneration ?: 0L,
+        )
         if (start == usb.ui.WindowsImportLaunch.Busy) {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerBusy)))
             return
@@ -6147,15 +6280,11 @@ class MainActivity : ComponentActivity() {
             return
         }
         val context = (start as usb.ui.WindowsImportLaunch.Starting).context
-        val intent =
-            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "*/*"
-            }
-        val launched = runCatching {
-            startActivityForResult(intent, context.requestCode)
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
         }
-        if (launched.isFailure) {
+        if (runCatching { startActivityForResult(intent, context.requestCode) }.isFailure) {
             windowsImportCoordinator.launchFailed(context.requestCode)
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
         }
@@ -6318,8 +6447,13 @@ class MainActivity : ComponentActivity() {
             WindowsImportPickerCoordinator.RestoreResult.Restored -> Unit
         }
         pickerEventsScope.launch {
-            viewModel.pickerCancellations.collect { session ->
-                windowsImportCoordinator.cancelByPickSession(session)
+            viewModel.pickerEvents.collect { event ->
+                when (event) {
+                    is UiEffect.CancelPendingWindowsImport ->
+                        windowsImportCoordinator.cancelByPickSession(event.pickSessionId)
+                    is UiEffect.LaunchWindowsImport -> launchPinnedWindowsImport(event)
+                    else -> Unit
+                }
             }
         }
         val restoredFolderAction =
@@ -6408,6 +6542,9 @@ class MainActivity : ComponentActivity() {
             identity = live?.identity,
             attachGeneration = live?.attachGeneration ?: 0L,
             pickSessionId = viewModel.state.filesPickMode?.sessionId,
+            partitionId = viewModel.state.filesPickMode?.partitionId,
+            startLba = viewModel.state.filesPickMode?.startLba,
+            sectorCount = viewModel.state.filesPickMode?.sectorCount,
         )
         backupFolderLaunches.pending?.let { pending ->
             if (pending.action == BackupFolderAction.ChangeFolder) {

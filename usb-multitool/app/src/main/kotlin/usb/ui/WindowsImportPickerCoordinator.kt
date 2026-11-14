@@ -11,7 +11,8 @@ import android.os.Looper
  */
 class WindowsImportPickerCoordinator(
     private val queue: WindowsImportLaunchQueue,
-    private val onTimeout: () -> Unit,
+    private val onTimeout: (PendingWindowsImport) -> Unit,
+    private val onInvalidated: (PendingWindowsImport) -> Unit = {},
 ) {
     sealed interface RestoreResult {
         data object Ignored : RestoreResult
@@ -25,8 +26,8 @@ class WindowsImportPickerCoordinator(
         Runnable {
             val code = timeoutCode ?: return@Runnable
             timeoutCode = null
-            queue.resetByRequestCode(code)
-            onTimeout()
+            val context = queue.pending?.takeIf { it.requestCode == code } ?: return@Runnable
+            if (queue.resetByRequestCode(code)) onTimeout(context)
         }
 
     val pending: PendingWindowsImport?
@@ -38,8 +39,22 @@ class WindowsImportPickerCoordinator(
         pickSessionId: String?,
         identity: String?,
         attachGeneration: Long,
+        partitionId: String? = null,
+        startLba: ULong? = null,
+        sectorCount: ULong? = null,
+        launchSource: FilesPickLaunchSource = FilesPickLaunchSource.Files,
     ): WindowsImportLaunch =
-        queue.begin(kind, directory, pickSessionId, identity, attachGeneration)
+        queue.begin(
+            kind,
+            directory,
+            pickSessionId,
+            identity,
+            attachGeneration,
+            partitionId,
+            startLba,
+            sectorCount,
+            launchSource,
+        )
 
     /** Consume only matching result, retiring its timeout with its context. */
     fun takeResult(requestCode: Int): PendingWindowsImport? {
@@ -71,8 +86,14 @@ class WindowsImportPickerCoordinator(
                 kind = kind,
                 directory = state.getString(STATE_DIRECTORY),
                 pickSessionId = state.getString(STATE_PICK_SESSION),
+                launchSource = state.getString(STATE_LAUNCH_SOURCE)
+                    ?.let { runCatching { FilesPickLaunchSource.valueOf(it) }.getOrNull() }
+                    ?: FilesPickLaunchSource.Files,
                 identity = state.getString(STATE_IDENTITY),
                 attachGeneration = state.getLong(STATE_ATTACH, -1L),
+                partitionId = state.getString(STATE_PARTITION),
+                startLba = state.getString(STATE_START_LBA)?.toULongOrNull(),
+                sectorCount = state.getString(STATE_SECTOR_COUNT)?.toULongOrNull(),
                 requestCode = requestCode,
             )
         return if (queue.restore(context)) RestoreResult.Restored else RestoreResult.Unavailable
@@ -83,17 +104,38 @@ class WindowsImportPickerCoordinator(
             outState.putString(STATE_KIND, context.kind.name)
             context.directory?.let { outState.putString(STATE_DIRECTORY, it) }
             context.pickSessionId?.let { outState.putString(STATE_PICK_SESSION, it) }
+            outState.putString(STATE_LAUNCH_SOURCE, context.launchSource.name)
             context.identity?.let { outState.putString(STATE_IDENTITY, it) }
             outState.putLong(STATE_ATTACH, context.attachGeneration)
+            context.partitionId?.let { outState.putString(STATE_PARTITION, it) }
+            context.startLba?.let { outState.putString(STATE_START_LBA, it.toString()) }
+            context.sectorCount?.let { outState.putString(STATE_SECTOR_COUNT, it.toString()) }
             outState.putInt(STATE_REQUEST, context.requestCode)
         }
     }
 
     /** Reconcile restored/returned picker with live attachment and files-pick session. */
-    fun onResume(identity: String?, attachGeneration: Long, pickSessionId: String?) {
+    fun onResume(
+        identity: String?,
+        attachGeneration: Long,
+        pickSessionId: String?,
+        partitionId: String? = null,
+        startLba: ULong? = null,
+        sectorCount: ULong? = null,
+    ) {
         val context = queue.pending ?: return
         if (context.identity != identity || context.attachGeneration != attachGeneration) {
             cancelByRequestCode(context.requestCode)
+            onInvalidated(context)
+            return
+        }
+        if (context.partitionId != null &&
+            (context.partitionId != partitionId ||
+                context.startLba != startLba ||
+                context.sectorCount != sectorCount)
+        ) {
+            cancelByRequestCode(context.requestCode)
+            onInvalidated(context)
             return
         }
         val expectedSession = context.pickSessionId
@@ -138,8 +180,12 @@ class WindowsImportPickerCoordinator(
         const val STATE_KIND = "usb.multitool.PENDING_WINDOWS_KIND"
         const val STATE_DIRECTORY = "usb.multitool.PENDING_WINDOWS_DIRECTORY"
         const val STATE_PICK_SESSION = "usb.multitool.PENDING_WINDOWS_PICK_SESSION"
+        const val STATE_LAUNCH_SOURCE = "usb.multitool.PENDING_WINDOWS_LAUNCH_SOURCE"
         const val STATE_IDENTITY = "usb.multitool.PENDING_WINDOWS_IDENTITY"
         const val STATE_ATTACH = "usb.multitool.PENDING_WINDOWS_ATTACH"
+        const val STATE_PARTITION = "usb.multitool.PENDING_WINDOWS_PARTITION"
+        const val STATE_START_LBA = "usb.multitool.PENDING_WINDOWS_START_LBA"
+        const val STATE_SECTOR_COUNT = "usb.multitool.PENDING_WINDOWS_SECTOR_COUNT"
         const val STATE_REQUEST = "usb.multitool.PENDING_WINDOWS_REQUEST"
         const val WINDOWS_IMPORT_TIMEOUT_MS = 5 * 60 * 1000L
     }

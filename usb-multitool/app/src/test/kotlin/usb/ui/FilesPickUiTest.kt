@@ -166,6 +166,93 @@ class FilesPickUiTest {
 
 
     @Test
+    fun phoneBeginPinsRootAndEmitsSessionBoundLaunchAfterListing() {
+        val result =
+            UiReducer.reduce(
+                ready(path = "/old"),
+                UiIntent.BeginFilesPick(
+                    purpose = FilesPickPurpose.WindowsImage,
+                    returnTab = ShellTab.Ventoy,
+                    launchSource = FilesPickLaunchSource.Phone,
+                ),
+            )
+        val mode = requireNotNull(result.state.filesPickMode)
+        assertEquals(FilesPickLaunchSource.Phone, mode.launchSource)
+        assertEquals(
+            listOf(
+                UiEffect.LoadFiles("/"),
+                UiEffect.LaunchWindowsImport(
+                    directory = "/",
+                    pickSessionId = mode.sessionId,
+                    identity = device.identity,
+                    attachGeneration = device.attachGeneration,
+                    partitionId = data.id,
+                    startLba = data.startLba!!,
+                    sectorCount = data.sectorCount!!,
+                ),
+            ),
+            result.effects,
+        )
+    }
+
+    @Test
+    fun phonePickerCancelClosesOnlyMatchingPhoneSession() {
+        val state =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.BeginFilesPick(
+                    purpose = FilesPickPurpose.WindowsImage,
+                    returnTab = ShellTab.Ventoy,
+                    launchSource = FilesPickLaunchSource.Phone,
+                ),
+            ).state
+        val session = requireNotNull(state.filesPickMode).sessionId
+        val cancelled =
+            UiReducer.reduce(
+                state,
+                UiIntent.WindowsImportPickerFinished(
+                    pickSessionId = session,
+                    cancelled = true,
+                    launchSource = FilesPickLaunchSource.Phone,
+                ),
+            )
+        assertNull(cancelled.state.filesPickMode)
+        assertEquals(ShellTab.Ventoy, cancelled.state.tab)
+        assertTrue(cancelled.state.filesPickSession != state.filesPickSession)
+
+        val stale =
+            UiReducer.reduce(
+                cancelled.state,
+                UiIntent.WindowsImportPickerFinished(
+                    pickSessionId = session,
+                    cancelled = true,
+                    launchSource = FilesPickLaunchSource.Phone,
+                ),
+            )
+        assertEquals(cancelled.state, stale.state)
+    }
+
+    @Test
+    fun phoneBeginRejectsStaleDialogAttachmentSnapshot() {
+        val result =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.BeginFilesPick(
+                    purpose = FilesPickPurpose.WindowsImage,
+                    returnTab = ShellTab.Ventoy,
+                    launchSource = FilesPickLaunchSource.Phone,
+                    expectedIdentity = "different-stick",
+                    expectedAttachGeneration = device.attachGeneration,
+                ),
+            )
+        assertNull(result.state.filesPickMode)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.TargetChanged),
+            result.state.statusMessage,
+        )
+    }
+
+    @Test
     fun beginFailsClosedWithoutPinnedPartition() {
         val empty = ready(partitions = emptyList())
         val result =
@@ -657,6 +744,26 @@ class FilesPickUiTest {
             UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
             result.state.statusMessage,
         )
+    }
+
+    @Test
+    fun queueContextRetainsSessionAndGeometryForInvalidationFence() {
+        val queue = WindowsImportLaunchQueue()
+        val context =
+            (queue.begin(
+                kind = WindowsImportKind.Image,
+                directory = "/",
+                pickSessionId = "phone-session",
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                partitionId = data.id,
+                startLba = data.startLba,
+                sectorCount = data.sectorCount,
+            ) as WindowsImportLaunch.Starting).context
+        assertEquals("phone-session", context.pickSessionId)
+        assertEquals(data.id, context.partitionId)
+        assertEquals(data.startLba, context.startLba)
+        assertEquals(data.sectorCount, context.sectorCount)
     }
 
     @Test
