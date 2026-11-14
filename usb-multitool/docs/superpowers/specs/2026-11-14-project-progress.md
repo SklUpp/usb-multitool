@@ -51,6 +51,19 @@
 - **Единый владелец USB**: декомпозиция выполняется по проверенному плану из 7 последовательных срезов с сохранением строго **одного общепроцессного владения USB** (`UsbExclusiveClaim`) и единого `FilesVolumeSession` замка/epoch fence. Запрещено создание параллельных очередей или второго владельца USB.
 - **Одобренный кэш SAF**: пользователь утвердил стратегию кэширования SAF (полная запись во внутреннее app-private временное хранилище с последующей передачей в целевой SAF-документ; при ошибке передачи после мутации — честный `Partial`). Реализация кэша строго зафиксирована **после** завершения архитектурной декомпозиции; никакой код кэша не должен предшествовать границе декомпозиции.
 
+### Decomposition closure review — HEAD `f85e5e7`
+
+Independent review compared reviewer acceptance obligations with actual tests. Missing deterministic coverage was limited to:
+
+- body failure plus volume-close failure through `FilesOperationRunner` and `OperationExecutor`: `app/src/test/kotlin/usb/files/FilesOperationRunnerTest.kt:68-115`; primary body error is preserved as the wrapped cause, close error is suppressed and exposed, next mount is refused by the close latch;
+- append-only close diagnostic after a newer operation begins: `app/src/test/kotlin/usb/ui/OperationTransitionsTest.kt:89-105`; diagnostic changes only `logLines` and leaves current operation/status/effects unchanged. Old terminal completion/reload behavior is already covered by `FilesListFreshnessTest.kt:876-923` and token fencing by `OperationTransitionsTest.kt:49-87`.
+
+Existing close/terminal obligations already covered: `UsbExclusiveClaimTest.kt:98-131`; `FilesVolumeSessionTest.kt:53-67,101-390,410-631,699-778,839-878,1001-1188,1296-1404,1458-1579`; `FilesOperationPolicyTest.kt:98-163`; `OperationExecutorTest.kt:90-249,528-695,821-1129`; `OperationTransitionsTest.kt:22-105`; `FilesListFreshnessTest.kt:876-923`. No duplicate close test or SAF-cache test added.
+
+Residual coupling is intentional: `MainActivity.kt:5897-6019` composes runner/executor/close diagnostics/terminal callbacks; `MainActivity.kt:679-783` owns operation-generation fencing and effect dispatch. `FilesVolumeSession.kt:36-67` remains sole mount/claim/latch owner; `OperationExecutor.kt:297-405` remains sole queue/terminal classifier. Further extraction would add proxy layers, not remove ownership coupling.
+
+Exact CI decision: CI **43641196718**, SHA **`f85e5e7`**, green (per review input). Workflow contract is `.github/workflows/android-debug.yml:21-110`: FatFs, locked Rust, exFAT/NTFS/EXT/USB-block hosts, unit tests, debug APK, 16 KB alignment, lint, Kotlin compile. Current assignment ran no build/test. Physical USB/SAF checks remain unperformed. Third-party/data preserved. SAF cache remains deferred until decomposition closure.
+
 ## Требования в работе
 
 | Область | Реализовано в коде | Независимо проверено | Доказательства и пробелы верификации |

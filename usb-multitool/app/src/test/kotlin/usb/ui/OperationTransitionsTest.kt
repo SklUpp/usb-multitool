@@ -87,6 +87,24 @@ class OperationTransitionsTest {
     }
 
     @Test
+    fun closeDiagnosticAfterNewOperationIsAppendOnly() {
+        val newToken = OperationTokenGenerator.next()
+        val current = UiReducer.reduce(
+            ready(),
+            UiIntent.OperationBegan(OperationProgress(OperationState.Queued, OperationTitle.ReadScan, newToken)),
+        )
+        val diagnostic = UiReducer.reduce(
+            current.state,
+            UiIntent.AppendLog("Volume close/sync unconfirmed: old close failure"),
+        )
+
+        assertEquals(current.state.operation, diagnostic.state.operation)
+        assertEquals(current.state.statusMessage, diagnostic.state.statusMessage)
+        assertEquals(listOf("Volume close/sync unconfirmed: old close failure"), diagnostic.state.logLines)
+        assertTrue(diagnostic.effects.isEmpty())
+    }
+
+    @Test
     fun cancelUsesCurrentCancelableTokenOnly() {
         val token = OperationTokenGenerator.next()
         val running = UiReducer.reduce(

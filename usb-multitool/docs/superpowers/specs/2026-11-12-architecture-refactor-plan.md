@@ -46,8 +46,8 @@
    - *Приёмка*: тесты подтверждают идентичность следующего состояния и упорядоченных эффектов при одинаковых входных данных; устаревшие обратные вызовы игнорируются. Сохраняются индивидуальные политики отмены, sync, close, readback и `Partial`.
 7. **Повторный аудит и остановка на естественных границах**:
    - Файл: `docs/superpowers/specs/2026-11-12-architecture-refactor-plan.md`.
-   - Фиксация выполненных срезов, ревизий CI, остаточной связности и обоснования, почему дальнейшее дробление нецелесообразно. Переход к реализации утверждённого SAF-кэша.
-   - *Приёмка*: утверждение о завершении декомпозиции опирается на отсутствие остаточной связности, а не на размер файлов; никакой код кэша не добавляется до этой точки.
+   - Фиксация выполненных срезов, ревизий CI, остаточной связности и обоснования, почему дальнейшее дробление нецелесообразно. Реализация утверждённого SAF-кэша остаётся отдельным следующим этапом.
+   - *Приёмка*: утверждение о завершении декомпозиции опирается на отсутствие остаточной связности, а не на размер файлов; **код SAF-кэша на этом этапе запрещён**.
 ## Проверка
 
 Каждый срез: тесты наблюдаемого поведения и гонок, независимое ревью, соответствующие локальные лёгкие host-проверки; Android build/unit/lint и 16 KB alignment в CI. Для опасных путей нужны физические USB detach/claim, ошибки файловых движков и провайдера SAF; CI не заменяет их. Не утверждать проверку Ventoy boot, Windows installation или TalkBack без отдельного испытания.
@@ -115,6 +115,31 @@ Ventoy: независимая проверка показала, что VTOYEFI
 ### Приоритеты и границы исполнения
 
 Сначала запустить и подтвердить полный CI текущего дерева. Затем строго по порядку выполнить 7 срезов декомпозиции с сохранением единого общепроцессного владения USB (`UsbExclusiveClaim`). Реализацию одобренного двухфазного SAF-кэша выполнять строго после завершения декомпозиции.
+
+### Аудит срезов 1–7 — текущий HEAD `f85e5e7`
+
+Срезы декомпозиции завершены на естественных границах; кэш SAF не реализован.
+
+| Срез | Реализация и тестовые якоря | Ревизия |
+|---|---|---|
+| 1. USB ownership/races | `UsbExclusiveClaim`, attachment pin и epoch/close-latch в `FilesVolumeSession`; `UsbExclusiveClaimTest.kt:98-131`, `FilesVolumeSessionTest.kt:634-778,1406-1579` | `f2b0026` |
+| 2. Filesystem/session boundary | volume-before-disk close, shared claim, raw-open/usage interleavings; `FilesVolumeSessionTest.kt:53-67,1017-1188,1323-1404` | `f2b0026` |
+| 3. Terminal effects | executor cancellation/disconnect/commit races; reducer token fencing; `OperationExecutorTest.kt:90-249,821-1129`, `OperationTransitionsTest.kt:49-105`, `FilesListFreshnessTest.kt:876-923` | `e7ac6bf` plus current deterministic close-diagnostic test |
+| 4. Inspection ownership | ticket cancellation, stale callbacks, attachment change; `InspectionOwnershipTest.kt:1-190` | `5e7b4f4` |
+| 5. Picker/SAF lifecycle | picker token/attachment restore and stale-result rejection; `MainActivityPickerRecoveryTest.kt:147-185,299-374`, `FilesPickUiTest.kt:614-694` | `e336025` |
+| 6. Reducer/domain transitions | operation transitions and typed effects; `OperationTransitionsTest.kt:22-148`, `UiEffectTypingTest.kt` | `e7ac6bf` |
+| 7. Re-audit/stop | residual coupling and evidence recorded here; no SAF-cache code | current review |
+
+#### Explicit residual coupling
+
+`MainActivity.kt` remains integration owner by design: `submitFilesOperation` composes `FilesOperationRunner`, `OperationExecutor`, close diagnostics, and terminal callbacks (`MainActivity.kt:5897-6019`); `onIntent` removes operation-generation ownership and dispatches completion effects (`MainActivity.kt:679-783`). These are Android lifecycle/effect boundaries, not second USB owners or second queues. Further extraction would create pass-through proxies and weaken lifecycle locality. `FilesVolumeSession` still owns mount lock, pin, epoch fence, close latch, and shared claim (`FilesVolumeSession.kt:36-67`); `OperationExecutor` still owns queue and terminal classification (`OperationExecutor.kt:297-405`).
+
+#### Exact CI and decisions
+
+- Full CI confirmed for current architecture series: **CI 43641196718**, SHA **`f85e5e7`**, green. Workflow remains `.github/workflows/android-debug.yml:21-110`: FatFs host, locked Rust tests, exFAT/NTFS/EXT/USB-block hosts, Gradle unit tests, debug APK, 16 KB alignment, lint, Kotlin compile, artifacts.
+- Decision: no cache implementation in this slice; approved two-phase SAF cache starts only after decomposition review.
+- Decision: preserve one process-wide `UsbExclusiveClaim`, one `FilesVolumeSession`, one `OperationExecutor`; no parallel scheduler, no physical checks, no third-party/data changes.
+- Decision: close diagnostics stay append-only (`FilesOperationPolicy.kt:109-133`), never overwrite primary status or current operation.
 ### Предыдущие решения и источники
 
 SAF prior art: [SimpleStorage](https://github.com/anggrayudi/SimpleStorage) — Kotlin recursive copy/conflicts, но его sealed `StorageFile` не принимает наш `FilesVolume` напрямую; [FSAF](https://github.com/K1rakishou/Fuck-Storage-Access-Framework) предоставляет custom manager seam, совместимость exact-ID/Partial/USB ownership не доказана; [libaums](https://github.com/magnusja/libaums) заявляет FAT32 и не заменяет все имеющиеся файловые системы. Поиск не подтверждает готовую безопасную замену всего backend; зависимости не добавлялись.
