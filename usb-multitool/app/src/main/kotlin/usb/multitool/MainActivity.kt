@@ -4,6 +4,7 @@ import usb.files.AttachmentPin
 import usb.files.AttachmentState
 import usb.files.FilesVolumeSession
 import usb.files.FilesOperationPolicy
+import usb.files.FilesOperationRunner
 
 import android.Manifest
 import android.app.PendingIntent
@@ -409,6 +410,7 @@ class MainViewModel(
             },
             claim = DiskController.get().usbClaim,
         )
+    private val filesOperationRunner = FilesOperationRunner(filesSession)
     private val usbOpenBoundary: UsbOpenBoundary by lazy {
         UsbOpenBoundary(
             currentAttachment = { attachment.snapshot() },
@@ -5907,40 +5909,12 @@ class MainViewModel(
         body: (DiskOperation) -> Unit,
     ): OperationHandle {
         val label = title.logLabel
-        // Close failure must survive CancellationException paths where OperationExecutor
-        // leaves failureCause null for read-only cancel. Terminal stays Cancelled.
-        val closeDiagnostic = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
-        val operation = object : DiskOperation(name = label, bytesTotal = bytesTotal) {
-            override suspend fun run() {
-                filesSession.withLock {
-                    var acquireToken = 0L
-                    var bodyError: Throwable? = null
-                    try {
-                        filesSession.withAcquireRecorder({ token -> acquireToken = token }) {
-                            body(this)
-                        }
-                    } catch (t: Throwable) {
-                        bodyError = t
-                        throw t
-                    } finally {
-                        // O2: error after acquire → close before next op can enter the lock.
-                        // Partial/writable already closed inside withWritableVolume → NotOwned.
-                        // Fail-before-acquire (token 0) → do not touch foreign mount.
-                        val err = bodyError
-                        if (err != null && acquireToken != 0L) {
-                            when (
-                                val released =
-                                    filesSession.releaseAcquiredAfterErrorLocked(acquireToken, err)
-                            ) {
-                                is usb.files.CloseEpochResult.ClosedFailed ->
-                                    closeDiagnostic.set(released.error)
-                                else -> Unit
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        val submission = filesOperationRunner.create(
+            name = label,
+            bytesTotal = bytesTotal,
+            body = body,
+        )
+        val operation = submission.operation
         val token = nextOperationToken()
         val handle = DiskController.get().submit(operation, token)
         if (!quiet) activeHandle = handle
@@ -6007,7 +5981,7 @@ class MainViewModel(
                                 quiet = quiet,
                                 hasBoundFailure = listFailure != null,
                                 opStillCurrent = stillCurrent || activeHandle === handle,
-                                explicitClose = closeDiagnostic.get(),
+                                explicitClose = submission.closeFailure,
                             )
                     ) {
                         usb.files.CloseDiagnosticPublish.None -> Unit
