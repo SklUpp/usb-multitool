@@ -34,4 +34,19 @@ ${CC:-gcc} -std=gnu11 -O2 -g \
   -o "$BUILD/ext_name_utf8_host_test" \
   "$SRC/host/ext_name_utf8_host_test.c"
 
-(cd "$BUILD" && ./ext_host_test && ./ext_name_utf8_host_test)
+"${CC:-gcc}" -std=gnu11 -O2 -g \
+  -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 \
+  -DCONFIG_USE_DEFAULT_CFG=1 \
+  -DCONFIG_DEBUG_ASSERT=0 \
+  -DCONFIG_EXT4_MOUNTPOINTS_COUNT=8 \
+  -I"$SRC" \
+  -I"$TP/include" \
+  -Wno-unused-parameter -Wno-unused-function \
+  -o "$BUILD/ext_usage_bounds_host_test" \
+  "$SRC/host/ext_usage_bounds_host_test.c" \
+  "$SRC/usb_block.c" \
+  "$SRC/ext_engine.c" \
+  "${LWEXT4_SRC[@]}" \
+  -lpthread
+
+(cd "$BUILD" && ./ext_host_test && ./ext_name_utf8_host_test && ./ext_usage_bounds_host_test)
