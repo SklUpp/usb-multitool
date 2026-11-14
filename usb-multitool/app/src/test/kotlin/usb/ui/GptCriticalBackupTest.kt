@@ -178,6 +178,46 @@ class GptCriticalBackupTest {
         )
         require(overlapTarget.syncs == 0) { "overlap restore must not write" }
     }
+
+    @Test
+    fun rejectsMalformedProtectiveMbrBeforeRestoreOrCapture() {
+        val source = syntheticGpt(2048UL)
+        val valid = capture(source)
+        val sane = GptCriticalBackup.inspectCaptured(valid, source, PRIMARY_SECTORS, BACKUP_SECTORS)
+        require(sane.partitions == 2) { "sane PMBR must be accepted" }
+
+        val malformed = listOf(
+            "missing signature" to { bytes: ByteArray -> bytes[510] = 0 },
+            "missing protective entry" to { bytes: ByteArray -> bytes[446 + 4] = 0 },
+            "hybrid entry" to {
+                bytes: ByteArray ->
+                bytes[446 + 16 + 4] = 0x83.toByte()
+                putLeInt(bytes, 446 + 16 + 8, 100)
+                putLeInt(bytes, 446 + 16 + 12, 10)
+            },
+        )
+        for ((label, mutate) in malformed) {
+            val blob = valid.copyOf().also(mutate)
+            val captureFailure = runCatching {
+                GptCriticalBackup.inspectCaptured(blob, source, PRIMARY_SECTORS, BACKUP_SECTORS)
+            }.exceptionOrNull()
+            require(captureFailure is IllegalArgumentException) {
+                "$label PMBR capture must fail: $captureFailure"
+            }
+
+            val target = MemoryDisk(2048UL)
+            val restoreFailure = runCatching {
+                GptCriticalBackup.restore(target, blob, PRIMARY_SECTORS, BACKUP_SECTORS)
+            }.exceptionOrNull()
+            require(restoreFailure is IllegalArgumentException) {
+                "$label PMBR restore must fail: $restoreFailure"
+            }
+            require(target.writes == 0 && target.syncs == 0) {
+                "$label PMBR rejection must perform zero writes"
+            }
+        }
+    }
+
     @Test
     fun writeVerificationFailureMarksPartialButPreflightStaysClean() {
         val source = syntheticGpt(2048UL)
@@ -269,6 +309,9 @@ class GptCriticalBackupTest {
         }
 
         disk.write(0UL, ByteBuffer.wrap(ByteArray(sectorSize).also {
+            it[446 + 4] = 0xEE.toByte()
+            putLeInt(it, 446 + 8, 1)
+            putLeInt(it, 446 + 12, (sectorCount - 1UL).toInt())
             it[510] = 0x55
             it[511] = 0xAA.toByte()
         }))
@@ -315,6 +358,8 @@ class GptCriticalBackupTest {
         override val sectorSize: Int = SECTOR_SIZE,
     ) : BlockDevice {
         private val image = ByteArray((sectorCount * sectorSize.toULong()).toInt())
+        var writes = 0
+            private set
         var syncs = 0
             private set
         var dropWritesAt: ULong? = null
@@ -326,10 +371,12 @@ class GptCriticalBackupTest {
         }
 
         override fun write(lba: ULong, source: ByteBuffer) {
+            writes++
             if (failWritesAt == lba) error("write-$lba")
             if (dropWritesAt == lba) return
             source.get(image, (lba * sectorSize.toULong()).toInt(), source.remaining())
         }
+
 
         override fun sync() {
             syncs++

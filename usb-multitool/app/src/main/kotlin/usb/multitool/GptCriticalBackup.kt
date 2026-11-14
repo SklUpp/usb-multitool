@@ -89,6 +89,8 @@ object GptCriticalBackup {
             "backup describes a $sectorCount-sector disk, too small for $primarySectors + " +
                 "$backupSectors critical GPT sectors"
         }
+        validateProtectiveMbr(blob, sectorSize, sectorCount)
+
         val tailStart = sectorCount - backupSectors.toULong()
         val primaryEntries =
             entryArray(blob, primary, sectorSize, primarySectors, backupSectors, tailStart)
@@ -279,6 +281,39 @@ object GptCriticalBackup {
             throw failure
         }
         return report
+    }
+
+    /** Validate the LBA 0 Protective MBR required by UEFI 2.10A §5.2. */
+    private fun validateProtectiveMbr(blob: ByteArray, sectorSize: Int, sectorCount: ULong) {
+        require(sectorCount > 1UL) { "GPT disk must contain at least two sectors" }
+        require(sectorSize >= 512 && blob.size >= sectorSize) {
+            "sector is too small for a protective MBR"
+        }
+        require((blob[510].toInt() and 0xFF) == 0x55 &&
+            (blob[511].toInt() and 0xFF) == 0xAA) {
+            "missing protective MBR signature at LBA 0"
+        }
+        val entry = 446
+        // UEFI §5.2 says implementations ignore PMBR BootIndicator; validate protective type/extent instead.
+        require((blob[entry + 4].toInt() and 0xFF) == 0xEE) {
+            "missing GPT protective MBR entry at LBA 0"
+        }
+        require(leInt(blob, entry + 8).toUInt().toULong() == 1UL) {
+            "GPT protective MBR entry must start at LBA 1"
+        }
+        val expectedSize = minOf(sectorCount - 1UL, 0xFFFF_FFFFUL)
+        require(leInt(blob, entry + 12).toUInt().toULong() == expectedSize) {
+            "GPT protective MBR entry does not cover disk"
+        }
+        for (slot in 1 until 4) {
+            val offset = entry + slot * 16
+            val type = blob[offset + 4].toInt() and 0xFF
+            val start = leInt(blob, offset + 8).toUInt()
+            val size = leInt(blob, offset + 12).toUInt()
+            require(type == 0 && start == 0u && size == 0u) {
+                "hybrid GPT/MBR layout: protective MBR has extra partition entry $slot"
+            }
+        }
     }
 
     private fun firstMismatch(expected: ByteArray, expectedOffset: Int, actual: ByteArray): Int {
