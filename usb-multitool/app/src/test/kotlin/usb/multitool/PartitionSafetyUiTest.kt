@@ -207,4 +207,28 @@ class PartitionSafetyUiTest {
         ).state
         assertFalse(disabled.vtoyEfiWriteEnabled)
     }
+
+    @Test
+    fun efiEnableRequiresExactPendingBindingConfirmation() {
+        val attached = DeviceIdentity("USB", 100uL, serialNumber = "SN-1", attachGeneration = 2L)
+        val target = usb.ui.PartitionBinding(attached, efiA.id, efiA.startLba, efiA.sectorCount)
+        val requested = UiReducer.reduce(
+            attachedState(attached),
+            UiIntent.RequestSetVtoyEfiWritable(target),
+        ).state
+        assertFalse(requested.vtoyEfiWriteEnabled)
+        assertEquals(target, requested.pendingEfiWriteBinding)
+
+        val stale = requested.copy(partitions = listOf(efiA.copy(startLba = 4096uL), efiB, data))
+        assertFalse(
+            UiReducer.reduce(stale, UiIntent.ConfirmSetVtoyEfiWritable(target)).state
+                .vtoyEfiWriteEnabled,
+        )
+        val confirmed = UiReducer.reduce(
+            requested,
+            UiIntent.ConfirmSetVtoyEfiWritable(target),
+        ).state
+        assertTrue(confirmed.vtoyEfiWriteEnabled)
+        assertNull(confirmed.pendingEfiWriteBinding)
+    }
 }

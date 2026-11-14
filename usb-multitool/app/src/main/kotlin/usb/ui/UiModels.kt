@@ -1253,6 +1253,8 @@ data class AppUiState(
     val filesystemUsageGeneration: Long = 0L,
     val operation: OperationProgress? = null,
     val pendingConfirmation: DestructiveConfirmation? = null,
+    /** Exact EFI override target awaiting explicit UI confirmation. */
+    val pendingEfiWriteBinding: PartitionBinding? = null,
     val linkOverwriteCandidate: String? = null,
     /** Device identity that produced [linkOverwriteCandidate]. */
     val linkOverwriteCandidateIdentity: String? = null,

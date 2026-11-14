@@ -14,6 +14,30 @@ import usb.ventoy.normalizeVentoyFilePath
  * object holds no state and performs no I/O.
  */
 internal object VentoyTransitions {
+    fun requestSetVtoyEfiWritable(state: AppUiState, intent: UiIntent.RequestSetVtoyEfiWritable): ReduceResult {
+        val target = state.partitions.firstOrNull { it.id == intent.target.partitionId && it.readOnly }
+        val valid = state.actionsEnabled && state.tableValid && !state.partitionTableAmbiguous &&
+            !state.partitionTableDamaged && target?.startLba != null && target.sectorCount != null &&
+            intent.target.matches(state)
+        return if (valid) ReduceResult(state.copy(pendingEfiWriteBinding = intent.target))
+        else ReduceResult(state.copy(pendingEfiWriteBinding = null))
+    }
+
+    fun confirmSetVtoyEfiWritable(state: AppUiState, intent: UiIntent.ConfirmSetVtoyEfiWritable): ReduceResult {
+        val pending = state.pendingEfiWriteBinding
+        val target = state.partitions.firstOrNull { it.id == intent.target.partitionId && it.readOnly }
+        val valid = pending == intent.target && target?.startLba != null && target.sectorCount != null &&
+            intent.target.matches(state) && state.actionsEnabled && state.tableValid &&
+            !state.partitionTableAmbiguous && !state.partitionTableDamaged
+        return if (valid) {
+            setVtoyEfiWritable(
+                state.copy(pendingEfiWriteBinding = null),
+                UiIntent.SetVtoyEfiWritable(intent.target.partitionId, true),
+            )
+        } else ReduceResult(state.copy(pendingEfiWriteBinding = null))
+    }
+
+
     fun setVtoyEfiWritable(state: AppUiState, intent: UiIntent.SetVtoyEfiWritable): ReduceResult =
         when {
             !intent.enabled ->

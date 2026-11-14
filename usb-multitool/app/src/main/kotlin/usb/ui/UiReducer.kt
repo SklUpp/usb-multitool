@@ -83,6 +83,12 @@ sealed class UiIntent {
 
     /** Drop the stored result for one purpose, or every purpose when null. */
     data class ClearFilesPickSelection(val purpose: FilesPickPurpose? = null) : UiIntent()
+    /** Request application EFI write-protection override; reducer snapshots exact binding. */
+    data class RequestSetVtoyEfiWritable(val target: PartitionBinding) : UiIntent()
+    /** Confirm exact EFI override target after explicit user approval. */
+    data class ConfirmSetVtoyEfiWritable(val target: PartitionBinding) : UiIntent()
+    /** Confirm previously requested EFI override against current exact attachment geometry. */
+    data object DismissEfiWriteConfirmation : UiIntent()
     /** Lift or restore write protection for exactly [partitionId] on the current attachment. */
     data class SetVtoyEfiWritable(val partitionId: String, val enabled: Boolean) : UiIntent()
     data class SetVtoyBypassChecks(val enabled: Boolean?) : UiIntent()
@@ -1175,6 +1181,12 @@ object UiReducer {
 
             is UiIntent.SetVtoyEfiWritable ->
                 VentoyTransitions.setVtoyEfiWritable(state, intent)
+            is UiIntent.RequestSetVtoyEfiWritable ->
+                VentoyTransitions.requestSetVtoyEfiWritable(state, intent)
+            is UiIntent.ConfirmSetVtoyEfiWritable ->
+                VentoyTransitions.confirmSetVtoyEfiWritable(state, intent)
+            UiIntent.DismissEfiWriteConfirmation ->
+                ReduceResult(state.copy(pendingEfiWriteBinding = null))
             is UiIntent.SetVtoyBypassChecks ->
                 VentoyTransitions.setVtoyBypassChecks(state, intent)
             is UiIntent.SetVtoyLocalAccount ->
@@ -1286,7 +1298,13 @@ object UiReducer {
                                 it.sectorCount == state.vtoyEfiWriteSectorCount
                         }
                     }
-                // Keep the open folder on the same stick while the previously selected
+                val retainedPendingEfi = state.pendingEfiWriteBinding?.takeIf { pending ->
+                    retainPrivileged && tableTrusted && pending.device == intent.device &&
+                        partitions.any {
+                            it.id == pending.partitionId && it.readOnly &&
+                                it.startLba == pending.startLba && it.sectorCount == pending.sectorCount
+                        }
+                }
                 // partition is still known. Detach / other stick / missing id → root.
                 val keepPath =
                     sameStick &&
@@ -1369,6 +1387,7 @@ object UiReducer {
                         operation = state.operation?.takeIf { sameStick },
                         presence = intent.presence,
                         device = device,
+                        pendingEfiWriteBinding = retainedPendingEfi,
                         vtoyEfiWritePartitionId = retainedEfi?.id,
                         vtoyEfiWriteStartLba = retainedEfi?.startLba,
                         vtoyEfiWriteSectorCount = retainedEfi?.sectorCount,

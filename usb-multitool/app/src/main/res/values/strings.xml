@@ -34,6 +34,8 @@
     <string name="efi_allow_hint">This setting applies to the current connection. A disk change or reconnect clears it.</string>
     <string name="efi_policy_info_title">EFI write policy</string>
     <string name="efi_policy_info_text">This is write protection, not a mount mode. How volumes are mounted does not change. The permission applies only to the named EFI partition and the current connection. It is cleared when the disk changes, reconnects or detaches. Every other EFI partition stays protected.</string>
+    <string name="efi_confirm_title">Allow EFI writes?</string>
+    <string name="efi_confirm_body">This lifts application write protection for %1$s on disk %2$s at LBA %3$s for %4$s sectors. Reconnect or geometry changes clear permission. Enable only when you intend to modify EFI contents.</string>
 
     <string name="partitions_create_title">Create partition</string>
     <string name="partitions_create_free_sectors">Free %1$d sectors · %2$d bytes/sector</string>

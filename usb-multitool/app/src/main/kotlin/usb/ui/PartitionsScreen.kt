@@ -981,6 +981,36 @@ fun PartitionsScreen(
                         }
                     },
                 )
+                if (selected.readOnly) {
+                    val efiPolicyEnabled = state.isEfiWriteAllowed(selected)
+                    val efiBinding = state.device?.let { device ->
+                        PartitionBinding(device, selected.id, selected.startLba, selected.sectorCount)
+                    }
+                    val efiGeometryKnown = selected.startLba != null && selected.sectorCount != null
+                    SwitchRow(
+                        label = stringResource(R.string.efi_allow_writes),
+                        checked = efiPolicyEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && efiBinding != null) {
+                                onIntent(UiIntent.RequestSetVtoyEfiWritable(efiBinding))
+                            } else if (!enabled) {
+                                onIntent(UiIntent.SetVtoyEfiWritable(selected.id, false))
+                            }
+                        },
+                        enabled = state.actionsEnabled && !state.partitionTableAmbiguous &&
+                            !state.partitionTableDamaged && state.tableValid && efiBinding != null &&
+                            efiGeometryKnown,
+                        hint = stringResource(
+                            if (efiPolicyEnabled) R.string.efi_write_policy_allowed
+                            else R.string.efi_write_policy_protected,
+                        ),
+                    )
+                    InfoHint(
+                        text = stringResource(R.string.efi_allow_hint),
+                        infoTitle = stringResource(R.string.efi_policy_info_title),
+                        infoText = stringResource(R.string.efi_policy_info_text),
+                    )
+                }
                 InteractiveInfoRow(
                     label = stringResource(R.string.bootable_label),
                     value = stringResource(if (selected.bootable) R.string.answer_yes else R.string.answer_no),
@@ -1073,10 +1103,45 @@ fun PartitionsScreen(
             }
         }
 
-        EfiWriteCard(state = state, onIntent = onIntent)
 
 
         val promptTarget = schemePrompt
+        state.pendingEfiWriteBinding?.let { binding ->
+            val target = state.partitions.firstOrNull { it.id == binding.partitionId }
+            val valid = target != null && binding.matches(state) && target.readOnly &&
+                state.actionsEnabled && state.tableValid && !state.partitionTableAmbiguous &&
+                !state.partitionTableDamaged
+            AlertDialog(
+                onDismissRequest = { onIntent(UiIntent.DismissEfiWriteConfirmation) },
+                title = { Text(stringResource(R.string.efi_confirm_title)) },
+                text = {
+                    Text(
+                        stringResource(
+                            R.string.efi_confirm_body,
+                            target?.name?.ifBlank { target.id } ?: binding.partitionId,
+                            binding.device.identity,
+                            binding.startLba?.toString() ?: "?",
+                            binding.sectorCount?.toString() ?: "?",
+                        ),
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (valid) {
+                                onIntent(UiIntent.ConfirmSetVtoyEfiWritable(binding))
+                            }
+                        },
+                        enabled = valid,
+                    ) { Text(stringResource(R.string.action_confirm)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { onIntent(UiIntent.DismissEfiWriteConfirmation) }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
         if (promptTarget != null &&
             promptTarget != state.partitionScheme?.toPartitionScheme()
         ) {
@@ -1818,14 +1883,14 @@ private fun SchemeIcons(
 ) {
     Row(
         modifier = modifier
-            .fillMaxWidth()
+            .widthIn(max = 180.dp)
             .border(
                 1.dp,
                 MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
                 RoundedCornerShape(12.dp),
             )
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val firstScheme = if (current == PartitionScheme.Mbr) PartitionScheme.Mbr else PartitionScheme.Gpt
@@ -1883,7 +1948,7 @@ private fun SchemeIcon(
             null
         },
         modifier = modifier
-            .widthIn(min = 48.dp)
+            .widthIn(min = 48.dp, max = 64.dp)
             .heightIn(min = 48.dp)
             .selectable(
                 selected = isCurrent,
@@ -1896,7 +1961,7 @@ private fun SchemeIcon(
         Box(
             modifier = Modifier
                 .heightIn(min = 48.dp)
-                .padding(horizontal = 4.dp, vertical = 12.dp),
+                .padding(horizontal = 2.dp, vertical = 12.dp),
             contentAlignment = Alignment.Center,
         ) {
             if (isCurrent) {
@@ -2009,66 +2074,6 @@ private fun InteractiveInfoRow(
     }
 }
 
-/**
- * EFI write protection moved here from the Ventoy tab. The switch is bound to the same
- * [UiIntent.SetVtoyEfiWritable] and [AppUiState.isEfiWriteAllowed] exact identity +
- * startLba + sectorCount check, so a re-plug or geometry change can never inherit an
- * override for a different partition. Damaged, ambiguous or unreadable tables keep the
- * control disabled and the override is dropped by the reducer on such a refresh.
- */
-@Composable
-private fun EfiWriteCard(state: AppUiState, onIntent: (UiIntent) -> Unit) {
-    SectionCard(
-        title = stringResource(R.string.efi_section_title),
-        titleColor = MaterialTheme.colorScheme.onSurface,
-        trailing = {
-            InfoHelpButton(
-                infoTitle = stringResource(R.string.efi_policy_info_title),
-                infoText = stringResource(R.string.efi_policy_info_text),
-            )
-        },
-    ) {
-        val tableBlocked = state.partitionTableAmbiguous ||
-            state.partitionTableDamaged ||
-            !state.tableValid
-        if (state.efiPartitions.isEmpty()) {
-            EmptyHint(stringResource(R.string.efi_missing))
-        } else {
-            state.efiPartitions.forEach { partition ->
-                val policyAllows = state.isEfiWriteAllowed(partition)
-                SwitchRow(
-                    label = partition.name.ifBlank { partition.id },
-                    checked = policyAllows,
-                    onCheckedChange = {
-                        onIntent(UiIntent.SetVtoyEfiWritable(partition.id, it))
-                    },
-                    enabled = state.actionsEnabled && !tableBlocked,
-                    hint = stringResource(
-                        if (policyAllows) {
-                            R.string.efi_write_policy_allowed
-                        } else {
-                            R.string.efi_write_policy_protected
-                        },
-                    ),
-                )
-            }
-        }
-        // Disabled reasons stay reachable: the same table faults shown in the scheme card.
-        if (tableBlocked) {
-            Text(
-                text = stringResource(
-                    when {
-                        state.partitionTableAmbiguous -> R.string.partitions_efi_table_ambiguous
-                        state.partitionTableDamaged -> R.string.partitions_efi_table_damaged
-                        else -> R.string.partitions_efi_table_invalid
-                    },
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-    }
-}
 
 /**
  * Default Material3 range-slider thumb width. Verified in the resolved artifact

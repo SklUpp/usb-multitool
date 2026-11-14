@@ -238,13 +238,7 @@ fun AppShell(
             contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 Column(
-                    // The navigation bar normally supplies the system bottom inset. While
-                    // the log screen covers it, the guard adds that inset here so neither
-                    // the status block nor the log content touches the system nav bar —
-                    // and it still applies when the status block has nothing to show.
                     modifier = if (panels.journalScreenOpen) {
-                        // Bottom only: the status surface already applies horizontal safe
-                        // insets, and applying both would double the side padding.
                         Modifier.windowInsetsPadding(
                             WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
                         )
@@ -252,15 +246,16 @@ fun AppShell(
                         Modifier
                     },
                 ) {
-                    // The operation status stays reachable on the log screen too: a running
-                    // operation must keep its progress and cancel action visible.
-                    StatusLogPanel(
-                        state = state,
-                        onIntent = onIntent,
-                        panels = panels,
-                        onCollapseStatus = { panels = panels.collapseStatus() },
-                        onExpandStatus = { panels = panels.expandStatus() },
-                    )
+                    // Expanded status participates in layout; collapsed status is an overlay below.
+                    if (!panels.statusCollapsed) {
+                        StatusLogPanel(
+                            state = state,
+                            onIntent = onIntent,
+                            panels = panels,
+                            onCollapseStatus = { panels = panels.collapseStatus() },
+                            onExpandStatus = { panels = panels.expandStatus() },
+                        )
+                    }
                     if (!panels.journalScreenOpen) {
                         NavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -362,9 +357,14 @@ fun AppShell(
                     ) {
                         AnimatedContent(
                             targetState = state.tab,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(
+                                    bottom = if (panels.statusCollapsed &&
+                                        (state.operation != null || state.statusMessage != null)
+                                    ) 72.dp else 0.dp,
+                                ),
                             transitionSpec = {
-                                // Slide in the reading direction of the tab order; both taps
                                 // and swipes animate the same way. RTL mirrors the sides.
                                 val forward = targetState.ordinal >= initialState.ordinal
                                 val base = if (forward) 1 else -1
@@ -437,8 +437,27 @@ fun AppShell(
                             onBack = { panels = panels.closeJournalScreen() },
                             onIntent = onIntent,
                             onExportTrace = onExportTrace,
+                            modifier = Modifier.padding(
+                                bottom = if (panels.statusCollapsed &&
+                                    (state.operation != null || state.statusMessage != null)
+                                ) 80.dp else 0.dp,
+                            ),
                         )
                     }
+                }
+                if (panels.statusCollapsed &&
+                    (state.operation != null || state.statusMessage != null)
+                ) {
+                    StatusLogPanel(
+                        state = state,
+                        onIntent = onIntent,
+                        panels = panels,
+                        onCollapseStatus = { panels = panels.collapseStatus() },
+                        onExpandStatus = { panels = panels.expandStatus() },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(bottom = 8.dp),
+                    )
                 }
             }
         }
@@ -829,7 +848,7 @@ private fun LogOpenButton(
     TextButton(
         onClick = onOpenLog,
         modifier = Modifier
-            .heightIn(min = 36.dp)
+            .heightIn(min = 48.dp)
             .focusRequester(focusRequester)
             .semantics { contentDescription = "$label · $lineCount" },
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
@@ -846,6 +865,7 @@ internal fun StatusLogPanel(
     panels: ShellPanelState,
     onCollapseStatus: () -> Unit,
     onExpandStatus: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val op = state.operation
     if (op == null && state.statusMessage == null) return
@@ -942,8 +962,8 @@ internal fun StatusLogPanel(
             contentDescription = accessibleMessage
         }
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
+            .then(if (collapsed) Modifier else Modifier.fillMaxWidth())
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -1316,13 +1336,14 @@ private fun LogScreen(
     onBack: () -> Unit,
     onIntent: (UiIntent) -> Unit,
     onExportTrace: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val logPaneTitle = stringResource(R.string.log_screen_title)
     var confirmCopy by remember { mutableStateOf(false) }
     val backText = stringResource(R.string.log_back)
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp)
             .semantics {
