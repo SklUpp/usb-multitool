@@ -999,65 +999,6 @@ data class ReduceResult(
 )
 
 object UiReducer {
-    private fun reduceOperationProgress(
-        state: AppUiState,
-        progress: OperationProgress,
-        begin: Boolean,
-    ): ReduceResult {
-        val previous = state.operation
-        if (!begin) {
-            if (previous == null || previous.token != progress.token || previous.state.isTerminal()) {
-                return ReduceResult(state)
-            }
-            if (progress.state == OperationState.Queued && previous.state == OperationState.Running) {
-                return ReduceResult(state)
-            }
-        }
-        val terminal = progress.state.isTerminal()
-        val base = state.copy(
-            operation = progress,
-            pendingVentoyControls =
-                if (terminal && progress.state == OperationState.Completed &&
-                    progress.title.clearsPendingVentoyControls() &&
-                    (progress.title == OperationTitle.SetVentoyGlobalSetting ||
-                        state.ventoySettingsSource.isDefaultPath())
-                ) emptyList() else state.pendingVentoyControls,
-            filesystemUsage = if (terminal) null else state.filesystemUsage,
-            presence = when {
-                progress.state == OperationState.Running &&
-                    (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy) ->
-                    DevicePresence.Busy
-                terminal && state.presence == DevicePresence.Busy -> DevicePresence.Ready
-                else -> state.presence
-            },
-            statusMessage = when (progress.state) {
-                OperationState.Completed ->
-                    progress.readScanResult?.let(UiMessage::ReadScan)
-                        ?: progress.resultMessage?.let(UiMessage::Raw)
-                        ?: state.statusMessage?.takeUnless { it.isDefaultStateStatus() }
-                        ?: UiMessage.Key(UiMessageKey.Success)
-                OperationState.Cancelled ->
-                    progress.readScanResult?.let(UiMessage::ReadScan)
-                        ?: UiMessage.Key(UiMessageKey.CancelledStatus)
-                OperationState.Failed -> progress.errorMessage?.let(UiMessage::Raw)
-                    ?: UiMessage.Key(UiMessageKey.FailedStatus)
-                OperationState.Partial ->
-                    progress.readScanResult?.let(UiMessage::ReadScan)
-                        ?: (progress.resultMessage ?: progress.errorMessage)
-                            ?.let(UiMessage::Raw)
-                        ?: UiMessage.Key(UiMessageKey.PartialStatus)
-                OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
-                OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
-            },
-        )
-        return ReduceResult(base)
-    }
-
-    private fun OperationState.isTerminal(): Boolean = when (this) {
-        OperationState.Queued, OperationState.Running -> false
-        OperationState.Completed, OperationState.Cancelled, OperationState.Partial -> true
-        OperationState.Failed -> true
-    }
     /**
      * Actions that rewrite the partition layout. Ambiguity blocks them unconditionally:
      * unlike an EFI read-only partition, no override may lift this.
@@ -1124,7 +1065,7 @@ object UiReducer {
                             switched.presence == DevicePresence.Ready &&
                             switched.actionsEnabled
                         ) {
-                            filesReload(switched)
+                            OperationTransitions.filesReload(switched)
                         } else {
                             ReduceResult(switched)
                         }
@@ -1708,40 +1649,17 @@ object UiReducer {
                 }
             }
 
-            is UiIntent.OperationBegan -> reduceOperationProgress(state, intent.progress, begin = true)
-            is UiIntent.OperationUpdated -> reduceOperationProgress(state, intent.progress, begin = false)
+            is UiIntent.OperationBegan -> OperationTransitions.progress(state, intent.progress, begin = true)
+            is UiIntent.OperationUpdated -> OperationTransitions.progress(state, intent.progress, begin = false)
             is UiIntent.OperationCleared ->
                 if (state.operation?.token == intent.token) {
                     ReduceResult(state.copy(operation = null))
                 } else {
                     ReduceResult(state)
                 }
-            is UiIntent.OperationCompletionEffects ->
-                if (intent.state.isTerminal() &&
-                    state.device?.attachGeneration == intent.attachmentGeneration
-                ) {
-                    val invalidatesCaches = intent.title.invalidatesVentoyStickCaches()
-                    val invalidatesFiles = intent.title.invalidatesFilesListing()
-                    val invalidated =
-                        if (invalidatesCaches) {
-                            dropVentoyStickCaches(
-                                state.copy(filesystemUsage = null),
-                                keepTemplatePath = true,
-                            )
-                        } else {
-                            state.copy(filesystemUsage = null)
-                        }
-                    when {
-                        invalidatesFiles -> filesReload(invalidated)
-                        invalidated.filesListingState == FilesListingState.Stale -> filesStart(invalidated)
-                        invalidatesCaches -> ReduceResult(invalidated)
-                        else -> ReduceResult(state)
-                    }
-                } else {
-                    ReduceResult(state)
-                }
+            is UiIntent.OperationCompletionEffects -> OperationTransitions.completion(state, intent)
             UiIntent.InvalidateVentoyStickCaches ->
-                ReduceResult(dropVentoyStickCaches(state, keepTemplatePath = true))
+                ReduceResult(OperationTransitions.dropVentoyStickCaches(state, keepTemplatePath = true))
 
             is UiIntent.RequestCreatePartition ->
                 PartitionTransitions.requestCreatePartition(state, intent)
@@ -3942,17 +3860,7 @@ object UiReducer {
 
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 
-            is UiIntent.CancelOperation ->
-                if (state.operation?.token == intent.token && state.operation.cancelable &&
-                    (state.operation.state == OperationState.Running || state.operation.state == OperationState.Queued)
-                ) {
-                    ReduceResult(
-                        state,
-                        effects = listOf(UiEffect.CancelOperation(intent.token)),
-                    )
-                } else {
-                    ReduceResult(state)
-                }
+            is UiIntent.CancelOperation -> OperationTransitions.cancel(state, intent.token)
 
             is UiIntent.OpenDirectory -> {
                 val target = safePickPath(intent.path)
@@ -3967,7 +3875,7 @@ object UiReducer {
                             state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     else -> {
-                        val invalidated = filesInvalidate(state).copy(
+                        val invalidated = OperationTransitions.filesInvalidate(state).copy(
                             currentPath = target,
                             filesListingState = FilesListingState.Loading,
                         )
@@ -3988,7 +3896,7 @@ object UiReducer {
                     if (target == state.currentPath) {
                         ReduceResult(state)
                     } else {
-                        val invalidated = filesInvalidate(state).copy(
+                        val invalidated = OperationTransitions.filesInvalidate(state).copy(
                             currentPath = target,
                             filesListingState = FilesListingState.Loading,
                         )
@@ -4009,7 +3917,7 @@ object UiReducer {
                 } else {
                     // A manual refresh preempts an in-flight list: its older answer is
                     // dropped by the generation bump.
-                    filesReload(state)
+                    OperationTransitions.filesReload(state)
                 }
             }
 
@@ -4461,7 +4369,7 @@ object UiReducer {
         ) {
             return result
         }
-        val started = filesStart(state)
+        val started = OperationTransitions.filesStart(state)
         return if (pickerKind == null) {
             started
         } else {
@@ -4728,134 +4636,6 @@ object UiReducer {
             )
     }
 
-    private fun OperationTitle.clearsPendingVentoyControls(): Boolean =
-        when (this) {
-            is OperationTitle.Destructive ->
-                action == DestructiveAction.VENTOY_INSTALL ||
-                    action == DestructiveAction.VENTOY_UPDATE
-            OperationTitle.SetVentoyGlobalSetting -> true
-            else -> false
-        }
-
-    /**
-     * Titles that rewrite the data partition or partition table enough that retained
-     * Ventoy/XML catalogs and the open XML document must not stay on screen.
-     * Read-only probe/list titles never match.
-     */
-    private fun OperationTitle.invalidatesVentoyStickCaches(): Boolean =
-        when (this) {
-            is OperationTitle.Destructive ->
-                when (action) {
-                    DestructiveAction.WIPE,
-                    DestructiveAction.VENTOY_INSTALL,
-                    DestructiveAction.VENTOY_UPDATE,
-                    DestructiveAction.RAW_WRITE,
-                    DestructiveAction.FORMAT_PARTITION,
-                    DestructiveAction.DELETE_PARTITION,
-                    DestructiveAction.CREATE_PARTITION,
-                    DestructiveAction.GPT_REPAIR,
-                    DestructiveAction.GPT_RESTORE,
-                    DestructiveAction.RESCUE_RESTORE,
-                    DestructiveAction.INITIALIZE_PARTITION_TABLE,
-                    DestructiveAction.SET_PARTITION_ROLE,
-                    DestructiveAction.SET_PARTITION_BOOTABLE,
-                    DestructiveAction.RENAME_PARTITION,
-                    DestructiveAction.RENAME_VOLUME_LABEL,
-                    DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
-                    DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT,
-                    DestructiveAction.VENTOY_LINK_XML,
-                    -> true
-                }
-            is OperationTitle.ImportTarget,
-            is OperationTitle.FormatTarget,
-            is OperationTitle.DeleteEntry,
-            is OperationTitle.DeleteBatch,
-            is OperationTitle.RenameEntry,
-            is OperationTitle.NewFolder,
-            OperationTitle.Upload,
-            is OperationTitle.UploadBatch,
-            OperationTitle.BindImagesToUnattendXml,
-            OperationTitle.UnbindImageFromUnattendXml,
-            OperationTitle.GenerateUnattendXml,
-            OperationTitle.WriteUnattendXml,
-            OperationTitle.RemoveXmlBindings,
-            OperationTitle.SetVentoyGlobalSetting,
-            OperationTitle.SaveGlobalWindowsControls,
-            -> true
-            else -> false
-        }
-
-    /** Terminal stick writes can change directory rows; preserve established reload coverage. */
-    private fun OperationTitle.invalidatesFilesListing(): Boolean =
-        invalidatesVentoyStickCaches() ||
-            when (this) {
-                OperationTitle.AutounattendXmlLink,
-                OperationTitle.RemoveXmlBindings,
-                OperationTitle.SaveGlobalWindowsControls,
-                OperationTitle.GenerateUnattendXml,
-                OperationTitle.WriteUnattendXml,
-                OperationTitle.SetVentoyGlobalSetting,
-                OperationTitle.BindImagesToUnattendXml,
-                OperationTitle.UnbindImageFromUnattendXml,
-                OperationTitle.Upload,
-                is OperationTitle.UploadBatch,
-                is OperationTitle.ImportTarget,
-                is OperationTitle.FormatTarget,
-                is OperationTitle.DeleteEntry,
-                is OperationTitle.DeleteBatch,
-                is OperationTitle.RenameEntry,
-                is OperationTitle.NewFolder,
-                -> true
-                else -> false
-            }
-
-    /**
-     * Clear stick-scoped Ventoy/XML catalogs and bump generations/epoch so in-flight
-     * loads cannot land on a post-mutation state. [keepTemplatePath] leaves the chosen
-     * XML path so the Ventoy tab can re-read without another pick; document/candidates
-     * still go to Missing/null. Does not emit mount effects.
-     */
-    private fun dropVentoyStickCaches(
-        state: AppUiState,
-        keepTemplatePath: Boolean,
-    ): AppUiState =
-        state.copy(
-            windowsIsoCandidates = null,
-            windowsIsoCandidatesGeneration = state.windowsIsoCandidatesGeneration + 1,
-            windowsIsoCandidatesIdentity = null,
-            windowsIsoCandidatesError = null,
-            windowsImageLinks = null,
-            windowsImageLinksGeneration = state.windowsImageLinksGeneration + 1,
-            windowsImageLinksIdentity = null,
-            windowsSelectedImages = emptyList(),
-            windowsTemplatePath = if (keepTemplatePath) state.windowsTemplatePath else null,
-            autounattendState = AutounattendState.Missing,
-            autounattendBindings = null,
-            autounattendCandidates = null,
-            autounattendRequestGeneration = state.autounattendRequestGeneration + 1,
-            autounattendLoadInFlight = false,
-            diskLayoutConfirmation = null,
-            pendingAutounattendGeneration = null,
-            ventoyGlobalSettings = null,
-            ventoySettingsSourceLoading = false,
-            ventoyFolderPath = "/",
-            ventoyFolders = null,
-            ventoyFoldersError = null,
-            ventoyFoldersLoading = false,
-            ventoyFoldersPending = false,
-            ventoyCacheEpoch = state.ventoyCacheEpoch + 1,
-            pendingWindowsUnlink = null,
-            linkOverwriteCandidatePaths = emptyList(),
-            linkOverwriteCandidateTemplatePath = null,
-            // Phone-import inspection is stick-scoped; a mutation must not keep an overwrite
-            // prompt bound to a pre-mutation generation.
-            pendingIsoImport = null,
-            deferredIsoImport = null,
-            isoImportError = null,
-            isoImportGeneration = state.isoImportGeneration + 1,
-            // The import-folder demand is NOT dropped here: on the same attachment the user
-            // must still be asked to choose again after an unrelated mutation (R6).
-        )
     /**
      * Pins the payload the user is about to confirm. A downloaded release wins with its
      * full provenance; otherwise the bundled release is named explicitly. The host may
@@ -4888,13 +4668,6 @@ object UiReducer {
     internal fun mbrAddressLimitSectors(): ULong = 0xFFFF_FFFFUL
 
 
-    private fun UiMessage.isDefaultStateStatus(): Boolean =
-        this is UiMessage.Key &&
-            key in setOf(
-                UiMessageKey.RunningStatus,
-                UiMessageKey.QueuedStatus,
-            )
-
     /** Null when [binding] still names the selected device, partition and geometry. */
     private fun bindingProblem(state: AppUiState, binding: PartitionBinding): UiMessage? =
         if (state.device == null) {
@@ -4922,35 +4695,6 @@ object UiReducer {
     }
 
 
-    /** Invalidate current rows and fence every older directory response. */
-    private fun filesInvalidate(state: AppUiState): AppUiState =
-        state.copy(
-            files = emptyList(),
-            filesError = null,
-            filesListGeneration = state.filesListGeneration + 1L,
-            filesListingState = FilesListingState.Stale,
-        )
-
-    /** Emit one directory request only when Files can mount safely now. */
-    private fun filesStart(state: AppUiState): ReduceResult {
-        val canStart =
-            state.presence == DevicePresence.Ready &&
-                state.actionsEnabled &&
-                state.tab == ShellTab.Files &&
-                state.selectedPartition() != null
-        return if (!canStart || state.filesListingState == FilesListingState.Loading) {
-            ReduceResult(state)
-        } else {
-            ReduceResult(
-                state.copy(filesListingState = FilesListingState.Loading),
-                effects = listOf(UiEffect.LoadFiles(path = state.currentPath)),
-            )
-        }
-    }
-
-    /** Invalidate then start one fresh directory request when eligible. */
-    private fun filesReload(state: AppUiState): ReduceResult =
-        filesStart(filesInvalidate(state))
 
 
     /**
