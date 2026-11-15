@@ -40,70 +40,109 @@ object GptBackup {
      * Updates primary header backup-LBA / last-usable fields and CRCs.
      */
     fun relocateBackup(disk: BlockDevice, newDiskSectorCount: ULong): PartitionTable {
-        val table = PartitionTable.read(disk)
-        if (table.scheme == TableScheme.HYBRID || table.hybridAmbiguous) {
-            throw HybridAmbiguityException("refusing GPT backup relocate on hybrid/ambiguous layout")
+        require(newDiskSectorCount == disk.sectorCount) {
+            "target disk size ${newDiskSectorCount} does not match live geometry ${disk.sectorCount}"
         }
-        require(table.scheme == TableScheme.GPT) { "relocateBackup requires GPT" }
-        require(!table.gptPrimaryDamaged) {
-            "primary GPT header or entries are damaged; refusing to relocate an " +
-                "ambiguous table — restore a matching GPT critical backup first"
+        val protective = MbrTable.readProtectiveOnly(disk)
+        val primary = try {
+            GptTable.read(disk, 1UL)
+        } catch (failure: IllegalArgumentException) {
+            if (protective == null) runCatching { PartitionTable.read(disk) }
+            throw failure
         }
-        val header = requireNotNull(table.gptHeader) { "missing GPT header" }
-        val entries = requireNotNull(table.gptEntriesRaw) { "missing GPT entries" }
+        val expectedCurrentCount = minOf(newDiskSectorCount - 1UL, 0xFFFF_FFFFUL)
+        val oldCount = minOf(primary.header.backupLba, 0xFFFF_FFFFUL)
+        require(newDiskSectorCount > 1UL) { "disk too small for GPT relocation" }
+        val repairPmbr = when {
+            protective == null -> {
+                runCatching { PartitionTable.read(disk) }
+                throw HybridAmbiguityException("refusing GPT backup relocate on hybrid/ambiguous layout")
+            }
+            protective.sectorCount == expectedCurrentCount -> false
+            protective.sectorCount == oldCount && oldCount != expectedCurrentCount -> true
+            else -> throw HybridAmbiguityException("refusing GPT backup relocate with mismatched protective MBR")
+        }
+        val header = primary.header
+        val entries = primary.entriesRaw
         val sectorSize = disk.sectorSize
-
-        val entryBytes = header.entryCount * header.entrySize
+        val entryBytes = header.entryCount.toLong() * header.entrySize.toLong()
+        require(entryBytes <= Int.MAX_VALUE) { "GPT entry array is too large" }
         val entrySectors = ((entryBytes + sectorSize - 1) / sectorSize).toULong()
         require(newDiskSectorCount > header.firstUsable + entrySectors + 1UL) {
             "new disk size too small for GPT backup structures"
         }
-
         val newBackupHeaderLba = newDiskSectorCount - 1UL
         val newBackupEntriesLba = newBackupHeaderLba - entrySectors
         val newLastUsable = newBackupEntriesLba - 1UL
         require(newLastUsable >= header.firstUsable) { "no usable space after relocate" }
-
-        // Refuse if any partition would fall outside the new usable range.
-        for (p in table.partitions) {
+        if (primary.header.backupLba < disk.sectorCount) {
+            val oldBackupHeader = GptTable.readHeaderOrNull(disk, primary.header.backupLba)
+            if (oldBackupHeader != null) {
+                require(
+                    oldBackupHeader.backupLba == 1UL &&
+                        oldBackupHeader.firstUsable == primary.header.firstUsable &&
+                        oldBackupHeader.lastUsable == primary.header.lastUsable &&
+                        oldBackupHeader.diskGuid.contentEquals(primary.header.diskGuid) &&
+                        oldBackupHeader.entryCount == primary.header.entryCount &&
+                        oldBackupHeader.entrySize == primary.header.entrySize,
+                ) { "primary and backup GPT disagree before relocation" }
+                val existingBackup = try {
+                    GptTable.read(disk, primary.header.backupLba)
+                } catch (failure: IllegalArgumentException) {
+                    require(failure.message == "GPT entries CRC mismatch" &&
+                        newBackupEntriesLba <= primary.header.backupLba) {
+                        throw failure
+                    }
+                    null
+                }
+                if (existingBackup != null) {
+                    require(existingBackup.entriesRaw.contentEquals(primary.entriesRaw)) {
+                        "primary and backup GPT disagree before relocation"
+                    }
+                }
+            } else {
+                require(newBackupEntriesLba <= primary.header.backupLba) {
+                    "primary and backup GPT disagree before relocation"
+                }
+            }
+        }
+        for (p in primary.partitions) {
+            require(p.sectorCount > 0UL) { "partition ${p.name} has empty extent" }
             val end = p.startLba + p.sectorCount - 1UL
-            require(end <= newLastUsable) {
+            require(end >= p.startLba && end <= newLastUsable) {
                 "occupied partition ${p.name} extends past new last usable LBA"
             }
         }
-
-        // Write backup entries then backup header.
+        if (repairPmbr) {
+            val pmbr = requireNotNull(protective).sector
+            GptTable.putLeInt(pmbr, 446 + protective.slot * 16 + 12, expectedCurrentCount.toInt())
+            disk.write(0UL, ByteBuffer.wrap(pmbr))
+            disk.sync()
+        }
         writeSectors(disk, newBackupEntriesLba, entries)
-
         val backupHeader = buildHeader(
-            header = header,
-            currentLba = newBackupHeaderLba,
-            backupLba = 1UL,
-            firstUsable = header.firstUsable,
-            lastUsable = newLastUsable,
-            entryLba = newBackupEntriesLba,
-            entriesCrc = GptTable.crc32(entries),
-            sectorSize = sectorSize,
+            header, newBackupHeaderLba, 1UL, header.firstUsable, newLastUsable,
+            newBackupEntriesLba, GptTable.crc32(entries), sectorSize,
         )
         disk.write(newBackupHeaderLba, ByteBuffer.wrap(backupHeader))
-        // Durable backup before the primary header stops pointing at the relocated copy.
         disk.sync()
-
-        // Update primary header to point at new backup.
         val primaryHeader = buildHeader(
-            header = header,
-            currentLba = 1UL,
-            backupLba = newBackupHeaderLba,
-            firstUsable = header.firstUsable,
-            lastUsable = newLastUsable,
-            entryLba = header.entryLba,
-            entriesCrc = GptTable.crc32(entries),
-            sectorSize = sectorSize,
+            header, 1UL, newBackupHeaderLba, header.firstUsable, newLastUsable,
+            header.entryLba, GptTable.crc32(entries), sectorSize,
         )
         disk.write(1UL, ByteBuffer.wrap(primaryHeader))
         disk.sync()
-
-        return PartitionTable.read(disk)
+        val result = PartitionTable.read(disk)
+        require(result.scheme == TableScheme.GPT && !result.gptPrimaryDamaged && !result.hybridAmbiguous) {
+            "GPT relocation reread is not a writable GPT"
+        }
+        val rereadPrimary = GptTable.read(disk, 1UL)
+        require(rereadPrimary.header.backupLba == newBackupHeaderLba)
+        require(GptTable.read(disk, newBackupHeaderLba).header.entryLba == newBackupEntriesLba)
+        require(MbrTable.readProtectiveOnly(disk)?.sectorCount == expectedCurrentCount) {
+            "GPT relocation reread has mismatched protective MBR"
+        }
+        return result
     }
 
     private fun writeSectors(disk: BlockDevice, startLba: ULong, raw: ByteArray) {

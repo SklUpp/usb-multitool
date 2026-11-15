@@ -93,7 +93,7 @@ class GptFallbackTest {
             GptBackup.relocateBackup(damaged, damaged.sectorCount)
         }
 
-        assertTrue(ex.message!!.contains("refusing to relocate"))
+        assertTrue(ex.message!!.contains("GPT header CRC mismatch"))
         assertTrue(damaged.writes.isEmpty())
         assertTrue(damaged.snapshot().contentEquals(before))
     }

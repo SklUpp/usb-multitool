@@ -14,6 +14,36 @@ object MbrTable {
         val recognition: TableRecognition,
         val signaturePresent: Boolean = recognition != TableRecognition.UNRECOGNIZED,
     )
+    /** Local recognizer for GPT shrink recovery; ordinary reads remain fail-closed. */
+    internal data class ProtectiveOnly(
+        val sector: ByteArray,
+        val slot: Int,
+        val startLba: ULong,
+        val sectorCount: ULong,
+    )
+
+    internal fun readProtectiveOnly(disk: BlockDevice): ProtectiveOnly? {
+        val buf = ByteBuffer.allocate(disk.sectorSize).order(ByteOrder.LITTLE_ENDIAN)
+        disk.read(0UL, buf)
+        buf.flip()
+        if (buf.limit() < 512 ||
+            ((buf.get(510).toInt() and 0xFF) or ((buf.get(511).toInt() and 0xFF) shl 8)) != 0xAA55 ||
+            filesystemBootStatus(buf, disk.sectorCount, disk.sectorSize) != FilesystemBoot.NONE
+        ) return null
+        var protective: ProtectiveOnly? = null
+        for (i in 0 until 4) {
+            val off = 446 + i * 16
+            val type = buf.get(off + 4).toInt() and 0xFF
+            val start = buf.getInt(off + 8).toUInt().toULong()
+            val count = buf.getInt(off + 12).toUInt().toULong()
+            val empty = (0 until 16).all { buf.get(off + it).toInt() == 0 }
+            if (empty) continue
+            if (type != PROTECTIVE_TYPE || start != 1UL || count == 0UL || protective != null) return null
+            protective = ProtectiveOnly(buf.array().copyOf(), i, start, count)
+        }
+        return protective
+    }
+
 
     fun read(disk: BlockDevice): Result {
         val sectorSize = disk.sectorSize
