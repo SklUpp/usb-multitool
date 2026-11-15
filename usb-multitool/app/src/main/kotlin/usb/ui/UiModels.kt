@@ -168,6 +168,7 @@ enum class UiMessageKey {
     FilesPickTargetInvalid,
     /** No writable Ventoy data partition is attached. */
     VentoyDataPartitionMissing,
+    VentoyDataPartitionRequired,
     /** Another phone-file inspection still holds the host slot; nothing was started. */
     ImportInspectionBusy,
     /** A system file picker is already open; the second launch was ignored. */
@@ -268,6 +269,7 @@ enum class UiMessageKey {
     SchemeBackupMetadataUnknown,
     SchemeBackupUnverified,
     SchemeMbrTooLarge,
+    SchemeMetadataUnverified,
     CannotReadUsb,
     CannotReadPartitionTable,
     FolderListChanged,
@@ -428,8 +430,17 @@ data class DestructiveConfirmation(
     val volumeLabel: String = "",
     /** New GPT entry name for RENAME_PARTITION. */
     val partitionName: String? = null,
-    /** Scheme the table had when the confirmation was created (null = unknown, refused). */
+    /** Scheme the table had when confirmation was created; MBR is baseline for unrecognized media. */
     val initialScheme: PartitionScheme? = null,
+    /** Whether bounded parser recognized a supported table at confirmation time. */
+    val initialTableRecognized: Boolean = true,
+    val initialTableRecognition: usb.partition.TableRecognition =
+        usb.partition.TableRecognition.RECOGNIZED,
+    val initialMetadataFingerprint: String? = null,
+    val initialInitializationMetadataFingerprint: String? = null,
+    /** Disk geometry pinned by confirmation. */
+    val initialDiskSectorCount: ULong? = null,
+    val initialDiskSectorSize: Int? = null,
     /** Scheme the table will be initialized to. */
     val targetScheme: PartitionScheme? = null,
     /** Exact partition geometries of the table being replaced. */
@@ -614,6 +625,8 @@ enum class ShellTab {
     Ventoy,
     Partitions,
     Diagnostics,
+    /** App preferences and local settings; persisted by [ShellTabPersistence] by name. */
+    Settings,
 }
 
 /** Exact target captured when a file mutation is requested. */
@@ -1209,7 +1222,13 @@ data class AppUiState(
     val tableValid: Boolean = true,
     /** GPT primary header/entries were invalid; data came from the backup GPT. */
     val partitionTableDamaged: Boolean = false,
-    /** MBR and GPT both describe partitions; every layout mutation stays blocked. */
+    /** Bounded parser recognition; false is not proof that media contains no data. */
+    val partitionTableRecognized: Boolean = true,
+    val partitionTableRecognition: usb.partition.TableRecognition =
+        usb.partition.TableRecognition.RECOGNIZED,
+    val metadataFingerprint: String? = null,
+    val initializationMetadataFingerprintGpt: String? = null,
+    val initializationMetadataFingerprintMbr: String? = null,
     val partitionTableAmbiguous: Boolean = false,
     /**
      * On-disk table scheme of the current attachment. Null = unread/unknown, in which case

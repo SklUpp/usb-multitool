@@ -60,6 +60,8 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_files_pick_target_invalid)
             UiMessageKey.VentoyDataPartitionMissing ->
                 stringResource(R.string.msg_ventoy_data_partition_missing)
+            UiMessageKey.VentoyDataPartitionRequired ->
+                stringResource(R.string.msg_ventoy_data_partition_required)
             UiMessageKey.ImportInspectionBusy ->
                 stringResource(R.string.msg_import_inspection_busy)
             UiMessageKey.ImportPickerBusy ->
@@ -187,7 +189,9 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_scheme_backup_metadata_unknown)
             UiMessageKey.SchemeBackupUnverified ->
                 stringResource(R.string.msg_scheme_backup_unverified)
-            UiMessageKey.SchemeMbrTooLarge -> stringResource(R.string.msg_scheme_mbr_too_large)
+            UiMessageKey.SchemeMbrTooLarge ->
+                stringResource(R.string.msg_scheme_mbr_too_large)
+            UiMessageKey.SchemeMetadataUnverified -> stringResource(R.string.msg_scheme_metadata_unverified)
             UiMessageKey.Success -> stringResource(R.string.msg_success)
             UiMessageKey.CancelledStatus -> stringResource(R.string.msg_cancelled)
             UiMessageKey.FailedStatus -> stringResource(R.string.msg_failed)
@@ -452,10 +456,10 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
     }
     if (confirmation.action == DestructiveAction.INITIALIZE_PARTITION_TABLE) {
         confirmation.targetScheme?.let { scheme ->
-            lines += stringResource(
-                R.string.confirm_initialize_scheme,
-                scheme.toTableScheme().name,
-            )
+            lines += stringResource(R.string.confirm_initialize_scheme, scheme.toTableScheme().name)
+        }
+        if (!confirmation.initialTableRecognized) {
+            lines += stringResource(R.string.confirm_initialize_unrecognized)
         }
         if (confirmation.initialPartitions.isNotEmpty()) {
             if (confirmation.initialPartitionNames.size == confirmation.initialPartitions.size) {
@@ -463,10 +467,7 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
                     lines += stringResource(R.string.confirm_erase_partition, name)
                 }
             } else {
-                lines += stringResource(
-                    R.string.confirm_initialize_partitions,
-                    confirmation.initialPartitions.size,
-                )
+                lines += stringResource(R.string.confirm_initialize_partitions, confirmation.initialPartitions.size)
             }
         }
     }

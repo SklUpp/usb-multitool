@@ -91,6 +91,13 @@ internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
     -> null
 }
 
+/** Four primary destinations shown in bottom navigation; Settings is explicit menu route. */
+internal val PrimaryShellTabs = listOf(
+    ShellTab.Files,
+    ShellTab.Ventoy,
+    ShellTab.Partitions,
+    ShellTab.Diagnostics,
+)
 /** Direction of a committed horizontal tab swipe, in reading order. */
 internal enum class ShellSwipeDirection {
     /** Next tab in reading order: finger left in LTR, finger right in RTL. */
@@ -143,7 +150,7 @@ internal object ShellSwipePolicy {
     fun target(
         current: ShellTab,
         direction: ShellSwipeDirection,
-        tabs: List<ShellTab> = ShellTab.entries,
+        tabs: List<ShellTab> = PrimaryShellTabs,
     ): ShellTab? {
         val index = tabs.indexOf(current)
         if (index < 0) return null

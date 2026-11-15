@@ -42,9 +42,12 @@ class PartitionRepairUiTest {
         AppUiState(
             presence = DevicePresence.Ready,
             device = device,
+            partitionScheme = scheme,
             partitions = listOf(data, esp),
             selectedPartitionId = data.id,
-            partitionScheme = scheme,
+            metadataFingerprint = "base",
+            initializationMetadataFingerprintGpt = "gpt-target",
+            initializationMetadataFingerprintMbr = "mbr-target",
         )
 
     private fun requestRepair(state: AppUiState): ReduceResult =

@@ -71,6 +71,12 @@ object TableInitializer {
     )
 
     fun plan(table: PartitionTable, target: TableScheme): Plan {
+        require(table.recognition != TableRecognition.SUPERFLOPPY) {
+            "known filesystem boot sector without partition table; refusing initialization"
+        }
+        require(table.recognition != TableRecognition.DAMAGED) {
+            "damaged partition metadata; refusing initialization"
+        }
         if (table.scheme == TableScheme.HYBRID || table.hybridAmbiguous) {
             throw HybridAmbiguityException(
                 "hybrid/ambiguous layout: refusing to initialize a table over it",
@@ -92,6 +98,43 @@ object TableInitializer {
      * Writes the planned empty table, syncing between the crash-visible stages, and verifies
      * by re-reading. Throws after the first write, so the caller reports `Partial`.
      */
+    /** Re-check metadata fences before any initialization write. */
+    fun requireMetadataUnchanged(
+        disk: BlockDevice,
+        table: PartitionTable,
+        target: TableScheme,
+        expectedCurrent: String,
+        expectedTarget: String,
+    ) {
+        val current = metadataFingerprint(disk, metadataLbas(table))
+        require(current == expectedCurrent) {
+            throw usb.diagnostics.ConfirmationMismatchException(
+                "partition metadata changed since the confirmation",
+            )
+        }
+        val targetFingerprint = metadataFingerprint(
+            disk,
+            initializationMetadataLbas(table, target),
+        )
+        require(targetFingerprint == expectedTarget) {
+            throw usb.diagnostics.ConfirmationMismatchException(
+                "target metadata range changed since the confirmation",
+            )
+        }
+    }
+
+    /** Confirmation fence and initialization write form one production operation. */
+    fun initializeConfirmed(
+        disk: BlockDevice,
+        table: PartitionTable,
+        target: TableScheme,
+        expectedCurrent: String,
+        expectedTarget: String,
+    ): String {
+        requireMetadataUnchanged(disk, table, target, expectedCurrent, expectedTarget)
+        return initialize(disk, table, target)
+    }
+
     fun initialize(disk: BlockDevice, table: PartitionTable, target: TableScheme): String {
         require(disk.sectorCount == table.diskSectorCount) { "live disk geometry changed" }
         require(disk.sectorSize == table.sectorSize) { "live sector size changed" }

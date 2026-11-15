@@ -56,6 +56,9 @@ object UiStateHostCheck {
                         ),
                     ),
                 selectedPartitionId = "1",
+                metadataFingerprint = "base",
+                initializationMetadataFingerprintGpt = "gpt-target",
+                initializationMetadataFingerprintMbr = "mbr-target",
                 files =
                     listOf(
                         FileEntry("win11.iso", isDirectory = false, sizeBytes = 5_000_000_000uL),

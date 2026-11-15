@@ -21,6 +21,9 @@ import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.graphics.Color as AndroidColor
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -115,6 +118,7 @@ import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.ui.filesystemUsageKey
 import usb.ui.needsFilesystemUsageRequest
+import usb.ui.scheduleFilesystemUsageRequest
 import usb.ui.fatChildPath
 import usb.ui.RawMeasureError
 import usb.ui.rawSourceKey
@@ -158,6 +162,15 @@ import java.util.Locale
 import java.security.MessageDigest
 import usb.ui.DestructiveAction
 
+private fun <T> fingerprintOrNull(block: () -> T): T? = try {
+    block()
+} catch (cancel: kotlinx.coroutines.CancellationException) {
+    throw cancel
+} catch (_: DiskException) {
+    null
+} catch (_: IllegalArgumentException) {
+    null
+}
 private const val WINDOWS_IMPORT_PREFS = "usb.multitool.windows_import"
 private const val WINDOWS_IMPORT_NEXT_CODE_KEY = "next_request_code"
 
@@ -1110,11 +1123,32 @@ class MainViewModel(
                                     val expected = confirmed.initialScheme
                                         ?: throw IllegalStateException("initial scheme not confirmed")
                                     val current = table ?: throw IllegalStateException("no partition table")
-                                    current.requireUnambiguousLayout()
+                                    current.requireInitializationLayout()
                                     require(!current.gptPrimaryDamaged) {
                                         "GPT primary is damaged; restore a matching GPT backup first"
                                     }
-                                    if (current.scheme != expected.toTableScheme()) {
+                                    require(current.recognized == confirmed.initialTableRecognized) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "partition-table recognition changed since confirmation",
+                                        )
+                                    }
+                                    require(disk.geometry.sectorSize == confirmed.initialDiskSectorSize) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "sector size changed since confirmation",
+                                        )
+                                    }
+                                    require(disk.geometry.sectorCount == confirmed.initialDiskSectorCount) {
+                                        throw usb.diagnostics.ConfirmationMismatchException(
+                                            "disk geometry changed since confirmation",
+                                        )
+                                    }
+                                    if (!confirmed.initialTableRecognized) {
+                                        if (current.recognized) {
+                                            throw usb.diagnostics.ConfirmationMismatchException(
+                                                "unrecognized table changed before initialization",
+                                            )
+                                        }
+                                    } else if (current.scheme != expected.toTableScheme()) {
                                         throw usb.diagnostics.ConfirmationMismatchException(
                                             "partition scheme changed since the confirmation " +
                                                 "(${current.scheme} != ${expected.toTableScheme()})",
@@ -1127,10 +1161,18 @@ class MainViewModel(
                                             "partition layout changed since the confirmation",
                                         )
                                     }
-                                    result = TableInitializer.initialize(
-                                        partitionDisk,
-                                        current,
-                                        target.toTableScheme(),
+                                    result = usb.partition.TableInitializer.initializeConfirmed(
+                                        disk = partitionDisk,
+                                        table = current,
+                                        target = target.toTableScheme(),
+                                        expectedCurrent = confirmed.initialMetadataFingerprint
+                                            ?: throw usb.diagnostics.ConfirmationMismatchException(
+                                                "current metadata fingerprint missing",
+                                            ),
+                                        expectedTarget = confirmed.initialInitializationMetadataFingerprint
+                                            ?: throw usb.diagnostics.ConfirmationMismatchException(
+                                                "target metadata fingerprint missing",
+                                            ),
                                     )
                                     report(disk.geometry.capacityBytes.toLong())
                                 }
@@ -2333,6 +2375,7 @@ class MainViewModel(
         )
         onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.Probing)))
 
+        var probeCloseFailure: Throwable? = null
         val op = object : DiskOperation(name = OperationTitle.ProbeDevice.logLabel) {
             override suspend fun run() {
                 val raw = openRawDisk { live ->
@@ -2341,7 +2384,9 @@ class MainViewModel(
                     live.device ?: throw DiskException.Disconnected()
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
-                try {
+                var publish: (suspend () -> Unit)? = null
+                val result = ProbePublication.run(
+                    body = {
                     val capacity = disk.geometry.capacityBytes
                     val tableResult = runCatching { PartitionTable.read(disk) }
                     val failure = tableResult.exceptionOrNull()
@@ -2353,12 +2398,20 @@ class MainViewModel(
                         } else {
                             readInstalledVentoyRelease(disk)
                         }
-                    withContext(Dispatchers.Main.immediate) {
+                    val metadataFingerprint = tableResult.getOrNull()?.let { table ->
+                        fingerprintOrNull { usb.partition.metadataFingerprint(disk, usb.partition.metadataLbas(table)) }
+                    }
+                    val initializationMetadataFingerprintGpt = tableResult.getOrNull()?.let { table ->
+                        fingerprintOrNull { usb.partition.metadataFingerprint(disk, usb.partition.initializationMetadataLbas(table, usb.partition.TableScheme.GPT)) }
+                    }
+                    val initializationMetadataFingerprintMbr = tableResult.getOrNull()?.let { table ->
+                        fingerprintOrNull { usb.partition.metadataFingerprint(disk, usb.partition.initializationMetadataLbas(table, usb.partition.TableScheme.MBR)) }
+                    }
+                    publish = { withContext(Dispatchers.Main.immediate) {
                         if (!attachmentIs(gen, device)) {
                             return@withContext
                         }
                         if (this@MainViewModel.state.isRunning) {
-                            // Keep the geometry the running operation is using.
                             return@withContext
                         }
                         val probedIdentity =
@@ -2380,7 +2433,15 @@ class MainViewModel(
                                     !isTransport && tableResult.getOrNull()?.gptPrimaryDamaged == true,
                                 partitionTableAmbiguous =
                                     !isTransport && tableResult.getOrNull()?.hybridAmbiguous == true,
+                                partitionTableRecognition =
+                                    tableResult.getOrNull()?.recognition
+                                        ?: usb.partition.TableRecognition.UNRECOGNIZED,
+                                partitionTableRecognized =
+                                    !isTransport && tableResult.getOrNull()?.recognized == true,
                                 partitionScheme = tableResult.getOrNull()?.scheme,
+                                metadataFingerprint = metadataFingerprint,
+                                initializationMetadataFingerprintGpt = initializationMetadataFingerprintGpt,
+                                initializationMetadataFingerprintMbr = initializationMetadataFingerprintMbr,
                                 rawGeometry =
                                     usb.partition.RawRangeGeometry.from(
                                         tableResult.getOrNull(),
@@ -2417,22 +2478,21 @@ class MainViewModel(
                                 UiMessage.Key(key, listOf(err.message ?: err.javaClass.simpleName)),
                             ))
                         }
-                    }
-                    failure?.let { err ->
-                        state = usb.operation.OperationState.Failed(err)
-                        failureCause = err
-                    }
-                } finally {
-                    try {
-                        disk.close()
-                    } catch (closeErr: Throwable) {
-                        val primary = failureCause
-                        if (primary != null) {
-                            if (primary !== closeErr) primary.addSuppressed(closeErr)
-                        } else {
-                            throw closeErr
+                    } }
+                        failure?.let { err ->
+                            state = usb.operation.OperationState.Failed(err)
+                            failureCause = err
                         }
-                    }
+                        failure
+                    },
+                    close = { disk.close() },
+                    publish = { publish?.invoke() },
+                )
+                probeCloseFailure = result.closeFailure
+                result.failure?.let { failure ->
+                    state = usb.operation.OperationState.Failed(failure)
+                    failureCause = failure
+                    throw failure
                 }
             }
         }
@@ -2445,47 +2505,49 @@ class MainViewModel(
                     is usb.operation.OperationState.Failed -> {
                         withContext(Dispatchers.Main.immediate) {
                             if (attachmentIs(gen, device)) {
-                                val isTransport =
-                                    outcome.cause is DiskException ||
-                                        outcome.cause.cause is DiskException
-                                // Soft-table path already painted Ready/tableValid=false in run().
-                                if (state.presence != DevicePresence.Ready || isTransport) {
-                                    onIntent(
-                                        UiIntent.DeviceChanged(
-                                            presence =
-                                                if (isTransport) DevicePresence.Disconnected
-                                                else DevicePresence.Ready,
-                                            device = if (isTransport) identity else state.device ?: identity,
-                                            partitions = if (isTransport) emptyList() else state.partitions,
-                                            files = if (isTransport) emptyList() else state.files,
-                                            tableValid = false,
-                                        ),
-                                    )
-
+                                val isTransport = outcome.cause is DiskException || outcome.cause.cause is DiskException
+                                val closeFailed = probeCloseFailure != null
+                                if (state.presence != DevicePresence.Ready || isTransport || closeFailed) {
+                                    onIntent(UiIntent.DeviceChanged(
+                                        presence = when {
+                                            isTransport -> DevicePresence.Disconnected
+                                            closeFailed -> DevicePresence.Busy
+                                            else -> DevicePresence.Ready
+                                        },
+                                        device = identity,
+                                        partitions = emptyList(),
+                                        tableValid = false,
+                                        retainExisting = false,
+                                        rawGeometry = null,
+                                    ))
                                 }
-                                val key =
-                                    if (isTransport) UiMessageKey.CannotOpenUsb
-                                    else UiMessageKey.CannotReadPartitionTable
-                                onIntent(UiIntent.Status(
-                                    UiMessage.Key(
-                                        key,
-                                        listOf(outcome.cause.message ?: outcome.cause.javaClass.simpleName),
-                                    ),
-                                ))
+                                val key = when {
+                                    closeFailed -> UiMessageKey.VolumeSyncUnconfirmed
+                                    isTransport -> UiMessageKey.CannotOpenUsb
+                                    else -> UiMessageKey.CannotReadPartitionTable
+                                }
+                                val detail = buildString {
+                                    append(outcome.cause.message ?: outcome.cause.javaClass.simpleName)
+                                    probeCloseFailure?.let { closeFailure ->
+                                        if (closeFailure !== outcome.cause && outcome.cause.suppressed.none { it === closeFailure }) {
+                                            append("; release: ")
+                                            append(closeFailure.message ?: closeFailure.javaClass.simpleName)
+                                        }
+                                    }
+                                }
+                                onIntent(UiIntent.Status(UiMessage.Key(key, listOf(detail))))
                             }
                         }
                     }
                     is usb.operation.OperationState.Cancelled -> {
                         withContext(Dispatchers.Main.immediate) {
                             if (attachmentIs(gen, device)) {
-                                onIntent(
-                                    UiIntent.DeviceChanged(
-                                        presence = DevicePresence.Disconnected,
-                                        device = identity,
-                                        partitions = emptyList(),
-                                        files = emptyList(),
-                                    ),
-                                )
+                                onIntent(UiIntent.DeviceChanged(
+                                    presence = DevicePresence.Disconnected,
+                                    device = identity,
+                                    partitions = emptyList(),
+                                    files = emptyList(),
+                                ))
                                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ProbeCancelled)))
                             }
                         }
@@ -2541,6 +2603,15 @@ class MainViewModel(
                         } else {
                             readInstalledVentoyRelease(disk)
                         }
+                    val metadataFingerprint = tableResult.getOrNull()?.let { table ->
+                        fingerprintOrNull { usb.partition.metadataFingerprint(disk, usb.partition.metadataLbas(table)) }
+                    }
+                    val initializationMetadataFingerprintGpt = tableResult.getOrNull()?.let { table ->
+                        fingerprintOrNull { usb.partition.metadataFingerprint(disk, usb.partition.initializationMetadataLbas(table, usb.partition.TableScheme.GPT)) }
+                    }
+                    val initializationMetadataFingerprintMbr = tableResult.getOrNull()?.let { table ->
+                        fingerprintOrNull { usb.partition.metadataFingerprint(disk, usb.partition.initializationMetadataLbas(table, usb.partition.TableScheme.MBR)) }
+                    }
                     withContext(Dispatchers.Main.immediate) {
                         if (!attachmentIs(gen, dev)) {
                             return@withContext
@@ -2564,7 +2635,15 @@ class MainViewModel(
                                     !isTransport && tableResult.getOrNull()?.gptPrimaryDamaged == true,
                                 partitionTableAmbiguous =
                                     !isTransport && tableResult.getOrNull()?.hybridAmbiguous == true,
+                                partitionTableRecognized =
+                                    !isTransport && tableResult.getOrNull()?.recognized == true,
                                 partitionScheme = tableResult.getOrNull()?.scheme,
+                                partitionTableRecognition =
+                                    tableResult.getOrNull()?.recognition
+                                        ?: usb.partition.TableRecognition.UNRECOGNIZED,
+                                metadataFingerprint = metadataFingerprint,
+                                initializationMetadataFingerprintGpt = initializationMetadataFingerprintGpt,
+                                initializationMetadataFingerprintMbr = initializationMetadataFingerprintMbr,
                                 rawGeometry =
                                     usb.partition.RawRangeGeometry.from(
                                         tableResult.getOrNull(),
@@ -2768,13 +2847,16 @@ class MainViewModel(
             intent is UiIntent.OperationUpdated &&
                 intent.progress.state != OperationState.Running &&
                 intent.progress.state != OperationState.Queued
-        if (!state.needsFilesystemUsageRequest(key, lastUsageKey, usageInFlightKey, finished)) return
-        val result = UiReducer.reduce(state, UiIntent.RequestFilesystemUsage)
-        if (result.effects.isEmpty()) return
-        lastUsageKey = key
-        usageInFlightKey = key
-        state = result.state
-        result.effects.forEach { effect -> handleEffect(effect) }
+        val scheduled = scheduleFilesystemUsageRequest(
+            state = state,
+            lastRequestedKey = lastUsageKey,
+            inFlightKey = usageInFlightKey,
+            operationFinished = finished,
+        ) ?: return
+        lastUsageKey = scheduled.key
+        usageInFlightKey = scheduled.key
+        state = scheduled.state
+        handleEffect(scheduled.effect)
     }
 
     /**
@@ -7199,8 +7281,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Keep system bar icons light and bars black; edge-to-edge content supplies backgrounds on API 35+. */
+    private fun configureDarkSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = AndroidColor.BLACK
+        window.navigationBarColor = AndroidColor.BLACK
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureDarkSystemBars()
         // Transfer knobs are read once per operation, so persisted values must be live
         // before the first disk action, not only after visiting Diagnostics.
         usb.diagnostics.PerformancePreferences.load(applicationContext)

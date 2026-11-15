@@ -4,6 +4,7 @@ import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
 import usb.partition.RawSchemeProblem
+import usb.partition.TableRecognition
 import usb.partition.TableScheme
 
 /**
@@ -200,19 +201,24 @@ internal object PartitionTransitions {
             state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
             state.partitionTableDamaged -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
             !state.tableValid -> UiMessage.Key(UiMessageKey.TableDamaged)
-            state.rawGeometry?.metadataProblem ==
-                RawSchemeProblem.GptBackupMetadataUnknown ->
+            state.rawGeometry?.metadataProblem == RawSchemeProblem.GptBackupMetadataUnknown ->
                 UiMessage.Key(UiMessageKey.SchemeBackupMetadataUnknown)
-            currentScheme == null -> UiMessage.Key(UiMessageKey.SchemeUnknown)
-            currentScheme == intent.scheme -> UiMessage.Key(UiMessageKey.SchemeAlreadyCurrent)
+            state.partitionTableRecognition == TableRecognition.SUPERFLOPPY ->
+                UiMessage.Key(UiMessageKey.SchemeUnknown)
+            currentScheme == null && state.partitionTableRecognized -> UiMessage.Key(UiMessageKey.SchemeUnknown)
+            state.partitionTableRecognized && currentScheme == intent.scheme ->
+                UiMessage.Key(UiMessageKey.SchemeAlreadyCurrent)
             snapshot.any { it == null } -> UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)
             intent.scheme == PartitionScheme.Mbr &&
-                device.capacityBytes /
-                state.diskSectorSize.coerceAtLeast(1).toULong() >
-                UiReducer.mbrAddressLimitSectors() ->
-                UiMessage.Key(UiMessageKey.SchemeMbrTooLarge)
-            currentScheme == PartitionScheme.Gpt && state.rawGeometry == null ->
+                device.capacityBytes / state.diskSectorSize.coerceAtLeast(1).toULong() >
+                UiReducer.mbrAddressLimitSectors() -> UiMessage.Key(UiMessageKey.SchemeMbrTooLarge)
+            state.partitionTableRecognized && currentScheme == PartitionScheme.Gpt && state.rawGeometry == null ->
                 UiMessage.Key(UiMessageKey.SchemeBackupUnverified)
+            state.metadataFingerprint == null ->
+                UiMessage.Key(UiMessageKey.SchemeMetadataUnverified)
+            (if (intent.scheme == PartitionScheme.Gpt) state.initializationMetadataFingerprintGpt
+                else state.initializationMetadataFingerprintMbr) == null ->
+                UiMessage.Key(UiMessageKey.SchemeMetadataUnverified)
             else -> null
         }
         return if (problem != null || device == null) {
@@ -225,7 +231,16 @@ internal object PartitionTransitions {
             ReduceResult(
                 state.copy(
                     pendingConfirmation = base.copy(
-                        initialScheme = currentScheme,
+                        initialScheme = currentScheme ?: PartitionScheme.Mbr,
+                        initialTableRecognized = state.partitionTableRecognized,
+                        initialTableRecognition = state.partitionTableRecognition,
+                        initialMetadataFingerprint = state.metadataFingerprint,
+                        initialInitializationMetadataFingerprint =
+                            if (intent.scheme == PartitionScheme.Gpt) state.initializationMetadataFingerprintGpt
+                            else state.initializationMetadataFingerprintMbr,
+                        initialDiskSectorCount = device.capacityBytes /
+                            state.diskSectorSize.coerceAtLeast(1).toULong(),
+                        initialDiskSectorSize = state.diskSectorSize,
                         targetScheme = intent.scheme,
                         initialPartitions = snapshot.filterNotNull(),
                         initialPartitionNames = snapshotNames,

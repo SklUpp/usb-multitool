@@ -140,14 +140,17 @@ class ShellLogBehaviorTest {
     }
 
     @Test
-    fun clearHintStatesNoConfirmationAndUntouchedLogcat() {
-        val english = string("app/src/main/res/values/strings.xml", "log_clear_hint")
-        assertTrue("no confirmation: $english", english.contains("no confirmation"))
-        assertTrue("logcat is untouched: $english", english.contains("logcat", ignoreCase = true))
+    fun clearSnackbarAcknowledgesWithoutTouchingLogcat() {
+        assertNull(stringOrNull("app/src/main/res/values/strings.xml", "log_clear_hint"))
+        assertNull(stringOrNull("app/src/main/res/values-ru/strings.xml", "log_clear_hint"))
 
-        val russian = string("app/src/main/res/values-ru/strings.xml", "log_clear_hint")
-        assertTrue("no confirmation: $russian", russian.contains("без подтверждения"))
-        assertTrue("logcat is untouched: $russian", russian.contains("logcat", ignoreCase = true))
+        val english = string("app/src/main/res/values/strings.xml", "log_clear_snackbar")
+        assertTrue("acknowledgement must name Logcat: $english", english.contains("logcat", ignoreCase = true))
+        assertTrue("acknowledgement must say journal cleared: $english", english.contains("cleared"))
+
+        val russian = string("app/src/main/res/values-ru/strings.xml", "log_clear_snackbar")
+        assertTrue("acknowledgement must name Logcat: $russian", russian.contains("logcat", ignoreCase = true))
+        assertTrue("acknowledgement must say journal cleared: $russian", russian.contains("очищен"))
     }
 
     @Test

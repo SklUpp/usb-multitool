@@ -338,6 +338,39 @@ class FilesPickUiTest {
     }
 
     @Test
+    fun pickerSwitchRepinsAndDoesNotBindOtherPartitionAsVentoyImage() {
+        val before = begun()
+        val result = UiReducer.reduce(before, UiIntent.SelectFilesPickPartition("2"))
+        val mode = requireNotNull(result.state.filesPickMode)
+        assertEquals("2", mode.partitionId)
+        assertEquals(efi.startLba, mode.startLba)
+        assertTrue(mode.sessionId != before.filesPickMode?.sessionId)
+        assertEquals("/", result.state.currentPath)
+        assertTrue(result.state.files.isEmpty())
+        assertEquals(FilesListingState.Loading, result.state.filesListingState)
+        assertTrue(result.effects.any { it == UiEffect.LoadFiles(path = "/") })
+        val listed = result.state.copy(files = ready().files, filesListingState = FilesListingState.Loaded)
+        val confirmed = UiReducer.reduce(listed, UiIntent.ConfirmFilesPickFile("win11.iso"))
+        assertNotNull(confirmed.state.filesPickMode)
+        assertNull(confirmed.state.filesPickSelection(FilesPickPurpose.WindowsImage))
+        assertEquals(UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired), confirmed.state.statusMessage)
+        assertTrue(confirmed.effects.isEmpty())
+    }
+
+    @Test
+    fun rawPickerStagesSelectedPartitionWithoutWriting() {
+        val switched = UiReducer.reduce(
+            begun(purpose = FilesPickPurpose.RawSource, returnTab = ShellTab.Partitions),
+            UiIntent.SelectFilesPickPartition("2"),
+        ).state.copy(files = ready().files, filesListingState = FilesListingState.Loaded)
+        val result = UiReducer.reduce(switched, UiIntent.ConfirmFilesPickFile("win11.iso"))
+        val effect = result.effects.single() as UiEffect.StageUsbImageForRawWrite
+        val binding = requireNotNull(effect.binding)
+        assertEquals("2", binding.partitionId)
+        assertEquals(efi.startLba, binding.startLba)
+    }
+
+    @Test
     fun pickingExistingImageReturnsToVentoyWithPinnedSelection() {
         val result = UiReducer.reduce(begun(), UiIntent.ConfirmFilesPickFile("win11.iso"))
 

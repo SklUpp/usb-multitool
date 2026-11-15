@@ -1,13 +1,18 @@
 package usb.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import android.provider.Settings
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -59,7 +64,12 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.lightColorScheme
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -75,6 +85,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,6 +107,8 @@ import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -118,6 +131,7 @@ import androidx.compose.ui.semantics.collectionItemInfo
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -132,6 +146,17 @@ import usb.image.ReadbackVerdict
 import usb.multitool.R
 import usb.service.OperationToken
 import java.util.Locale
+private fun reducedMotionEnabled(context: Context): Boolean = runCatching {
+    Settings.Global.getFloat(
+        context.contentResolver,
+        Settings.Global.ANIMATOR_DURATION_SCALE,
+        1f,
+    ) == 0f
+}.getOrDefault(false)
+
+private fun usbContentAvailable(presence: DevicePresence): Boolean =
+    presence == DevicePresence.Ready || presence == DevicePresence.Busy
+
 
 /**
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
@@ -202,13 +227,45 @@ fun AppShell(
         var panels by rememberSaveable(stateSaver = ShellPanelStateSaver) {
             mutableStateOf(ShellPanelState())
         }
+        var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         BackHandler(enabled = panels.journalScreenOpen) {
             panels = panels.closeJournalScreen()
+        }
+        BackHandler(enabled = state.tab == ShellTab.Settings) {
+            onIntent(
+                UiIntent.SelectTab(
+                    ShellTabPersistence.decode(settingsReturnTab) ?: ShellTab.Files,
+                ),
+            )
         }
         val logButtonFocus = remember { FocusRequester() }
         val logScreenFocus = remember { FocusRequester() }
         val focusManager = LocalFocusManager.current
         var restoreLogFocus by remember { mutableStateOf(false) }
+        val haptic = LocalHapticFeedback.current
+        val reducedMotion = reducedMotionEnabled(baseContext)
+        var completedHapticToken by rememberSaveable { mutableStateOf<Long?>(null) }
+        var previousPresence by remember { mutableStateOf(state.presence) }
+        LaunchedEffect(state.presence) {
+            val previous = previousPresence
+            val becameAvailable = usbContentAvailable(state.presence) &&
+                (previous == null || !usbContentAvailable(previous))
+            val becameUnavailable = !usbContentAvailable(state.presence) &&
+                previous != null && usbContentAvailable(previous)
+            if (becameAvailable || becameUnavailable) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            }
+            previousPresence = state.presence
+        }
+        LaunchedEffect(state.operation?.token, state.operation?.state) {
+            val token = state.operation?.token?.value
+            if (state.operation?.state == OperationState.Completed && token != null &&
+                token != completedHapticToken
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                completedHapticToken = token
+            }
+        }
         LaunchedEffect(panels.journalScreenOpen) {
             if (panels.journalScreenOpen) {
                 // Clear focus before fencing the covered group, then focus the journal layer.
@@ -231,6 +288,7 @@ fun AppShell(
                 panels = panels.expandStatus()
             }
         }
+        val statusVisible = state.operation != null || state.statusMessage != null
         Scaffold(
             modifier = modifier.fillMaxSize(),
             // targetSdk 36 draws edge to edge: the header, the tab content and the log
@@ -247,13 +305,18 @@ fun AppShell(
                     },
                 ) {
                     // Expanded status participates in layout; collapsed status is an overlay below.
-                    if (!panels.statusCollapsed) {
+                    AnimatedVisibility(
+                        visible = !panels.statusCollapsed && statusVisible,
+                        enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(200)),
+                        exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(100)),
+                    ) {
                         StatusLogPanel(
                             state = state,
                             onIntent = onIntent,
                             panels = panels,
                             onCollapseStatus = { panels = panels.collapseStatus() },
                             onExpandStatus = { panels = panels.expandStatus() },
+                            interactive = statusVisible && !panels.statusCollapsed,
                         )
                     }
                     if (!panels.journalScreenOpen) {
@@ -261,7 +324,7 @@ fun AppShell(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             tonalElevation = 0.dp,
                         ) {
-                            ShellTab.entries.forEach { tab ->
+                            PrimaryShellTabs.forEach { tab ->
                                 NavigationBarItem(
                                     selected = state.tab == tab,
                                     onClick = { onIntent(UiIntent.SelectTab(tab)) },
@@ -318,15 +381,20 @@ fun AppShell(
                         ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    DeviceHeader(
-                        state = state,
-                        onIntent = onIntent,
-                        logButtonFocus = logButtonFocus,
-                        onOpenLog = {
-                            restoreLogFocus = true
-                            panels = panels.openJournalScreen()
-                        },
-                    )
+                    if (state.tab != ShellTab.Settings) {
+                        DeviceHeader(
+                            state = state,
+                            logButtonFocus = logButtonFocus,
+                            onOpenSettings = {
+                                if (state.tab in PrimaryShellTabs) settingsReturnTab = state.tab.name
+                                onIntent(UiIntent.SelectTab(ShellTab.Settings))
+                            },
+                            onOpenLog = {
+                                restoreLogFocus = true
+                                panels = panels.openJournalScreen()
+                            },
+                        )
+                    }
                     // Horizontal tab swipe: the parent only watches pointers that no child
                     // consumed, so a range slider, a horizontally scrolled row or a vertical
                     // list keeps its own gesture. A committed swipe goes through the reducer
@@ -365,25 +433,17 @@ fun AppShell(
                                     ) 72.dp else 0.dp,
                                 ),
                             transitionSpec = {
-                                // and swipes animate the same way. RTL mirrors the sides.
-                                val forward = targetState.ordinal >= initialState.ordinal
-                                val base = if (forward) 1 else -1
-                                val enterFrom = if (layoutDirection == LayoutDirection.Rtl) {
-                                    -base
+                                if (reducedMotion) {
+                                    EnterTransition.None togetherWith ExitTransition.None
                                 } else {
-                                    base
+                                    (fadeIn(tween(200)) +
+                                        scaleIn(initialScale = 0.96f, animationSpec = tween(200)))
+                                        .togetherWith(fadeOut(tween(100)))
                                 }
-                                val enter = slideInHorizontally(tween(220)) { width ->
-                                    enterFrom * width / 3
-                                } + fadeIn(tween(180))
-                                val exit = slideOutHorizontally(tween(220)) { width ->
-                                    -enterFrom * width / 3
-                                } + fadeOut(tween(160))
-                                enter.togetherWith(exit)
                             },
                             label = "tab",
-                        ) { tab ->
-                            when (tab) {
+                        ) { target ->
+                            when (target) {
                                 ShellTab.Files -> FilesScreen(
                                     state = state,
                                     onIntent = onIntent,
@@ -416,6 +476,20 @@ fun AppShell(
                                     onCreateGptCopy = onCreateGptCopy,
                                     onPickRestoreFolder = onPickRestoreFolder,
                                 )
+                                ShellTab.Settings -> SettingsScreen(
+                                    state = state,
+                                    versionName = installedVersionName(LocalContext.current),
+                                    onIntent = onIntent,
+                                    onBack = {
+                                        onIntent(
+                                            UiIntent.SelectTab(
+                                                ShellTabPersistence.decode(settingsReturnTab)
+                                                    ?: ShellTab.Files,
+                                            ),
+                                        )
+                                    },
+                                    onPickBackupFolder = onPickBackupFolder,
+                                )
                             }
                         }
                     }
@@ -445,8 +519,11 @@ fun AppShell(
                         )
                     }
                 }
-                if (panels.statusCollapsed &&
-                    (state.operation != null || state.statusMessage != null)
+                AnimatedVisibility(
+                    visible = panels.statusCollapsed && statusVisible,
+                    enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(200)),
+                    exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(100)),
+                    modifier = Modifier.align(Alignment.BottomEnd),
                 ) {
                     StatusLogPanel(
                         state = state,
@@ -454,9 +531,8 @@ fun AppShell(
                         panels = panels,
                         onCollapseStatus = { panels = panels.collapseStatus() },
                         onExpandStatus = { panels = panels.expandStatus() },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(bottom = 8.dp),
+                        interactive = statusVisible && panels.statusCollapsed,
+                        modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
             }
@@ -494,9 +570,21 @@ fun AppShell(
         state.pendingConfirmation
             ?.takeIf { state.linkOverwriteCandidate == null }
             ?.let { confirmation ->
-            // Explicit acknowledgement: the target board requires a checked box before the
-            // destructive button becomes reachable. Reset per confirmation, never sticky.
+            // Explicit acknowledgement remains mandatory. Wipe also waits three seconds;
+            // no hold gesture or text input can bypass this delay.
             var acknowledged by remember(confirmation) { mutableStateOf(false) }
+            var wipeDelayReady by remember(confirmation) {
+                mutableStateOf(confirmation.action != DestructiveAction.WIPE)
+            }
+            LaunchedEffect(confirmation) {
+                if (confirmation.action == DestructiveAction.WIPE) {
+                    wipeDelayReady = false
+                    delay(3_000L)
+                    wipeDelayReady = true
+                } else {
+                    wipeDelayReady = true
+                }
+            }
             AlertDialog(
                 onDismissRequest = { onIntent(UiIntent.DismissConfirmation) },
                 shape = RoundedCornerShape(28.dp),
@@ -560,13 +648,14 @@ fun AppShell(
                     }
                 },
                 confirmButton = {
+                    val confirmEnabled = acknowledged && wipeDelayReady
                     TextButton(
                         onClick = { onIntent(UiIntent.ConfirmDestructive) },
-                        enabled = acknowledged,
+                        enabled = confirmEnabled,
                     ) {
                         Text(
                             text = stringResource(R.string.action_confirm),
-                            color = if (acknowledged) {
+                            color = if (confirmEnabled) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
@@ -682,96 +771,74 @@ private fun ProjectVersionButton(versionName: String?) {
     }
 }
 
-/**
- * Compact top device status header. The title and subtitle sit in their own surface with a
- * top inset; language, theme and log controls stay outside that surface, so no control is
- * painted on top of the block it does not belong to. Height is content-driven — no
- * `heightIn(max)` that could clip a wrapped subtitle on small/landscape screens.
- */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DeviceHeader(
     state: AppUiState,
-    onIntent: (UiIntent) -> Unit,
     logButtonFocus: FocusRequester,
+    onOpenSettings: () -> Unit,
     onOpenLog: () -> Unit,
 ) {
     val device = state.device
-    val partCount = state.partitions.size
-    val context = LocalContext.current
-    // Installed version is stable for the process lifetime; avoid a binder read per frame.
-    val versionName = remember(context) { installedVersionName(context) }
     val subtitle = when (state.presence) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
-            append(" · ")
-            append(pluralStringResource(R.plurals.partitions_count, partCount, partCount))
+            state.partitionScheme?.name?.let { append(" · ").append(it) }
         }
         DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
         DevicePresence.Busy -> stringResource(R.string.header_busy)
         DevicePresence.Disconnected -> stringResource(R.string.header_disconnected)
         DevicePresence.Absent -> stringResource(R.string.header_absent)
     }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            modifier = Modifier.weight(1f),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(1.dp),
-            ) {
+    var moreOpen by remember { mutableStateOf(false) }
+    val logLabel = stringResource(R.string.log_screen_title)
+    val moreLabel = stringResource(R.string.more_actions)
+TopAppBar(
+        title = {
+            Column {
                 Text(
                     text = device?.label ?: stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.semantics { heading() },
                 )
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (state.presence == DevicePresence.PermissionRequired) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-
-        // Version and non-journal controls share one compact row. Journal remains a text action.
-        Column(
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(0.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
-            ) {
-                ProjectVersionButton(versionName = versionName)
-                LanguagePicker(language = state.language, onIntent = onIntent)
-                ThemeToggle(darkTheme = state.darkTheme, onIntent = onIntent)
+        },
+        actions = {
+            IconButton(
+                onClick = onOpenLog,
+                modifier = Modifier
+                    .size(48.dp)
+                    .focusRequester(logButtonFocus)
+                    .semantics { contentDescription = logLabel },
+            ) { GlyphIcon(Glyph.Log, size = 22.dp) }
+            Box {
+                IconButton(
+                    onClick = { moreOpen = true },
+                    modifier = Modifier
+                        .size(48.dp)
+                    .semantics { contentDescription = moreLabel },
+                ) { GlyphIcon(Glyph.More, size = 22.dp) }
+                DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.settings_title_screen)) },
+                        onClick = { moreOpen = false; onOpenSettings() },
+                    )
+                }
             }
-            LogOpenButton(
-                lineCount = state.logLines.size,
-                focusRequester = logButtonFocus,
-                onOpenLog = onOpenLog,
-            )
-        }
-    }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+        ),
+    )
 }
 
 /**
@@ -866,6 +933,7 @@ internal fun StatusLogPanel(
     onCollapseStatus: () -> Unit,
     onExpandStatus: () -> Unit,
     modifier: Modifier = Modifier,
+    interactive: Boolean = true,
 ) {
     val op = state.operation
     if (op == null && state.statusMessage == null) return
@@ -944,11 +1012,12 @@ internal fun StatusLogPanel(
                     .size(circleDiameter)
                     .clip(CircleShape)
                     .combinedClickable(
+                        enabled = interactive,
                         role = Role.Button,
                         onClickLabel = statusDescription,
-                        onLongClickLabel = if (cancelable) cancelDescription else null,
+                        onLongClickLabel = if (interactive && cancelable) cancelDescription else null,
                         onClick = onExpandStatus,
-                        onLongClick = if (cancelable) ::requestCancel else null,
+                        onLongClick = if (interactive && cancelable) ::requestCancel else null,
                     )
             } else {
                 Modifier
@@ -1177,7 +1246,7 @@ internal fun StatusLogPanel(
                                 color = content,
                             )
                         }
-                        if (cancelable) {
+                        if (interactive && cancelable) {
                             IconButton(
                                 onClick = ::requestCancel,
                                 modifier = Modifier
@@ -1193,7 +1262,12 @@ internal fun StatusLogPanel(
                                 .size(48.dp)
                                 .semantics { contentDescription = detailsDescription },
                         ) {
-                            GlyphIcon(glyph = Glyph.Info, size = 18.dp, tint = content)
+                            Icon(
+                                painter = painterResource(R.drawable.ic_info_duotone),
+                                contentDescription = null,
+                                tint = content,
+                                modifier = Modifier.size(18.dp),
+                            )
                         }
                         IconButton(
                             onClick = onCollapseStatus,
@@ -1340,8 +1414,14 @@ private fun LogScreen(
 ) {
     val context = LocalContext.current
     val logPaneTitle = stringResource(R.string.log_screen_title)
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
     var confirmCopy by remember { mutableStateOf(false) }
     val backText = stringResource(R.string.log_back)
+    val copyLabel = stringResource(R.string.log_copy_all)
+    val clearLabel = stringResource(R.string.log_clear)
+    val exportLabel = stringResource(R.string.log_export_trace)
+    val clearSnackbar = stringResource(R.string.log_clear_snackbar)
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1375,39 +1455,40 @@ private fun LogScreen(
                 text = stringResource(R.string.log_title_count, lines.size),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
                     .semantics { heading() },
             )
-            TextButton(
+            IconButton(
                 onClick = { confirmCopy = true },
                 enabled = lines.isNotEmpty(),
-                modifier = Modifier.heightIn(min = 48.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = copyLabel },
             ) {
-                Text(stringResource(R.string.log_copy_all))
+                GlyphIcon(glyph = Glyph.Copy, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            TextButton(
-                onClick = { onIntent(UiIntent.ClearLog) },
+            IconButton(
+                onClick = {
+                    onIntent(UiIntent.ClearLog)
+                    snackbarScope.launch { snackbarHostState.showSnackbar(clearSnackbar) }
+                },
                 enabled = lines.isNotEmpty(),
-                modifier = Modifier.heightIn(min = 48.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = clearLabel },
             ) {
-                Text(stringResource(R.string.log_clear))
+                GlyphIcon(glyph = Glyph.Trash, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }
-        // Own row: two text buttons beside the title already fill the header at RU lengths.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(
+            IconButton(
                 onClick = onExportTrace,
-                modifier = Modifier.heightIn(min = 48.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = exportLabel },
             ) {
-                Text(stringResource(R.string.log_export_trace))
+                GlyphIcon(glyph = Glyph.Download, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (lines.isEmpty()) {
@@ -1427,7 +1508,10 @@ private fun LogScreen(
                 items(lines.size) { index ->
                     Text(
                         text = lines[index],
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.semantics {
                             collectionItemInfo = CollectionItemInfo(
@@ -1441,10 +1525,8 @@ private fun LogScreen(
                 }
             }
         }
-        Text(
-            text = stringResource(R.string.log_clear_hint),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        SnackbarHost(
+            hostState = snackbarHostState,
             modifier = Modifier.padding(bottom = 12.dp),
         )
     }
@@ -1572,22 +1654,24 @@ private fun languageName(language: AppLanguage): String =
 private fun themeLabel(darkTheme: Boolean): String =
     if (darkTheme) stringResource(R.string.theme_dark) else stringResource(R.string.theme_light)
 
-/** Design tokens of the target boards: flat background, card and row surfaces, one accent. */
+/** AMOLED palette: true black background and dark tonal containers. */
 private fun darkDesignColors() = darkColorScheme(
     primary = Color(0xFFB4C5FF), onPrimary = Color(0xFF0E1E4A),
-    primaryContainer = Color(0xFF2A2A30), onPrimaryContainer = Color(0xFFE6E6EA),
-    secondaryContainer = Color(0xFF2A2A30), onSecondaryContainer = Color(0xFFE6E6EA),
-    tertiaryContainer = Color(0xFF2A2A30), onTertiaryContainer = Color(0xFFE6E6EA),
-    background = Color(0xFF111113), onBackground = Color(0xFFE6E6EA),
-    surface = Color(0xFF111113), onSurface = Color(0xFFE6E6EA),
-    surfaceVariant = Color(0xFF2A2A30), onSurfaceVariant = Color(0xFFA3A3AD),
-    surfaceContainer = Color(0xFF1B1B1F),
-    surfaceContainerHigh = Color(0xFF2A2A30),
-    surfaceContainerHighest = Color(0xFF33333A),
-    outline = Color(0xFF3A3A42), outlineVariant = Color(0xFF3A3A42),
+    primaryContainer = Color(0xFF25252B), onPrimaryContainer = Color(0xFFE6E6EA),
+    secondaryContainer = Color(0xFF25252B), onSecondaryContainer = Color(0xFFE6E6EA),
+    tertiaryContainer = Color(0xFF25252B), onTertiaryContainer = Color(0xFFE6E6EA),
+    background = Color.Black, onBackground = Color(0xFFE6E6EA),
+    surface = Color.Black, onSurface = Color(0xFFE6E6EA),
+    surfaceVariant = Color(0xFF202027), onSurfaceVariant = Color(0xFFA3A3AD),
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF0B0B0D),
+    surfaceContainer = Color(0xFF121216),
+    surfaceContainerHigh = Color(0xFF1D1D22),
+    surfaceContainerHighest = Color(0xFF292930),
+    outline = Color(0xFF3A3A42), outlineVariant = Color(0xFF303038),
     error = Color(0xFFFFB4AB), onError = Color(0xFF690005),
     errorContainer = Color(0xFF93000A), onErrorContainer = Color(0xFFFFDAD6),
-    inverseSurface = Color(0xFFE6E6EA), inverseOnSurface = Color(0xFF111113),
+    inverseSurface = Color(0xFFE6E6EA), inverseOnSurface = Color.Black,
 )
 
 private fun lightDesignColors() = lightColorScheme(
@@ -1912,9 +1996,9 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
             .size(48.dp)
             .semantics { contentDescription = infoTitle },
     ) {
-        GlyphIcon(
-            glyph = Glyph.Info,
-            size = 20.dp,
+        Icon(
+            painter = painterResource(R.drawable.ic_info_duotone),
+            contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
         )
     }
@@ -2001,6 +2085,8 @@ internal enum class Glyph {
     Stop,
     /** Three stacked lines: the in-app operation log. */
     Log,
+    /** Overflow menu action. */
+    More,
     /** Reveal a masked value. */
     Eye,
     /** Hide a revealed value. */
@@ -2260,6 +2346,11 @@ internal fun GlyphIcon(
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 12f), androidx.compose.ui.geometry.Offset(19f, 12f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 17f), androidx.compose.ui.geometry.Offset(13f, 17f), 1.8f)
                 }
+                Glyph.More -> {
+                    drawCircle(tint, radius = 1.7f, center = androidx.compose.ui.geometry.Offset(12f, 5.5f))
+                    drawCircle(tint, radius = 1.7f, center = androidx.compose.ui.geometry.Offset(12f, 12f))
+                    drawCircle(tint, radius = 1.7f, center = androidx.compose.ui.geometry.Offset(12f, 18.5f))
+                }
                 Glyph.Eye -> {
                     drawPath(
                         Path().apply {
@@ -2336,6 +2427,7 @@ private fun ShellTab.title(): String =
         ShellTab.Ventoy -> stringResource(R.string.tab_ventoy)
         ShellTab.Partitions -> stringResource(R.string.tab_partitions)
         ShellTab.Diagnostics -> stringResource(R.string.tab_diagnostics)
+        ShellTab.Settings -> stringResource(R.string.settings_title_screen)
     }
 
 @Composable
@@ -2349,6 +2441,7 @@ private fun TabIcon(tab: ShellTab) {
                 ShellTab.Ventoy -> R.drawable.ic_tab_ventoy
                 ShellTab.Partitions -> R.drawable.ic_tab_partitions
                 ShellTab.Diagnostics -> R.drawable.ic_tab_diagnostics
+                ShellTab.Settings -> R.drawable.ic_theme
             },
         ),
         contentDescription = null,

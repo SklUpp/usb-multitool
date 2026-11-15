@@ -1,6 +1,15 @@
 package usb.partition
 
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import usb.device.BlockDevice
+
+enum class TableRecognition {
+    RECOGNIZED,
+    SUPERFLOPPY,
+    UNRECOGNIZED,
+    DAMAGED,
+}
 
 data class PartitionTable(
     val scheme: TableScheme,
@@ -8,8 +17,11 @@ data class PartitionTable(
     val freeRegions: List<FreeRegion>,
     val diskSectorCount: ULong,
     val sectorSize: Int = 512,
+    /** True when a valid MBR/GPT table was recognized. */
+    val recognized: Boolean = true,
+    val recognition: TableRecognition = if (recognized) TableRecognition.RECOGNIZED else TableRecognition.UNRECOGNIZED,
     val hybridAmbiguous: Boolean = false,
-    /** Backup GPT header LBA from the CRC-valid backup header; null when unknown/invalid. */
+    /** SHA-256 of only parsed metadata sectors; never scans partition contents. */
     val gptBackupHeaderLba: ULong? = null,
     /** Backup entry-array LBA as recorded by that header; never guessed, null when unknown. */
     val gptBackupEntriesLba: ULong? = null,
@@ -29,9 +41,20 @@ data class PartitionTable(
      * rewritten or formatted: either layout may own the sectors under the other's records.
      */
     fun requireUnambiguousLayout() {
-        if (scheme == TableScheme.HYBRID || hybridAmbiguous) {
+        if (scheme == TableScheme.HYBRID || hybridAmbiguous || !recognized ||
+            recognition != TableRecognition.RECOGNIZED) {
             throw HybridAmbiguityException(
-                "partition layout is ambiguous; repair the table before changing partitions",
+                "partition layout is ambiguous or unrecognized; repair the table before changing partitions",
+            )
+        }
+    }
+
+    /** Initialization may replace only truly unrecognized metadata after confirmation. */
+    fun requireInitializationLayout() {
+        if (scheme == TableScheme.HYBRID || hybridAmbiguous ||
+            recognition == TableRecognition.SUPERFLOPPY || recognition == TableRecognition.DAMAGED) {
+            throw HybridAmbiguityException(
+                "partition layout is ambiguous or contains a filesystem; refusing initialization",
             )
         }
     }
@@ -49,15 +72,24 @@ data class PartitionTable(
                 val gpt = gptBehindDamagedMbr(disk, mbrFailure)
                 return hybridAmbiguous(disk, gpt.partitions)
             }
+            if (mbr.recognition == TableRecognition.DAMAGED) {
+                return PartitionTable(
+                    scheme = TableScheme.MBR,
+                    partitions = mbr.partitions,
+                    freeRegions = emptyList(),
+                    diskSectorCount = disk.sectorCount,
+                    sectorSize = disk.sectorSize,
+                    recognized = false,
+                    recognition = TableRecognition.DAMAGED,
+                    hybridAmbiguous = true,
+                )
+            }
             if (mbr.protective) {
                 // 0xEE plus any other real MBR partition is hybrid-ambiguous.
                 if (mbr.partitions.isNotEmpty()) return hybridAmbiguous(disk, mbr.partitions)
                 return fromGpt(disk, readGptPreferPrimary(disk))
             }
             if (mbr.partitions.isNotEmpty()) {
-                // Classic MBR. Only a fully validated GPT copy proves a hybrid layout; GPT
-                // magic bytes inside ordinary data are not evidence of one.
-                // Transport failures must surface.
                 val gpt = try {
                     readGptPreferPrimary(disk)
                 } catch (_: IllegalArgumentException) {
@@ -76,10 +108,24 @@ data class PartitionTable(
                     sectorSize = disk.sectorSize,
                 )
             }
+            if (mbr.recognition == TableRecognition.SUPERFLOPPY) {
+                val gpt = try {
+                    readGptPreferPrimary(disk)
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+                return if (gpt != null) {
+                    // A filesystem boot sector at LBA 0 and a valid GPT are competing owners.
+                    hybridAmbiguous(disk, emptyList())
+                } else {
+                    emptyMbr(disk, TableRecognition.SUPERFLOPPY)
+                }
+            }
             return try {
                 fromGpt(disk, readGptPreferPrimary(disk))
             } catch (_: GptTable.MissingSignatureException) {
-                emptyMbr(disk)
+                // No signed MBR and no GPT signature: metadata is unrecognized.
+                emptyMbr(disk, mbr.recognition)
             }
         }
 
@@ -103,10 +149,11 @@ data class PartitionTable(
                 hybridAmbiguous = true,
             )
 
-        private fun emptyMbr(disk: BlockDevice) = PartitionTable(
+        private fun emptyMbr(disk: BlockDevice, recognition: TableRecognition = TableRecognition.RECOGNIZED) = PartitionTable(
             scheme = TableScheme.MBR,
             partitions = emptyList(),
-            // Never offer LBA 0: a partition there would overwrite the MBR/GPT
+            recognized = recognition == TableRecognition.RECOGNIZED,
+            recognition = recognition,
             // metadata written by commit as soon as its filesystem is formatted.
             freeRegions = recomputeFree(
                 emptyList(),
@@ -308,4 +355,60 @@ data class PartitionTable(
             return free
         }
     }
+}
+/** Hash bounded metadata sectors, including LBA labels to prevent reorder ambiguity. */
+fun metadataFingerprint(disk: BlockDevice, lbas: Collection<ULong>): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteBuffer.allocate(disk.sectorSize)
+    for (lba in lbas.distinct().sorted()) {
+        require(lba < disk.sectorCount) { "metadata LBA outside disk" }
+        buffer.clear()
+        disk.read(lba, buffer)
+        buffer.flip()
+        digest.update(ByteBuffer.allocate(8).putLong(lba.toLong()).array())
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        digest.update(bytes)
+    }
+    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+}
+
+fun metadataLbas(table: PartitionTable): List<ULong> {
+    val lbas = linkedSetOf<ULong>(0UL)
+    if (table.diskSectorCount > 1UL) lbas += 1UL
+    if (table.diskSectorCount > 0UL) lbas += table.diskSectorCount - 1UL
+    table.gptHeader?.let { header ->
+        lbas += header.currentLba
+        lbas += header.entryLba
+        val sectors = GptTable.entrySectors(header, table.sectorSize)
+        repeat(sectors.toInt()) { lbas += header.entryLba + it.toULong() }
+    }
+    table.gptBackupHeaderLba?.let { lbas += it }
+    table.gptBackupEntriesLba?.let { start ->
+        val count = table.gptHeader?.let { GptTable.entrySectors(it, table.sectorSize) } ?: 0UL
+        repeat(count.toInt()) { lbas += start + it.toULong() }
+    }
+    return lbas.filter { it < table.diskSectorCount }
+}
+
+/** Exact bounded metadata sectors touched by [TableInitializer.plan] for target. */
+fun initializationMetadataLbas(table: PartitionTable, target: TableScheme): List<ULong> {
+    val plan = TableInitializer.plan(table, target)
+    val lbas = linkedSetOf<ULong>(0UL)
+    fun addRange(range: FreeRegion) {
+        require(range.sectorCount <= Int.MAX_VALUE.toULong())
+        repeat(range.sectorCount.toInt()) { lbas += range.startLba + it.toULong() }
+    }
+    plan.eraseHeaders.forEach(::addRange)
+    plan.eraseArrays.forEach(::addRange)
+    lbas += plan.primaryHeaderLba
+    lbas += plan.backupHeaderLba
+    repeat(GptTable.entrySectors(
+        GptHeader(92, plan.primaryHeaderLba, plan.backupHeaderLba, plan.firstUsable,
+            plan.lastUsable, plan.diskGuid, plan.primaryEntriesLba, plan.entryCount,
+            plan.entrySize, 0, 0), table.sectorSize).toInt()) {
+        lbas += plan.primaryEntriesLba + it.toULong()
+        lbas += plan.backupEntriesLba + it.toULong()
+    }
+    return lbas.filter { it < table.diskSectorCount }
 }

@@ -19,7 +19,7 @@
     <string name="log_copy_warning">В журнале могут быть пути к файлам и серийные номера USB. При копировании всё это попадёт в буфер обмена, откуда его сможет прочитать следующее приложение. Копируйте, только если допускаете такое раскрытие.</string>
     <string name="log_copy_confirm">Копировать</string>
     <string name="log_clear">Очистить</string>
-    <string name="log_clear_hint">Очистка выполняется сразу, без подтверждения. Новые записи могут появиться тут же, в том числе во время операции. Logcat Android не очищается.</string>
+    <string name="log_clear_snackbar">Журнал очищен. Системный Logcat не затронут.</string>
     <string name="log_export_trace">Экспорт трассировки</string>
     <string name="msg_trace_exported">Трассировка записана в выбранный файл.</string>
     <string name="msg_trace_export_failed">Не удалось записать файл трассировки.</string>
@@ -112,6 +112,9 @@
     <string name="partitions_scheme_erase_title">Будут стёрты разделы:</string>
     <string name="partitions_scheme_erase_partition">• %1$s — %2$s</string>
     <string name="partitions_scheme_change_action">Сменить на %1$s</string>
+    <string name="partitions_scheme_convert_to">Конвертировать в %1$s</string>
+    <string name="partitions_scheme_initialize_action">Инициализировать таблицу</string>
+    <string name="partitions_scheme_initialize_title">Инициализация таблицы разделов</string>
     <string name="partitions_scheme_current_a11y">Текущая схема: %1$s</string>
     <string name="partitions_scheme_actions_a11y">Открыть варианты схемы и резервной GPT для %1$s</string>
     <string name="partitions_scheme_unavailable_a11y">Действия со схемой %1$s недоступны</string>
@@ -163,7 +166,7 @@
     <string name="tab_files">Файлы</string>
     <string name="tab_ventoy">Ventoy</string>
     <string name="tab_partitions">Разделы</string>
-    <string name="tab_diagnostics">Диагностика</string>
+    <string name="tab_diagnostics">Обслуживание</string>
     <string name="action_confirm">Подтвердить</string>
     <string name="action_delete">Удалить</string>
     <string name="action_create">Создать</string>
@@ -253,6 +256,7 @@
     <string name="files_pick_device">Выбрать с устройства</string>
     <string name="files_pick_use_file">Использовать файл</string>
     <string name="files_pick_back">Назад</string>
+    <string name="files_more_actions">Дополнительные действия с файлом</string>
     <string name="type_folder">Папка</string>
     <string name="type_iso">ISO-образ</string>
     <string name="type_file">Файл</string>
@@ -325,6 +329,7 @@
     <string name="partitions_repair_info_title">Исправление резервной GPT</string>
     <string name="partitions_repair_info_text">Резервная GPT восстанавливается по исправной основной GPT. Операция не форматирует, не создаёт, не удаляет и не перезаписывает содержимое разделов. Исправление недоступно, если основная GPT повреждена или таблица неоднозначна.</string>
     <string name="ventoy_section_title">Ventoy</string>
+    <string name="ventoy_version_subtitle">Версия</string>
     <string name="ventoy_help_title">Установка и обновление Ventoy</string>
     <string name="ventoy_help_text">Версии в приложении, на флешке (VTOYEFI) и на сервере показаны отдельно. Установка стирает все разделы и файлы и форматирует раздел данных; требуется подтверждение. Обновление перезаписывает загрузочные файлы, сохраняя данные, но атомарность не обещается.</string>
     <string name="ventoy_help_details">Проверка и загрузка не пишут на флешку; проверенный релиз хранится в приватном хранилище и используется для установки/обновления до очистки данных. Для закреплённых релизов требуются независимые SHA-256 архива и компонентов. Непривязанный upstream загружается только после отдельного предупреждения об отсутствии независимой доверенной SHA; структурная проверка не доказывает подлинность.</string>
@@ -353,6 +358,7 @@
     <string name="ventoy_badge_downloaded">Загружен %1$s</string>
     <string name="ventoy_badge_pinned">Закреплён %1$s</string>
     <string name="ventoy_check_version">Проверить версию на сервере</string>
+    <string name="ventoy_check_download">Проверить и загрузить релиз</string>
     <string name="ventoy_download_already_latest_title">Ventoy уже последней версии</string>
     <string name="ventoy_download_already_latest_body">Целевая версия приложения %1$s совпадает с upstream %2$s. Более новой версии для загрузки нет.</string>
     <string name="ventoy_download_recovered">%1$s не сохранён; доступен сохранённый %2$s.</string>
@@ -438,6 +444,7 @@
     <string name="msg_files_pick_active">Сначала завершите или отмените выбор файла.</string>
     <string name="msg_files_pick_target_invalid">Выбранный файл больше недоступен. Вернитесь и выберите снова.</string>
     <string name="msg_ventoy_data_partition_missing">Раздел данных Ventoy не найден.</string>
+    <string name="msg_ventoy_data_partition_required">Выберите файл на первом разделе данных Ventoy. Файлы на других разделах автоматически не обнаруживаются Ventoy.</string>
     <string name="msg_import_inspection_busy">Другая проверка файла ещё выполняется. Повторите через момент.</string>
     <string name="msg_import_picker_busy">Окно выбора файла уже открыто. Завершите или отмените его.</string>
     <string name="msg_import_inspection_cancelling">Завершаем проверку файла. USB-диск закроется автоматически.</string>
@@ -541,6 +548,7 @@
     <string name="confirm_volume_label">Новая метка тома: %1$s</string>
     <string name="confirm_initialize_scheme">Новая схема: %1$s</string>
     <string name="confirm_initialize_partitions">Будет удалено разделов: %1$d</string>
+    <string name="confirm_initialize_unrecognized">Поддерживаемая таблица разделов не распознана. Это не доказывает, что носитель пуст; существующие данные могут стать недоступны. Инициализация записывает метаданные разделов и не выполняет безопасное стирание диска.</string>
     <string name="raw_map_legend_range">Диапазон записи</string>
     <string name="raw_map_legend_partition">Раздел</string>
     <string name="raw_map_legend_boot">Загрузочная область</string>
@@ -623,6 +631,7 @@
     <string name="msg_scheme_backup_metadata_unknown">Метаданные резервной GPT не читаются; деструктивная смена схемы отключена до восстановления или повторного чтения таблицы.</string>
     <string name="msg_scheme_backup_unverified">Данные резервной GPT ещё не проверены; обновите устройство перед деструктивной сменой схемы.</string>
     <string name="msg_scheme_mbr_too_large">MBR не адресует этот диск: превышен предел 32-бит LBA.</string>
+    <string name="msg_scheme_metadata_unverified">Метаданные целевой схемы нельзя безопасно проверить; обновите устройство перед деструктивной инициализацией схемы.</string>
     <string name="msg_target_layout_invalid">Недопустимая разметка целевого диска: %1$s</string>
     <string name="layout_confirm_ack">Я понимаю, что разметка относится к другому компьютеру, заявленный размер диска и DiskID здесь не проверяются, порядок дисков там может быть иным, а применение разметки может очистить или перезаписать этот диск</string>
     <string name="layout_confirm_apply">Применить разметку</string>
@@ -843,4 +852,9 @@
 <string name="op_delete_batch">Удаление %1$d записей</string>
 <string name="op_batch_current_file_pct">файл %1$d%%</string>
 <string name="op_batch_current_file_bytes">Текущий файл · %1$s / %2$s</string>
+    <string name="settings_title_screen">Настройки</string>
+    <string name="settings_back">Назад</string>
+    <string name="settings_appearance_title">Внешний вид</string>
+    <string name="settings_about_title">О приложении</string>
+    <string name="more_actions">Другие действия</string>
 </resources>

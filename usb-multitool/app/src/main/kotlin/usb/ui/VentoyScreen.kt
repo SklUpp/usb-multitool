@@ -1,6 +1,7 @@
 package usb.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,18 +10,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
@@ -34,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -142,33 +147,17 @@ fun VentoyScreen(
     ) {
         SectionCard(
             title = stringResource(R.string.ventoy_section_title),
+            subtitle = stringResource(R.string.ventoy_version_subtitle),
             titleColor = MaterialTheme.colorScheme.onSurface,
             trailing = {
-                Row(
-                    modifier = Modifier.wrapContentWidth().horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    VentoyVersionRow(state = state, onIntent = onIntent)
-                    state.downloadedVentoyRelease?.let { downloaded ->
-                        Badge(
-                            text = stringResource(
-                                if (downloaded.independentlyPinned) R.string.ventoy_badge_pinned
-                                else R.string.ventoy_badge_downloaded,
-                                downloaded.release,
-                            ),
-                            container = MaterialTheme.colorScheme.tertiaryContainer,
-                            content = DownloadedReleaseOrange,
-                        )
-                    }
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.ventoy_help_title),
-                        infoText = stringResource(R.string.ventoy_help_text) +
-                            "\n\n" + stringResource(R.string.ventoy_help_details),
-                    )
-                }
+                InfoHelpButton(
+                    infoTitle = stringResource(R.string.ventoy_help_title),
+                    infoText = stringResource(R.string.ventoy_help_text) +
+                        "\n\n" + stringResource(R.string.ventoy_help_details),
+                )
             },
         ) {
+            VentoyVersionRow(state = state, onIntent = onIntent)
             if (!state.actionsEnabled) {
                 EmptyHint(UiReducer.presenceMessage(state.presence).localized())
             }
@@ -204,7 +193,7 @@ fun VentoyScreen(
                     Text(
                         text = ventoyUpdateLabel(comparison),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -256,10 +245,9 @@ private fun VentoyVersionRow(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
 ) {
-    val checkLabel = stringResource(R.string.ventoy_check_version)
-    val downloadLabel = stringResource(R.string.ventoy_download)
-    var downloadPrompt by remember { mutableStateOf<DownloadPrompt?>(null) }
+    val checkDownloadLabel = stringResource(R.string.ventoy_check_download)
     var pendingDownloadCheck by remember { mutableStateOf(false) }
+    var downloadPrompt by remember { mutableStateOf<DownloadPrompt?>(null) }
     var promptRelease by remember { mutableStateOf<String?>(null) }
     var promptPinned by remember { mutableStateOf<Boolean?>(null) }
     var promptRequest by remember { mutableStateOf<Long?>(null) }
@@ -297,45 +285,76 @@ private fun VentoyVersionRow(
             }
         }
     }
-    Row(
-        modifier = Modifier.wrapContentWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        VentoyVersionFact(
-            glyph = Glyph.Package,
-            label = stringResource(R.string.ventoy_version_bundled),
-            value = state.downloadedVentoyRelease?.release ?: state.bundledVentoyRelease,
-            valueColor = if (state.downloadedVentoyRelease != null) {
-                DownloadedReleaseOrange
-            } else {
-                null
-            },
-        )
-        VentoyVersionFact(
-            glyph = Glyph.Usb,
-            label = stringResource(R.string.ventoy_version_installed),
-            value = state.installedVentoyRelease,
-            readError = state.installedVentoyReadError,
-        )
-        VentoyVersionFact(
-            glyph = Glyph.Cloud,
-            label = stringResource(R.string.ventoy_version_upstream),
-            value = state.upstreamVentoyRelease,
-        )
-        IconButton(
-            onClick = {
-                pendingDownloadCheck = true
-                onIntent(UiIntent.CheckVentoyUpstream)
-            },
-            enabled = !state.ventoyDownloadInFlight && !state.ventoyUpstreamChecking,
-            modifier = Modifier.semantics { contentDescription = downloadLabel },
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (state.ventoyDownloadInFlight || state.ventoyUpstreamChecking) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            } else {
-                GlyphIcon(Glyph.Download, size = 18.dp)
+            VentoyVersionFact(
+                glyph = Glyph.Package,
+                label = stringResource(R.string.ventoy_version_bundled),
+                value = state.downloadedVentoyRelease?.release ?: state.bundledVentoyRelease,
+                valueColor = if (state.downloadedVentoyRelease != null) DownloadedReleaseOrange else null,
+                modifier = Modifier.weight(1f),
+            )
+            VentoyVersionFact(
+                glyph = Glyph.Usb,
+                label = stringResource(R.string.ventoy_version_installed),
+                value = state.installedVentoyRelease,
+                readError = state.installedVentoyReadError,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        state.downloadedVentoyRelease?.let { downloaded ->
+            Badge(
+                text = stringResource(
+                    if (downloaded.independentlyPinned) R.string.ventoy_badge_pinned
+                    else R.string.ventoy_badge_downloaded,
+                    downloaded.release,
+                ),
+                container = MaterialTheme.colorScheme.tertiaryContainer,
+                content = DownloadedReleaseOrange,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            VentoyVersionFact(
+                glyph = Glyph.Cloud,
+                label = stringResource(R.string.ventoy_version_upstream),
+                value = state.upstreamVentoyRelease,
+                modifier = Modifier.weight(1f),
+            )
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                IconButton(
+                    onClick = {
+                        pendingDownloadCheck = true
+                        onIntent(UiIntent.CheckVentoyUpstream)
+                    },
+                    enabled = !state.ventoyDownloadInFlight && !state.ventoyUpstreamChecking,
+                    modifier = Modifier.semantics { contentDescription = checkDownloadLabel },
+                ) {
+                    if (state.ventoyDownloadInFlight || state.ventoyUpstreamChecking) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        GlyphIcon(Glyph.Download, size = 18.dp)
+                    }
+                }
             }
+            Text(
+                text = ":",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
     val prompt = downloadPrompt
@@ -444,6 +463,11 @@ private fun VentoyVersionFact(
         GlyphIcon(
             glyph = glyph,
             size = 14.dp,
+        )
+        Text(
+            text = ":",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
         )
         Text(
             text = displayValue,
@@ -606,8 +630,16 @@ private fun WindowsImageBlock(
             title = { Text(chooseDescription) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.raw_choose_stick)) },
+                        leadingContent = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().clickable {
                             imageSourcePrompt = false
                             onIntent(
                                 UiIntent.BeginFilesPick(
@@ -619,12 +651,17 @@ private fun WindowsImageBlock(
                                 ),
                             )
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.raw_choose_stick))
-                    }
-                    TextButton(
-                        onClick = {
+                    )
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.raw_choose_phone)) },
+                        leadingContent = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().clickable {
                             imageSourcePrompt = false
                             onIntent(
                                 UiIntent.BeginFilesPick(
@@ -636,10 +673,7 @@ private fun WindowsImageBlock(
                                 ),
                             )
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.raw_choose_phone))
-                    }
+                    )
                 }
             },
             confirmButton = {},

@@ -132,6 +132,46 @@ internal object FilesPickTransitions {
             }
         }
     }
+    fun selectPartition(state: AppUiState, partitionId: String): ReduceResult {
+        val mode = state.filesPickMode ?: return ReduceResult(state)
+        if (!mode.matches(state)) return abortPinLost(state)
+        if (!state.actionsEnabled) {
+            return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+        }
+        val partition = state.partitions.firstOrNull { it.id == partitionId }
+            ?: return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+        if (partition.startLba == null || partition.sectorCount == null) {
+            return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)))
+        }
+        if (partition.id == mode.partitionId) return ReduceResult(state)
+        val session = newFilesPickSession()
+        val hostInspection = state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
+        return ReduceResult(
+            state.copy(
+                filesPickSession = session,
+                filesPickMode = mode.copy(sessionId = session, partitionId = partition.id,
+                    startLba = partition.startLba, sectorCount = partition.sectorCount),
+                selectedPartitionId = partition.id,
+                currentPath = "/",
+                files = emptyList(),
+                filesError = null,
+                filesListGeneration = state.filesListGeneration + 1L,
+                filesListingState = FilesListingState.Loading,
+                pendingIsoImport = null,
+                deferredIsoImport = null,
+                isoImportError = null,
+                isoImportSafInFlight = null,
+                isoImportGeneration = state.isoImportGeneration + 1,
+                statusMessage = null,
+            ),
+            effects = buildList {
+                add(UiEffect.CancelPendingWindowsImport(mode.sessionId))
+                if (hostInspection) add(UiEffect.CancelIsoImportInspection)
+                add(UiEffect.LoadFiles(path = "/"))
+            },
+        )
+    }
+
 
     fun cancel(state: AppUiState): ReduceResult {
         val mode =
@@ -221,6 +261,9 @@ internal object FilesPickTransitions {
                 state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
+        if (mode.purpose != FilesPickPurpose.RawSource && mode.partitionId != "1") {
+            return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired)))
+        }
         val path = fatChildPath(state.currentPath, entry.name)
         val selection = mode.selection(path, entry.name, entry.sizeBytes, isDirectory = false)
         if (mode.purpose == FilesPickPurpose.RawSource) {
@@ -268,6 +311,9 @@ internal object FilesPickTransitions {
             return ReduceResult(
                 state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
+        }
+        if (mode.purpose != FilesPickPurpose.RawSource && mode.partitionId != "1") {
+            return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired)))
         }
         val name = if (path == "/") "/" else path.substringAfterLast('/')
         return finishFilesPick(

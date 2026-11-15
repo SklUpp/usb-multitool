@@ -52,6 +52,8 @@ fun DiagnosticsScreen(
     onPickRestoreFolder: () -> Unit = {},
 ) {
     var dangerExpanded by remember { mutableStateOf(false) }
+    val usbPresent = state.device != null &&
+        (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy)
     val dangerActionLabel = stringResource(
         if (dangerExpanded) R.string.diagnostics_collapse else R.string.diagnostics_expand,
     )
@@ -75,31 +77,33 @@ fun DiagnosticsScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SectionCard(
-            title = stringResource(R.string.diagnostics_checks_title),
-            subtitle = stringResource(R.string.diagnostics_checks_subtitle),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        if (usbPresent) {
+            SectionCard(
+                title = stringResource(R.string.diagnostics_checks_title),
+                subtitle = stringResource(R.string.diagnostics_checks_subtitle),
             ) {
-                DiagTile(
-                    glyph = Glyph.Shield,
-                    title = stringResource(R.string.diagnostics_self_test),
-                    hint = stringResource(R.string.diagnostics_self_test_hint),
-                    enabled = !state.isRunning,
-                    highlighted = true,
-                    onClick = { onIntent(UiIntent.RunSelfTest) },
-                    modifier = Modifier.weight(1f),
-                )
-                DiagTile(
-                    glyph = Glyph.Scan,
-                    title = stringResource(R.string.diagnostics_read_scan),
-                    hint = stringResource(R.string.diagnostics_read_scan_hint),
-                    enabled = state.actionsEnabled,
-                    onClick = { onIntent(UiIntent.StartReadScan) },
-                    modifier = Modifier.weight(1f),
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DiagTile(
+                        glyph = Glyph.Shield,
+                        title = stringResource(R.string.diagnostics_self_test),
+                        hint = stringResource(R.string.diagnostics_self_test_hint),
+                        enabled = state.actionsEnabled,
+                        highlighted = true,
+                        onClick = { onIntent(UiIntent.RunSelfTest) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    DiagTile(
+                        glyph = Glyph.Scan,
+                        title = stringResource(R.string.diagnostics_read_scan),
+                        hint = stringResource(R.string.diagnostics_read_scan_hint),
+                        enabled = state.actionsEnabled,
+                        onClick = { onIntent(UiIntent.StartReadScan) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
 
@@ -302,10 +306,11 @@ fun DiagnosticsScreen(
 
         PerformanceSettingsSection()
 
-        if (!state.actionsEnabled) {
+        if (!usbPresent) {
             EmptyHint(UiReducer.presenceMessage(state.presence).localized())
         }
 
+        if (usbPresent) {
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
@@ -367,6 +372,7 @@ fun DiagnosticsScreen(
                     }
                 }
             }
+        }
         }
     }
 }

@@ -270,20 +270,245 @@ class PartitionTableTest {
     }
 
     @Test
-    fun junkBackupSectorDoesNotRejectValidGpt() {
-        val disk = SyntheticGpt.build(sectorCount = 2048UL)
+    fun signedFatSuperfloppyIsRefusedAsInitializationTarget() {
+        val disk = DiskFixture.empty(sectorCount = 1024UL) as ImageBlockDevice
         val bytes = disk.snapshot()
-        // Keep the magic but corrupt the backup header CRC: it must not deny the primary copy.
-        bytes.fill(0x7F, 2047 * 512, 2048 * 512)
-        "EFI PART".toByteArray(Charsets.US_ASCII).copyInto(bytes, 2047 * 512)
-
-        val table = PartitionTable.read(ImageBlockDevice(bytes, 512, 2048UL))
-
-        assertEquals(TableScheme.GPT, table.scheme)
-        assertEquals(false, table.gptPrimaryDamaged)
-        assertEquals(listOf("EFI", "DATA"), table.partitions.map { it.name })
+        bytes[0] = 0xEB.toByte()
+        bytes[2] = 0x90.toByte()
+        bytes[3] = 'M'.code.toByte()
+        bytes[4] = 'S'.code.toByte()
+        bytes[5] = 'D'.code.toByte()
+        bytes[6] = 'O'.code.toByte()
+        bytes[7] = 'S'.code.toByte()
+        bytes[11] = 0x00
+        bytes[12] = 0x02
+        bytes[13] = 0x01
+        bytes[14] = 0x01
+        bytes[16] = 0x02
+        bytes[17] = 0x00
+        bytes[18] = 0x02
+        bytes[19] = 0xE8.toByte()
+        bytes[20] = 0x03
+        bytes[21] = 0xF8.toByte()
+        bytes[22] = 0x04
+        bytes[23] = 0x00
+        bytes[32] = 0x00
+        bytes[33] = 0x00
+        bytes[54] = 'F'.code.toByte()
+        bytes[55] = 'A'.code.toByte()
+        bytes[56] = 'T'.code.toByte()
+        bytes[57] = '1'.code.toByte()
+        bytes[58] = '6'.code.toByte()
+        bytes[510] = 0x55
+        bytes[511] = 0xAA.toByte()
+        val image = ImageBlockDevice(bytes, 512, 1024UL)
+        val table = PartitionTable.read(image)
+        val before = image.snapshot()
+        assertThrows(IllegalArgumentException::class.java) {
+            TableInitializer.initialize(image, table, TableScheme.GPT)
+        }
+        assertTrue(before.contentEquals(image.snapshot()))
+    }
+    @Test
+    fun metadataFenceRejectsMutationBeforeInitializationWrites() {
+        val initial = DiskFixture.empty(sectorCount = 1024UL) as ImageBlockDevice
+        val table = PartitionTable.read(initial)
+        val expectedCurrent = metadataFingerprint(initial, metadataLbas(table))
+        val expectedTarget = metadataFingerprint(
+            initial,
+            initializationMetadataLbas(table, TableScheme.GPT),
+        )
+        val mutatedBytes = initial.snapshot()
+        mutatedBytes[0] = (mutatedBytes[0].toInt() xor 1).toByte()
+        val mutated = ImageBlockDevice(mutatedBytes, 512, 1024UL)
+        val before = mutated.snapshot()
+        assertThrows(usb.diagnostics.ConfirmationMismatchException::class.java) {
+            TableInitializer.initializeConfirmed(
+                mutated,
+                table,
+                TableScheme.GPT,
+                expectedCurrent,
+                expectedTarget,
+            )
+        }
+        assertTrue(before.contentEquals(mutated.snapshot()))
+        assertTrue(mutated.writes.isEmpty())
     }
 
+    @Test
+    fun targetMetadataMutationRejectsInitializationBeforeWrites() {
+        val initial = DiskFixture.empty(sectorCount = 1024UL) as ImageBlockDevice
+        val table = PartitionTable.read(initial)
+        val base = metadataLbas(table).toSet()
+        val target = initializationMetadataLbas(table, TableScheme.GPT)
+        val targetOnly = target.first { it !in base }
+        val expectedCurrent = metadataFingerprint(initial, base)
+        val expectedTarget = metadataFingerprint(initial, target)
+        val mutatedBytes = initial.snapshot()
+        mutatedBytes[(targetOnly * 512UL).toInt()] = 1
+        val mutated = ImageBlockDevice(mutatedBytes, 512, 1024UL)
+        val before = mutated.snapshot()
+        assertThrows(usb.diagnostics.ConfirmationMismatchException::class.java) {
+            TableInitializer.initializeConfirmed(mutated, table, TableScheme.GPT, expectedCurrent, expectedTarget)
+        }
+        assertTrue(before.contentEquals(mutated.snapshot()))
+        assertTrue(mutated.writes.isEmpty())
+    }
+
+    @Test
+    fun confirmedUnrecognizedInitializationWritesNewTable() {
+        val image = DiskFixture.empty(sectorCount = 1024UL) as ImageBlockDevice
+        val table = PartitionTable.read(image)
+        assertEquals(TableRecognition.UNRECOGNIZED, table.recognition)
+        val expectedCurrent = metadataFingerprint(image, metadataLbas(table))
+        val expectedTarget = metadataFingerprint(
+            image,
+            initializationMetadataLbas(table, TableScheme.GPT),
+        )
+        TableInitializer.initializeConfirmed(
+            image,
+            table,
+            TableScheme.GPT,
+            expectedCurrent,
+            expectedTarget,
+        )
+        assertTrue(image.writes.isNotEmpty())
+        assertEquals(TableScheme.GPT, PartitionTable.read(image).scheme)
+    }
+
+
+
+
+    @Test
+    fun signedAndUnsignedNtfsBootsAreRecognizedAndInitializationWritesNothing() {
+        for (signed in listOf(true, false)) {
+            val image = filesystemImage(FilesystemFixture.NTFS, signed, malformed = false)
+            val table = PartitionTable.read(image)
+            assertEquals(
+                if (signed) TableRecognition.SUPERFLOPPY else TableRecognition.DAMAGED,
+                table.recognition,
+            )
+            val before = image.snapshot()
+            assertThrows(IllegalArgumentException::class.java) {
+                TableInitializer.initialize(image, table, TableScheme.GPT)
+            }
+            assertTrue("NTFS signed=$signed must not be written", image.writes.isEmpty())
+            assertTrue(before.contentEquals(image.snapshot()))
+        }
+    }
+
+    @Test
+    fun signedAndUnsignedExfatBootsAreRecognizedAndInitializationWritesNothing() {
+        for (signed in listOf(true, false)) {
+            val image = filesystemImage(FilesystemFixture.EXFAT, signed, malformed = false)
+            val table = PartitionTable.read(image)
+            assertEquals(
+                if (signed) TableRecognition.SUPERFLOPPY else TableRecognition.DAMAGED,
+                table.recognition,
+            )
+            val before = image.snapshot()
+            assertThrows(IllegalArgumentException::class.java) {
+                TableInitializer.initialize(image, table, TableScheme.GPT)
+            }
+            assertTrue("exFAT signed=$signed must not be written", image.writes.isEmpty())
+            assertTrue(before.contentEquals(image.snapshot()))
+        }
+    }
+
+    @Test
+    fun malformedNtfsAndExfatMarkersAreDamagedAndInitializationWritesNothing() {
+        for (filesystem in FilesystemFixture.entries) {
+            for (signed in listOf(true, false)) {
+                val image = filesystemImage(filesystem, signed, malformed = true)
+                val table = PartitionTable.read(image)
+                assertEquals("${filesystem.name} signed=$signed", TableRecognition.DAMAGED, table.recognition)
+                val before = image.snapshot()
+                assertThrows(IllegalArgumentException::class.java) {
+                    TableInitializer.initialize(image, table, TableScheme.GPT)
+                }
+                assertTrue("$filesystem signed=$signed must not be written", image.writes.isEmpty())
+                assertTrue(before.contentEquals(image.snapshot()))
+            }
+        }
+    }
+
+    @Test
+    fun filesystemBootWithStaleMbrEntryIsAmbiguousAndWritesNothing() {
+        for (filesystem in FilesystemFixture.entries) {
+            val image = filesystemImage(filesystem, signed = true, malformed = false)
+            val bytes = image.snapshot()
+            bytes[446 + 4] = 0x07
+            putLeInt(bytes, 446 + 8, 64)
+            putLeInt(bytes, 446 + 12, 128)
+            val staleMbr = ImageBlockDevice(bytes, 512, 2048UL)
+            val table = PartitionTable.read(staleMbr)
+            assertEquals("${filesystem.name}", TableRecognition.DAMAGED, table.recognition)
+            assertTrue(table.hybridAmbiguous)
+            val before = staleMbr.snapshot()
+            assertThrows(IllegalArgumentException::class.java) {
+                // Recognition guard may run before ambiguity guard; both must fail closed.
+                TableInitializer.initialize(staleMbr, table, TableScheme.MBR)
+            }
+            assertTrue("$filesystem stale MBR must not be written", staleMbr.writes.isEmpty())
+            assertTrue(before.contentEquals(staleMbr.snapshot()))
+        }
+    }
+
+    private enum class FilesystemFixture { NTFS, EXFAT }
+
+    private fun filesystemImage(
+        filesystem: FilesystemFixture,
+        signed: Boolean,
+        malformed: Boolean,
+    ): ImageBlockDevice {
+        val bytes = ByteArray(2048 * 512)
+        when (filesystem) {
+            FilesystemFixture.NTFS -> {
+                bytes[0] = 0xEB.toByte()
+                bytes[1] = 0x52
+                bytes[2] = 0x90.toByte()
+                "NTFS    ".toByteArray(Charsets.US_ASCII).copyInto(bytes, 3)
+                putLeShort(bytes, 11, 512)
+                bytes[13] = 8
+                bytes[21] = 0xF8.toByte()
+                putLeLong(bytes, 40, if (malformed) 4096L else 2048L)
+                putLeLong(bytes, 48, 4L)
+                putLeLong(bytes, 56, 8L)
+                bytes[64] = 0xF6.toByte()
+                bytes[68] = 1
+            }
+            FilesystemFixture.EXFAT -> {
+                bytes[0] = 0xEB.toByte()
+                bytes[1] = 0x76
+                bytes[2] = 0x90.toByte()
+                "EXFAT   ".toByteArray(Charsets.US_ASCII).copyInto(bytes, 3)
+                putLeLong(bytes, 72, if (malformed) 4096L else 2048L)
+                putLeInt(bytes, 80, 24)
+                putLeInt(bytes, 84, 8)
+                putLeInt(bytes, 88, 32)
+                putLeInt(bytes, 92, 250)
+                putLeInt(bytes, 96, 2)
+                bytes[108] = 9
+                bytes[109] = 3
+                bytes[110] = 1
+            }
+        }
+        if (signed) {
+            bytes[510] = 0x55
+            bytes[511] = 0xAA.toByte()
+        }
+        return ImageBlockDevice(bytes, 512, 2048UL)
+    }
+
+    private fun putLeShort(bytes: ByteArray, offset: Int, value: Int) {
+        bytes[offset] = value.toByte()
+        bytes[offset + 1] = (value shr 8).toByte()
+    }
+
+    private fun putLeLong(bytes: ByteArray, offset: Int, value: Long) {
+        putLeInt(bytes, offset, value.toInt())
+        putLeInt(bytes, offset + 4, (value ushr 32).toInt())
+    }
 
     private fun sector(disk: BlockDevice, lba: ULong): ByteArray {
         val buffer = ByteBuffer.allocate(disk.sectorSize)

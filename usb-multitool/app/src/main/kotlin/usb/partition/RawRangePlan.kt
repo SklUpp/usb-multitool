@@ -42,6 +42,7 @@ data class RawRangeObject(
 /** Why the on-disk scheme cannot be trusted; rendered by the UI, never guessed here. */
 enum class RawSchemeProblem {
     TableUnreadable,
+    Unrecognized,
     HybridAmbiguous,
     GptPrimaryDamaged,
     GptBackupMetadataUnknown,
@@ -184,10 +185,15 @@ data class RawRangeGeometry(
             }
             val hybrid =
                 table.hybridAmbiguous || table.scheme == TableScheme.HYBRID
+            val unrecognized = table.recognition != TableRecognition.RECOGNIZED
             val trust = when {
                 hybrid -> SchemeTrust.Damaged(RawSchemeProblem.HybridAmbiguous)
+                unrecognized -> SchemeTrust.Unreadable(RawSchemeProblem.Unrecognized)
                 table.gptPrimaryDamaged -> SchemeTrust.Damaged(RawSchemeProblem.GptPrimaryDamaged)
                 else -> SchemeTrust.Confirmed(table.scheme)
+            }
+            if (unrecognized && metadataProblem == null) {
+                metadataProblem = RawSchemeProblem.Unrecognized
             }
             if (hybrid) {
                 // MBR view hides the GPT metadata that also lives on the medium, so an

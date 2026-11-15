@@ -1,10 +1,8 @@
 package usb.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,24 +15,33 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,11 +52,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -123,9 +133,27 @@ fun FilesScreen(
         mutableStateOf<PartitionBinding?>(null)
     }
     var renameName by remember { mutableStateOf("") }
+    var actionEntry by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf<FileEntry?>(null) }
 
 
     val selected = state.selectedPartition()
+    val fileListState = rememberLazyListState()
+    var isScrollingDown by remember { mutableStateOf(false) }
+    LaunchedEffect(fileListState) {
+        var previousPosition = 0
+        snapshotFlow {
+            fileListState.firstVisibleItemIndex * 1_000_000 +
+                fileListState.firstVisibleItemScrollOffset to fileListState.isScrollInProgress
+        }.collect { (position, scrolling) ->
+            isScrollingDown = scrolling && position > previousPosition
+            previousPosition = position
+        }
+    }
     val canAct = state.actionsEnabled && selected != null
     // Only an EFI-protected selected partition loses write actions; a missing selection
     // must not be reported as EFI protection.
@@ -135,6 +163,7 @@ fun FilesScreen(
     val selectedEntries = selection.entries
     val singleSelection = selection.single
     val writeAccess = selected?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown
+    val uploadDescription = stringResource(R.string.files_copy_from_phone)
     val space = selected?.let(state::filesystemSpace)
 
 
@@ -186,9 +215,11 @@ fun FilesScreen(
                 canWrite = canWrite,
                 selection = selection,
                 selectedNames = selectedNames,
+                fileListState = fileListState,
                 onToggleSelect = { entry ->
                     selectedNames = toggleSelectedName(selectedNames, entry.name)
                 },
+                onAction = { actionEntry = it },
                 onNavigate = { entry ->
                     onIntent(UiIntent.OpenDirectory(fatChildPath(state.currentPath, entry.name)))
                 },
@@ -196,7 +227,6 @@ fun FilesScreen(
                 onRefresh = { onIntent(UiIntent.RefreshFiles) },
                 onNavigateUp = { onIntent(UiIntent.NavigateUp) },
                 onNewFolder = { showNewFolderDialog = true },
-                onCopyFromPhone = onRequestBatchUpload,
                 onSaveToPhone = {
                     val device = state.device
                     val partition = state.selectedPartition()
@@ -260,9 +290,65 @@ fun FilesScreen(
                     }
                     pendingDeleteSelection = pinned
                 },
+                isLoading = state.filesListingState == FilesListingState.Loading,
                 modifier = Modifier.weight(1f),
             )
         }
+        ExtendedFloatingActionButton(
+            expanded = !isScrollingDown,
+            onClick = { if (canWrite) onRequestBatchUpload() },
+            icon = { GlyphIcon(Glyph.Plus, size = 24.dp) },
+            text = { Text(uploadDescription) },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+                .alpha(if (canWrite) 1f else 0.38f)
+                .semantics {
+                    contentDescription = uploadDescription
+                    if (!canWrite) disabled()
+                },
+        )
+    }
+    actionEntry?.let { entry ->
+        FileActionSheet(
+            entry = entry,
+            canWrite = canWrite,
+            canDownload = filesBatchDownloadEnabled(canAct, listOf(entry.toBatchItem())),
+            onDismiss = { actionEntry = null },
+            onDownload = {
+                actionEntry = null
+                val device = state.device
+                val partition = state.selectedPartition()
+                if (device != null && partition != null) {
+                    onRequestDownload(
+                        FilesDownloadBinding(
+                            directory = state.currentPath,
+                            name = entry.name,
+                            sizeBytes = entry.sizeBytes,
+                            identity = device.identity,
+                            attachGeneration = device.attachGeneration,
+                            partitionId = partition.id,
+                            startLba = partition.startLba,
+                            sectorCount = partition.sectorCount,
+                        ),
+                    )
+                }
+            },
+            onRename = {
+                actionEntry = null
+                renameTarget = entry
+                renameName = entry.name
+                val device = state.device
+                val partition = state.selectedPartition()
+                renameBinding = if (device != null && partition != null) {
+                    PartitionBinding(device, partition.id, partition.startLba, partition.sectorCount)
+                } else null
+            },
+            onDelete = {
+                actionEntry = null
+                filesBatchSelectionOrNull(state, listOf(entry))?.let { pendingDeleteSelection = it }
+            },
+        )
     }
 
     if (showNewFolderDialog) {
@@ -480,21 +566,6 @@ private fun FilesPickScreen(
             R.string.files_pick_hint
         },
     )
-    val partitionLine =
-        partition?.let {
-            buildString {
-                append(it.name)
-                if (it.isEfiType) append(" (EFI)")
-                it.filesystemLabel.takeIf { label -> label.isNotEmpty() }?.let { label ->
-                    append(" · ")
-                    append(label)
-                }
-                partitionSizeLabel(state, it)?.let { size ->
-                    append(" · ")
-                    append(size)
-                }
-            }
-        } ?: stringResource(R.string.partitions_none_selected)
 
     // A vanished import folder resets the listing to root in the reducer; consume the
     // picker demand here instead of leaving an unanswered prompt.
@@ -550,15 +621,16 @@ private fun FilesPickScreen(
         contentPadding = PaddingValues(bottom = 16.dp),
     ) {
         item(key = "pick-partition") {
-            SectionCard(
-                title = stringResource(R.string.files_section_partition),
-                titleColor = MaterialTheme.colorScheme.onSurface,
-            ) {
-                InfoRow(
-                    stringResource(R.string.files_current_partition),
-                    partitionLine,
-                )
-            }
+            PartitionChoiceRow(
+                options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
+                partitions = state.partitions,
+                selectedId = mode.partitionId,
+                writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
+                sizeLabel = partition?.let { partitionSizeLabel(state, it) },
+                space = partition?.let(state::filesystemSpace),
+                enabled = canAct,
+                onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
+            )
         }
 
         item(key = "pick-folder") {
@@ -608,6 +680,7 @@ private fun FilesPickScreen(
                                 onRequestDeviceImage(state.currentPath, mode.sessionId)
                             },
                             enabled =
+                                    mode.partitionId == "1" &&
                                 canAct &&
                                     state.isoImportSafInFlight == null &&
                                     state.isoImportUsbInFlight == null &&
@@ -754,6 +827,7 @@ private fun FilesPickScreen(
                                 ),
                             )
                         },
+                        showActions = false,
                     )
                 }
             }
@@ -778,29 +852,66 @@ private fun FolderCard(
     canWrite: Boolean,
     selection: ListingSelection,
     selectedNames: Set<String>,
+    fileListState: LazyListState,
     onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
     onClearSelection: () -> Unit,
     onRefresh: () -> Unit,
     onNavigateUp: () -> Unit,
     onNewFolder: () -> Unit,
-    onCopyFromPhone: () -> Unit,
     onSaveToPhone: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onAction: (FileEntry) -> Unit,
+    isLoading: Boolean,
     modifier: Modifier = Modifier,
 )
 {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = modifier.fillMaxWidth(),
-    ) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        if (selection.entries.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FolderActionButton(
+                    glyph = Glyph.Download,
+                    description = stringResource(R.string.files_save_to_phone),
+                    enabled = filesBatchDownloadEnabled(canAct, selection.entries.map { it.toBatchItem() }),
+                    onClick = onSaveToPhone,
+                )
+                FolderActionButton(
+                    glyph = Glyph.Pencil,
+                    description = stringResource(R.string.files_rename),
+                    enabled = filesBatchRenameEnabled(canWrite, selection.entries.map { it.toBatchItem() }),
+                    onClick = onRename,
+                )
+                FolderActionButton(
+                    glyph = Glyph.Trash,
+                    description = stringResource(R.string.action_delete),
+                    enabled = filesBatchDeleteEnabled(canWrite, selection.entries.map { it.toBatchItem() }),
+                    onClick = onDelete,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+                FolderActionButton(
+                    glyph = Glyph.Close,
+                    description = stringResource(R.string.files_clear_selection),
+                    enabled = canAct,
+                    onClick = onClearSelection,
+                )
+            }
+        }
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
         // One lazy area for the whole volume: the path/action sub-block is its first item, so
         // a short window or a large font scrolls it away instead of squeezing the list to zero.
         LazyColumn(
+            state = fileListState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 8.dp),
+            contentPadding = PaddingValues(bottom = 80.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             item(key = "folder-subblock") {
@@ -813,11 +924,12 @@ private fun FolderCard(
                     onNavigateUp = onNavigateUp,
                     onRefresh = onRefresh,
                     onNewFolder = onNewFolder,
-                    onCopyFromPhone = onCopyFromPhone,
                     onSaveToPhone = onSaveToPhone,
                     onRename = onRename,
                     onDelete = onDelete,
                     onClearSelection = onClearSelection,
+                    onAction = onAction,
+                    isLoading = isLoading,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                 )
             }
@@ -868,6 +980,7 @@ private fun FolderCard(
                         actionsEnabled = canAct,
                         onToggleSelect = { onToggleSelect(entry) },
                         onNavigate = { onNavigate(entry) },
+                        onAction = { onAction(entry) },
                     )
                 }
             }
@@ -875,6 +988,7 @@ private fun FolderCard(
     }
 }
 
+}
 /** Path and icon actions at top of folder block. */
 @Composable
 private fun FolderSubblock(
@@ -886,17 +1000,18 @@ private fun FolderSubblock(
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
     onNewFolder: () -> Unit,
-    onCopyFromPhone: () -> Unit,
     onSaveToPhone: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onClearSelection: () -> Unit,
+    onAction: (FileEntry) -> Unit,
+    isLoading: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val upDescription = stringResource(R.string.files_up)
     val refreshDescription = stringResource(R.string.unattend_refresh)
     val newFolderDescription = stringResource(R.string.files_create_folder)
-    val copyDescription = stringResource(R.string.files_copy_from_phone)
+    val pathA11y = stringResource(R.string.files_current_path, pathLabel)
     val saveDescription = stringResource(R.string.files_save_to_phone)
     val renameDescription = stringResource(R.string.files_rename)
     val deleteDescription = stringResource(R.string.action_delete)
@@ -906,13 +1021,6 @@ private fun FolderSubblock(
     val saveEnabled = filesBatchDownloadEnabled(canAct, batchItems)
     val renameEnabled = filesBatchRenameEnabled(canWrite, batchItems)
     val deleteEnabled = filesBatchDeleteEnabled(canWrite, batchItems)
-    // The current (last) segment is what the user needs to see: keep the scroll at the end
-    // whenever the path label or its measured width changes.
-    val pathScroll = remember(pathLabel) { ScrollState(0) }
-    val pathA11y = stringResource(R.string.files_current_path, pathLabel)
-    LaunchedEffect(pathScroll.maxValue) {
-        pathScroll.scrollTo(pathScroll.maxValue)
-    }
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -924,90 +1032,60 @@ private fun FolderSubblock(
                 modifier = Modifier.fillMaxWidth().padding(end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // The block title is the up button itself; the path is relative to the root
-                // and is scrolled to its end, so the current folder segment stays visible.
                 IconButton(
                     onClick = onNavigateUp,
                     enabled = canNavigateUp,
                     modifier = Modifier
                         .size(40.dp)
-                        .semantics { contentDescription = upDescription },
+                        .semantics { contentDescription = upDescription }
                 ) {
                     GlyphIcon(glyph = Glyph.ArrowUp, size = 22.dp)
                 }
-                Box(
+                Text(
+                    text = pathLabel,
                     modifier = Modifier
                         .weight(1f)
+                        .heightIn(min = 48.dp)
                         .padding(start = 4.dp)
-                        .horizontalScroll(pathScroll),
-                ) {
-                    Text(
-                        text = pathLabel,
-                        modifier = Modifier.clearAndSetSemantics {
-                            contentDescription = pathA11y
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                }
+                        .clearAndSetSemantics { contentDescription = pathA11y }
+                        .clickable(enabled = canNavigateUp, onClick = onNavigateUp),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.StartEllipsis,
+                    softWrap = false,
+                )
             }
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                FolderActionButton(
-                    glyph = Glyph.Refresh,
-                    description = refreshDescription,
-                    enabled = canAct,
-                    onClick = onRefresh,
-                )
+                if (isLoading) {
+                    IconButton(
+                        onClick = onRefresh,
+                        enabled = canAct,
+                        modifier = Modifier.semantics { contentDescription = refreshDescription },
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    FolderActionButton(
+                        glyph = Glyph.Refresh,
+                        description = refreshDescription,
+                        enabled = canAct,
+                        onClick = onRefresh,
+                    )
+                }
                 FolderActionButton(
                     glyph = Glyph.FolderPlus,
                     description = newFolderDescription,
                     enabled = canWrite,
                     onClick = onNewFolder,
                 )
-                FolderActionButton(
-                    glyph = Glyph.Download,
-                    description = copyDescription,
-                    enabled = canWrite,
-                    onClick = onCopyFromPhone,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Upload,
-                    description = saveDescription,
-                    enabled = saveEnabled,
-                    onClick = onSaveToPhone,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Pencil,
-                    description = renameDescription,
-                    enabled = renameEnabled,
-                    onClick = onRename,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Trash,
-                    description = deleteDescription,
-                    enabled = deleteEnabled,
-                    onClick = onDelete,
-                    tint = MaterialTheme.colorScheme.error,
-                )
-                if (selectedEntries.isNotEmpty()) {
-                    FolderActionButton(
-                        glyph = Glyph.Close,
-                        description = clearDescription,
-                        enabled = canAct,
-                        onClick = onClearSelection,
-                    )
-                }
-            }
         }
     }
+}
 }
 
 
@@ -1177,8 +1255,11 @@ private fun FileRow(
     actionsEnabled: Boolean,
     onToggleSelect: () -> Unit,
     onNavigate: () -> Unit,
+    onAction: () -> Unit = {},
+    showActions: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    val moreActionsDescription = stringResource(R.string.files_more_actions)
     val clickLabel = when {
         multiSelectActive || !entry.isDirectory -> stringResource(R.string.files_select_file)
         else -> stringResource(R.string.files_open_folder)
@@ -1264,10 +1345,24 @@ private fun FileRow(
             if (!entry.isDirectory) {
                 Text(
                     text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                 )
+            }
+            if (showActions) {
+                IconButton(
+                    onClick = onAction,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.semantics {
+                        contentDescription = moreActionsDescription
+                    },
+                ) {
+                    GlyphIcon(Glyph.More, size = 24.dp)
+                }
             }
         }
     }
@@ -1352,4 +1447,42 @@ internal fun filesBatchConflictPathDisplay(conflict: FilesConflict): String {
     val path = conflict.pathLabel
     if (path.isNotEmpty()) return path
     return conflict.name
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FileActionSheet(
+    entry: FileEntry,
+    canWrite: Boolean,
+    canDownload: Boolean,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        ListItem(
+            headlineContent = { Text(entry.name) },
+            supportingContent = {
+                Text(
+                    DeviceIdentity.formatCapacity(entry.sizeBytes),
+                    fontFamily = FontFamily.Monospace,
+                )
+            },
+        )
+        if (!entry.isDirectory) {
+            TextButton(onClick = onDownload, enabled = canDownload) {
+                Text(stringResource(R.string.files_save_to_phone))
+            }
+        }
+        TextButton(onClick = onRename, enabled = canWrite) {
+            Text(stringResource(R.string.files_rename))
+        }
+        TextButton(onClick = onDelete, enabled = canWrite) {
+            Text(stringResource(R.string.action_delete))
+        }
+        TextButton(onClick = onDismiss) {
+            Text(stringResource(R.string.action_cancel))
+        }
+    }
 }

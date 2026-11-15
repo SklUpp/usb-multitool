@@ -39,6 +39,7 @@ sealed class UiIntent {
     data class SelectTab(val tab: ShellTab) : UiIntent()
 
     data class SelectPartition(val partitionId: String) : UiIntent()
+    data class SelectFilesPickPartition(val partitionId: String) : UiIntent()
 
     /**
      * Open simplified Files picker. Partition and attachment expectations come from the
@@ -108,10 +109,16 @@ sealed class UiIntent {
         val partitionTableDamaged: Boolean = false,
         val partitionTableAmbiguous: Boolean = false,
         val partitionScheme: TableScheme? = null,
-        /** Raw-range map source of truth; null means the host has not described the disk. */
+        val partitionTableRecognized: Boolean = true,
+        val partitionTableRecognition: usb.partition.TableRecognition =
+            usb.partition.TableRecognition.RECOGNIZED,
+        val metadataFingerprint: String? = null,
+        val initializationMetadataFingerprintGpt: String? = null,
+        val initializationMetadataFingerprintMbr: String? = null,
         val rawGeometry: usb.partition.RawRangeGeometry? = null,
+        /** False when release failed: stale Busy geometry must not survive. */
+        val retainExisting: Boolean = true,
     ) : UiIntent()
-
     data class OperationBegan(val progress: OperationProgress) : UiIntent()
     data class OperationUpdated(val progress: OperationProgress) : UiIntent()
     data class OperationCleared(val token: OperationToken) : UiIntent()
@@ -1013,6 +1020,27 @@ data class ReduceResult(
     val effects: List<UiEffect> = emptyList(),
 )
 
+/** Production scheduling seam: DeviceChanged state feeds this exact request path. */
+internal data class FilesystemUsageSchedule(
+    val state: AppUiState,
+    val key: FilesystemUsageKey,
+    val effect: UiEffect.LoadFilesystemUsage,
+)
+
+internal fun scheduleFilesystemUsageRequest(
+    state: AppUiState,
+    lastRequestedKey: FilesystemUsageKey?,
+    inFlightKey: FilesystemUsageKey?,
+    operationFinished: Boolean,
+): FilesystemUsageSchedule? {
+    val partition = state.selectedPartition() ?: return null
+    val key = state.filesystemUsageKey(partition) ?: return null
+    if (!state.needsFilesystemUsageRequest(key, lastRequestedKey, inFlightKey, operationFinished)) return null
+    val result = UiReducer.reduce(state, UiIntent.RequestFilesystemUsage)
+    val effect = result.effects.singleOrNull() as? UiEffect.LoadFilesystemUsage ?: return null
+    return FilesystemUsageSchedule(result.state, key, effect)
+}
+
 object UiReducer {
     /**
      * Actions that rewrite the partition layout. Ambiguity blocks them unconditionally:
@@ -1151,6 +1179,7 @@ object UiReducer {
                 }
 
             is UiIntent.BeginFilesPick -> FilesPickTransitions.begin(state, intent)
+            is UiIntent.SelectFilesPickPartition -> FilesPickTransitions.selectPartition(state, intent.partitionId)
 
             is UiIntent.WindowsImportPickerFinished -> {
                 val mode = state.filesPickMode
@@ -1233,10 +1262,10 @@ object UiReducer {
                         incoming != null &&
                         previous != null &&
                         deviceIdentityTrusted(previous, incoming)
-                // Busy/PermissionRequired probe on the live stick must not wipe browse
-                // state: host sends empty partitions until Ready.
+                // Busy/PermissionRequired retains state only while release is confirmed.
                 val probingRetain =
                     sameStick &&
+                        intent.retainExisting &&
                         (intent.presence == DevicePresence.Busy ||
                             intent.presence == DevicePresence.PermissionRequired)
                 val partitions =
@@ -1425,23 +1454,29 @@ object UiReducer {
                                 intent.tableValid
                             },
                         partitionTableDamaged =
-                            if (probingRetain && intent.partitions.isEmpty()) {
-                                state.partitionTableDamaged
-                            } else {
-                                intent.partitionTableDamaged
-                            },
+                            if (probingRetain && intent.partitions.isEmpty()) state.partitionTableDamaged
+                            else intent.partitionTableDamaged,
                         partitionTableAmbiguous =
-                            if (probingRetain && intent.partitions.isEmpty()) {
-                                state.partitionTableAmbiguous
-                            } else {
-                                intent.partitionTableAmbiguous
-                            },
+                            if (probingRetain && intent.partitions.isEmpty()) state.partitionTableAmbiguous
+                            else intent.partitionTableAmbiguous,
+                        partitionTableRecognized =
+                            if (probingRetain && intent.partitions.isEmpty()) state.partitionTableRecognized
+                            else intent.partitionTableRecognized,
                         partitionScheme =
-                            if (probingRetain && intent.partitions.isEmpty()) {
-                                state.partitionScheme
-                            } else {
-                                intent.partitionScheme
-                            },
+                            if (probingRetain && intent.partitions.isEmpty()) state.partitionScheme
+                            else intent.partitionScheme,
+                        partitionTableRecognition =
+                            if (probingRetain && intent.partitions.isEmpty()) state.partitionTableRecognition
+                            else intent.partitionTableRecognition,
+                        metadataFingerprint =
+                            if (probingRetain && intent.metadataFingerprint == null) state.metadataFingerprint
+                            else intent.metadataFingerprint,
+                        initializationMetadataFingerprintGpt =
+                            if (probingRetain && intent.initializationMetadataFingerprintGpt == null) state.initializationMetadataFingerprintGpt
+                            else intent.initializationMetadataFingerprintGpt,
+                        initializationMetadataFingerprintMbr =
+                            if (probingRetain && intent.initializationMetadataFingerprintMbr == null) state.initializationMetadataFingerprintMbr
+                            else intent.initializationMetadataFingerprintMbr,
                         rawGeometry =
                             if (probingRetain && intent.partitions.isEmpty() && intent.rawGeometry == null) {
                                 state.rawGeometry
@@ -1946,13 +1981,35 @@ object UiReducer {
                     action == DestructiveAction.INITIALIZE_PARTITION_TABLE &&
                         (pending.targetScheme == null ||
                             pending.initialScheme == null ||
-                            pending.targetScheme == pending.initialScheme ||
-                            state.partitionScheme?.toPartitionScheme() != pending.initialScheme ||
+                            state.partitionTableRecognition == usb.partition.TableRecognition.SUPERFLOPPY ||
+                            pending.initialTableRecognition != state.partitionTableRecognition ||
+                            pending.initialMetadataFingerprint == null ||
+                            pending.initialMetadataFingerprint != state.metadataFingerprint ||
+                            pending.initialInitializationMetadataFingerprint == null ||
+                            pending.initialInitializationMetadataFingerprint !=
+                                (if (pending.targetScheme == PartitionScheme.Gpt) {
+                                    state.initializationMetadataFingerprintGpt
+                                } else {
+                                    state.initializationMetadataFingerprintMbr
+                                }) ||
+                            (pending.initialTableRecognized && pending.targetScheme == pending.initialScheme) ||
+                            pending.initialTableRecognized != state.partitionTableRecognized ||
+                            (pending.initialTableRecognized &&
+                                state.partitionScheme?.toPartitionScheme() != pending.initialScheme) ||
+                            pending.initialDiskSectorSize != state.diskSectorSize ||
+                            pending.initialDiskSectorCount !=
+                                state.device?.capacityBytes?.div(state.diskSectorSize.coerceAtLeast(1).toULong()) ||
                             !state.tableValid ||
-                            state.rawGeometry?.metadataProblem ==
-                            RawSchemeProblem.GptBackupMetadataUnknown ||
-                            (state.partitionScheme?.toPartitionScheme() ==
-                                PartitionScheme.Gpt && state.rawGeometry == null)) -> true
+                            state.partitionTableAmbiguous ||
+                            state.partitionTableDamaged ||
+                            state.rawGeometry?.metadataProblem == RawSchemeProblem.GptBackupMetadataUnknown ||
+                            (state.partitionTableRecognized && state.partitionScheme?.toPartitionScheme() == PartitionScheme.Gpt &&
+                                state.rawGeometry == null) ||
+                            state.partitions.mapNotNull { tab ->
+                                val start = tab.startLba
+                                val count = tab.sectorCount
+                                if (start == null || count == null) null else PartitionRef(start, count)
+                            } != pending.initialPartitions) -> true
                     action == DestructiveAction.GPT_REPAIR &&
                         (pending.initialScheme != PartitionScheme.Gpt ||
                             state.partitionScheme?.toPartitionScheme() != PartitionScheme.Gpt ||

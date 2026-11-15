@@ -16,6 +16,10 @@ class SchemeInitUiTest {
             device = device,
             partitions = emptyList(),
             partitionScheme = scheme,
+            partitionTableRecognized = true,
+            metadataFingerprint = "base",
+            initializationMetadataFingerprintGpt = "gpt-target",
+            initializationMetadataFingerprintMbr = "mbr-target",
         )
 
     private fun pending(

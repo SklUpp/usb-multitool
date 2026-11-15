@@ -7,7 +7,6 @@ import usb.partition.PartitionName
 import usb.partition.RawSchemeProblem
 import usb.partition.TableScheme
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,7 +27,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -39,11 +37,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -68,6 +70,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import kotlin.math.roundToInt
@@ -118,6 +121,9 @@ fun PartitionsScreen(
     }
     var schemeChangePrompt by remember(state.device, state.partitionScheme, partitionGeometryKey) {
         mutableStateOf<PartitionScheme?>(null)
+    }
+    var initializeScheme by remember(state.device, state.partitionScheme, partitionGeometryKey) {
+        mutableStateOf(PartitionScheme.Gpt)
     }
     val namesSupported = state.partitionScheme?.let { PartitionName.supported(it) } == true
     // Whole-MiB-aligned start of every free region; the create dialog picks among them.
@@ -688,18 +694,66 @@ fun PartitionsScreen(
             },
             trailing = {
                 Row(
-                    modifier = Modifier.fillMaxWidth(fraction = 0.70f),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    SchemeIcons(
-                        current = currentScheme,
-                        enabled = state.actionsEnabled && !schemeBlocked && currentScheme != null,
-                        onPick = { target ->
-                            if (currentScheme == PartitionScheme.Gpt) schemePrompt = target
-                            else schemeChangePrompt = target
-                        },
-                        modifier = Modifier.weight(1f),
+                    InfoHelpButton(
+                        infoTitle = stringResource(R.string.partitions_scheme_help_title),
+                        infoText = stringResource(R.string.partitions_scheme_help_text),
                     )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (!state.partitionTableRecognized &&
+                            state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
+                            state.tableValid && !state.partitionTableAmbiguous) {
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                listOf(PartitionScheme.Gpt, PartitionScheme.Mbr).forEachIndexed { index, scheme ->
+                                    SegmentedButton(
+                                        selected = initializeScheme == scheme,
+                                        onClick = { initializeScheme = scheme },
+                                        enabled = state.actionsEnabled,
+                                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 2),
+                                    ) {
+                                        Text(scheme.toTableScheme().name)
+                                    }
+                                }
+                            }
+                            FilledTonalButton(
+                                onClick = {
+                                    onIntent(UiIntent.RequestInitializePartitionTable(initializeScheme))
+                                },
+                                enabled = state.actionsEnabled && !schemeBlocked,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.partitions_scheme_initialize_action))
+                            }
+                        } else {
+                            Badge(
+                                text = currentScheme?.toTableScheme()?.name
+                                    ?: stringResource(R.string.partitions_scheme_unknown),
+                            )
+                            val target = currentScheme?.let {
+                                if (it == PartitionScheme.Gpt) PartitionScheme.Mbr else PartitionScheme.Gpt
+                            }
+                            if (target != null) {
+                                FilledTonalButton(
+                                    onClick = {
+                                        if (currentScheme == PartitionScheme.Gpt) schemePrompt = target
+                                        else schemeChangePrompt = target
+                                    },
+                                    enabled = state.actionsEnabled && !schemeBlocked,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    GlyphIcon(Glyph.Gpt, size = 20.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(R.string.partitions_scheme_convert_to, target.toTableScheme().name))
+                                }
+                            }
+                        }
+                    }
                 }
             },
         ) {
@@ -769,16 +823,8 @@ fun PartitionsScreen(
                     PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
                     PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
                     PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
-                    PartitionWriteAccess.Unknown -> "—"
+                    PartitionWriteAccess.Unknown -> stringResource(R.string.partitions_write_unknown)
                 }
-                val accessDescription = stringResource(
-                    when (access) {
-                        PartitionWriteAccess.ReadOnly -> R.string.partitions_write_policy_ro
-                        PartitionWriteAccess.DriverReadOnly -> R.string.partitions_write_driver_ro
-                        PartitionWriteAccess.ReadWrite -> R.string.partitions_write_driver_rw
-                        PartitionWriteAccess.Unknown -> R.string.partitions_write_unknown
-                    },
-                )
                 val displayName = partition.name.ifBlank { partition.id }
                 val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
                 val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
@@ -789,14 +835,9 @@ fun PartitionsScreen(
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (isSelected) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                        MaterialTheme.colorScheme.secondaryContainer
                     } else {
                         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                    },
-                    border = if (isSelected) {
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                    } else {
-                        null
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -825,7 +866,6 @@ fun PartitionsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RadioDot(selected = isSelected)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = rowTitle,
@@ -842,6 +882,7 @@ fun PartitionsScreen(
                                 text = rowFacts.joinToString(" · "),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = FontFamily.Monospace,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -849,20 +890,13 @@ fun PartitionsScreen(
                         if (partition.isEfiType) {
                             Badge(text = "EFI")
                         }
-                        Text(
-                            text = accessLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = when (access) {
-                                PartitionWriteAccess.ReadOnly, PartitionWriteAccess.DriverReadOnly ->
-                                    MaterialTheme.colorScheme.error
-                                PartitionWriteAccess.ReadWrite, PartitionWriteAccess.Unknown ->
-                                    MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier.semantics {
-                                contentDescription = accessDescription
-                            },
-                        )
+                        if (access != PartitionWriteAccess.Unknown) {
+                            Badge(
+                                text = accessLabel,
+                                container = MaterialTheme.colorScheme.tertiaryContainer,
+                                content = MaterialTheme.colorScheme.onTertiaryContainer,
+                            )
+                        }
                     }
                 }
             }
@@ -1039,7 +1073,7 @@ fun PartitionsScreen(
                         PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
                         PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
                         PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
-                        PartitionWriteAccess.Unknown -> "—"
+                        PartitionWriteAccess.Unknown -> stringResource(R.string.partitions_write_unknown)
                     },
                     enabled = false,
                 )
@@ -1867,151 +1901,10 @@ private fun PartitionSelectStrip(
 // sticky selection, GPT/MBR warning actions, create-in-list, EFI policy, bound editors,
 // derived raw end, overlap list, probe and dual source pickers are wired above.
 
-/**
- * Two text glyphs ("GPT"/"MBR") inside oval pills. The current scheme gets the selection
- * outline and a neutral filter wash; the other pill opens the nested repair/change prompt.
- * The whole construct is framed in the error colour because changing the scheme erases
- * partitions. No vector asset is required: the text itself is the icon and carries the
- * accessibility description.
- */
-@Composable
-private fun SchemeIcons(
-    current: PartitionScheme?,
-    enabled: Boolean,
-    onPick: (PartitionScheme) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .widthIn(max = 180.dp)
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                RoundedCornerShape(12.dp),
-            )
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val firstScheme = if (current == PartitionScheme.Mbr) PartitionScheme.Mbr else PartitionScheme.Gpt
-        val secondScheme = if (current == PartitionScheme.Mbr) PartitionScheme.Gpt else PartitionScheme.Mbr
-        SchemeIcon(
-            scheme = firstScheme,
-            current = current,
-            enabled = enabled,
-            onPick = onPick,
-        )
-        SchemeArrow(pointsRight = true)
-        SchemeIcon(
-            scheme = secondScheme,
-            current = current,
-            enabled = enabled,
-            onPick = onPick,
-        )
-    }
-}
 
-@Composable
-private fun SchemeIcon(
-    scheme: PartitionScheme,
-    current: PartitionScheme?,
-    enabled: Boolean,
-    onPick: (PartitionScheme) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val label = scheme.toTableScheme().name
-    val isCurrent = current == scheme
-    val actionAvailable = enabled && !isCurrent
-    val description = when {
-        isCurrent -> stringResource(R.string.partitions_scheme_current_a11y, label)
-        // Disabled or unknown-scheme pills must not promise an action they cannot open.
-        !actionAvailable -> stringResource(R.string.partitions_scheme_unavailable_a11y, label)
-        // GPT current opens the neutral chooser (repair or change); only an MBR current
-        // pill leads straight to the destructive change warning.
-        current == PartitionScheme.Gpt ->
-            stringResource(R.string.partitions_scheme_actions_a11y, label)
-        current == PartitionScheme.Mbr ->
-            stringResource(R.string.partitions_scheme_change_a11y, label)
-        else -> stringResource(R.string.partitions_scheme_unavailable_a11y, label)
-    }
-    Surface(
-        // Fully rounded pill: text wrapped by the oval background, not a rectangular tile.
-        shape = RoundedCornerShape(percent = 50),
-        color = if (isCurrent) {
-            MaterialTheme.colorScheme.surfaceVariant
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        },
-        border = if (isCurrent) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface)
-        } else {
-            null
-        },
-        modifier = modifier
-            .widthIn(min = 48.dp, max = 64.dp)
-            .heightIn(min = 48.dp)
-            .selectable(
-                selected = isCurrent,
-                enabled = enabled && !isCurrent,
-                role = Role.RadioButton,
-                onClick = { onPick(scheme) },
-            )
-            .semantics { contentDescription = description },
-    ) {
-        Box(
-            modifier = Modifier
-                .heightIn(min = 48.dp)
-                .padding(horizontal = 2.dp, vertical = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (isCurrent) {
-                // Selection filter: a neutral wash, never colour alone.
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
-                )
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
 
-@Composable
-private fun SchemeArrow(pointsRight: Boolean) {
-    val color = MaterialTheme.colorScheme.onSurfaceVariant
-    Canvas(modifier = Modifier.size(width = 28.dp, height = 24.dp)) {
-        val y = size.height / 2f
-        val inset = 4.dp.toPx()
-        val head = 6.dp.toPx()
-        val startX = if (pointsRight) inset else size.width - inset
-        val endX = if (pointsRight) size.width - inset else inset
-        drawLine(
-            color = color,
-            start = Offset(startX, y),
-            end = Offset(endX, y),
-            strokeWidth = 2.dp.toPx(),
-        )
-        val direction = if (pointsRight) -1f else 1f
-        drawLine(
-            color = color,
-            start = Offset(endX, y),
-            end = Offset(endX + direction * head, y - head),
-            strokeWidth = 2.dp.toPx(),
-        )
-        drawLine(
-            color = color,
-            start = Offset(endX, y),
-            end = Offset(endX + direction * head, y + head),
-            strokeWidth = 2.dp.toPx(),
-        )
-    }
-}
+
+
 
 @Composable
 private fun InteractiveInfoRow(

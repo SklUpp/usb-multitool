@@ -382,4 +382,52 @@ class FilesystemUsageUiTest {
         refresh(finished = true) // a finished operation always re-measures
         assertEquals(3, requests)
     }
+
+    @Test
+    fun failedProbeBusyTransitionDropsStaleGeometry() {
+        val current = ready().copy(selectedPartitionId = "1")
+        val busy = UiReducer.reduce(
+            current,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Busy,
+                device = device,
+                partitions = emptyList(),
+            ),
+        )
+        assertEquals(listOf(data, other), busy.state.partitions)
+        val fenced = UiReducer.reduce(
+            busy.state,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Busy,
+                device = device,
+                partitions = emptyList(),
+                retainExisting = false,
+                tableValid = false,
+            ),
+        )
+        assertTrue(fenced.state.partitions.isEmpty())
+        assertNull(fenced.state.selectedPartitionId)
+        assertEquals(DevicePresence.Busy, fenced.state.presence)
+    }
+
+    @Test
+    fun deviceReadyProductionSchedulerEmitsUsageEffectAfterConsumerClaimRelease() {
+        val readyResult = UiReducer.reduce(
+            AppUiState(),
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Ready,
+                device = device,
+                partitions = listOf(data, other),
+                sectorSize = 512,
+            ),
+        )
+        val readyState = readyResult.state
+        assertEquals("1", readyState.selectedPartitionId)
+        val scheduled = requireNotNull(
+            scheduleFilesystemUsageRequest(readyState, null, null, operationFinished = false),
+        )
+        assertEquals(UiEffect.LoadFilesystemUsage::class, scheduled.effect::class)
+        assertEquals("1", scheduled.effect.partitionId)
+        assertEquals(scheduled.key, scheduled.effect.usageKey)
+    }
 }

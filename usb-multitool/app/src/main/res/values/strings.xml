@@ -16,10 +16,10 @@
     <string name="log_back">Back to tabs</string>
     <string name="log_empty">No entries yet. Operation details appear here while they run.</string>
     <string name="log_copy_all">Copy all</string>
-    <string name="log_copy_warning">The log may contain file paths and USB serial numbers. Copying sends all of them to the clipboard, where the next app can read them. Copy only if you accept that exposure.</string>
+    <string name="log_copy_warning">The log may contain file paths and USB serial numbers. Copying puts them on the clipboard, where another app may read them. Copy only if you accept this disclosure.</string>
     <string name="log_copy_confirm">Copy</string>
     <string name="log_clear">Clear</string>
-    <string name="log_clear_hint">Clearing is immediate and needs no confirmation. New entries can appear right away, including during an operation. Android logcat is not cleared.</string>
+    <string name="log_clear_snackbar">Journal cleared. System Logcat was not affected.</string>
     <string name="log_export_trace">Export trace</string>
     <string name="msg_trace_exported">Trace written to the selected file.</string>
     <string name="msg_trace_export_failed">Could not write the trace file.</string>
@@ -112,6 +112,9 @@
     <string name="partitions_scheme_erase_title">Partitions to erase:</string>
     <string name="partitions_scheme_erase_partition">• %1$s — %2$s</string>
     <string name="partitions_scheme_change_action">Change to %1$s</string>
+    <string name="partitions_scheme_convert_to">Convert to %1$s</string>
+    <string name="partitions_scheme_initialize_action">Initialize table</string>
+    <string name="partitions_scheme_initialize_title">Initialize partition table</string>
     <string name="partitions_scheme_current_a11y">Current scheme: %1$s</string>
     <string name="partitions_scheme_actions_a11y">Open scheme and backup GPT options for %1$s</string>
     <string name="partitions_scheme_unavailable_a11y">Scheme actions for %1$s are unavailable</string>
@@ -163,7 +166,7 @@
     <string name="tab_files">Files</string>
     <string name="tab_ventoy">Ventoy</string>
     <string name="tab_partitions">Partitions</string>
-    <string name="tab_diagnostics">Diagnostics</string>
+    <string name="tab_diagnostics">Maintenance</string>
     <string name="action_confirm">Confirm</string>
     <string name="action_delete">Delete</string>
     <string name="action_create">Create</string>
@@ -253,6 +256,7 @@
     <string name="files_pick_device">Choose from device</string>
     <string name="files_pick_use_file">Use file</string>
     <string name="files_pick_back">Back</string>
+    <string name="files_more_actions">More file actions</string>
     <string name="type_folder">Folder</string>
     <string name="type_iso">ISO image</string>
     <string name="type_file">File</string>
@@ -325,6 +329,7 @@
     <string name="partitions_repair_info_title">Backup GPT repair</string>
     <string name="partitions_repair_info_text">This repairs the backup GPT from the valid primary GPT. It does not format, create, delete, or rewrite partition contents. Repair is unavailable when the primary GPT is damaged or the table is ambiguous.</string>
     <string name="ventoy_section_title">Ventoy</string>
+    <string name="ventoy_version_subtitle">Version</string>
     <string name="ventoy_help_title">Ventoy install and update</string>
     <string name="ventoy_help_text">Bundled, USB (VTOYEFI), and server versions are shown separately. Install erases all partitions and files and formats the data partition; confirmation is required. Update rewrites boot files and keeps data files; it does not promise atomicity.</string>
     <string name="ventoy_help_details">Check never writes the stick. Download keeps validated bytes app-private until app data is cleared. Pinned releases require independent archive and member SHA-256 pins. An unpinned latest release is downloaded only after a separate warning that no independent trusted SHA is available; structural validation does not prove authenticity.</string>
@@ -337,6 +342,7 @@
     <string name="confirm_ventoy_provenance">Pinned archive SHA-256: %1$s\nSource: %2$s</string>
     <string name="confirm_ventoy_unpinned">No independent trusted SHA is available for this release. Archive/member structure and checksums were validated, but authenticity is not independently verified. Source: %1$s</string>
     <string name="ventoy_check_version">Check upstream version</string>
+    <string name="ventoy_check_download">Check and download release</string>
     <string name="ventoy_badge_downloaded">Downloaded %1$s</string>
     <string name="ventoy_badge_pinned">Pinned %1$s</string>
     <string name="ventoy_download_failed">Ventoy download/store warning: %1$s</string>
@@ -437,6 +443,7 @@
     <string name="msg_files_pick_active">Finish or cancel the current file selection first.</string>
     <string name="msg_files_pick_target_invalid">The selected file is no longer available. Return and choose again.</string>
     <string name="msg_ventoy_data_partition_missing">No writable Ventoy data partition found.</string>
+    <string name="msg_ventoy_data_partition_required">Choose this file on the first Ventoy data partition. Files on other partitions are not automatically discovered by Ventoy.</string>
     <string name="msg_import_inspection_busy">Another file check is still running. Try again in a moment.</string>
     <string name="msg_import_picker_busy">A file picker is already open. Finish or cancel it first.</string>
     <string name="msg_import_inspection_cancelling">Ending the running file check. The USB disk closes automatically.</string>
@@ -540,6 +547,7 @@
     <string name="confirm_volume_label">New volume label: %1$s</string>
     <string name="confirm_initialize_scheme">New scheme: %1$s</string>
     <string name="confirm_initialize_partitions">Partitions to erase: %1$d</string>
+    <string name="confirm_initialize_unrecognized">No supported partition table was recognized. This does not prove the medium is empty; existing data may become inaccessible. Initialization writes partition metadata and does not securely erase the disk.</string>
     <string name="raw_map_legend_range">Write range</string>
     <string name="raw_map_legend_partition">Partition</string>
     <string name="raw_map_legend_boot">Boot area</string>
@@ -622,6 +630,7 @@
     <string name="msg_scheme_backup_metadata_unknown">Backup GPT metadata is unreadable; a destructive scheme change is disabled until the table is restored or re-read.</string>
     <string name="msg_scheme_backup_unverified">Backup GPT data has not been verified yet; refresh the device before a destructive scheme change.</string>
     <string name="msg_scheme_mbr_too_large">MBR cannot address this disk: it exceeds the 32-bit LBA limit.</string>
+    <string name="msg_scheme_metadata_unverified">Target metadata could not be safely fingerprinted; refresh device before destructive scheme initialization.</string>
     <string name="msg_target_layout_invalid">Target disk layout is invalid: %1$s</string>
     <string name="layout_confirm_ack">I understand this layout is for another computer, the declared disk size and DiskID are not verified here, the disk order there may differ, and applying a layout can wipe or rewrite that disk</string>
     <string name="layout_confirm_apply">Apply layout</string>
@@ -842,4 +851,9 @@
 <string name="op_delete_batch">Delete %1$d entries</string>
 <string name="op_batch_current_file_pct">file %1$d%%</string>
 <string name="op_batch_current_file_bytes">Current file · %1$s / %2$s</string>
+    <string name="settings_title_screen">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_appearance_title">Appearance</string>
+    <string name="settings_about_title">About</string>
+    <string name="more_actions">More actions</string>
 </resources>

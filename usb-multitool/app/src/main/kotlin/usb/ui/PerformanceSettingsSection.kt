@@ -5,22 +5,26 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import usb.device.TransferTuning
 import usb.diagnostics.PerformancePreferences
 import usb.multitool.R
@@ -33,6 +37,7 @@ import usb.multitool.R
 internal fun PerformanceSettingsSection() {
     val context = LocalContext.current
     val prefs = remember { PerformancePreferences.prefs(context) }
+    val haptic = LocalHapticFeedback.current
     var scsiChunkKib by remember {
         mutableStateOf(
             prefs.getInt(
@@ -83,8 +88,11 @@ internal fun PerformanceSettingsSection() {
             onValueChange = { scsiChunkKib = it },
             onValueChangeFinished = { saveValues() },
             onReset = {
-                scsiChunkKib = TransferTuning.DEFAULT_SCSI_CHUNK_KIB
-                saveValues()
+                if (scsiChunkKib != TransferTuning.DEFAULT_SCSI_CHUNK_KIB) {
+                    scsiChunkKib = TransferTuning.DEFAULT_SCSI_CHUNK_KIB
+                    saveValues()
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
             },
         )
         PerfSlider(
@@ -98,8 +106,11 @@ internal fun PerformanceSettingsSection() {
             onValueChange = { jniCapKib = it },
             onValueChangeFinished = { saveValues() },
             onReset = {
-                jniCapKib = TransferTuning.DEFAULT_JNI_CAP_KIB
-                saveValues()
+                if (jniCapKib != TransferTuning.DEFAULT_JNI_CAP_KIB) {
+                    jniCapKib = TransferTuning.DEFAULT_JNI_CAP_KIB
+                    saveValues()
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
             },
         )
         PerfSlider(
@@ -114,8 +125,11 @@ internal fun PerformanceSettingsSection() {
             onValueChange = { rescueCheckpointMib = it },
             onValueChangeFinished = { saveValues() },
             onReset = {
-                rescueCheckpointMib = TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB
-                saveValues()
+                if (rescueCheckpointMib != TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB) {
+                    rescueCheckpointMib = TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB
+                    saveValues()
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
             },
         )
     }
@@ -134,6 +148,11 @@ private fun PerfSlider(
     onValueChangeFinished: () -> Unit,
     onReset: () -> Unit,
 ) {
+    val haptic = LocalHapticFeedback.current
+    var lastHapticValue by remember { mutableStateOf(value) }
+    LaunchedEffect(value) {
+        lastHapticValue = value
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -152,7 +171,9 @@ private fun PerfSlider(
             )
             IconButton(
                 onClick = onReset,
-                modifier = Modifier.semantics { contentDescription = resetDescription },
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = resetDescription },
             ) {
                 Text("↻", style = MaterialTheme.typography.titleMedium)
             }
@@ -164,7 +185,14 @@ private fun PerfSlider(
         )
         Slider(
             value = value.toFloat(),
-            onValueChange = { onValueChange((it.toInt() / step) * step) },
+            onValueChange = {
+                val snapped = (it.toInt() / step) * step
+                if (snapped != lastHapticValue) {
+                    lastHapticValue = snapped
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                onValueChange(snapped)
+            },
             onValueChangeFinished = onValueChangeFinished,
             valueRange = range.first.toFloat()..range.last.toFloat(),
             steps = ((range.last - range.first) / step) - 1,
