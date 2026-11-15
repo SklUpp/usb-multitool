@@ -175,6 +175,9 @@
     <string name="header_busy">Device busy</string>
     <string name="header_disconnected">Device disconnected</string>
     <string name="header_absent">No drive connected</string>
+    <string name="usb_empty_title">Connect a USB drive</string>
+    <string name="usb_empty_otg">Connect a drive using a compatible USB OTG adapter.</string>
+    <string name="usb_empty_permission">Allow USB access when Android asks.</string>
     <string name="header_used_accessibility">Used %1$d%% of capacity</string>
     <string name="header_used_caption">Used %1$d%% · %2$s</string>
     <string name="status_title">Status</string>

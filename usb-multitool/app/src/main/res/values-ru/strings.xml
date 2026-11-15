@@ -175,6 +175,9 @@
     <string name="header_busy">Устройство занято</string>
     <string name="header_disconnected">Устройство отключено</string>
     <string name="header_absent">Накопитель не подключён</string>
+    <string name="usb_empty_title">Подключите USB-накопитель</string>
+    <string name="usb_empty_otg">Подключите накопитель через совместимый USB OTG-адаптер.</string>
+    <string name="usb_empty_permission">Разрешите доступ к USB в запросе Android.</string>
     <string name="header_used_accessibility">Занято %1$d%% ёмкости</string>
     <string name="header_used_caption">Занято %1$d%% · %2$s</string>
     <string name="status_title">Статус</string>

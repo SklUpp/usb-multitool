@@ -443,6 +443,25 @@ fun AppShell(
                             },
                             label = "tab",
                         ) { target ->
+                            if (target in listOf(ShellTab.Files, ShellTab.Partitions) &&
+                                !usbContentAvailable(state.presence)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    GlyphIcon(Glyph.Usb, size = 48.dp)
+                                    Text(stringResource(R.string.usb_empty_title), style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        stringResource(
+                                            if (state.presence == DevicePresence.PermissionRequired) R.string.usb_empty_permission
+                                            else R.string.usb_empty_otg,
+                                        ),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                }
+                            } else {
                             when (target) {
                                 ShellTab.Files -> FilesScreen(
                                     state = state,
@@ -490,6 +509,7 @@ fun AppShell(
                                     },
                                     onPickBackupFolder = onPickBackupFolder,
                                 )
+                            }
                             }
                         }
                     }
