@@ -7,6 +7,11 @@ must not invent filesystem/Ventoy/F3/ddrescue success. `exfatprogs` is the one
 exception: it is vendored under `third_party/exfatprogs/` with its upstream tag and
 commit recorded in `UPSTREAM.md`.
 
+The native build compiles FatFs, ntfs-3g, lwext4, and exfatprogs in separate
+CMake static-library targets. Project-owned filesystem adapters and JNI bridges
+remain in `app/src/main/cpp/` and link those targets into `usb_native`. Upstream
+patches remain separate from the adapter code and are applied by the fetch script.
+
 ## FatFs (FAT12/16/32 + exFAT)
 
 - URL: https://elm-chan.org/fsw/ff/arc/ff16.zip

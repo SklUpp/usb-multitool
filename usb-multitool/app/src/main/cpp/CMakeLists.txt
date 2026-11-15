@@ -76,7 +76,62 @@ if(USB_WITH_LWEXT4 AND NOT LWEXT4_SOURCES)
         "lwext4 sources missing under ${LWEXT4_DIR}/src — run scripts/fetch-third-party.sh")
 endif()
 
+# Keep vendored upstream code in separate PIC archives. Project adapters and JNI
+# remain in usb_native below; feature flags still control target creation.
+set(USB_ENGINE_LIBS "")
+if(USB_WITH_FATFS)
+    add_library(fatfs_upstream STATIC
+        ${FATFS_DIR}/ff.c
+        ${FATFS_DIR}/ffunicode.c
+        ${FATFS_DIR}/ffsystem.c
+    )
+    target_include_directories(fatfs_upstream PUBLIC ${FATFS_DIR})
+    target_compile_definitions(fatfs_upstream PRIVATE
+        _GNU_SOURCE
+        _FILE_OFFSET_BITS=64
+    )
+    set_target_properties(fatfs_upstream PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    list(APPEND USB_ENGINE_LIBS fatfs_upstream)
+endif()
 
+if(USB_WITH_NTFS)
+    add_library(ntfs3g_upstream STATIC
+        ${NTFS_PROGS_DIR}/mkntfs.c
+        ${NTFS_PROGS_DIR}/attrdef.c
+        ${NTFS_PROGS_DIR}/boot.c
+        ${NTFS_PROGS_DIR}/sd.c
+        ${NTFS_SOURCES}
+    )
+    target_include_directories(ntfs3g_upstream PUBLIC
+        ${NTFS_PROGS_DIR}
+        ${NTFS_DIR}/libntfs-3g
+        ${NTFS_DIR}/include
+        ${NTFS_DIR}/include/ntfs-3g
+    )
+    target_compile_definitions(ntfs3g_upstream PRIVATE
+        _GNU_SOURCE
+        _FILE_OFFSET_BITS=64
+        HAVE_CONFIG_H=1
+        MKNTFS_LIBRARY=1
+        MKNTFS_NO_UUID_LIB=1
+    )
+    set_target_properties(ntfs3g_upstream PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    list(APPEND USB_ENGINE_LIBS ntfs3g_upstream)
+endif()
+
+if(USB_WITH_LWEXT4)
+    add_library(lwext4_upstream STATIC ${LWEXT4_SOURCES})
+    target_include_directories(lwext4_upstream PUBLIC ${LWEXT4_DIR}/include)
+    target_compile_definitions(lwext4_upstream PRIVATE
+        _GNU_SOURCE
+        _FILE_OFFSET_BITS=64
+        CONFIG_USE_DEFAULT_CFG=1
+        CONFIG_DEBUG_ASSERT=0
+        CONFIG_EXT4_MOUNTPOINTS_COUNT=8
+    )
+    set_target_properties(lwext4_upstream PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    list(APPEND USB_ENGINE_LIBS lwext4_upstream)
+endif()
 set(USB_NATIVE_SOURCES
     native-lib.cpp
     usb_block.c
@@ -113,27 +168,17 @@ if(USB_WITH_FATFS)
     list(APPEND USB_NATIVE_SOURCES
         fat_engine.c
         fat_jni.cpp
-        ${FATFS_DIR}/ff.c
-        ${FATFS_DIR}/ffunicode.c
-        ${FATFS_DIR}/ffsystem.c
         ${FATFS_DIR}/diskio.c
     )
     list(APPEND USB_NATIVE_INCLUDES ${FATFS_DIR})
 endif()
 
 if(USB_WITH_NTFS)
-    # mkntfs is the real upstream formatter; MKNTFS_LIBRARY removes its CLI
-    # main and MKNTFS_NO_UUID_LIB uses libntfs-3g's GUID generator instead of
-    # libuuid, which the NDK does not ship.
+    # mkntfs formatter and libntfs-3g sources live in ntfs3g_upstream.
     list(APPEND USB_NATIVE_SOURCES
         ntfs_engine.c
         ntfs_jni.cpp
         ntfs_mkfs_support.c
-        ${NTFS_PROGS_DIR}/mkntfs.c
-        ${NTFS_PROGS_DIR}/attrdef.c
-        ${NTFS_PROGS_DIR}/boot.c
-        ${NTFS_PROGS_DIR}/sd.c
-        ${NTFS_SOURCES}
     )
     list(APPEND USB_NATIVE_INCLUDES
         ${NTFS_PROGS_DIR}
@@ -152,7 +197,6 @@ if(USB_WITH_LWEXT4)
     list(APPEND USB_NATIVE_SOURCES
         ext_engine.c
         ext_jni.cpp
-        ${LWEXT4_SOURCES}
     )
     list(APPEND USB_NATIVE_INCLUDES ${LWEXT4_DIR}/include)
     list(APPEND USB_NATIVE_DEFS
@@ -176,6 +220,7 @@ if(ANDROID)
     find_library(log-lib log)
     target_link_libraries(usb_native
         exfatprogs_fsck
+        ${USB_ENGINE_LIBS}
         ${log-lib}
         Threads::Threads
         dl
@@ -186,6 +231,7 @@ if(ANDROID)
 else()
     target_link_libraries(usb_native
         exfatprogs_fsck
+        ${USB_ENGINE_LIBS}
         Threads::Threads
         ${USB_NATIVE_LIBS}
     )
