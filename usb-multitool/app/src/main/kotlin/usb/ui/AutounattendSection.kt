@@ -15,10 +15,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
@@ -54,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
+import androidx.compose.ui.res.painterResource
 import usb.ventoy.VentoySetup
 import usb.ventoy.WindowsTemplate
 import usb.ventoy.XmlText
@@ -95,6 +100,7 @@ private val NonDefaultSettingsPath = Color(0xFFE65100)
  * block, unknown elements are reported as preserved, and the target-PC layout is acknowledged
  * in its own dialog that never shows this stick's identity.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AutounattendSection(
     state: AppUiState,
@@ -578,33 +584,43 @@ internal fun AutounattendSection(
         )
     }
     if (templateSourcePrompt) {
-        AlertDialog(
-            onDismissRequest = { templateSourcePrompt = false },
-            title = { Text(stringResource(R.string.windows_template_choose_source)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = {
-                            templateSourcePrompt = false
-                            pickerOpen = true
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.raw_choose_stick))
-                    }
-                    TextButton(
-                        onClick = {
-                            templateSourcePrompt = false
-                            folderKind = WindowsImportKind.XmlTemplate
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.raw_choose_phone))
-                    }
-                }
-            },
-            confirmButton = {},
-        )
+        ModalBottomSheet(onDismissRequest = { templateSourcePrompt = false }) {
+            Text(
+                text = stringResource(R.string.windows_template_choose_source),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.raw_choose_stick)) },
+                leadingContent = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
+                        contentDescription = null,
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) {
+                        templateSourcePrompt = false
+                        pickerOpen = true
+                    },
+            )
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.raw_choose_phone)) },
+                leadingContent = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
+                        contentDescription = null,
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) {
+                        templateSourcePrompt = false
+                        folderKind = WindowsImportKind.XmlTemplate
+                    },
+            )
+        }
     }
 
     folderKind?.let {
@@ -680,7 +696,7 @@ internal fun AutounattendSection(
  * keys stay editable as key/value, and every edit is staged until Update or the confirmed
  * install/update writes the default file.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun GlobalSettingsCard(
     state: AppUiState,
@@ -1248,34 +1264,45 @@ private fun EditablePairRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsSourceDialog(
     onStick: () -> Unit,
     onPhone: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_source_choose)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onStick, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.settings_source_choose_stick))
-                }
-                TextButton(onClick = onPhone, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.settings_source_choose_phone))
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.import_error_dismiss))
-            }
-        },
-    )
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            text = stringResource(R.string.settings_source_choose),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.settings_source_choose_stick)) },
+            leadingContent = {
+                Icon(
+                    painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
+                    contentDescription = null,
+                )
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button, onClick = onStick),
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.settings_source_choose_phone)) },
+            leadingContent = {
+                Icon(
+                    painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
+                    contentDescription = null,
+                )
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button, onClick = onPhone),
+        )
+    }
 }
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun KnownControlRow(

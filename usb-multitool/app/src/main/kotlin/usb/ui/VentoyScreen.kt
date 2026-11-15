@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,6 +26,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.Surface
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
@@ -513,6 +516,7 @@ private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
  * Phone import and device file selection via real callbacks, with
  * honest copying progress and confirmation gates.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WindowsImageBlock(
     state: AppUiState,
@@ -625,59 +629,61 @@ private fun WindowsImageBlock(
     }
 
     if (imageSourcePrompt) {
-        AlertDialog(
-            onDismissRequest = { imageSourcePrompt = false },
-            title = { Text(chooseDescription) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.raw_choose_stick)) },
-                        leadingContent = {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            imageSourcePrompt = false
-                            onIntent(
-                                UiIntent.BeginFilesPick(
-                                    purpose = FilesPickPurpose.WindowsImage,
-                                    returnTab = ShellTab.Ventoy,
-                                    launchSource = FilesPickLaunchSource.Files,
-                                    expectedIdentity = sourceDialogIdentity,
-                                    expectedAttachGeneration = sourceDialogGeneration,
-                                ),
-                            )
-                        },
+        ModalBottomSheet(onDismissRequest = { imageSourcePrompt = false }) {
+            Text(
+                text = chooseDescription,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.raw_choose_stick)) },
+                leadingContent = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
                     )
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.raw_choose_phone)) },
-                        leadingContent = {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            imageSourcePrompt = false
-                            onIntent(
-                                UiIntent.BeginFilesPick(
-                                    purpose = FilesPickPurpose.WindowsImage,
-                                    returnTab = ShellTab.Ventoy,
-                                    launchSource = FilesPickLaunchSource.Phone,
-                                    expectedIdentity = sourceDialogIdentity,
-                                    expectedAttachGeneration = sourceDialogGeneration,
-                                ),
-                            )
-                        },
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        imageSourcePrompt = false
+                        onIntent(
+                            UiIntent.BeginFilesPick(
+                                purpose = FilesPickPurpose.WindowsImage,
+                                returnTab = ShellTab.Ventoy,
+                                launchSource = FilesPickLaunchSource.Files,
+                                expectedIdentity = sourceDialogIdentity,
+                                expectedAttachGeneration = sourceDialogGeneration,
+                            ),
+                        )
+                    },
+            )
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.raw_choose_phone)) },
+                leadingContent = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
                     )
-                }
-            },
-            confirmButton = {},
-        )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        imageSourcePrompt = false
+                        onIntent(
+                            UiIntent.BeginFilesPick(
+                                purpose = FilesPickPurpose.WindowsImage,
+                                returnTab = ShellTab.Ventoy,
+                                launchSource = FilesPickLaunchSource.Phone,
+                                expectedIdentity = sourceDialogIdentity,
+                                expectedAttachGeneration = sourceDialogGeneration,
+                            ),
+                        )
+                    },
+            )
+        }
     }
 
     state.pendingIsoImport?.takeIf { it.kind == WindowsImportKind.Image }?.let { proposal ->
