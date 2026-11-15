@@ -2,8 +2,8 @@ package usb.image
 
 import java.io.File
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-
 /**
  * App-private staging for "Send to raw writer".
  *
@@ -74,6 +74,15 @@ object ImageStaging {
         return sessionOwned.contains(candidate.path)
     }
 
+    data class Lease(val path: String, val id: String)
+
+    fun createLease(filesDir: File, sourceName: String): Lease {
+        val file = createUnique(filesDir, sourceName)
+        return Lease(file.canonicalPath, UUID.randomUUID().toString())
+    }
+
+    fun leaseMatches(filesDir: File, lease: Lease): Boolean =
+        isManaged(filesDir, lease.path) && File(lease.path).isFile
     /** Snapshot of session-owned canonical paths (tests / diagnostics). */
     fun sessionOwnedPaths(): Set<String> = sessionOwned.toSet()
 

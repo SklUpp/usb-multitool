@@ -84,6 +84,18 @@ class ImageStagingTest {
         assertTrue(owned.exists())
         assertTrue(foreign.exists())
     }
+    @Test
+    fun inactiveOperationReleasesOwnedStage() {
+        val root = root()
+        val staged = ImageStaging.createUnique(root, "queued-download.bin")
+        val operation = usb.operation.DiskOperation("queued-download")
+        operation.onInactive {
+            ImageStaging.deleteIfManaged(root, staged.absolutePath)
+        }
+        operation.markInactive()
+        assertFalse(staged.exists())
+        assertFalse(ImageStaging.isManaged(root, staged.absolutePath))
+    }
 
     @Test
     fun sanitizeStripsPathParts() {

@@ -206,6 +206,28 @@ class MainActivityPickerRecoveryTest {
             controller.destroy()
         }
     }
+    @Test
+    fun downloadBindingWithoutOwnedStageIsNotRestoredAfterProcessDeath() {
+        val saved = Bundle().apply {
+            putString("usb.multitool.PENDING_DOWNLOAD_DIRECTORY", "/ISO")
+            putString("usb.multitool.PENDING_DOWNLOAD_NAME", "win11.iso")
+            putString("usb.multitool.PENDING_DOWNLOAD_SIZE", "4096")
+            putString("usb.multitool.PENDING_DOWNLOAD_IDENTITY", "SanDisk#SER-11")
+            putString("usb.multitool.PENDING_DOWNLOAD_PARTITION", "1")
+            putLong("usb.multitool.PENDING_DOWNLOAD_ATTACH", 4L)
+        }
+        val controller = Robolectric.buildActivity(MainActivity::class.java).create(saved)
+        try {
+            val vm = ViewModelProvider(controller.get())[MainViewModel::class.java]
+            assertEquals(UiMessage.Key(UiMessageKey.StaleStagedImage), vm.state.statusMessage)
+            val out = Bundle()
+            controller.saveInstanceState(out)
+            assertFalse(out.containsKey("usb.multitool.PENDING_DOWNLOAD_NAME"))
+            assertFalse(out.containsKey("usb.multitool.PENDING_DOWNLOAD_STAGED"))
+        } finally {
+            controller.destroy()
+        }
+    }
 
     @Test
     fun backupPinIsolatesMissingSerialAndMismatchedKeyIdentityAndSerial() {

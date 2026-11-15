@@ -675,6 +675,7 @@ sealed class UiIntent {
     data class DownloadFile(
         val binding: FilesDownloadBinding,
         val uri: String,
+        val stagedPath: String? = null,
     ) : UiIntent()
 
     /** Delete every entry in [selection] after UI confirmation; reducer re-checks pin/write. */
@@ -808,8 +809,16 @@ sealed interface UiEffect {
 
     data class UploadFile(val path: String, val uri: String) : UiEffect
 
-    data class DownloadFile(val binding: FilesDownloadBinding, val uri: String) : UiEffect
-
+    data class DownloadFile(
+        val binding: FilesDownloadBinding,
+        val uri: String,
+        val stagedPath: String? = null,
+    ) : UiEffect
+    data class DownloadPickerReady(
+        val binding: FilesDownloadBinding,
+        val suggestedName: String,
+        val requestId: Long,
+    ) : UiEffect
     data class DeleteBatch(val selection: FilesBatchSelection) : UiEffect
 
     data class DownloadBatch(val selection: FilesBatchSelection, val treeUri: String) : UiEffect
@@ -4068,7 +4077,7 @@ object UiReducer {
                     else ->
                         ReduceResult(
                             state,
-                            effects = listOf(UiEffect.DownloadFile(intent.binding, intent.uri)),
+                            effects = listOf(UiEffect.DownloadFile(intent.binding, intent.uri, intent.stagedPath))
                         )
 
                 }

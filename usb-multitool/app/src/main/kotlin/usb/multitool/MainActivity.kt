@@ -208,6 +208,14 @@ class MainViewModel(
     private var rawSourceHandle: OperationHandle? = null
     private var rawMeasureJob: Job? = null
     private var rawMeasureHandle: MeasurementHandle? = null
+    internal var pendingDownloadBinding: FilesDownloadBinding? = null
+    internal var pendingDownloadStagedPath: String? = null
+    internal var pendingDownloadStageAttach: Long = Long.MIN_VALUE
+    private val pendingDownloadRequest = java.util.concurrent.atomic.AtomicLong(0L)
+    internal var pendingDownloadRequestId: Long = 0L
+    private var pickerLaunchRequestId: Long = 0L
+    private var pendingDownloadWorkerStarted = false
+    @Volatile private var pendingRawStagingPath: String? = null
     private var rawMeasureRunning = false
     /** Latest source waiting for a blocked provider pass to return; never starts in parallel. */
     private var pendingRawMeasureEffect: UiEffect.MeasureRawSource? = null
@@ -440,7 +448,21 @@ class MainViewModel(
 
 
     override fun onCleared() {
-        // Detach/clear must not crash the process if umount/sync fails on a yanked stick.
+        usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
+        if (!pendingDownloadWorkerStarted) {
+            pendingDownloadStagedPath?.let { path ->
+                runCatching { ImageStaging.deleteIfManaged(getApplication<Application>().filesDir, path) }
+            }
+        }
+        pendingRawStagingPath?.let { path ->
+            if (state.stagedRawImagePath != path) {
+                runCatching { ImageStaging.deleteIfManaged(getApplication<Application>().filesDir, path) }
+            }
+        }
+        pendingDownloadStagedPath = null
+        pendingRawStagingPath = null
+        pendingDownloadBinding = null
+        pendingDownloadRequestId = 0L
         inspectionOwner.cancel(cancelUsb = true)
         runCatching { closeFilesVolume(reportStatus = false) }
         _pickerEvents.close()
@@ -1669,8 +1691,13 @@ class MainViewModel(
                 uploadFile(effect.path, effect.uri)
             }
             is UiEffect.DownloadFile -> {
-                downloadFile(effect.binding, effect.uri)
+                if (effect.stagedPath != null) {
+                    downloadFile(effect.binding, effect.uri, effect.stagedPath)
+                } else {
+                    stageDownloadForPicker(effect.binding)
+                }
             }
+            is UiEffect.DownloadPickerReady -> _pickerEvents.trySend(effect)
             is UiEffect.StageUsbImageForRawWrite -> {
                 val binding = effect.binding
                 if (binding != null) {
@@ -2995,7 +3022,6 @@ class MainViewModel(
                 operation.bytesTotal = reportedSize ?: -1L
 
                 filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    operation.mutationAttempted = true
                     FilesOperations.upload(
                         resolver = resolver,
                         uri = document,
@@ -3003,6 +3029,7 @@ class MainViewModel(
                         volume = volume,
                         operation = operation,
                         chunkBytes = TransferTuning.jniCapBytes,
+                        filesDir = getApplication<Application>().filesDir,
                         onCleanupFailure = { cleanupError ->
                             // Engine already adds the cleanup failure as suppressed to the
                             // primary upload error; keep a persistent log line as well so the
@@ -3063,6 +3090,7 @@ class MainViewModel(
                             state.pendingConfirmation == null &&
                             state.stagedRawImagePath == stagedPath
                     )
+                    if (stagedPublished.get()) pendingRawStagingPath = null
                 }
             },
             onTerminal = { outcome, terminalToken ->
@@ -3072,6 +3100,7 @@ class MainViewModel(
                 if (outcome !is usb.operation.OperationState.Completed || !stagedPublished.get()) {
                     val orphan = stagedPathHolder[0]
                     stagedPathHolder[0] = null
+                    if (pendingRawStagingPath == orphan) pendingRawStagingPath = null
                     try {
                         ImageStaging.deleteIfManaged(filesDir, orphan)
                     } catch (err: Throwable) {
@@ -3096,46 +3125,48 @@ class MainViewModel(
                 }
             },
         ) { operation ->
+            val cleanup: () -> Unit = {
+                if (!stagedPublished.get()) {
+                    val orphan = stagedPathHolder[0]
+                    stagedPathHolder[0] = null
+                    if (pendingRawStagingPath == orphan) pendingRawStagingPath = null
+                    if (orphan != null) {
+                        try {
+                            ImageStaging.deleteIfManaged(filesDir, orphan)
+                        } catch (failure: Throwable) {
+                            operation.failureCause = operation.failureCause ?: failure
+                            traceEvent("staging.cleanup_failed", "path" to orphan, "error" to (failure.message ?: failure.javaClass.simpleName))
+                        }
+                    }
+                }
+            }
+            operation.onInactive(cleanup)
             require(binding.matches(state)) { "raw source target changed" }
             val target = fatChildPath(path, name)
             val volume = filesSession.volumeForLocked(pin, binding.partitionId)
             val size = volume.stat(target).size
-                operation.bytesTotal = size
-                ImageStaging.requireUsableSpaceEstimate(filesDir, size)
-                var primary: Throwable? = null
-                try {
-                    val stagedCopy = stageRawImageChunks(
-                        filesDir = filesDir,
-                        volume = volume,
-                        sourcePath = target,
-                        sourceSize = size,
-                        sourceName = name,
-                        operation = operation,
-                        chunkBytes = TransferTuning.jniCapBytes,
-                    )
-                    stagedPathHolder[0] = stagedCopy.absolutePath
-                } catch (t: Throwable) {
-                    primary = t
-                    stagedPathHolder[0] = null
-                    throw t
-                } finally {
-                    // Release USB before Partitions confirm / raw claim.
-                    val closeErr = closeFilesVolume(reportStatus = false)
-                    if (closeErr != null) {
-                        // No publish without successful source close; drop the staged copy.
-                        val pending = stagedPathHolder[0]
-                        stagedPathHolder[0] = null
-                        val cleanupErr = pending?.let {
-                            runCatching { ImageStaging.deleteIfManaged(filesDir, it) }
-                                .onFailure { err ->
-                                    val detail = err.message ?: err.javaClass.simpleName
-                                    post(UiIntent.AppendLog(logLine("Staging cleanup failed: $detail")))
-                                }
-                                .exceptionOrNull()
-                        }
-                        throw usb.fs.mergeCloseFailure(primary, closeErr, cleanupErr)
-                    }
+            operation.bytesTotal = size
+            ImageStaging.requireUsableSpaceEstimate(filesDir, size)
+            try {
+                val stagedCopy = stageRawImageChunks(
+                    filesDir = filesDir,
+                    volume = volume,
+                    sourcePath = target,
+                    sourceSize = size,
+                    sourceName = name,
+                    operation = operation,
+                    chunkBytes = TransferTuning.jniCapBytes,
+                )
+                stagedPathHolder[0] = stagedCopy.absolutePath
+                pendingRawStagingPath = stagedCopy.absolutePath
+                if (!operation.isActive()) cleanup()
+            } finally {
+                val closeErr = closeFilesVolume(reportStatus = false)
+                if (closeErr != null) {
+                    cleanup()
+                    throw usb.fs.mergeCloseFailure(null, closeErr, null)
                 }
+            }
         }
     }
 
@@ -5368,28 +5399,145 @@ class MainViewModel(
             }
         }
     }
-
-    private fun downloadFile(binding: FilesDownloadBinding, uri: String) {
-        val resolver = getApplication<Application>().contentResolver
+    internal fun emitPickerReady(binding: FilesDownloadBinding) {
+        _pickerEvents.trySend(UiEffect.DownloadPickerReady(binding, binding.name, pendingDownloadRequestId))
+    }
+    internal fun stageDownloadForPicker(binding: FilesDownloadBinding) {
+        if (pendingDownloadRequestId != 0L) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickActive)))
+            return
+        }
+        val requestId = pendingDownloadRequest.incrementAndGet()
+        pendingDownloadRequestId = requestId
+        pendingDownloadBinding = binding
         val pin = currentAttachmentPin()
+        val filesDir = getApplication<Application>().filesDir
+        var ownedPath: String? = null
+        var pickerEventEmitted = false
+        submitFilesOperation(
+            title = OperationTitle.DownloadEntry(binding.name),
+            onSuccess = {
+                if (pendingDownloadRequestId != requestId) {
+                    ownedPath?.let { runCatching { ImageStaging.deleteIfManaged(filesDir, it) } }
+                    return@submitFilesOperation
+                }
+                val staged = ownedPath
+                if (staged == null || !binding.matches(state)) {
+                    staged?.let { runCatching { ImageStaging.deleteIfManaged(filesDir, it) } }
+                    clearPendingDownload(requestId)
+                    return@submitFilesOperation
+                }
+                pendingDownloadStagedPath = staged
+                pickerEventEmitted = true
+                _pickerEvents.trySend(UiEffect.DownloadPickerReady(binding, binding.name, requestId))
+            },
+            onTerminal = { outcome, _ ->
+                if (outcome !is usb.operation.OperationState.Completed || !pickerEventEmitted) {
+                    ownedPath?.let { runCatching { ImageStaging.deleteIfManaged(filesDir, it) } }
+                    clearPendingDownload(requestId)
+                }
+            },
+        ) { operation ->
+            val cleanup: () -> Unit = {
+                ownedPath?.let { path ->
+                    try {
+                        ImageStaging.deleteIfManaged(filesDir, path)
+                    } catch (failure: Throwable) {
+                        operation.failureCause = operation.failureCause ?: failure
+                        traceEvent("staging.cleanup_failed", "path" to path, "error" to (failure.message ?: failure.javaClass.simpleName))
+                    }
+                }
+            }
+            operation.onInactive(cleanup)
+            try {
+                require(binding.matches(state)) { "download target changed" }
+                val volume = filesSession.volumeForLocked(pin, binding.partitionId)
+                ownedPath = FilesOperations.stageDownloadSource(filesDir, volume, binding.targetPath, operation).absolutePath
+                if (!operation.isActive()) {
+                    cleanup()
+                } else if (pendingDownloadRequestId == requestId) {
+                    pendingDownloadStagedPath = ownedPath
+                }
+            } finally {
+                if (!operation.isActive()) cleanup()
+                operation.removeInactiveListener(cleanup)
+            }
+        }
+    }
+
+    internal fun cancelPendingDownload(binding: FilesDownloadBinding) {
+        if (pendingDownloadBinding != binding) return
+        val path = pendingDownloadStagedPath
+        val requestId = pendingDownloadRequestId
+        clearPendingDownload(requestId)
+        path?.let { runCatching { ImageStaging.deleteIfManaged(getApplication<Application>().filesDir, it) } }
+    }
+
+    private fun clearPendingDownload(requestId: Long) {
+        if (pendingDownloadRequestId != requestId) return
+        pendingDownloadRequestId = 0L
+        pickerLaunchRequestId = 0L
+        pendingDownloadStagedPath = null
+        pendingDownloadBinding = null
+        pendingDownloadStageAttach = Long.MIN_VALUE
+    }
+    internal fun claimPickerLaunch(requestId: Long, binding: FilesDownloadBinding): Boolean {
+        if (!pickerRequestMatches(requestId, binding) || pickerLaunchRequestId == requestId) return false
+        pickerLaunchRequestId = requestId
+        return true
+    }
+    internal fun pickerLaunchFailed(binding: FilesDownloadBinding, requestId: Long = pendingDownloadRequestId) {
+        if (pendingDownloadBinding != binding || pendingDownloadRequestId != requestId) return
+        val path = pendingDownloadStagedPath
+        clearPendingDownload(requestId)
+        path?.let { runCatching { ImageStaging.deleteIfManaged(getApplication<Application>().filesDir, it) } }
+    }
+    internal fun pickerRequestMatches(requestId: Long, binding: FilesDownloadBinding): Boolean =
+        pendingDownloadRequestId == requestId && pendingDownloadBinding == binding
+
+    internal fun submitDownloadResult(binding: FilesDownloadBinding, uri: Uri): Boolean {
+        val path = pendingDownloadStagedPath
+        if (pendingDownloadBinding != binding || path == null || !ImageStaging.isManaged(getApplication<Application>().filesDir, path)) {
+            pickerLaunchFailed(binding)
+            return false
+        }
+        if (state.filesPickMode != null || !state.actionsEnabled || !binding.matches(state)) {
+            pickerLaunchFailed(binding)
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return false
+        }
+        onIntent(UiIntent.DownloadFile(binding, uri.toString(), path))
+        return true
+    }
+
+
+    internal fun downloadFile(binding: FilesDownloadBinding, uri: String, stagedPath: String) {
+        val resolver = getApplication<Application>().contentResolver
+        val filesDir = getApplication<Application>().filesDir
         submitFilesOperation(
             title = OperationTitle.DownloadEntry(binding.name),
             onSuccess = {
                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(binding.name))))
             },
-        ) { operation ->
-            require(FilesOperationPolicy.requireChildName(binding.name, "download") == binding.name) {
-                "download target name changed"
+            onTerminal = { _, _ ->
+                runCatching { ImageStaging.deleteIfManaged(filesDir, stagedPath) }
+                pendingDownloadWorkerStarted = false
+                if (pendingDownloadStagedPath == stagedPath) clearPendingDownload(pendingDownloadRequestId)
             }
-            require(binding.matches(state)) { "download target changed" }
-            val volume = filesSession.volumeForLocked(pin, binding.partitionId)
-            FilesOperations.download(
-                resolver = resolver,
-                target = binding.targetPath,
-                destination = Uri.parse(uri),
-                volume = volume,
-                operation = operation,
-            )
+        ) { operation ->
+            pendingDownloadWorkerStarted = true
+            try {
+                require(binding.matches(state)) { "download target changed" }
+                val staged = java.io.File(stagedPath)
+                FilesOperations.downloadStaged(resolver, staged, staged.length(), Uri.parse(uri), operation, filesDir)
+            } finally {
+                try {
+                    ImageStaging.deleteIfManaged(filesDir, stagedPath)
+                } catch (failure: Throwable) {
+                    operation.failureCause = operation.failureCause ?: failure
+                    operation.state = usb.operation.OperationState.Partial
+                }
+            }
         }
     }
 
@@ -5432,6 +5580,7 @@ class MainViewModel(
                     destTree = folder,
                     destParent = destParent,
                     operation = operation,
+                    filesDir = getApplication<Application>().filesDir,
                     conflict = { conflict ->
                         val park =
                             FilesBatchConflictPark(
@@ -5536,6 +5685,7 @@ class MainViewModel(
                             volume = volume,
                             operation = operation,
                             chunkBytes = TransferTuning.jniCapBytes,
+                            filesDir = getApplication<Application>().filesDir,
                             conflict = { conflict ->
                                 val park =
                                     FilesBatchConflictPark(
@@ -5657,6 +5807,7 @@ class MainViewModel(
                 destParent = destParent,
                 operation = operation,
                 resume = parkCursor,
+                filesDir = getApplication<Application>().filesDir,
                 conflict = { conflict ->
                     if (first && conflict.pathLabel == conflictLabel) {
                         first = false
@@ -5757,6 +5908,7 @@ class MainViewModel(
                         volume = volume,
                         operation = operation,
                         chunkBytes = TransferTuning.jniCapBytes,
+                        filesDir = getApplication<Application>().filesDir,
                         conflict = { conflict ->
                             if (first && conflict.pathLabel == conflictLabel) {
                                 first = false
@@ -6810,10 +6962,6 @@ class MainActivity : ComponentActivity() {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
         }
     }
-
-
-    /** Exact source selected before SAF destination; stale callback is rejected, never retargeted. */
-    private var pendingDownloadBinding: FilesDownloadBinding? = null
     /** Multi/dir download pin before OpenDocumentTree; cleared on detach/result. */
     private var pendingBatchDownload: FilesBatchSelection? = null
     /** Upload pin before OpenMultipleDocuments; cleared on detach/result. */
@@ -6823,7 +6971,6 @@ class MainActivity : ComponentActivity() {
     private var pendingBatchUploadPartition: String? = null
     private var pendingBatchUploadStart: String? = null
     private var pendingBatchUploadCount: String? = null
-
     private val batchDownloadTreeLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
@@ -6925,18 +7072,16 @@ class MainActivity : ComponentActivity() {
     private val downloadLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri: Uri? ->
-        val binding = pendingDownloadBinding
-        pendingDownloadBinding = null
-        if (uri == null) return@registerForActivityResult
+        val binding = viewModel.pendingDownloadBinding
         if (binding == null) {
-            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.StaleStagedImage)))
             return@registerForActivityResult
         }
-        if (!binding.matches(viewModel.state)) {
-            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+        if (uri == null) {
+            viewModel.pickerLaunchFailed(binding)
             return@registerForActivityResult
         }
-        viewModel.onIntent(UiIntent.DownloadFile(binding, uri.toString()))
+        viewModel.submitDownloadResult(binding, uri)
     }
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -7064,20 +7209,32 @@ class MainActivity : ComponentActivity() {
         ventoySettingsPickerIdentity = savedInstanceState?.getString(STATE_VENTOY_SETTINGS_IDENTITY)
         ventoySettingsPickerGeneration = savedInstanceState?.getLong(STATE_VENTOY_SETTINGS_ATTACH, Long.MIN_VALUE)
             ?.takeIf { it != Long.MIN_VALUE }
-        pendingDownloadBinding = savedInstanceState?.let { saved ->
-            val directory = saved.getString(STATE_PENDING_DOWNLOAD_DIRECTORY)
-            val name = saved.getString(STATE_PENDING_DOWNLOAD_NAME)
-            val size = saved.getString(STATE_PENDING_DOWNLOAD_SIZE)?.toULongOrNull()
-            val identity = saved.getString(STATE_PENDING_DOWNLOAD_IDENTITY)
-            val partition = saved.getString(STATE_PENDING_DOWNLOAD_PARTITION)
-            val start = saved.getString(STATE_PENDING_DOWNLOAD_START)?.toULongOrNull()
-            val count = saved.getString(STATE_PENDING_DOWNLOAD_COUNT)?.toULongOrNull()
-            val generation = saved.getLong(STATE_PENDING_DOWNLOAD_ATTACH, Long.MIN_VALUE)
-            if (directory != null && name != null && size != null && identity != null &&
-                partition != null && generation != Long.MIN_VALUE
-            ) {
-                FilesDownloadBinding(directory, name, size, identity, generation, partition, start, count)
-            } else null
+        if (viewModel.pendingDownloadBinding == null) {
+            val savedPickerRequest = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD_NAME)
+            val restoredPath = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD_STAGED)
+                ?.takeIf { ImageStaging.isManaged(applicationContext.filesDir, it) }
+            if (restoredPath != null) {
+                viewModel.pendingDownloadBinding = savedInstanceState?.let { saved ->
+                    val directory = saved.getString(STATE_PENDING_DOWNLOAD_DIRECTORY)
+                    val name = saved.getString(STATE_PENDING_DOWNLOAD_NAME)
+                    val size = saved.getString(STATE_PENDING_DOWNLOAD_SIZE)?.toULongOrNull()
+                    val identity = saved.getString(STATE_PENDING_DOWNLOAD_IDENTITY)
+                    val partition = saved.getString(STATE_PENDING_DOWNLOAD_PARTITION)
+                    val start = saved.getString(STATE_PENDING_DOWNLOAD_START)?.toULongOrNull()
+                    val count = saved.getString(STATE_PENDING_DOWNLOAD_COUNT)?.toULongOrNull()
+                    val generation = saved.getLong(STATE_PENDING_DOWNLOAD_ATTACH, Long.MIN_VALUE)
+                    if (directory != null && name != null && size != null && identity != null && partition != null && generation != Long.MIN_VALUE) {
+                        FilesDownloadBinding(directory, name, size, identity, generation, partition, start, count)
+                    } else null
+                }
+                if (viewModel.pendingDownloadBinding != null) {
+                    viewModel.pendingDownloadStagedPath = restoredPath
+                    viewModel.pendingDownloadRequestId = 1L
+                }
+            } else if (savedPickerRequest != null) {
+                // Prior process owned no provable staging path; reject picker result and retain unknown files.
+                viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.StaleStagedImage)))
+            }
         }
         pendingBatchDownload = savedInstanceState?.let { saved ->
             val directory = saved.getString(STATE_PENDING_BATCH_DIRECTORY) ?: return@let null
@@ -7134,8 +7291,16 @@ class MainActivity : ComponentActivity() {
         pickerEventsScope.launch {
             viewModel.pickerEvents.collect { event ->
                 when (event) {
-                    is UiEffect.CancelPendingWindowsImport ->
-                        windowsImportCoordinator.cancelByPickSession(event.pickSessionId)
+                    is UiEffect.DownloadPickerReady -> {
+                        if (!viewModel.claimPickerLaunch(event.requestId, event.binding)) return@collect
+                        try {
+                            downloadLauncher.launch(event.suggestedName)
+                        } catch (_: RuntimeException) {
+                            viewModel.pickerLaunchFailed(event.binding, event.requestId)
+                            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
+                        }
+                    }
+                    is UiEffect.CancelPendingWindowsImport -> windowsImportCoordinator.cancelByPickSession(event.pickSessionId)
                     is UiEffect.LaunchWindowsImport -> launchPinnedWindowsImport(event)
                     else -> Unit
                 }
@@ -7157,10 +7322,9 @@ class MainActivity : ComponentActivity() {
                     // A raw image may be called anything; filtering by MIME hid real files.
                     imagePickerLauncher.launch(arrayOf("*/*"))
                 },
-                onRequestDownload = { binding ->
-                    pendingDownloadBinding = binding
-                    downloadLauncher.launch(binding.name)
-                },
+            onRequestDownload = { binding ->
+                viewModel.stageDownloadForPicker(binding)
+            },
                 onRequestBatchDownload = { selection ->
                     pendingBatchDownload = selection
                     runCatching { batchDownloadTreeLauncher.launch(null) }
@@ -7262,7 +7426,7 @@ class MainActivity : ComponentActivity() {
         ventoySettingsPickerGeneration?.let {
             outState.putLong(STATE_VENTOY_SETTINGS_ATTACH, it)
         }
-        pendingDownloadBinding?.let { binding ->
+        viewModel.pendingDownloadBinding?.let { binding ->
             outState.putString(STATE_PENDING_DOWNLOAD_DIRECTORY, binding.directory)
             outState.putString(STATE_PENDING_DOWNLOAD_NAME, binding.name)
             outState.putString(STATE_PENDING_DOWNLOAD_SIZE, binding.sizeBytes.toString())
@@ -7272,6 +7436,7 @@ class MainActivity : ComponentActivity() {
             binding.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
             binding.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
         }
+        viewModel.pendingDownloadStagedPath?.let { outState.putString(STATE_PENDING_DOWNLOAD_STAGED, it) }
         pendingBatchDownload?.let { selection ->
             outState.putString(STATE_PENDING_BATCH_DIRECTORY, selection.directory)
             outState.putStringArray(STATE_PENDING_BATCH_NAMES, selection.items.map { it.name }.toTypedArray())
@@ -7417,6 +7582,7 @@ class MainActivity : ComponentActivity() {
         private const val STATE_PENDING_DOWNLOAD_PARTITION = "usb.multitool.PENDING_DOWNLOAD_PARTITION"
         private const val STATE_PENDING_DOWNLOAD_START = "usb.multitool.PENDING_DOWNLOAD_START"
         private const val STATE_PENDING_DOWNLOAD_COUNT = "usb.multitool.PENDING_DOWNLOAD_COUNT"
+        private const val STATE_PENDING_DOWNLOAD_STAGED = "usb.multitool.PENDING_DOWNLOAD_STAGED"
         private const val STATE_PENDING_BATCH_DIRECTORY = "usb.multitool.PENDING_BATCH_DIRECTORY"
         private const val STATE_PENDING_BATCH_NAMES = "usb.multitool.PENDING_BATCH_NAMES"
         private const val STATE_PENDING_BATCH_DIRS = "usb.multitool.PENDING_BATCH_DIRS"
