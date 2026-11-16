@@ -660,7 +660,7 @@
     <string name="params_disk_id">DiskID on the target PC</string>
     <string name="params_images">Images to bind after generation: %1$d</string>
     <string name="params_language">Language tag, for example en-US</string>
-    <string name="params_layout">Disk layout for the target PC</string>
+    <string name="params_layout">Target PC disk layout</string>
     <string name="params_layout_disk_size">Declared target disk size, MB</string>
     <string name="params_layout_disk_size_missing">Enter the target disk size you know. This app cannot measure it.</string>
     <string name="params_layout_hint">Written into the answer file and applied by Windows Setup on another machine; this app never writes to that disk.</string>
@@ -699,6 +699,8 @@
     <string name="settings_applies_note">Edits are staged. Update writes them into the selected file in place; a confirmed Ventoy install or update writes the standard file. Unknown JSON sections are preserved.</string>
     <string name="settings_win11_hint">1 bypasses the Windows 11 hardware checks (TPM, RAM, Secure Boot, CPU); 0 requires them; remove leaves Ventoy\'s default.</string>
     <string name="settings_win11_nro_hint">1 skips the Windows 11 online-account requirement and allows a local account; 0 requires a Microsoft account; remove leaves Ventoy\'s default.</string>
+    <string name="settings_win11_short">Hardware checks bypass</string>
+    <string name="settings_win11_nro_short">Local account without network</string>
     <string name="settings_help_title">Global Ventoy settings</string>
     <string name="settings_help_text">Values come from the control list of ventoy.json exactly as written. Known keys offer explicit choices; other keys stay editable as key/value and are preserved. Edits are staged and written after a confirmed install/update or with Apply. If Ventoy is installed but the settings write fails, the operation is Partial and the retry stays available.</string>
     <string name="settings_missing">No ventoy.json on this partition yet. Chosen settings are written after a confirmed install formats the data partition.</string>
@@ -710,7 +712,9 @@
     <string name="settings_add_header">Add or overwrite a key</string>
     <string name="settings_key_label">Key</string>
     <string name="settings_value_label">Value</string>
-    <string name="settings_add">Add to staged changes</string>
+    <string name="settings_clear_field">Clear</string>
+    <string name="settings_delete_row">Delete row</string>
+    <string name="settings_add">Add parameter</string>
     <string name="settings_staged">Staged settings</string>
     <string name="settings_staged_hint">Update writes them into the selected file in place. Unknown JSON sections are preserved.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
@@ -748,7 +752,7 @@
     <string name="unattend_clear_template">Clear template</string>
     <string name="unattend_destructive_note">This file contains destructive sections:</string>
     <string name="unattend_empty_file">The file is empty</string>
-    <string name="unattend_generate">Generate or update XML…</string>
+    <string name="unattend_generate">Create XML</string>
     <string name="unattend_io_failure">The file could not be read</string>
     <string name="unattend_layout_problems">Existing layout blocks rewriting:</string>
     <string name="unattend_malformed">The XML cannot be parsed</string>
@@ -835,10 +839,11 @@
     <string name="settings_source_custom_path">Non-standard path. Ventoy reads /ventoy/ventoy.json; this file is changed only when you press Update here.</string>
     <string name="settings_source_phone_note">The phone document is updated in place; it is never copied to the stick.</string>
     <string name="settings_open_editor">Open editor</string>
-    <string name="settings_editor_title">Global Ventoy settings</string>
-    <string name="settings_editor_help">Edit known controls and every key/value pair. Clear values with ×, delete non-empty rows with the trash icon, add rows with +. Apply writes the imported document to /ventoy/ventoy.json; Cancel discards draft changes.</string>
+    <string name="settings_editor_title">Global settings</string>
+    <string name="settings_editor_help">Known controls expose choices; unknown keys stay editable. Clear a value with ×, delete only a non-empty row with the trash icon. Save writes staged changes.</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_apply">Apply</string>
+    <string name="settings_save">Save</string>
     <string name="settings_source_status_reading">Reading…</string>
     <string name="settings_source_status_unread">Not read yet</string>
     <string name="settings_source_status_valid">Valid JSON · %1$d settings</string>

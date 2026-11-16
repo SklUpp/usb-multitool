@@ -661,7 +661,7 @@
     <string name="params_disk_id">DiskID на целевом ПК</string>
     <string name="params_images">Образов будет привязано: %1$d</string>
     <string name="params_language">Тег языка, например en-US</string>
-    <string name="params_layout">Разметка диска целевого ПК</string>
+    <string name="params_layout">Разметка диска ПК</string>
     <string name="params_layout_disk_size">Заявленный размер целевого диска, МБ</string>
     <string name="params_layout_disk_size_missing">Введите известный вам размер целевого диска. Приложение не может его измерить.</string>
     <string name="params_layout_hint">Записывается в файл ответов и применяется Windows Setup на другом компьютере; это приложение никогда не пишет на тот диск.</string>
@@ -700,6 +700,8 @@
     <string name="settings_applies_note">Изменения подготовлены. «Обновить» записывает их в выбранный файл на месте; подтверждённая установка или обновление Ventoy записывает стандартный файл. Неизвестные разделы JSON сохраняются.</string>
     <string name="settings_win11_hint">1 обходит аппаратные проверки Windows 11 (TPM, RAM, Secure Boot, CPU); 0 требует их; удаление оставляет значение Ventoy по умолчанию.</string>
     <string name="settings_win11_nro_hint">1 пропускает требование онлайн-аккаунта Windows 11 и разрешает локальную учётную запись; 0 требует учётную запись Microsoft; удаление оставляет значение Ventoy по умолчанию.</string>
+    <string name="settings_win11_short">Обход аппаратных проверок</string>
+    <string name="settings_win11_nro_short">Локальная запись без сети</string>
     <string name="settings_help_title">Глобальные настройки Ventoy</string>
     <string name="settings_help_text">Значения берутся из списка control файла ventoy.json как записаны. Для известных ключей есть явные варианты; остальные ключи редактируются как key/value и сохраняются. Изменения подготавливаются и записываются после подтверждённой установки/обновления либо кнопкой «Применить». Если Ventoy установлен, а запись настроек не удалась, операция получает Partial и повтор остаётся доступен.</string>
     <string name="settings_missing">На этом разделе пока нет ventoy.json. Выбранные настройки записываются после подтверждённой установки, когда раздел данных отформатирован.</string>
@@ -711,7 +713,9 @@
     <string name="settings_add_header">Добавить или перезаписать ключ</string>
     <string name="settings_key_label">Ключ</string>
     <string name="settings_value_label">Значение</string>
-    <string name="settings_add">Добавить в очередь</string>
+    <string name="settings_clear_field">Очистить</string>
+    <string name="settings_delete_row">Удалить строку</string>
+    <string name="settings_add">Добавить параметр</string>
     <string name="settings_staged">Подготовленные настройки</string>
     <string name="settings_staged_hint">«Обновить» записывает их в выбранный файл на месте. Неизвестные разделы JSON сохраняются.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
@@ -749,7 +753,7 @@
     <string name="unattend_clear_template">Сбросить шаблон</string>
     <string name="unattend_destructive_note">Этот файл содержит разрушительные разделы:</string>
     <string name="unattend_empty_file">Файл пуст</string>
-    <string name="unattend_generate">Создать или обновить XML…</string>
+    <string name="unattend_generate">Создать XML</string>
     <string name="unattend_io_failure">Файл не удалось прочитать</string>
     <string name="unattend_layout_problems">Существующая разметка блокирует перезапись:</string>
     <string name="unattend_malformed">XML не удаётся разобрать</string>
@@ -836,10 +840,11 @@
     <string name="settings_source_custom_path">Нестандартный путь. Ventoy читает /ventoy/ventoy.json; этот файл изменяется только по кнопке «Обновить» здесь.</string>
     <string name="settings_source_phone_note">Документ на телефоне изменяется на месте и никогда не копируется на флешку.</string>
     <string name="settings_open_editor">Открыть редактор</string>
-    <string name="settings_editor_title">Глобальные настройки Ventoy</string>
-    <string name="settings_editor_help">Редактируйте известные ключи и все пары key/value. Очищайте значения крестиком, удаляйте непустые строки корзиной, добавляйте строки плюсом. Применить записывает импортированный документ в /ventoy/ventoy.json; Отмена отменяет черновик.</string>
+    <string name="settings_editor_title">Глобальные настройки</string>
+    <string name="settings_editor_help">Известные параметры задаются выбором; остальные ключи редактируются вручную. Значение очищается крестиком, корзина удаляет только непустую строку. «Сохранить» записывает подготовленные изменения.</string>
     <string name="settings_cancel">Отмена</string>
     <string name="settings_apply">Применить</string>
+    <string name="settings_save">Сохранить</string>
     <string name="settings_source_status_reading">Чтение…</string>
     <string name="settings_source_status_unread">Ещё не прочитано</string>
     <string name="settings_source_status_valid">JSON допустим · настроек: %1$d</string>

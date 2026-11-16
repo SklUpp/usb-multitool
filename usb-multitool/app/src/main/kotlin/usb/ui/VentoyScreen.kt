@@ -752,6 +752,7 @@ private fun ImportRow(
  * was not read for the current path, or that failed, cannot confirm anything: it is
  * "unreadable", never "gone", and it never emits a hint about a remembered destination.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ImportFolderDialog(
     currentPath: String,
@@ -766,132 +767,56 @@ internal fun ImportFolderDialog(
     onDismiss: () -> Unit,
 ) {
     val listed = folders.orEmpty()
-    // Only a settled successful read for this path can confirm a destination.
     val trusted = folders != null && folderError == null && !loading
+    val cancelDescription = stringResource(R.string.action_cancel)
     val parent = usb.ventoy.folderParent(currentPath)
     val errorText =
         when (folderError) {
             FolderReadProblem.Missing -> stringResource(R.string.import_folder_missing)
-            FolderReadProblem.NotDirectory ->
-                stringResource(R.string.import_folder_not_directory)
+            FolderReadProblem.NotDirectory -> stringResource(R.string.import_folder_not_directory)
             FolderReadProblem.Unreadable -> stringResource(R.string.import_folder_read_failed)
             null -> null
         }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(stringResource(R.string.import_folder_title))
-                Text(
-                    text = stringResource(R.string.import_folder_current, currentPath),
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.semantics { heading() },
-                )
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(R.string.import_folder_title), style = MaterialTheme.typography.titleLarge)
+                Text(text = stringResource(R.string.import_folder_current, currentPath), style = MaterialTheme.typography.labelMedium, modifier = Modifier.semantics { heading() })
             }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = stringResource(R.string.import_folder_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (blocked) {
-                    Text(
-                        text = stringResource(R.string.import_folder_blocked),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            IconButton(onClick = onDismiss, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(Glyph.Close) }
+        }
+        Text(text = stringResource(R.string.import_folder_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
+        if (blocked) {
+            Text(text = stringResource(R.string.import_folder_blocked), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
+        }
+        if (loading && listed.isNotEmpty()) {
+            Text(text = stringResource(R.string.import_folder_refreshing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
+        }
+        when {
+            errorText != null -> ListItem(headlineContent = { Text(text = errorText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) })
+            loading && listed.isEmpty() -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_loading), style = MaterialTheme.typography.bodySmall) })
+            folders == null && !blocked -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_not_loaded), style = MaterialTheme.typography.bodySmall) })
+            folders == null -> Unit
+            listed.isEmpty() -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_empty), style = MaterialTheme.typography.bodySmall) })
+            else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(items = listed, key = { it }) { folder ->
+                    val name = usb.ventoy.folderName(folder)
+                    val openLabel = stringResource(R.string.import_folder_open, name)
+                    ListItem(
+                        headlineContent = { Text(text = "$name/", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = { onEnter(folder) }, enabled = !blocked).clearAndSetSemantics { contentDescription = openLabel },
                     )
-                }
-                if (loading && listed.isNotEmpty()) {
-                    Text(
-                        text = stringResource(R.string.import_folder_refreshing),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                when {
-                    errorText != null -> Text(
-                        text = errorText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-
-                    loading && listed.isEmpty() -> Text(
-                        text = stringResource(R.string.import_folder_loading),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-
-                    folders == null && !blocked -> Text(
-                        text = stringResource(R.string.import_folder_not_loaded),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-
-                    folders == null -> Unit
-
-                    listed.isEmpty() -> Text(
-                        text = stringResource(R.string.import_folder_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-
-                    else -> LazyColumn(
-                        // Weighted with fill = false: the navigation row below is measured
-                        // first, so the list can only consume the height left in the dialog
-                        // slot. Every child is reachable; no row cap and no eager composition.
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .heightIn(max = 320.dp)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        items(items = listed, key = { it }) { folder ->
-                            val name = usb.ventoy.folderName(folder)
-                            val openLabel =
-                                stringResource(R.string.import_folder_open, name)
-                            TextButton(
-                                onClick = { onEnter(folder) },
-                                enabled = !blocked,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    text = "$name/",
-                                    modifier = Modifier.clearAndSetSemantics {
-                                        contentDescription = openLabel
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (parent != null) {
-                        TextButton(onClick = onUp, enabled = !blocked) {
-                            Text(stringResource(R.string.import_folder_up))
-                        }
-                    }
-                    TextButton(onClick = onRefresh, enabled = !blocked) {
-                        Text(stringResource(R.string.unattend_refresh))
-                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onPick(currentPath) },
-                enabled = trusted && !blocked,
-            ) { Text(stringResource(R.string.import_folder_use)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
-        },
-    )
+        }
+        ListItem(headlineContent = { Text(stringResource(R.string.import_folder_use)) }, supportingContent = { Text(text = stringResource(R.string.import_destination_line, currentPath), style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, enabled = trusted && !blocked, onClick = { onPick(currentPath) }))
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (parent != null) {
+                TextButton(onClick = onUp, enabled = !blocked) { Text(stringResource(R.string.import_folder_up)) }
+            }
+            TextButton(onClick = onRefresh, enabled = !blocked) { Text(stringResource(R.string.unattend_refresh)) }
+        }
+    }
 }
 
 /**

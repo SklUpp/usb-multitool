@@ -28,6 +28,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -943,6 +948,7 @@ private data class EditorPairDraft(
     val value: String,
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GlobalSettingsEditorDialog(
     state: AppUiState,
@@ -973,101 +979,118 @@ private fun GlobalSettingsEditorDialog(
             }
         }
     }
+    // MD3 full-screen dialog: single TopAppBar (X/title/Save), no bottom duplicate footer.
+    // Backend/commit path untouched: save lambda identical to old Apply footer.
+    fun commitDrafts() {
+        val rawOriginalCounts = entries.groupingBy { it.key }.eachCount()
+        val duplicateOriginalCounts = rawOriginalCounts.filterValues { it > 1 }
+        val draftOriginalCounts = drafts.mapNotNull { it.originalKey }.groupingBy { it }.eachCount()
+        val rawOriginalKeys = rawOriginalCounts.keys.filter { key ->
+            VentoyControlCatalog.known(key) == null || rawOriginalCounts[key]!! > 1
+        }.toSet()
+        val blankNewKey = drafts.any { it.originalKey == null && it.key.isBlank() && it.value.isNotEmpty() }
+        val blankExistingKey = drafts.any { it.originalKey != null && it.key.isBlank() }
+        val rawSettings = drafts
+            .filter { it.originalKey == null || it.key != it.originalKey || it.value != it.originalValue }
+            .filter { it.key.isNotBlank() }
+            .map { VentoyControlSetting(it.key, it.value) }
+        val renamedOrDeleted = (rawOriginalKeys - drafts.mapNotNull { it.originalKey }.toSet()) +
+            drafts.mapNotNull { draft -> draft.originalKey?.takeIf { draft.key.isNotBlank() && it != draft.key } }
+        val knownSettings = VentoyControlCatalog.known.mapNotNull { known ->
+            state.pendingVentoyControls.firstOrNull { it.key == known.key && it.value != null }
+        }
+        val knownRemoved = state.pendingVentoyControls
+            .filter { it.value == null && VentoyControlCatalog.known(it.key) != null }
+            .map { it.key }
+            .toSet()
+        val settings = rawSettings + knownSettings
+        val duplicateKeys = duplicateOriginalCounts.keys.filter { key ->
+            val expectedDraftCount = duplicateOriginalCounts[key]!! -
+                (if (VentoyControlCatalog.known(key) != null) 1 else 0)
+            expectedDraftCount != (draftOriginalCounts[key] ?: 0) ||
+                renamedOrDeleted.contains(key) ||
+                knownRemoved.contains(key) ||
+                settings.any { it.key == key }
+        }.toSet()
+        val merged = (renamedOrDeleted + knownRemoved).map { VentoyControlSetting(it, null) } + settings
+        val validation = when {
+            blankExistingKey || blankNewKey -> "Key cannot be empty"
+            duplicateKeys.isNotEmpty() -> "Cannot edit duplicate Ventoy keys safely: ${duplicateKeys.joinToString()}"
+            else -> VentoyControlCatalog.problem(merged)
+        }
+        if (validation != null) {
+            applyProblem = validation
+        } else if (state.ventoySettingsSource.isDefaultPath() &&
+            settings.isEmpty() && renamedOrDeleted.isEmpty() && knownRemoved.isEmpty()
+        ) {
+            applyProblem = "No Ventoy setting changes to apply"
+        } else {
+            applyProblem = null
+            onIntent(UiIntent.CommitAndApplyVentoyControls(
+                removedKeys = renamedOrDeleted + knownRemoved,
+                settings = settings,
+                duplicateKeys = duplicateKeys,
+            ))
+        }
+    }
+    val closeLabel = stringResource(R.string.settings_cancel)
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.settings_editor_title), style = MaterialTheme.typography.headlineSmall)
-                applyProblem?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-                }
-                Text(stringResource(R.string.settings_editor_help), style = MaterialTheme.typography.bodySmall)
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(stringResource(R.string.settings_editor_title)) },
+                        navigationIcon = {
+                            IconButton(
+                                onClick = onCancel,
+                                modifier = Modifier.semantics { contentDescription = closeLabel },
+                            ) { GlyphIcon(Glyph.Close) }
+                        },
+                        actions = {
+                            TextButton(onClick = ::commitDrafts, enabled = state.actionsEnabled) {
+                                Text(stringResource(R.string.settings_save))
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                        ),
+                    )
+                },
+            ) { inner ->
                 Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxSize().padding(inner).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    VentoyControlCatalog.known.forEach { known ->
-                        KnownControlRow(known, entries, state.pendingVentoyControls, state.actionsEnabled, onIntent)
+                    Text(stringResource(R.string.settings_editor_help), style = MaterialTheme.typography.bodySmall)
+                    applyProblem?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                     }
-                    drafts.forEachIndexed { index, draft ->
-                        EditablePairRow(
-                            draft = draft,
-                            actionsEnabled = state.actionsEnabled,
-                            onChange = { changed -> drafts[index] = changed },
-                            onDelete = { drafts.removeAt(index) },
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            drafts.add(EditorPairDraft("new:${drafts.size}", null, "", "", ""))
-                        },
-                        enabled = state.actionsEnabled,
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Add setting row" },
+                            .weight(1f, fill = true)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        GlyphIcon(Glyph.Plus)
+                        VentoyControlCatalog.known.forEach { known ->
+                            KnownControlRow(known, entries, state.pendingVentoyControls, state.actionsEnabled, onIntent)
+                        }
+                        drafts.forEachIndexed { index, draft ->
+                            EditablePairRow(
+                                draft = draft,
+                                actionsEnabled = state.actionsEnabled,
+                                onChange = { changed -> drafts[index] = changed },
+                                onDelete = { drafts.removeAt(index) },
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = { drafts.add(EditorPairDraft("new:${drafts.size}", null, "", "", "")) },
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            GlyphIcon(Glyph.Plus)
+                            Text(stringResource(R.string.settings_add))
+                        }
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.settings_cancel)) }
-                    Button(
-                        onClick = {
-                            val rawOriginalCounts = entries.groupingBy { it.key }.eachCount()
-                            val duplicateOriginalCounts = rawOriginalCounts.filterValues { it > 1 }
-                            val draftOriginalCounts = drafts.mapNotNull { it.originalKey }.groupingBy { it }.eachCount()
-                            val rawOriginalKeys = rawOriginalCounts.keys.filter { key ->
-                                VentoyControlCatalog.known(key) == null || rawOriginalCounts[key]!! > 1
-                            }.toSet()
-                            val blankNewKey = drafts.any { it.originalKey == null && it.key.isBlank() && it.value.isNotEmpty() }
-                            val blankExistingKey = drafts.any { it.originalKey != null && it.key.isBlank() }
-                            val rawSettings = drafts
-                                .filter { it.originalKey == null || it.key != it.originalKey || it.value != it.originalValue }
-                                .filter { it.key.isNotBlank() }
-                                .map { VentoyControlSetting(it.key, it.value) }
-                            val renamedOrDeleted = (rawOriginalKeys - drafts.mapNotNull { it.originalKey }.toSet()) +
-                                drafts.mapNotNull { draft -> draft.originalKey?.takeIf { draft.key.isNotBlank() && it != draft.key } }
-                            val knownSettings = VentoyControlCatalog.known.mapNotNull { known ->
-                                state.pendingVentoyControls.firstOrNull { it.key == known.key && it.value != null }
-                            }
-                            val knownRemoved = state.pendingVentoyControls
-                                .filter { it.value == null && VentoyControlCatalog.known(it.key) != null }
-                                .map { it.key }
-                                .toSet()
-                            val settings = rawSettings + knownSettings
-                            val duplicateKeys = duplicateOriginalCounts.keys.filter { key ->
-                                val expectedDraftCount = duplicateOriginalCounts[key]!! -
-                                    (if (VentoyControlCatalog.known(key) != null) 1 else 0)
-                                expectedDraftCount != (draftOriginalCounts[key] ?: 0) ||
-                                    renamedOrDeleted.contains(key) ||
-                                    knownRemoved.contains(key) ||
-                                    settings.any { it.key == key }
-                            }.toSet()
-                            val merged = (renamedOrDeleted + knownRemoved).map { VentoyControlSetting(it, null) } + settings
-                            val validation = when {
-                                blankExistingKey || blankNewKey -> "Key cannot be empty"
-                                duplicateKeys.isNotEmpty() -> "Cannot edit duplicate Ventoy keys safely: ${duplicateKeys.joinToString()}"
-                                else -> VentoyControlCatalog.problem(merged)
-                            }
-                            if (validation != null) {
-                                applyProblem = validation
-                            } else if (state.ventoySettingsSource.isDefaultPath() &&
-                                settings.isEmpty() && renamedOrDeleted.isEmpty() && knownRemoved.isEmpty()
-                            ) {
-                                applyProblem = "No Ventoy setting changes to apply"
-                            } else {
-                                applyProblem = null
-                                onIntent(UiIntent.CommitAndApplyVentoyControls(
-                                    removedKeys = renamedOrDeleted + knownRemoved,
-                                    settings = settings,
-                                    duplicateKeys = duplicateKeys,
-                                ))
-                            }
-                        },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier.weight(1f),
-                    ) { Text(stringResource(R.string.settings_apply)) }
                 }
             }
         }
@@ -1228,6 +1251,10 @@ private fun EditablePairRow(
     onDelete: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
+        val clearLabel = stringResource(R.string.settings_clear_field)
+        val deleteLabel = stringResource(R.string.settings_delete_row)
+        // X clears one field (row stays = staged empty/edit); trash removes the whole row:
+        // existing saved key becomes a removal intent, new pair vanishes with no intent.
         OutlinedTextField(
             value = draft.key,
             onValueChange = { onChange(draft.copy(key = it)) },
@@ -1236,7 +1263,11 @@ private fun EditablePairRow(
             enabled = actionsEnabled,
             modifier = Modifier.weight(1f),
             trailingIcon = {
-                if (draft.key.isNotEmpty()) IconButton(onClick = { onChange(draft.copy(key = "")) }) {
+                if (draft.key.isNotEmpty()) IconButton(
+                    onClick = { onChange(draft.copy(key = "")) },
+                    enabled = actionsEnabled,
+                    modifier = Modifier.semantics { contentDescription = clearLabel },
+                ) {
                     GlyphIcon(Glyph.Close, size = 18.dp)
                 }
             },
@@ -1249,7 +1280,11 @@ private fun EditablePairRow(
             enabled = actionsEnabled,
             modifier = Modifier.weight(1f),
             trailingIcon = {
-                if (draft.value.isNotEmpty()) IconButton(onClick = { onChange(draft.copy(value = "")) }) {
+                if (draft.value.isNotEmpty()) IconButton(
+                    onClick = { onChange(draft.copy(value = "")) },
+                    enabled = actionsEnabled,
+                    modifier = Modifier.semantics { contentDescription = clearLabel },
+                ) {
                     GlyphIcon(Glyph.Close, size = 18.dp)
                 }
             },
@@ -1258,7 +1293,7 @@ private fun EditablePairRow(
             onClick = onDelete,
             enabled = actionsEnabled && (draft.key.isNotBlank() || draft.value.isNotBlank()),
             modifier = Modifier.semantics {
-                contentDescription = "Delete setting row"
+                contentDescription = deleteLabel
             },
         ) { GlyphIcon(Glyph.Trash, size = 18.dp) }
     }
@@ -1330,45 +1365,76 @@ private fun KnownControlRow(
             "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
             else -> null
         }
-        if (booleanKey) {
-            SwitchRow(
-                label = knownControlTitle(known.key),
-                checked = value == "1",
-                onCheckedChange = { enabled ->
-                    onIntent(
-                        UiIntent.StageVentoyControl(known.key, if (enabled) "1" else "0"),
-                    )
-                },
-                enabled = actionsEnabled,
-                hint = stringResource(R.string.settings_current, current),
-            )
-        } else {
-            Text(
-                text = knownControlTitle(known.key),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = stringResource(R.string.settings_current, current),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                known.allowed.forEach { option ->
-                    TextButton(
-                        onClick = { onIntent(UiIntent.StageVentoyControl(known.key, option)) },
-                        enabled = actionsEnabled,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    ) { Text(knownOptionLabel(known.key, option)) }
-                }
-            }
+        val keyShort = when (known.key) {
+            "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_short
+            "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_short
+            else -> null
         }
-        keyHint?.let {
-            Text(
-                text = stringResource(it),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        // Short function line stays visible; full 0/1/remove text lives in Info.
+        val shortLine = keyShort?.let { stringResource(it) }
+        if (booleanKey) {
+            Row(
+                modifier = Modifier.fillMaxWidth().toggleable(
+                    value = value == "1",
+                    enabled = actionsEnabled,
+                    role = Role.Switch,
+                    onValueChange = { enabled ->
+                        onIntent(UiIntent.StageVentoyControl(known.key, if (enabled) "1" else "0"))
+                    },
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = knownControlTitle(known.key), style = MaterialTheme.typography.bodyMedium)
+                    keyShort?.let {
+                        Text(
+                            text = stringResource(it),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.settings_current, current),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = value == "1", onCheckedChange = null, enabled = actionsEnabled)
+                keyHint?.let { InfoHelpButton(infoTitle = knownControlTitle(known.key), infoText = stringResource(it)) }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = knownControlTitle(known.key),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    shortLine?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.settings_current, current),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        known.allowed.forEach { option ->
+                            TextButton(
+                                onClick = { onIntent(UiIntent.StageVentoyControl(known.key, option)) },
+                                enabled = actionsEnabled,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) { Text(knownOptionLabel(known.key, option)) }
+                        }
+                    }
+                }
+                keyHint?.let { InfoHelpButton(infoTitle = knownControlTitle(known.key), infoText = stringResource(it)) }
+            }
         }
         val problem = (onDisk?.status as? SettingStatus.Known)?.takeIf { !it.valid }
         problem?.let {
