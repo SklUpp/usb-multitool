@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
@@ -452,9 +453,25 @@ fun AppShell(
                             },
                             label = "tab",
                         ) { target ->
-                            if (target in listOf(ShellTab.Files, ShellTab.Partitions) &&
-                                !usbContentAvailable(state.presence)
-                            ) {
+                            // Nested presence transition: tab switches fade/scale above;
+                            // USB attach/detach fades the empty state within the same tab.
+                            val gated = target in listOf(ShellTab.Files, ShellTab.Partitions)
+                            val visible = !gated || usbContentAvailable(state.presence)
+                            AnimatedContent(
+                                targetState = visible,
+                                transitionSpec = {
+                                    if (reducedMotion) {
+                                        EnterTransition.None togetherWith ExitTransition.None
+                                    } else {
+                                        (fadeIn(tween(200)) + scaleIn(
+                                            initialScale = 0.96f,
+                                            animationSpec = tween(200),
+                                        )).togetherWith(fadeOut(tween(100)))
+                                    }
+                                },
+                                label = "presence",
+                            ) { showContent ->
+                            if (!showContent) {
                                 Column(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.Center,
@@ -519,9 +536,10 @@ fun AppShell(
                                     onPickBackupFolder = onPickBackupFolder,
                                 )
                             }
-                            }
                         }
                     }
+                }
+                }
                 }
 
                 if (panels.journalScreenOpen) {
@@ -1077,6 +1095,7 @@ internal fun StatusLogPanel(
     Column(
         modifier = modifier
             .then(if (collapsed) Modifier else Modifier.fillMaxWidth())
+            .animateContentSize()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -1828,6 +1847,7 @@ internal fun SectionCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .animateContentSize()
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {

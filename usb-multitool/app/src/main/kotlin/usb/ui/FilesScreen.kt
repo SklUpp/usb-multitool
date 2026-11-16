@@ -169,9 +169,10 @@ fun FilesScreen(
     val uploadDescription = stringResource(R.string.files_copy_from_phone)
     val space = selected?.let(state::filesystemSpace)
 
-    // Blocked release is the only known system-claimed state: a failed volume close
-    // clears partitions, leaves Busy, keeps no operation at all, and only an
-    // Android-side unmount/eject (or e2fsck, per the status text) clears it.
+    // Blocked release marks an unconfirmed volume close/sync after a failed probe
+    // release: partitions are cleared and presence stays Busy with no live operation.
+    // The close error alone does not prove Android claimed the device, and an
+    // Android-side unmount/eject does not reset this latch.
     val blockedRelease = (state.statusMessage as? UiMessage.Key)
         ?.takeIf { it.key == UiMessageKey.VolumeSyncUnconfirmed }
     val systemBlocked = state.presence == DevicePresence.Busy &&
@@ -1508,18 +1509,49 @@ private fun FileActionSheet(
             },
         )
         if (!entry.isDirectory) {
-            TextButton(onClick = onDownload, enabled = canDownload) {
-                Text(stringResource(R.string.files_save_to_phone))
-            }
+            sheetActionRow(
+                label = stringResource(R.string.files_save_to_phone),
+                glyph = Glyph.Download,
+                enabled = canDownload,
+                onClick = onDownload,
+            )
         }
-        TextButton(onClick = onRename, enabled = canWrite) {
-            Text(stringResource(R.string.files_rename))
-        }
-        TextButton(onClick = onDelete, enabled = canWrite) {
-            Text(stringResource(R.string.action_delete))
-        }
-        TextButton(onClick = onDismiss) {
-            Text(stringResource(R.string.action_cancel))
-        }
+        sheetActionRow(
+            label = stringResource(R.string.files_rename),
+            glyph = Glyph.Pencil,
+            enabled = canWrite,
+            onClick = onRename,
+        )
+        sheetActionRow(
+            label = stringResource(R.string.action_delete),
+            glyph = Glyph.Trash,
+            enabled = canWrite,
+            onClick = onDelete,
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.action_cancel)) },
+            leadingContent = { GlyphIcon(Glyph.Close, size = 22.dp) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button, onClick = onDismiss),
+        )
     }
+}
+
+@Composable
+private fun sheetActionRow(
+    label: String,
+    glyph: Glyph,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = { GlyphIcon(glyph, size = 22.dp) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.38f)
+            .clickable(role = Role.Button, enabled = enabled, onClick = onClick)
+            .semantics { if (!enabled) disabled() },
+    )
 }

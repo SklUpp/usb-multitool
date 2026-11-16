@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -76,6 +77,7 @@ internal fun PerformanceSettingsSection() {
     SectionCard(
         title = stringResource(R.string.diagnostics_perf_title),
         subtitle = stringResource(R.string.diagnostics_perf_subtitle),
+        modifier = Modifier.animateContentSize(),
     ) {
         PerfSlider(
             title = stringResource(R.string.diagnostics_perf_scsi_title),
@@ -163,6 +165,7 @@ private fun PerfSlider(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
+            InfoHelpButton(infoTitle = title, infoText = hint)
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
@@ -175,7 +178,7 @@ private fun PerfSlider(
                     .size(48.dp)
                     .semantics { contentDescription = resetDescription },
             ) {
-                Text("↻", style = MaterialTheme.typography.titleMedium)
+                GlyphIcon(Glyph.Refresh, size = 20.dp)
             }
         }
         Text(
@@ -196,11 +199,6 @@ private fun PerfSlider(
             onValueChangeFinished = onValueChangeFinished,
             valueRange = range.first.toFloat()..range.last.toFloat(),
             steps = ((range.last - range.first) / step) - 1,
-        )
-        Text(
-            text = hint,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

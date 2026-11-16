@@ -57,6 +57,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -706,11 +708,17 @@ fun PartitionsScreen(
                         if (!state.partitionTableRecognized &&
                             state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
                             state.tableValid && !state.partitionTableAmbiguous) {
+                            val segmentHaptic = LocalHapticFeedback.current
                             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                                 listOf(PartitionScheme.Gpt, PartitionScheme.Mbr).forEachIndexed { index, scheme ->
                                     SegmentedButton(
                                         selected = initializeScheme == scheme,
-                                        onClick = { initializeScheme = scheme },
+                                        onClick = {
+                                            if (initializeScheme != scheme) {
+                                                initializeScheme = scheme
+                                                segmentHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            }
+                                        },
                                         enabled = state.actionsEnabled,
                                         shape = SegmentedButtonDefaults.itemShape(index = index, count = 2),
                                     ) {

@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -75,9 +76,9 @@ fun VentoyScreen(
     // does not triple-mount while caches are still null. Cleared when all three land or
     // epoch moves (invalidate).
     var catalogLoadEpoch by remember { mutableStateOf<Long?>(null) }
-    // One automatic upstream check per attachment: a failed check ends as n/a and does not
-    // retry on every recomposition; a new attach gets a fresh check after the old one is
-    // fenced out by the reducer.
+    // One automatic upstream check per attachment while no release is known: a failed
+    // check ends as n/a and does not retry on every recomposition. The check itself
+    // is global, so a landed release is kept and not re-requested.
     var upstreamCheckedGeneration by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(
@@ -254,6 +255,19 @@ private fun VentoyVersionRow(
     var promptRelease by remember { mutableStateOf<String?>(null) }
     var promptPinned by remember { mutableStateOf<Boolean?>(null) }
     var promptRequest by remember { mutableStateOf<Long?>(null) }
+    // Device-dependent prompt: AlreadyLatest compares this stick's installed
+    // version against the global upstream. An attachment change invalidates the
+    // open prompt without touching the global upstream fence.
+    LaunchedEffect(
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) {
+        downloadPrompt = null
+        promptRelease = null
+        promptPinned = null
+        promptRequest = null
+        pendingDownloadCheck = false
+    }
     LaunchedEffect(
         state.ventoyUpstreamRequest,
         state.upstreamVentoyRelease,
@@ -289,29 +303,23 @@ private fun VentoyVersionRow(
         }
     }
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            VentoyVersionFact(
-                glyph = Glyph.Package,
-                label = stringResource(R.string.ventoy_version_bundled),
-                value = state.downloadedVentoyRelease?.release ?: state.bundledVentoyRelease,
-                valueColor = if (state.downloadedVentoyRelease != null) DownloadedReleaseOrange else null,
-                modifier = Modifier.weight(1f),
-            )
-            VentoyVersionFact(
-                glyph = Glyph.Usb,
-                label = stringResource(R.string.ventoy_version_installed),
-                value = state.installedVentoyRelease,
-                readError = state.installedVentoyReadError,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        VentoyStatusLine(
+            glyph = Glyph.Package,
+            label = stringResource(R.string.ventoy_version_bundled),
+            value = state.downloadedVentoyRelease?.release ?: state.bundledVentoyRelease,
+            valueColor = if (state.downloadedVentoyRelease != null) DownloadedReleaseOrange else null,
+        )
+        VentoyStatusLine(
+            glyph = Glyph.Usb,
+            label = stringResource(R.string.ventoy_version_installed),
+            value = state.installedVentoyRelease,
+            readError = state.installedVentoyReadError,
+        )
         state.downloadedVentoyRelease?.let { downloaded ->
             Badge(
                 text = stringResource(
@@ -491,7 +499,30 @@ private fun VentoyVersionFact(
         )
     }
 }
-
+/** Two-line package/device status: label above, value below. */
+@Composable
+private fun VentoyStatusLine(
+    glyph: Glyph,
+    label: String,
+    value: String?,
+    valueColor: Color? = null,
+    readError: String? = null,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        VentoyVersionFact(
+            glyph = glyph,
+            label = label,
+            value = value,
+            readError = readError,
+            valueColor = valueColor,
+        )
+    }
+}
 @Composable
 private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
     when {
@@ -804,6 +835,12 @@ internal fun ImportFolderDialog(
                     val openLabel = stringResource(R.string.import_folder_open, name)
                     ListItem(
                         headlineContent = { Text(text = "$name/", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingContent = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_file_folder),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = { onEnter(folder) }, enabled = !blocked).clearAndSetSemantics { contentDescription = openLabel },
                     )
                 }

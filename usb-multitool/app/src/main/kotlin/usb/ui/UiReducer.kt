@@ -503,9 +503,8 @@ sealed class UiIntent {
     data object RequestApplyVentoyControls : UiIntent()
     data object CheckVentoyUpstream : UiIntent()
     /**
-     * Answer to [CheckVentoyUpstream]. An older [requestToken] is stale, and the attach
-     * generation is checked by the reducer's own reset, so a pre-attach check cannot
-     * repopulate the new attachment's header.
+     * Answer to [CheckVentoyUpstream]. An older [requestToken] is stale; the check is
+     * global, so an in-flight answer lands even if the stick detached mid-flight.
      */
     data class SetVentoyUpstreamRelease(
         val requestToken: Long,
@@ -967,9 +966,8 @@ sealed interface UiEffect {
     }
 
 
-    /** Read-only GitHub check; [requestToken] fences a result that outlived its attachment. */
+    /** Read-only GitHub check; [requestToken] fences a superseded request. */
     data class CheckVentoyUpstream(val requestToken: Long) : UiEffect
-
     /**
      * Fetch and verify a release into app-private storage. No USB device is opened, no
      * volume is mounted and no disk byte is written.
@@ -1667,25 +1665,18 @@ object UiReducer {
                             if (keepVentoy) state.ventoyFoldersPending else false,
                         ventoyCacheEpoch =
                             if (keepVentoy) state.ventoyCacheEpoch else state.ventoyCacheEpoch + 1,
-                        // Installed/upstream facts belong to one attachment. An old probe or
-                        // GitHub answer must not repaint the header after a re-plug; the
-                        // bumped request id also drops a check that was already in flight.
+                        // Installed facts belong to one attachment. The upstream check is
+                        // a global network request, not tied to the stick: detach keeps
+                        // its fields and fence untouched, so an in-flight answer lands
+                        // on the same token. A device switch still clears installed rows.
                         installedVentoyRelease =
                             if (keepVentoy) state.installedVentoyRelease else null,
                         installedVentoyReadError =
                             if (keepVentoy) state.installedVentoyReadError else null,
-                        upstreamVentoyRelease =
-                            if (keepVentoy) state.upstreamVentoyRelease else null,
-                        upstreamVentoyPinned =
-                            if (keepVentoy) state.upstreamVentoyPinned else null,
-                        ventoyUpstreamChecking =
-                            if (keepVentoy) state.ventoyUpstreamChecking else false,
-                        ventoyUpstreamRequest =
-                            if (keepVentoy) {
-                                state.ventoyUpstreamRequest
-                            } else {
-                                state.ventoyUpstreamRequest + 1L
-                            },
+                        upstreamVentoyRelease = state.upstreamVentoyRelease,
+                        upstreamVentoyPinned = state.upstreamVentoyPinned,
+                        ventoyUpstreamChecking = state.ventoyUpstreamChecking,
+                        ventoyUpstreamRequest = state.ventoyUpstreamRequest,
                         ventoyDownloadError =
                             if (keepVentoy) state.ventoyDownloadError else null,
                         linkOverwriteCandidate =

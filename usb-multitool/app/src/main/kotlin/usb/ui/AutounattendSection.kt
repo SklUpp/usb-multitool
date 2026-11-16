@@ -1097,6 +1097,7 @@ private fun GlobalSettingsEditorDialog(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AutounattendRawEditorDialog(
     template: String,
@@ -1124,25 +1125,81 @@ private fun AutounattendRawEditorDialog(
     }
     val invalidMessage = stringResource(R.string.unattend_editor_invalid)
     val destructiveAckRequired = stringResource(R.string.unattend_editor_destructive_ack)
+    val closeLabel = stringResource(R.string.settings_cancel)
+    val saveLabel = stringResource(R.string.settings_save)
+    fun commitDraft() {
+        val charset = runCatching {
+            document.sourceCharsetName?.let(Charset::forName)
+        }.getOrNull() ?: StandardCharsets.UTF_8
+        val encoded = runCatching {
+            XmlText.encode(draft, charset, document.sourceBom)
+        }.getOrElse {
+            applyProblem = invalidMessage
+            return
+        }
+        val inspection = runCatching {
+            WindowsTemplate.inspect(encoded, requireUnattendRoot = true)
+        }.getOrElse {
+            applyProblem = invalidMessage
+            return
+        }
+        val needsDestructive =
+            inspection.destructiveMarkers.isNotEmpty() ||
+                document.destructiveMarkers.isNotEmpty()
+        if (needsDestructive && !destructiveAck) {
+            applyProblem = destructiveAckRequired
+            return
+        }
+        applyProblem = null
+        onIntent(
+            UiIntent.RequestWriteAutounattendRaw(
+                xmlName = template,
+                rawBytes = encoded,
+                overwriteXml = true,
+                allowDestructiveTemplate = needsDestructive && destructiveAck,
+                expectedTemplateSha256 = document.templateSha256,
+                identity = device?.identity,
+                attachGeneration = device?.attachGeneration ?: 0L,
+            ),
+        )
+    }
     Dialog(
         onDismissRequest = onCancel,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    stringResource(R.string.unattend_editor_title),
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                Text(
-                    stringResource(R.string.unattend_editor_help),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(stringResource(R.string.unattend_editor_title)) },
+                        navigationIcon = {
+                            IconButton(
+                                onClick = onCancel,
+                                modifier = Modifier.semantics { contentDescription = closeLabel },
+                            ) { GlyphIcon(Glyph.Close) }
+                        },
+                        actions = {
+                            TextButton(onClick = ::commitDraft, enabled = actionsEnabled) {
+                                Text(saveLabel)
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                        ),
+                    )
+                },
+            ) { inner ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(inner)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.unattend_editor_help),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 applyProblem?.let {
                     Text(
                         it,
@@ -1187,61 +1244,11 @@ private fun AutounattendRawEditorDialog(
                         )
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = onCancel,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.settings_cancel))
-                    }
-                    Button(
-                        onClick = {
-                            val charset = runCatching {
-                                document.sourceCharsetName?.let(Charset::forName)
-                            }.getOrNull() ?: StandardCharsets.UTF_8
-                            val encoded = runCatching {
-                                XmlText.encode(draft, charset, document.sourceBom)
-                            }.getOrElse {
-                                applyProblem = invalidMessage
-                                return@Button
-                            }
-                            val inspection = runCatching {
-                                WindowsTemplate.inspect(encoded, requireUnattendRoot = true)
-                            }.getOrElse {
-                                applyProblem = invalidMessage
-                                return@Button
-                            }
-                            val needsDestructive =
-                                inspection.destructiveMarkers.isNotEmpty() ||
-                                    document.destructiveMarkers.isNotEmpty()
-                            if (needsDestructive && !destructiveAck) {
-                                applyProblem = destructiveAckRequired
-                                return@Button
-                            }
-                            applyProblem = null
-                            onIntent(
-                                UiIntent.RequestWriteAutounattendRaw(
-                                    xmlName = template,
-                                    rawBytes = encoded,
-                                    overwriteXml = true,
-                                    allowDestructiveTemplate = needsDestructive && destructiveAck,
-                                    expectedTemplateSha256 = document.templateSha256,
-                                    identity = device?.identity,
-                                    attachGeneration = device?.attachGeneration ?: 0L,
-                                ),
-                            )
-                        },
-                        enabled = actionsEnabled,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.settings_apply))
-                    }
-                }
             }
         }
     }
 }
-
+}
 
 @Composable
 private fun EditablePairRow(
@@ -1830,18 +1837,25 @@ private fun TemplatePickerDialog(
                             .verticalScroll(rememberScrollState()),
                     ) {
                         candidates.take(40).forEach { path ->
-                            TextButton(
-                                onClick = { onPick(path) },
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                            ) {
-                                Text(
-                                    text = path,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
+                            ListItem(
+                                headlineContent = {
+                                    Text(
+                                        text = path,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_file),
+                                        contentDescription = null,
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(role = Role.Button) { onPick(path) },
+                            )
                         }
                     }
                 }

@@ -99,7 +99,7 @@ class VentoyReleaseUiTest {
     }
 
     @Test
-    fun newAttachmentDropsCheckedVersionsButKeepsDownloadedRelease() {
+    fun newAttachmentDropsInstalledButKeepsUpstreamAndDownloadedRelease() {
         val loaded = ready(gen = 1L).copy(
             bundledVentoyRelease = "1.1.18",
             installedVentoyRelease = "1.1.18",
@@ -118,10 +118,10 @@ class VentoyReleaseUiTest {
             ),
         ).state
         assertNull(next.installedVentoyRelease)
-        assertNull(next.upstreamVentoyRelease)
-        assertNull(next.upstreamVentoyPinned)
+        assertEquals("1.1.21", next.upstreamVentoyRelease)
+        assertEquals(false, next.upstreamVentoyPinned)
         assertFalse(next.ventoyUpstreamChecking)
-        assertEquals(5L, next.ventoyUpstreamRequest)
+        assertEquals(4L, next.ventoyUpstreamRequest)
         assertEquals("1.1.20", next.downloadedVentoyRelease?.release)
         assertEquals("1.1.18", next.bundledVentoyRelease)
     }
@@ -145,6 +145,25 @@ class VentoyReleaseUiTest {
         assertEquals("1.1.21", next.upstreamVentoyRelease)
         assertEquals(4L, next.ventoyUpstreamRequest)
     }
+    @Test
+    fun detachKeepsGlobalUpstreamFenceAndClearsInstalled() {
+        val request = UiReducer.reduce(ready(), UiIntent.CheckVentoyUpstream)
+        val token = request.state.ventoyUpstreamRequest
+        val detached = UiReducer.reduce(
+            request.state.copy(installedVentoyRelease = "1.1.18"),
+            UiIntent.DeviceChanged(presence = DevicePresence.Absent),
+        ).state
+        assertNull(detached.installedVentoyRelease)
+        assertTrue(detached.ventoyUpstreamChecking)
+        assertEquals(token, detached.ventoyUpstreamRequest)
+        val landed = UiReducer.reduce(
+            detached,
+            UiIntent.SetVentoyUpstreamRelease(requestToken = token, tag = "1.1.21"),
+        ).state
+        assertEquals("1.1.21", landed.upstreamVentoyRelease)
+        assertFalse(landed.ventoyUpstreamChecking)
+    }
+
 
     @Test
     fun installedVersionOnlyLandsForTheCurrentAttachment() {
