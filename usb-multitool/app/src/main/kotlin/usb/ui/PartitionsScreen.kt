@@ -9,7 +9,6 @@ import usb.partition.TableScheme
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -24,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -61,7 +59,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
@@ -828,10 +825,8 @@ fun PartitionsScreen(
                 val displayName = partition.name.ifBlank { partition.id }
                 val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
                 val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
-                val rowTitle = listOfNotNull(
-                    "${index + 1}. $title",
-                    partition.filesystemLabel.takeIf { it.isNotEmpty() },
-                ).joinToString("   ")
+                val rowTitle = "${index + 1}. $title"
+                val rowSpace = state.filesystemSpace(partition)
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = if (isSelected) {
@@ -886,6 +881,23 @@ fun PartitionsScreen(
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            if (rowSpace != null) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.filesystem_usage_known,
+                                        DeviceIdentity.formatCapacity(rowSpace.freeBytes),
+                                        DeviceIdentity.formatCapacity(rowSpace.totalBytes),
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        if (partition.filesystemLabel.isNotEmpty()) {
+                            Badge(text = partition.filesystemLabel)
                         }
                         if (partition.isEfiType) {
                             Badge(text = "EFI")
@@ -1878,17 +1890,6 @@ private fun PartitionSelectStrip(
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                     },
-                                )
-                                .then(
-                                    if (isSelected) {
-                                        Modifier.border(
-                                            2.dp,
-                                            MaterialTheme.colorScheme.outline,
-                                            RoundedCornerShape(4.dp),
-                                        )
-                                    } else {
-                                        Modifier
-                                    },
                                 ),
                         )
                     }
@@ -2058,26 +2059,6 @@ private fun MibBoundaryTicks(
         }
     }
 }
-
-@Composable
-private fun RadioDot(selected: Boolean) {
-    val color = if (selected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.outline
-    }
-    Canvas(Modifier.size(20.dp)) {
-        drawCircle(
-            color = color,
-            radius = size.minDimension / 2f - 1.dp.toPx(),
-            style = Stroke(width = 1.5.dp.toPx()),
-        )
-        if (selected) {
-            drawCircle(color = color, radius = size.minDimension / 2f - 5.dp.toPx())
-        }
-    }
-}
-
 
 private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? {
     val sectors = partition.sectorCount ?: return null
