@@ -13,3 +13,25 @@ fun formatBinaryBytesPerSecond(bytesPerSecond: Long): String {
     val gib = mib / 1024.0
     return String.format(Locale.US, "%.2f GiB/s", gib)
 }
+/**
+ * Whole seconds left from [bytesDone] to [bytesTotal] at [bytesPerSecond].
+ * Null (omit ETA) when the total is unknown, speed is not positive, or nothing
+ * remains. Ceiling division without `remaining + speed - 1` overflow.
+ */
+fun remainingSeconds(bytesDone: Long, bytesTotal: Long, bytesPerSecond: Long): Long? {
+    if (bytesTotal <= 0L || bytesPerSecond <= 0L) return null
+    val remaining = bytesTotal - bytesDone.coerceAtLeast(0L)
+    if (remaining <= 0L) return null
+    return (remaining - 1L) / bytesPerSecond + 1L
+}
+
+/** Numeric clock label; the surrounding sentence stays a localized resource. */
+fun formatEtaDuration(totalSeconds: Long): String {
+    require(totalSeconds >= 0L) { "ETA must be non-negative" }
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    val mm = minutes.toString().padStart(2, '0')
+    val ss = seconds.toString().padStart(2, '0')
+    return if (hours > 0L) "$hours:$mm:$ss" else "${totalSeconds / 60L}:$ss"
+}

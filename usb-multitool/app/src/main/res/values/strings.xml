@@ -859,6 +859,7 @@
 <string name="op_delete_batch">Delete %1$d entries</string>
 <string name="op_batch_current_file_pct">file %1$d%%</string>
 <string name="op_batch_current_file_bytes">Current file · %1$s / %2$s</string>
+<string name="op_eta">ETA %1$s</string>
     <string name="settings_title_screen">Settings</string>
     <string name="settings_back">Back</string>
     <string name="settings_appearance_title">Appearance</string>

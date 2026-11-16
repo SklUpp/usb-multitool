@@ -1451,6 +1451,7 @@ class MainViewModel(
                                     token = token,
                                     bytesDone = done,
                                     bytesTotal = total,
+                                    bytesPerSecond = op.currentBytesPerSecond(),
                                     cancelable = isCooperative,
                                 )))
                                 val progress = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $done bytes"
@@ -4046,6 +4047,7 @@ class MainViewModel(
                                     token = token,
                                     bytesDone = op.bytesDone,
                                     bytesTotal = op.bytesTotal,
+                                    bytesPerSecond = op.currentBytesPerSecond(),
                                     cancelable = true,
                                 ),
                             ),
@@ -6181,6 +6183,7 @@ class MainViewModel(
                                         token = token,
                                         bytesDone = operation.bytesDone,
                                         bytesTotal = operation.bytesTotal,
+                                        bytesPerSecond = operation.currentBytesPerSecond(),
                                     ),
                                 ),
                             )
@@ -6407,6 +6410,7 @@ class MainViewModel(
                                     token = token,
                                     bytesDone = operation.bytesDone,
                                     bytesTotal = operation.bytesTotal,
+                                    bytesPerSecond = operation.currentBytesPerSecond(),
                                     cancelable = cancelable,
                                 ),
                             ),
@@ -6452,6 +6456,7 @@ class MainViewModel(
                                     resultMessage = operation.result?.takeIf { it.isNotEmpty() },
                                     failureCause = operation.failureCause,
                                     cancelable = cancelable,
+                                    bytesPerSecond = operation.currentBytesPerSecond(),
                                     readScanResult = sink.readScanResult,
                                 ),
                             ),
@@ -6472,6 +6477,7 @@ class MainViewModel(
                                     resultMessage = operation.result?.takeIf { it.isNotEmpty() },
                                     failureCause = operation.failureCause,
                                     cancelable = cancelable,
+                                    bytesPerSecond = operation.currentBytesPerSecond(),
                                     readScanResult = sink.readScanResult,
                                 ),
                             ),

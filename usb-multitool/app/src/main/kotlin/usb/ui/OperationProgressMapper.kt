@@ -13,6 +13,7 @@ fun readOnlyOperationProgress(
     resultMessage: String?,
     failureCause: Throwable?,
     cancelable: Boolean,
+    bytesPerSecond: Long = 0L,
     readScanResult: ReadScanOutcome? = null,
 ): OperationProgress = when (outcome) {
     is ServiceOperationState.Failed -> OperationProgress(
@@ -57,6 +58,7 @@ fun readOnlyOperationProgress(
         token = token,
         bytesDone = bytesDone,
         bytesTotal = bytesTotal,
+        bytesPerSecond = bytesPerSecond,
         cancelable = cancelable,
     )
     is ServiceOperationState.Completed -> OperationProgress(

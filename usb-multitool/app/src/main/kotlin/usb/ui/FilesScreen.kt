@@ -63,8 +63,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import usb.formatEtaDuration
 import usb.fs.FilesystemSpace
 import usb.multitool.R
+import usb.remainingSeconds
 
 /**
  * Files tab over real volume of selected partition.
@@ -729,6 +731,15 @@ private fun FilesPickScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (copying.state == OperationState.Running) {
+                            remainingSeconds(copying.bytesDone, copying.bytesTotal, copying.bytesPerSecond)?.let { eta ->
+                                Text(
+                                    text = stringResource(R.string.op_eta, formatEtaDuration(eta)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                     (copying.errorMessage ?: copying.resultMessage)?.let { message ->
                         Text(

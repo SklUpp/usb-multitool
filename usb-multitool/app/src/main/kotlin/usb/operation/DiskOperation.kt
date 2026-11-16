@@ -40,22 +40,77 @@ open class DiskOperation(
     }
 
     fun report(bytes: Long) {
+        report(bytes, System.nanoTime())
+    }
+
+    /**
+     * Monotonic throughput sample hook. [nowNanos] injected for deterministic tests;
+     * production passes [System.nanoTime]. Throughput stays 0 until two samples give
+     * a positive elapsed window, and clamps to 0 on stall/backward/repeated progress.
+     * A blocked engine issues no `report` calls; publishers must read speed through
+     * [currentBytesPerSecond] so a stalled sample expires to 0 instead of replaying.
+     */
+    @Volatile var bytesPerSecond: Long = 0L
+        private set
+    private var sampleBytes: Long = 0L
+    private var sampleNanos: Long = 0L
+    private var hasSample: Boolean = false
+
+    companion object {
+        /** Stall window after the last sample after which published speed expires. */
+        const val THROUGHPUT_STALE_NANOS: Long = 3_000_000_000L
+    }
+
+    /** Published speed; 0 when no sample or the last sample is older than the window. */
+    @Synchronized
+    fun currentBytesPerSecond(nowNanos: Long = System.nanoTime()): Long {
+        if (!hasSample) return 0L
+        val elapsed = nowNanos - sampleNanos
+        if (elapsed < 0L || elapsed > THROUGHPUT_STALE_NANOS) return 0L
+        return bytesPerSecond
+    }
+
+    @Synchronized
+    fun report(bytes: Long, nowNanos: Long) {
+        if (!hasSample) {
+            sampleBytes = bytes
+            sampleNanos = nowNanos
+            hasSample = true
+        } else {
+            val deltaBytes = bytes - sampleBytes
+            val deltaNanos = nowNanos - sampleNanos
+            if (deltaBytes > 0L && deltaNanos > 0L) {
+                val rate = deltaBytes.toDouble() * 1_000_000_000.0 / deltaNanos.toDouble()
+                if (rate.isFinite()) bytesPerSecond = rate.toLong().coerceAtLeast(0L)
+            } else if (deltaBytes <= 0L || deltaNanos <= 0L) {
+                bytesPerSecond = 0L
+            }
+            sampleBytes = bytes
+            sampleNanos = nowNanos
+        }
         bytesDone = bytes
+    }
+
+    suspend fun awaitInactive() {
+        inactive.await()
     }
 
     /**
      * Start progress for the next file in a batch (or a single transfer).
      * Resets [bytesDone] before publishing [bytesTotal] so the UI never shows a
      * false aggregate (e.g. previous file's done over the next file's smaller total).
-     * Pass [total] &lt; 0 when size is unknown (indeterminate / bytes-only).
+     * Also resets the throughput window, so the next speed comes from the new
+     * file's own samples. Pass [total] &lt; 0 when size is unknown
+     * (indeterminate / bytes-only).
      */
+    @Synchronized
     fun beginCurrentFile(total: Long) {
         bytesDone = 0L
         bytesTotal = total
-    }
-
-    suspend fun awaitInactive() {
-        inactive.await()
+        bytesPerSecond = 0L
+        sampleBytes = 0L
+        sampleNanos = 0L
+        hasSample = false
     }
 
     internal fun markInactive() {

@@ -139,6 +139,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import usb.formatBinaryBytesPerSecond
+import usb.formatEtaDuration
+import usb.remainingSeconds
 import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
 import usb.image.ReadbackProblem
@@ -989,6 +991,8 @@ internal fun StatusLogPanel(
         statusText?.takeIf { it != operationDetail }?.let(::add)
     }
     val batchCurrentFile = op?.title?.reportsCurrentFileBytes() == true
+    val etaSeconds = if (op != null && running) remainingSeconds(op.bytesDone, op.bytesTotal, op.bytesPerSecond) else null
+    val etaLabel = etaSeconds?.let { stringResource(R.string.op_eta, formatEtaDuration(it)) }
     val metric = when {
         op == null -> null
         completed -> "✓"
@@ -1009,6 +1013,7 @@ internal fun StatusLogPanel(
     val accessibleMessage = buildList {
         add(title)
         metric?.let(::add)
+        etaLabel?.let(::add)
         details.forEach(::add)
         readbackNote?.takeIf { it !in details }?.let(::add)
     }.joinToString(" · ")
@@ -1096,33 +1101,15 @@ internal fun StatusLogPanel(
                             color = content,
                             textAlign = TextAlign.Center,
                         )
-                    } else if (op != null && op.bytesTotal > 0L && batchCurrentFile) {
+                    } else if (metric != null) {
                         Text(
-                            text = stringResource(
-                                R.string.op_batch_current_file_pct,
-                                (op.fraction * 100).toInt(),
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                        )
-                    } else if (op != null && op.bytesTotal > 0L) {
-                        Text(
-                            text = "${(op.fraction * 100).toInt()}%",
+                            text = metric,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = content,
                             textAlign = TextAlign.Center,
-                        )
-                    } else if (op != null && op.bytesDone > 0L) {
-                        Text(
-                            text = DeviceIdentity.formatCapacity(op.bytesDone.toULong()),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     } else if (op != null) {
                         Text(
@@ -1183,7 +1170,16 @@ internal fun StatusLogPanel(
                             textAlign = TextAlign.Center,
                             overflow = TextOverflow.Ellipsis,
                         )
-                    } else if (op?.bytesPerSecond != null && op.bytesPerSecond > 0L) {
+                    } else if (etaSeconds != null) {
+                        Text(
+                            text = formatEtaDuration(etaSeconds),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = content.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            textAlign = TextAlign.Center,
+                            overflow = TextOverflow.Clip,
+                        )
+                    } else if (op != null && op.bytesPerSecond > 0L) {
                         Text(
                             text = formatBinaryBytesPerSecond(op.bytesPerSecond),
                             style = MaterialTheme.typography.labelSmall,
@@ -1260,7 +1256,7 @@ internal fun StatusLogPanel(
                         }
                         metric?.let {
                             Text(
-                                text = it,
+                                text = if (running && etaLabel != null && op != null && op.bytesTotal > 0L) "$it · $etaLabel" else it,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = content,
@@ -1348,6 +1344,7 @@ internal fun StatusLogPanel(
                 if (op.bytesPerSecond > 0L) {
                     add(formatBinaryBytesPerSecond(op.bytesPerSecond))
                 }
+                if (running && etaLabel != null) etaLabel.let(::add)
                 op.errorMessage?.let(::add)
                 op.resultMessage?.let(::add)
                 op.readScanResult?.let { add(readScanSummary(it)) }
