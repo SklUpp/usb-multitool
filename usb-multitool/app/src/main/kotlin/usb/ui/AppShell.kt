@@ -327,9 +327,15 @@ fun AppShell(
                             tonalElevation = 0.dp,
                         ) {
                             PrimaryShellTabs.forEach { tab ->
+                                // Reducer also refuses the switch; the disabled state names it
+                                // up front. Presence alone never disables: empty states stay
+                                // navigable, only a live operation pins the tab.
+                                val switchBlocked = tab != state.tab &&
+                                    (state.isRunning || state.operation?.state == OperationState.Queued)
                                 NavigationBarItem(
                                     selected = state.tab == tab,
                                     onClick = { onIntent(UiIntent.SelectTab(tab)) },
+                                    enabled = !switchBlocked,
                                     icon = { TabIcon(tab) },
                                     label = {
                                         Text(
@@ -387,6 +393,7 @@ fun AppShell(
                         DeviceHeader(
                             state = state,
                             logButtonFocus = logButtonFocus,
+                            onIntent = onIntent,
                             onOpenSettings = {
                                 if (state.tab in PrimaryShellTabs) settingsReturnTab = state.tab.name
                                 onIntent(UiIntent.SelectTab(ShellTab.Settings))
@@ -798,10 +805,12 @@ private fun ProjectVersionButton(versionName: String?) {
 private fun DeviceHeader(
     state: AppUiState,
     logButtonFocus: FocusRequester,
+    onIntent: (UiIntent) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenLog: () -> Unit,
 ) {
     val device = state.device
+    val operationLocked = state.isRunning || state.operation?.state == OperationState.Queued
     val subtitle = when (state.presence) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
@@ -852,8 +861,18 @@ TopAppBar(
                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.settings_title_screen)) },
+                        enabled = !operationLocked,
                         onClick = { moreOpen = false; onOpenSettings() },
                     )
+                    AppLanguage.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(languageName(option)) },
+                            onClick = {
+                                moreOpen = false
+                                onIntent(UiIntent.SetLanguage(option))
+                            },
+                        )
+                    }
                 }
             }
         },

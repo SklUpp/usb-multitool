@@ -1060,16 +1060,24 @@ object UiReducer {
     fun reduce(state: AppUiState, intent: UiIntent): ReduceResult =
         when (intent) {
             is UiIntent.SelectTab -> {
-                val enteringFiles = intent.tab == ShellTab.Files && state.tab != ShellTab.Files
-                // Any other tab leaves pick mode, exactly like CancelFilesPick. A running
-                // import or confirmation keeps the screen: the user must see it finish.
-                val pickExitBlock = if (intent.tab != ShellTab.Files &&
-                    state.filesPickMode != null
+                // A running or queued operation owns the USB lane: tab navigation (tap or
+                // swipe, both arrive here) must not orphan it from Cancel/status. The tab
+                // stays; completion restores actionsEnabled and navigation works again.
+                if (intent.tab != state.tab &&
+                    (state.isRunning || state.operation?.state == OperationState.Queued)
                 ) {
-                    filesPickExitBlock(state)
+                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)))
                 } else {
-                    null
-                }
+                    val enteringFiles = intent.tab == ShellTab.Files && state.tab != ShellTab.Files
+                    // Any other tab leaves pick mode, exactly like CancelFilesPick. A running
+                    // import or confirmation keeps the screen: the user must see it finish.
+                    val pickExitBlock = if (intent.tab != ShellTab.Files &&
+                        state.filesPickMode != null
+                    ) {
+                        filesPickExitBlock(state)
+                    } else {
+                        null
+                    }
                 if (pickExitBlock != null) {
                     ReduceResult(state.copy(statusMessage = pickExitBlock))
                 } else {
@@ -1097,7 +1105,12 @@ object UiReducer {
                                 isoImportGeneration = state.isoImportGeneration + 1,
                             )
                         } else {
-                            state.copy(tab = intent.tab, statusMessage = null)
+                            state.copy(
+                                tab = intent.tab,
+                                statusMessage = state.statusMessage.takeIf {
+                                    it is UiMessage.Key && it.key == UiMessageKey.VolumeSyncUnconfirmed
+                                },
+                            )
                         }
                     // Entering Files re-reads the open folder: changes may have happened while
                     // another tab owned the screen. One request per entry, none while one is
@@ -1128,6 +1141,7 @@ object UiReducer {
                     } else {
                         base
                     }
+                }
                 }
             }
 

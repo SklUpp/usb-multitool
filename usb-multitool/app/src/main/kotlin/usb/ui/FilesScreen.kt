@@ -72,9 +72,10 @@ import usb.remainingSeconds
  * Files tab over real volume of selected partition.
  *
  * Compact partition choice row carries measured filesystem space; folder block owns path,
- * icon actions and one shared lazy area for every file/folder. Operation errors and progress
- * stay in shell's shared status panel. Write state shows RO only for guaranteed EFI protection
- * and unknown otherwise: verified RW needs live mount fact.
+ * Refresh/CreateFolder and one shared lazy area for every file/folder. Selection
+ * Download/Rename/Delete/Clear live in the selection row and the per-row bottom sheet.
+ * Operation errors and progress stay in shell's shared status panel. Write badge shows
+ * only measured states: EFI policy or driver mount facts; unknown renders no badge.
  */
 @Composable
 fun FilesScreen(
@@ -168,18 +169,44 @@ fun FilesScreen(
     val uploadDescription = stringResource(R.string.files_copy_from_phone)
     val space = selected?.let(state::filesystemSpace)
 
-
+    // Blocked release is the only known system-claimed state: a failed volume close
+    // clears partitions, leaves Busy, keeps no operation at all, and only an
+    // Android-side unmount/eject (or e2fsck, per the status text) clears it.
+    val blockedRelease = (state.statusMessage as? UiMessage.Key)
+        ?.takeIf { it.key == UiMessageKey.VolumeSyncUnconfirmed }
+    val systemBlocked = state.presence == DevicePresence.Busy &&
+        (state.operation == null || state.operation.state.isTerminal()) && blockedRelease != null
     if (state.partitions.isEmpty()) {
+        if (!systemBlocked) {
+            Column(
+                modifier = modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                EmptyHint(stringResource(R.string.files_no_partitions_hint))
+                OutlinedButton(
+                    onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.files_no_partitions_cta))
+                }
+            }
+            return
+        }
         Column(
             modifier = modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            EmptyHint(stringResource(R.string.files_no_partitions_hint))
-            OutlinedButton(
-                onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(stringResource(R.string.files_no_partitions_cta))
+                Text(
+                    text = blockedRelease!!.localized(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
             }
         }
         return
@@ -209,8 +236,24 @@ fun FilesScreen(
                     enabled = state.actionsEnabled,
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
+                // Matches the empty-partitions branch below: the same known blocked
+                // release state renders the localized card here too, since partitions
+                // can be retained while the volume refuses to remount.
+                if (systemBlocked) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = blockedRelease!!.localized(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
             }
-
             FolderCard(
                 state = state,
                 canAct = canAct,
@@ -876,8 +919,8 @@ private fun FolderCard(
     onAction: (FileEntry) -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
-)
-{
+) {
+    val loadingDescription = stringResource(R.string.files_listing)
     Column(modifier = modifier.fillMaxWidth()) {
         if (selection.entries.isNotEmpty()) {
             Row(
@@ -931,15 +974,9 @@ private fun FolderCard(
                     canNavigateUp = canAct && state.currentPath != "/",
                     canAct = canAct,
                     canWrite = canWrite,
-                    selection = selection,
                     onNavigateUp = onNavigateUp,
                     onRefresh = onRefresh,
                     onNewFolder = onNewFolder,
-                    onSaveToPhone = onSaveToPhone,
-                    onRename = onRename,
-                    onDelete = onDelete,
-                    onClearSelection = onClearSelection,
-                    onAction = onAction,
                     isLoading = isLoading,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                 )
@@ -952,10 +989,15 @@ private fun FolderCard(
                     )
                 }
                 state.filesListingState == FilesListingState.Loading -> item(key = "loading") {
-                    EmptyHint(
-                        stringResource(R.string.files_listing),
-                        modifier = Modifier.padding(16.dp),
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp)
+                            .semantics { contentDescription = loadingDescription },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
+                    }
                 }
                 state.filesListingState == FilesListingState.Failed -> item(key = "error") {
                     EmptyHint(
@@ -998,24 +1040,19 @@ private fun FolderCard(
         }
     }
 }
-
 }
-/** Path and icon actions at top of folder block. */
+
+/** Path row with Refresh/CreateFolder only. Selection Download/Rename/Delete/Clear live in the
+ * selection row above and the per-row bottom sheet, never in this toolbar. */
 @Composable
 private fun FolderSubblock(
     pathLabel: String,
     canNavigateUp: Boolean,
     canAct: Boolean,
     canWrite: Boolean,
-    selection: ListingSelection,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
     onNewFolder: () -> Unit,
-    onSaveToPhone: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onClearSelection: () -> Unit,
-    onAction: (FileEntry) -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1023,15 +1060,6 @@ private fun FolderSubblock(
     val refreshDescription = stringResource(R.string.unattend_refresh)
     val newFolderDescription = stringResource(R.string.files_create_folder)
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
-    val saveDescription = stringResource(R.string.files_save_to_phone)
-    val renameDescription = stringResource(R.string.files_rename)
-    val deleteDescription = stringResource(R.string.action_delete)
-    val clearDescription = stringResource(R.string.files_clear_selection)
-    val selectedEntries = selection.entries
-    val batchItems = selectedEntries.map { it.toBatchItem() }
-    val saveEnabled = filesBatchDownloadEnabled(canAct, batchItems)
-    val renameEnabled = filesBatchRenameEnabled(canWrite, batchItems)
-    val deleteEnabled = filesBatchDeleteEnabled(canWrite, batchItems)
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -1094,9 +1122,9 @@ private fun FolderSubblock(
                     enabled = canWrite,
                     onClick = onNewFolder,
                 )
+            }
         }
     }
-}
 }
 
 
@@ -1220,31 +1248,29 @@ private fun PartitionChoiceRow(
 }
 
 /**
- * Uppercase write marker. RO is red and only claims guaranteed EFI protection; everything
- * else is an em dash announced as "write state not verified".
+ * Factual write badge matching Partitions semantics: neutral container shared by every
+ * known state, error tone only for guaranteed EFI policy. Driver-mounted states use
+ * measured mount facts; unknown renders no badge at all — never a red RO.
  */
 @Composable
 private fun WriteAccessBadge(access: PartitionWriteAccess) {
-    val color = when (access) {
-        PartitionWriteAccess.ReadOnly, PartitionWriteAccess.DriverReadOnly -> MaterialTheme.colorScheme.error
-        PartitionWriteAccess.ReadWrite, PartitionWriteAccess.Unknown -> MaterialTheme.colorScheme.onSurface
-    }
     val label = when (access) {
         PartitionWriteAccess.ReadOnly -> stringResource(R.string.files_write_policy_label)
         PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.files_write_driver_ro_label)
         PartitionWriteAccess.ReadWrite -> stringResource(R.string.files_write_driver_rw_label)
-        PartitionWriteAccess.Unknown -> "—"
+        PartitionWriteAccess.Unknown -> return
     }
     val description = when (access) {
         PartitionWriteAccess.ReadOnly -> stringResource(R.string.files_write_policy_ro)
         PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.files_write_driver_ro)
         PartitionWriteAccess.ReadWrite -> stringResource(R.string.files_write_driver_rw)
-        PartitionWriteAccess.Unknown -> stringResource(R.string.files_write_unknown)
+        PartitionWriteAccess.Unknown -> return
     }
+    val content = MaterialTheme.colorScheme.onTertiaryContainer
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = color.copy(alpha = 0.12f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.6f)),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)),
         modifier = Modifier.clearAndSetSemantics { contentDescription = description },
     ) {
         Text(
@@ -1252,7 +1278,7 @@ private fun WriteAccessBadge(access: PartitionWriteAccess) {
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
-            color = color,
+            color = content,
             maxLines = 1,
         )
     }
