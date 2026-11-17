@@ -118,10 +118,8 @@ internal fun AutounattendSection(
     val document = (state.autounattendState as? AutounattendState.Parsed)?.document
     // Detached stick hides USB-gated rows below; help + live import status/cancel stay.
     val xmlGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
-    var pickerOpen by remember(
-        state.device?.identity,
-        state.device?.attachGeneration,
-    ) { mutableStateOf(false) }
+    val templateSourceIdentity = state.device?.identity
+    val templateSourceGeneration = state.device?.attachGeneration
     var templateSourcePrompt by remember(
         state.device?.identity,
         state.device?.attachGeneration,
@@ -581,18 +579,14 @@ internal fun AutounattendSection(
         )
     }
 
-    if (pickerOpen) {
-        TemplatePickerDialog(
-            title = stringResource(R.string.unattend_pick_template),
-            candidates = state.windowsIsoCandidates?.map { it.path },
-            incomplete = state.windowsIsoCandidatesError != null,
-            onRefresh = { onIntent(UiIntent.LoadWindowsIsoCandidates) },
-            onPick = {
-                onIntent(UiIntent.SelectWindowsTemplate(it))
-                pickerOpen = false
-            },
-            onDismiss = { pickerOpen = false },
-        )
+    // Stick templates browse the shared Files picker: tap marks, explicit button confirms.
+    // The reducer atomically consumes filesPickSelections[WindowsTemplate], so this intent
+    // carries no path and cannot inject one. Phone flow uses SAF import below; nothing copies here.
+    LaunchedEffect(state.filesPickSelections[FilesPickPurpose.WindowsTemplate]) {
+        if (state.filesPickSelections[FilesPickPurpose.WindowsTemplate] == null) {
+            return@LaunchedEffect
+        }
+        onIntent(UiIntent.SelectWindowsTemplate)
     }
     if (templateSourcePrompt) {
         ModalBottomSheet(onDismissRequest = { templateSourcePrompt = false }) {
@@ -613,7 +607,16 @@ internal fun AutounattendSection(
                     .fillMaxWidth()
                     .clickable(role = Role.Button) {
                         templateSourcePrompt = false
-                        pickerOpen = true
+                        onIntent(
+                            UiIntent.BeginFilesPick(
+                                purpose = FilesPickPurpose.WindowsTemplate,
+                                returnTab = ShellTab.Ventoy,
+                                target = FilesPickTarget.File,
+                                initialPath = "/ventoy",
+                                expectedIdentity = templateSourceIdentity,
+                                expectedAttachGeneration = templateSourceGeneration,
+                            ),
+                        )
                     },
             )
             ListItem(
@@ -1807,84 +1810,6 @@ private fun LayoutConfirmDialog(
                 onClick = { onConfirm(true) },
                 enabled = actionsEnabled && acknowledged,
             ) { Text(stringResource(R.string.layout_confirm_apply)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
-        },
-    )
-}
-
-@Composable
-private fun TemplatePickerDialog(
-    title: String,
-    candidates: List<String>?,
-    incomplete: Boolean,
-    onRefresh: () -> Unit,
-    onPick: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (incomplete) {
-                    Text(
-                        text = stringResource(R.string.raw_stick_incomplete),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                when {
-                    candidates == null -> Text(
-                        text = stringResource(R.string.raw_stick_loading),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-
-                    candidates.isEmpty() -> Text(
-                        text = stringResource(R.string.raw_stick_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-
-                    else -> Column(
-                        modifier = Modifier
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        candidates.take(40).forEach { path ->
-                            ListItem(
-                                headlineContent = {
-                                    Text(
-                                        text = path,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                leadingContent = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_file),
-                                        contentDescription = null,
-                                    )
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(role = Role.Button) { onPick(path) },
-                            )
-                        }
-                    }
-                }
-                if (candidates != null && candidates.size > 40) {
-                    Text(
-                        text = stringResource(R.string.list_first_40),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onRefresh) { Text(stringResource(R.string.unattend_refresh)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }

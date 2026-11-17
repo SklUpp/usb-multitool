@@ -769,7 +769,6 @@
     <string name="unattend_no_candidates">На разделе данных Ventoy образы не найдены.</string>
     <string name="unattend_no_template">Файл ответов ещё не выбран.</string>
     <string name="unattend_not_unattend">Этот файл не является файлом ответов unattend</string>
-    <string name="unattend_pick_template">Выбор файла ответов Windows</string>
     <string name="unattend_problem_account">Имя учётной записи недопустимо</string>
     <string name="unattend_problem_computer">Имя компьютера недопустимо</string>
     <string name="unattend_problem_image_install">Эта разметка устанавливает образ на раздел данных — это не поддерживается</string>

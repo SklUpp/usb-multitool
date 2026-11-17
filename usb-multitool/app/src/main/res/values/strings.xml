@@ -768,7 +768,6 @@
     <string name="unattend_no_candidates">No images were found on the Ventoy data partition.</string>
     <string name="unattend_no_template">No answer file is selected yet.</string>
     <string name="unattend_not_unattend">This file is not an unattend answer file</string>
-    <string name="unattend_pick_template">Select the Windows answer file</string>
     <string name="unattend_problem_account">The account name is not valid</string>
     <string name="unattend_problem_computer">The computer name is not valid</string>
     <string name="unattend_problem_image_install">This layout installs the image onto a data partition, which is not supported here</string>

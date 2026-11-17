@@ -1035,6 +1035,110 @@ class FilesPickUiTest {
     }
 
     @Test
+    fun templatePickBeginsOnVentoyDataPartition() {
+        val result = UiReducer.reduce(
+            ready(path = "/old").copy(tab = ShellTab.Ventoy),
+            UiIntent.BeginFilesPick(
+                purpose = FilesPickPurpose.WindowsTemplate,
+                returnTab = ShellTab.Ventoy,
+                initialPath = "/ventoy",
+            ),
+        )
+
+        val mode = requireNotNull(result.state.filesPickMode)
+        assertEquals(FilesPickPurpose.WindowsTemplate, mode.purpose)
+        assertEquals(ShellTab.Files, result.state.tab)
+        assertEquals("1", result.state.selectedPartitionId)
+        assertEquals("/ventoy", result.state.currentPath)
+        assertEquals(device.identity, mode.identity)
+        assertEquals(device.attachGeneration, mode.attachGeneration)
+        assertEquals("1", mode.partitionId)
+        assertEquals(2048uL, mode.startLba)
+        assertEquals(4_000_000uL, mode.sectorCount)
+        assertEquals(ShellTab.Ventoy, mode.returnTab)
+        assertEquals(UiEffect.LoadFiles(path = "/ventoy"), result.effects.single())
+    }
+
+    @Test
+    fun templatePickConfirmsFileWithoutWriting() {
+        val opened = UiReducer.reduce(
+            ready(path = "/ventoy").copy(tab = ShellTab.Ventoy),
+            UiIntent.BeginFilesPick(
+                purpose = FilesPickPurpose.WindowsTemplate,
+                returnTab = ShellTab.Ventoy,
+                initialPath = "/ventoy",
+            ),
+        ).state
+        val listed = opened.copy(
+            files = listOf(
+                FileEntry("custom.xml", isDirectory = false, sizeBytes = 1_024uL),
+                FileEntry("notes.txt", isDirectory = false, sizeBytes = 512uL),
+                FileEntry("sub", isDirectory = true, sizeBytes = 0uL),
+            ),
+            filesListingState = FilesListingState.Loaded,
+        )
+        // No extension filter: a non-XML name from the same live listing confirms too.
+        val result = UiReducer.reduce(listed, UiIntent.ConfirmFilesPickFile("notes.txt"))
+
+        assertNull(result.state.filesPickMode)
+        assertEquals(ShellTab.Ventoy, result.state.tab)
+        assertTrue(result.effects.isEmpty())
+        val selection = requireNotNull(
+            result.state.filesPickSelection(FilesPickPurpose.WindowsTemplate),
+        )
+        assertEquals("/ventoy/notes.txt", selection.path)
+        assertEquals("notes.txt", selection.name)
+        assertEquals(FilesPickPurpose.WindowsTemplate, selection.purpose)
+        assertEquals("1", selection.partitionId)
+        assertEquals(2048uL, selection.startLba)
+        assertEquals(4_000_000uL, selection.sectorCount)
+        assertEquals(device.attachGeneration, selection.attachGeneration)
+    }
+
+    @Test
+    fun templateConsumeClearsPickSoReselectNeedsFreshConfirm() {
+        val opened = UiReducer.reduce(
+            ready(path = "/ventoy").copy(tab = ShellTab.Ventoy),
+            UiIntent.BeginFilesPick(
+                purpose = FilesPickPurpose.WindowsTemplate,
+                returnTab = ShellTab.Ventoy,
+                initialPath = "/ventoy",
+            ),
+        ).state
+        val listed = opened.copy(
+            files = listOf(
+                FileEntry("custom.xml", isDirectory = false, sizeBytes = 1_024uL),
+            ),
+            filesListingState = FilesListingState.Loaded,
+        )
+        val confirmed = UiReducer.reduce(listed, UiIntent.ConfirmFilesPickFile("custom.xml")).state
+        requireNotNull(confirmed.filesPickSelection(FilesPickPurpose.WindowsTemplate))
+
+        val consumed = UiReducer.reduce(confirmed, UiIntent.SelectWindowsTemplate)
+        assertEquals("/ventoy/custom.xml", consumed.state.windowsTemplatePath)
+        assertNull(consumed.state.filesPickSelection(FilesPickPurpose.WindowsTemplate))
+        assertEquals(2, consumed.effects.size)
+
+        val replay = UiReducer.reduce(consumed.state, UiIntent.SelectWindowsTemplate)
+        assertTrue(replay.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+            replay.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun templatePickCancelWritesNothing() {
+        val state = begun(purpose = FilesPickPurpose.WindowsTemplate, path = "/ventoy")
+        val result = UiReducer.reduce(state, UiIntent.CancelFilesPick)
+
+        assertNull(result.state.filesPickMode)
+        assertEquals(ShellTab.Ventoy, result.state.tab)
+        assertNull(result.state.filesPickSelection(FilesPickPurpose.WindowsTemplate))
+        assertTrue(result.effects.isNotEmpty())
+    }
+
+    @Test
     fun selectionsAreKeptPerPurpose() {
         val image =
             UiReducer.reduce(begun(), UiIntent.ConfirmFilesPickFile("win11.iso")).state

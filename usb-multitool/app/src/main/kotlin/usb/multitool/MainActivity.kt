@@ -3908,7 +3908,12 @@ class MainViewModel(
                 val disk = raw.disk
                 val resolvedTargetName: String
                 val exists: Boolean
+                val inspectPart1Start: ULong?
+                val inspectPart1Count: ULong?
                 try {
+                    val inspectProbe = usb.ventoy.VentoyLayout.probe(disk)
+                    inspectPart1Start = inspectProbe?.part1StartLba
+                    inspectPart1Count = inspectProbe?.part1SectorCount
                     val pair =
                         usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
                             if (destinationDirectory != null && directory != "/") {
@@ -3953,6 +3958,8 @@ class MainViewModel(
                             templateMarkers = markers,
                             directory = directory,
                             pickSessionId = pickSessionId,
+                            partitionStartLba = inspectPart1Start,
+                            partitionSectorCount = inspectPart1Count,
                         ),
                     )
                     if (markers.isNotEmpty()) {
@@ -4209,10 +4216,31 @@ class MainViewModel(
                     ),
                 )
                 if (state.operation?.token == token && mappedState == OperationState.Completed) {
-                    if (proposal.kind == usb.ui.WindowsImportKind.XmlTemplate) {
+                    val importStart = proposal.partitionStartLba
+                    val importCount = proposal.partitionSectorCount
+                    val importIdentity = proposal.identity
+                    val templateStale =
+                        attachGeneration != proposal.attachGeneration ||
+                            state.device?.identity != proposal.identity ||
+                            importIdentity == null ||
+                            importStart == null ||
+                            importCount == null
+                    if (proposal.kind == usb.ui.WindowsImportKind.XmlTemplate && templateStale) {
+                        onIntent(
+                            UiIntent.Status(
+                                UiMessage.Raw("USB attachment changed; template was not selected"),
+                            ),
+                        )
+                    } else if (proposal.kind == usb.ui.WindowsImportKind.XmlTemplate &&
+                        importIdentity != null && importStart != null && importCount != null
+                    ) {
                         onIntent(
                             UiIntent.WindowsTemplateImported(
-                                "${proposal.directory.trimEnd('/')}/${proposal.targetName}",
+                                path = "${proposal.directory.trimEnd('/')}/${proposal.targetName}",
+                                identity = importIdentity,
+                                attachGeneration = proposal.attachGeneration,
+                                partitionStartLba = importStart,
+                                partitionSectorCount = importCount,
                             ),
                         )
                     } else {
@@ -4623,6 +4651,10 @@ class MainViewModel(
         val expected = attachment.snapshot()
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
+        val expectedIdentity = state.device?.identity
+        val expectedPart1 = state.partitions.firstOrNull { it.id == "1" }
+        val expectedPart1Start = expectedPart1?.startLba
+        val expectedPart1Count = expectedPart1?.sectorCount
         val opTitle = OperationTitle.GenerateUnattendXml
         val label = opTitle.logLabel
         val op = object : DiskOperation(name = label) {
@@ -4637,7 +4669,23 @@ class MainViewModel(
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
                 try {
-                    // Integrity: confirmed plan must match the UI-proposed xmlName first.
+                    // Probe under the same claim: physical part-1 geometry must match the
+                    // pre-op snapshot before allocation or any write. Null pre-op means
+                    // unprovable — refuse rather than writing to an unknown layout.
+                    val writeProbe = usb.ventoy.VentoyLayout.probe(disk)
+                        ?: throw usb.ventoy.IncompatibleVentoyException(
+                            "No Ventoy data partition on this disk",
+                        )
+                    expectedPart1Start?.let { expected ->
+                        require(writeProbe.part1StartLba == expected) {
+                            "Ventoy data partition start changed since the write was confirmed"
+                        }
+                    } ?: throw AttachmentChangedException()
+                    expectedPart1Count?.let { expected ->
+                        require(writeProbe.part1SectorCount == expected) {
+                            "Ventoy data partition size changed since the write was confirmed"
+                        }
+                    } ?: throw AttachmentChangedException()
                     // Never invent a plan hash when the effect carries null.
                     val confirmedPlan = effect.expectedPlanSha256
                     if (confirmedPlan != null) {
@@ -4726,11 +4774,39 @@ class MainViewModel(
                     ),
                 )
                 if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                    val live = state.partitions.firstOrNull { it.id == "1" }
+                    val start = expectedPart1Start
+                    val count = expectedPart1Count
+                    val identity = expectedIdentity
+                    val generatedStale =
+                        attachGeneration != expectedAttach ||
+                            identity == null ||
+                            state.device?.identity != identity ||
+                            start == null ||
+                            count == null ||
+                            live == null ||
+                            live.startLba != start ||
+                            live.sectorCount != count
                     op.generatedXmlPath?.let { path ->
-                        onIntent(UiIntent.WindowsTemplateImported(path))
+                        if (!generatedStale && identity != null && start != null && count != null) {
+                            onIntent(
+                                UiIntent.WindowsTemplateImported(
+                                    path = path,
+                                    identity = identity,
+                                    attachGeneration = expectedAttach,
+                                    partitionStartLba = start,
+                                    partitionSectorCount = count,
+                                ),
+                            )
+                        } else {
+                            onIntent(
+                                UiIntent.Status(
+                                    UiMessage.Raw("USB attachment changed; template was not selected"),
+                                ),
+                            )
+                        }
                     }
                     onIntent(UiIntent.LoadWindowsImageLinks)
-                    onIntent(UiIntent.ClearWindowsSelection)
                 } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }

@@ -60,6 +60,20 @@ class VentoyUiStateTest {
     private fun withVentoy(state: AppUiState = ready()) = state.copy(
         windowsTemplatePath = template,
         windowsSelectedImages = listOf(pathA),
+        // Provenance is mandatory since the atomic-consume cutover; same-stick
+        // retention keeps a path only with a matching live pin.
+        windowsTemplatePin = FilesPickSelection(
+            purpose = FilesPickPurpose.WindowsTemplate,
+            path = template,
+            name = "autounattend.xml",
+            sizeBytes = 64uL,
+            isDirectory = false,
+            identity = state.device?.identity,
+            attachGeneration = state.device?.attachGeneration ?: 0L,
+            partitionId = "1",
+            startLba = 2048uL,
+            sectorCount = 4096uL,
+        ),
         autounattendState = AutounattendState.Missing,
         autounattendCandidates = candidates(
             AutounattendBinding(imagePath = pathA, bound = false),

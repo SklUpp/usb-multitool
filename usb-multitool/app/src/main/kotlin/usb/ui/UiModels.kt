@@ -870,13 +870,14 @@ enum class WindowsImportKind {
 
 /**
  * Why the simplified Files screen is open. One browser serves every on-stick choice:
- * the install image, a raw-write source, or a Ventoy config file. Results are kept per
- * purpose, so choosing one does not erase another.
+ * the install image, a raw-write source, a Ventoy config file, or a Windows XML
+ * template. Results are kept per purpose, so choosing one does not erase another.
  */
 enum class FilesPickPurpose {
     WindowsImage,
     RawSource,
     VentoyConfig,
+    WindowsTemplate,
 }
 
 enum class FilesPickLaunchSource {
@@ -1394,6 +1395,8 @@ data class AppUiState(
     val windowsImageLinksIdentity: String? = null,
     /** XML template file on the stick; never generated or rewritten by the app. */
     val windowsTemplatePath: String? = null,
+    /** Provenance of [windowsTemplatePath]; null when no template is selected. */
+    val windowsTemplatePin: FilesPickSelection? = null,
     /** Bindings selected for removal; confirmation only edits ventoy.json. */
     val pendingWindowsUnlink: List<String>? = null,
     /** Reader result for the selected XML; Missing/Parsed/Unreadable. */

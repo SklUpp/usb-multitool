@@ -61,6 +61,8 @@ class PhoneImportUiTest {
         kind: WindowsImportKind = WindowsImportKind.Image,
         markers: List<String> = emptyList(),
         pickSessionId: String? = null,
+        partitionStartLba: ULong? = 2048uL,
+        partitionSectorCount: ULong? = 4096uL,
     ) = UiIntent.WindowsIsoImportInspected(
         uri = URI,
         name = if (kind == WindowsImportKind.XmlTemplate) "autounattend.xml" else "win11.iso",
@@ -72,6 +74,8 @@ class PhoneImportUiTest {
         templateMarkers = markers,
         directory = if (kind == WindowsImportKind.XmlTemplate) "/ventoy" else "/ISO",
         pickSessionId = pickSessionId,
+        partitionStartLba = partitionStartLba,
+        partitionSectorCount = partitionSectorCount,
     )
 
     @Test
@@ -178,6 +182,23 @@ class PhoneImportUiTest {
     }
 
     @Test
+    fun imageProposalKeepsPickSessionForHostFencing() {
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val result = UiReducer.reduce(
+            requested,
+            inspected(
+                exists = false,
+                generation = requested.isoImportGeneration,
+                pickSessionId = token,
+            ),
+        )
+
+        val effect = result.effects.single() as UiEffect.ImportIso
+        assertEquals(token, effect.isoImport.pickSessionId)
+    }
+
+    @Test
     fun newTargetImportsWithoutConfirmation() {
         val (picked, token) = imagePick()
         val requested = requestImage(picked, token)
@@ -213,6 +234,59 @@ class PhoneImportUiTest {
 
         assertNull(stale.state.pendingIsoImport)
         assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
+    fun inspectProbeDisagreeingWithPickPinIsRejected() {
+        // Stale UI may probe after a real disk change; the disagreement must fail
+        // closed before any proposal or write, even though the session matches.
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val result = UiReducer.reduce(
+            requested,
+            inspected(
+                exists = false,
+                generation = requested.isoImportGeneration,
+                pickSessionId = token,
+                partitionStartLba = 999uL,
+                partitionSectorCount = 4096uL,
+            ),
+        )
+
+        assertNull(result.state.pendingIsoImport)
+        // RequestImport parks an in-flight SAF read; the refusal must disown it so
+        // a stuck provider cannot block a new import. USB-guard release still waits
+        // for the host Finished after the disk close.
+        assertEquals(
+            listOf(UiEffect.CancelIsoImportInspection),
+            result.effects,
+        )
+        assertEquals(requested.isoImportGeneration + 1, result.state.isoImportGeneration)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+            result.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun inspectProbeMatchingPickPinIsAccepted() {
+        val (picked, token) = imagePick()
+        val requested = requestImage(picked, token)
+        val result = UiReducer.reduce(
+            requested,
+            inspected(
+                exists = false,
+                generation = requested.isoImportGeneration,
+                pickSessionId = token,
+                partitionStartLba = 2048uL,
+                partitionSectorCount = 4096uL,
+            ),
+        )
+
+        val effect = result.effects.single() as UiEffect.ImportIso
+        assertEquals(2048uL, effect.isoImport.partitionStartLba)
+        assertEquals(4096uL, effect.isoImport.partitionSectorCount)
+        assertEquals(token, effect.isoImport.pickSessionId)
     }
 
     @Test
@@ -295,6 +369,68 @@ class PhoneImportUiTest {
         val proposal = requireNotNull(result.state.pendingIsoImport)
         assertEquals(WindowsImportKind.XmlTemplate, proposal.kind)
         assertEquals(listOf("/unattend/settings/component/DiskConfiguration"), proposal.templateMarkers)
+    }
+
+    @Test
+    fun folderDialogTemplateProposalCarriesInspectTimeGeometry() {
+        // Folder dialog flows never create a Files pick; geometry comes from the host
+        // probe at inspect time (WindowsIsoImportInspected.partitionStartLba).
+        val requested = UiReducer.reduce(
+            ready(),
+            UiIntent.RequestImportWindowsIso(URI, WindowsImportKind.XmlTemplate, "/ventoy"),
+        )
+        val result = UiReducer.reduce(
+            requested.state,
+            inspected(
+                exists = false,
+                generation = 1L,
+                kind = WindowsImportKind.XmlTemplate,
+                partitionStartLba = 2048uL,
+                partitionSectorCount = 4096uL,
+            ),
+        )
+        val effect = result.effects.single() as UiEffect.ImportIso
+        assertEquals(2048uL, effect.isoImport.partitionStartLba)
+        assertEquals(4096uL, effect.isoImport.partitionSectorCount)
+        assertEquals(device.identity, effect.isoImport.identity)
+        assertEquals(device.attachGeneration, effect.isoImport.attachGeneration)
+        assertNull(effect.isoImport.pickSessionId)
+    }
+
+    @Test
+    fun staleInspectGeometryProposalRefusesImport() {
+        val requested = UiReducer.reduce(
+            ready(),
+            UiIntent.RequestImportWindowsIso(URI, WindowsImportKind.XmlTemplate, "/ventoy"),
+        )
+        val pending = UiReducer.reduce(
+            requested.state,
+            inspected(
+                exists = false,
+                generation = 1L,
+                kind = WindowsImportKind.XmlTemplate,
+                partitionStartLba = 999uL,
+                partitionSectorCount = 4096uL,
+            ),
+        )
+        // Host ships the proposal pin into WindowsTemplateImported; the reducer must
+        // refuse the stale geometry instead of reading another layout's bytes.
+        val result = UiReducer.reduce(
+            pending.state,
+            UiIntent.WindowsTemplateImported(
+                path = "/ventoy/autounattend.xml",
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                partitionStartLba = 999uL,
+                partitionSectorCount = 4096uL,
+            ),
+        )
+
+        assertTrue(result.effects.isEmpty())
+        assertEquals(
+            UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+            result.state.statusMessage,
+        )
     }
 
     @Test

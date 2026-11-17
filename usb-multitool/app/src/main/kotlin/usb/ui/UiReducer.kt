@@ -25,6 +25,7 @@ import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoyReleaseSource
 import usb.ventoy.VentoySettingsSource
 import usb.ventoy.XmlPath
+import usb.ventoy.normalizeVentoyFilePath
 import usb.ventoy.autounattendPlanSha256
 import usb.ventoy.diskLayoutInstallTargetPartitionId
 import usb.ventoy.diskLayoutRemainingMb
@@ -292,6 +293,9 @@ sealed class UiIntent {
         val directory: String? = null,
         /** Echo of the pick session; a result for an older session is dropped. */
         val pickSessionId: String? = null,
+        /** Part-1 geometry probed at inspect time; folder-dialog flows carry it too. */
+        val partitionStartLba: ULong? = null,
+        val partitionSectorCount: ULong? = null,
     ) : UiIntent()
     /** Only an explicit true may replace an existing file. */
     data class ConfirmWindowsIsoImport(val overwrite: Boolean) : UiIntent()
@@ -337,8 +341,14 @@ sealed class UiIntent {
     /** Add or remove one data-partition image from the pending XML selection. */
     data class ToggleWindowsImage(val path: String) : UiIntent()
     data object ClearWindowsSelection : UiIntent()
-    /** Select the existing XML template; it is never generated or rewritten. */
-    data class SelectWindowsTemplate(val path: String) : UiIntent()
+    /**
+     * Consume the already-confirmed shared Files pick for [FilesPickPurpose.WindowsTemplate].
+     * Takes no path: the reducer atomically reads and clears
+     * `filesPickSelections[WindowsTemplate]`, so forged intents can never inject an
+     * arbitrary path. The consumed selection is retained as [AppUiState.windowsTemplatePin]
+     * for lifetime revalidation. Phone imports keep [WindowsTemplateImported].
+     */
+    data object SelectWindowsTemplate : UiIntent()
     data object ClearWindowsTemplate : UiIntent()
     /** One explicit confirmation covers every selected image and the template. */
     data class RequestLinkWindowsImages(
@@ -581,8 +591,19 @@ sealed class UiIntent {
         val error: String? = null,
     ) : UiIntent()
 
-    /** Real copy finished; the imported template path is now selectable without another tap. */
-    data class WindowsTemplateImported(val path: String) : UiIntent()
+    /**
+     * Real phone copy (or generated file) finished; the host verified the copy on this
+     * attachment. Pin still revalidated against live state; a stale attachment or
+     * partition geometry refuses instead of reading another stick's bytes. Write
+     * errors surface via [UiEffect.OperationUpdated], never hidden here.
+     */
+    data class WindowsTemplateImported(
+        val path: String,
+        val identity: String,
+        val attachGeneration: Long,
+        val partitionStartLba: ULong,
+        val partitionSectorCount: ULong,
+    ) : UiIntent()
 
     /**
      * Persisted SAF tree for image+map folders and GPT copies. [usable] is false when the
@@ -1470,6 +1491,20 @@ object UiReducer {
                                     it.sectorCount == selection.sectorCount
                             }
                     }
+                // Every template carries a consumed pin — stick picks and phone/generated
+                // copies alike — revalidated against the live attachment and part-1 geometry.
+                val templatePinValid =
+                    keepVentoy &&
+                        state.windowsTemplatePin != null &&
+                        device != null &&
+                        state.windowsTemplatePin.identity == device.identity &&
+                        state.windowsTemplatePin.attachGeneration == device.attachGeneration &&
+                        partitions.any {
+                            it.id == "1" &&
+                                it.id == state.windowsTemplatePin.partitionId &&
+                                it.startLba == state.windowsTemplatePin.startLba &&
+                                it.sectorCount == state.windowsTemplatePin.sectorCount
+                        }
                 ReduceResult(
                     state.copy(
                         operation = state.operation?.takeIf { sameStick },
@@ -1639,7 +1674,7 @@ object UiReducer {
                         windowsSelectedImages =
                             if (keepVentoy) state.windowsSelectedImages else emptyList(),
                         windowsTemplatePath =
-                            if (keepVentoy) state.windowsTemplatePath else null,
+                            if (templatePinValid) state.windowsTemplatePath else null,
                         windowsImageLinks =
                             if (keepVentoy) state.windowsImageLinks else null,
                         windowsImageLinksGeneration =
@@ -1653,20 +1688,30 @@ object UiReducer {
                         pendingWindowsUnlink = null,
                         linkOverwriteCandidatePaths = emptyList(),
                         linkOverwriteCandidateTemplatePath = null,
+                        // A dropped stick pin must not keep reading another geometry's bytes:
+                        // disown the pending document/candidate reads via a generation bump.
+                        // Real write errors still surface via OperationUpdated, never here.
+                        windowsTemplatePin =
+                            if (templatePinValid) state.windowsTemplatePin else null,
                         autounattendState =
-                            if (keepVentoy) state.autounattendState else AutounattendState.Missing,
+                            if (templatePinValid || !keepVentoy) {
+                                if (keepVentoy) state.autounattendState else AutounattendState.Missing
+                            } else {
+                                AutounattendState.Missing
+                            },
                         autounattendBindings =
-                            if (keepVentoy) state.autounattendBindings else null,
+                            if (templatePinValid) state.autounattendBindings else null,
                         autounattendCandidates =
-                            if (keepVentoy) state.autounattendCandidates else null,
+                            if (templatePinValid) state.autounattendCandidates else null,
                         autounattendRequestGeneration =
-                            if (keepVentoy) {
-                                state.autounattendRequestGeneration
+                            if (templatePinValid || !keepVentoy) {
+                                if (keepVentoy) state.autounattendRequestGeneration
+                                else state.autounattendRequestGeneration + 1
                             } else {
                                 state.autounattendRequestGeneration + 1
                             },
                         autounattendLoadInFlight =
-                            if (keepVentoy) state.autounattendLoadInFlight else false,
+                            if (templatePinValid) state.autounattendLoadInFlight else false,
                         diskLayoutConfirmation = null,
                         pendingAutounattendGeneration = null,
                         ventoyGlobalSettings =
@@ -2772,10 +2817,17 @@ object UiReducer {
                         // A non-picker inspection must not land inside a live picker.
                         pick != null
                     } else {
+                        // A stale UI may carry an inspect probe taken after a real disk
+                        // change. The probe must fully agree with the original pick pin;
+                        // otherwise refuse before any proposal or write.
+                        val geometryMismatch =
+                            intent.partitionStartLba != pick?.startLba ||
+                                intent.partitionSectorCount != pick?.sectorCount
                         pick == null ||
                             pick.sessionId != intent.pickSessionId ||
                             pick.purpose != FilesPickPurpose.WindowsImage ||
                             !pick.matches(state) ||
+                            geometryMismatch ||
                             safePickPath(intent.directory ?: state.currentPath) !=
                             safePickPath(state.currentPath)
                     }
@@ -2822,9 +2874,13 @@ object UiReducer {
                                         "/ISO"
                                     },
                             templateMarkers = intent.templateMarkers,
-                            partitionStartLba = pick?.startLba,
-                            partitionSectorCount = pick?.sectorCount,
-                            pickSessionId = pick?.sessionId,
+                            // Pick-owned imports keep the original pick pin: the probe
+                            // above already proved agreement, and the host fences the
+                            // copy on the same values. Folder-dialog flows have no
+                            // pick, so the inspect-time probe is their pin.
+                            partitionStartLba = pick?.startLba ?: intent.partitionStartLba,
+                            partitionSectorCount = pick?.sectorCount ?: intent.partitionSectorCount,
+                            pickSessionId = intent.pickSessionId,
                         )
                     if (intent.exists) {
                         // No write until the user explicitly accepts replacement. Kept even
@@ -3084,47 +3140,75 @@ object UiReducer {
             UiIntent.ClearWindowsSelection ->
                 ReduceResult(state.copy(windowsSelectedImages = emptyList()))
 
-            is UiIntent.SelectWindowsTemplate -> {
+            UiIntent.SelectWindowsTemplate -> {
+                // Atomic consume: the only accepted provenance is the reducer-held confirmed
+                // pick. Intent fields cannot inject a path because there are none.
+                val picked = state.filesPickSelections[FilesPickPurpose.WindowsTemplate]
+                val normalized =
+                    try {
+                        picked?.takeIf { !it.isDirectory }?.let { normalizeVentoyFilePath(it.path) }
+                    } catch (_: IllegalArgumentException) {
+                        null
+                    }
+                val device = state.device
+                val livePartition =
+                    picked?.let { selection ->
+                        state.partitions.firstOrNull {
+                            it.id == selection.partitionId &&
+                                it.startLba == selection.startLba &&
+                                it.sectorCount == selection.sectorCount
+                        }
+                    }
+                val stalePin =
+                    picked == null ||
+                        picked.purpose != FilesPickPurpose.WindowsTemplate ||
+                        picked.isDirectory ||
+                        normalized == null ||
+                        device == null ||
+                        picked.identity != device.identity ||
+                        picked.attachGeneration != device.attachGeneration ||
+                        livePartition == null ||
+                        livePartition.id != "1" ||
+                        picked.partitionId != "1"
                 if (!state.actionsEnabled) {
                     ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                } else if (stalePin || normalized == null) {
+                    ReduceResult(
+                        state.copy(
+                            statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
+                        ),
+                    )
                 } else {
-                    val template =
-                        state.windowsIsoCandidates?.firstOrNull { it.path == intent.path }
-                    if (template == null) {
-                        ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
-                                    "Selected XML template is no longer listed; reload it",
-                                ),
+                    // Single-use token: clear the consumed entry in the same transition so a
+                    // replayed intent cannot re-select without a fresh explicit confirm.
+                    // Content is validated by the XML read (Autounattend.read/inspect); no
+                    // extension filter is applied.
+                    val generation = state.autounattendRequestGeneration + 1
+                    ReduceResult(
+                        state.copy(
+                            windowsTemplatePath = normalized,
+                            windowsTemplatePin = picked,
+                            autounattendState = AutounattendState.Missing,
+                            autounattendBindings = null,
+                            autounattendCandidates = null,
+                            autounattendRequestGeneration = generation,
+                            autounattendLoadInFlight = true,
+                            diskLayoutConfirmation = null,
+                            pendingAutounattendGeneration = null,
+                            filesPickSelections =
+                                state.filesPickSelections - FilesPickPurpose.WindowsTemplate,
+                        ),
+                        effects = listOf(
+                            UiEffect.LoadAutounattend(
+                                xmlName = normalized,
+                                requestGeneration = generation,
                             ),
-                        )
-                    } else {
-                        // Re-selecting the same path changes no LaunchedEffect key, so the reload
-                        // has to be driven by the intent itself.
-                        val generation = state.autounattendRequestGeneration + 1
-                        ReduceResult(
-                            state.copy(
-                                windowsTemplatePath = template.path,
-                                autounattendState = AutounattendState.Missing,
-                                autounattendBindings = null,
-                                autounattendCandidates = null,
-                                autounattendRequestGeneration = generation,
-                                autounattendLoadInFlight = true,
-                                diskLayoutConfirmation = null,
-                                pendingAutounattendGeneration = null,
+                            UiEffect.LoadAutounattendCandidates(
+                                xmlName = normalized,
+                                requestGeneration = generation,
                             ),
-                            effects = listOf(
-                                UiEffect.LoadAutounattend(
-                                    xmlName = template.path,
-                                    requestGeneration = generation,
-                                ),
-                                UiEffect.LoadAutounattendCandidates(
-                                    xmlName = template.path,
-                                    requestGeneration = generation,
-                                ),
-                            ),
-                        )
-                    }
+                        ),
+                    )
                 }
             }
 
@@ -3132,6 +3216,7 @@ object UiReducer {
                 ReduceResult(
                     state.copy(
                         windowsTemplatePath = null,
+                        windowsTemplatePin = null,
                         autounattendState = AutounattendState.Missing,
                         autounattendBindings = null,
                         autounattendCandidates = null,
@@ -3143,31 +3228,74 @@ object UiReducer {
                 )
 
             is UiIntent.WindowsTemplateImported -> {
-                // The import overwrote the file this section was showing; nothing changes the
-                // LaunchedEffect key, so the fresh bytes are read here.
-                val generation = state.autounattendRequestGeneration + 1
-                ReduceResult(
-                    state.copy(
-                        windowsTemplatePath = intent.path,
-                        autounattendState = AutounattendState.Missing,
-                        autounattendBindings = null,
-                        autounattendCandidates = null,
-                        autounattendRequestGeneration = generation,
-                        autounattendLoadInFlight = true,
-                        diskLayoutConfirmation = null,
-                        pendingAutounattendGeneration = null,
-                    ),
-                    effects = listOf(
-                        UiEffect.LoadAutounattend(
-                            xmlName = intent.path,
-                            requestGeneration = generation,
+                // Phone copy (or generated file) landed via host-verified write. Pin is still
+                // revalidated: stale attachment or partition-1 geometry refuses, and write
+                // errors stay on OperationUpdated — this branch never masks them.
+                val normalized =
+                    try {
+                        normalizeVentoyFilePath(intent.path)
+                    } catch (_: IllegalArgumentException) {
+                        null
+                    }
+                val device = state.device
+                val livePartition1 =
+                    state.partitions.firstOrNull { it.id == "1" }
+                val stalePin =
+                    normalized == null ||
+                        device == null ||
+                        intent.identity != device.identity ||
+                        intent.attachGeneration != device.attachGeneration ||
+                        livePartition1 == null ||
+                        intent.partitionStartLba != livePartition1.startLba ||
+                        intent.partitionSectorCount != livePartition1.sectorCount
+                if (!state.actionsEnabled) {
+                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                } else if (stalePin || normalized == null) {
+                    ReduceResult(
+                        state.copy(
+                            statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
                         ),
-                        UiEffect.LoadAutounattendCandidates(
-                            xmlName = intent.path,
-                            requestGeneration = generation,
+                    )
+                } else {
+                    val generation = state.autounattendRequestGeneration + 1
+                    // Provenance for every template: retention revalidates this pin against
+                    // live attachment + part-1 geometry on every DeviceChanged.
+                    val pin = FilesPickSelection(
+                        purpose = FilesPickPurpose.WindowsTemplate,
+                        path = normalized,
+                        name = normalized.substringAfterLast('/'),
+                        sizeBytes = 0uL,
+                        isDirectory = false,
+                        identity = intent.identity,
+                        attachGeneration = intent.attachGeneration,
+                        partitionId = "1",
+                        startLba = intent.partitionStartLba,
+                        sectorCount = intent.partitionSectorCount,
+                    )
+                    ReduceResult(
+                        state.copy(
+                            windowsTemplatePath = normalized,
+                            windowsTemplatePin = pin,
+                            autounattendState = AutounattendState.Missing,
+                            autounattendBindings = null,
+                            autounattendCandidates = null,
+                            autounattendRequestGeneration = generation,
+                            autounattendLoadInFlight = true,
+                            diskLayoutConfirmation = null,
+                            pendingAutounattendGeneration = null,
                         ),
-                    ),
-                )
+                        effects = listOf(
+                            UiEffect.LoadAutounattend(
+                                xmlName = normalized,
+                                requestGeneration = generation,
+                            ),
+                            UiEffect.LoadAutounattendCandidates(
+                                xmlName = normalized,
+                                requestGeneration = generation,
+                            ),
+                        ),
+                    )
+                }
             }
 
             is UiIntent.RequestLinkWindowsImages -> {
