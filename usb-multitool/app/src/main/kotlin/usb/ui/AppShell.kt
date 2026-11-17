@@ -1385,7 +1385,7 @@ internal fun StatusLogPanel(
                                 .semantics { contentDescription = detailsDescription },
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_info_duotone),
+                                painter = painterResource(R.drawable.ic_info_outlined),
                                 contentDescription = null,
                                 tint = content,
                                 modifier = Modifier.size(18.dp),
