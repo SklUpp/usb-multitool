@@ -469,6 +469,32 @@ class FilesPickUiTest {
     }
 
     @Test
+    fun backCancelKeepsPickerWhileCopyRuns() {
+        val running =
+            UiReducer.reduce(
+                begun(),
+                UiIntent.OperationBegan(
+                    OperationProgress(
+                        state = OperationState.Running,
+                        title = OperationTitle.ImportTarget("win11.iso"),
+                        token = OperationTokenGenerator.next(),
+                        bytesDone = 1L,
+                        bytesTotal = 10L,
+                    ),
+                ),
+            ).state
+        // Shell Back routes here via CancelFilesPick; the reducer must keep the
+        // modal session instead of returning to the calling tab mid-copy.
+        val result = UiReducer.reduce(running, UiIntent.CancelFilesPick)
+        assertNotNull(result.state.filesPickMode)
+        assertEquals(ShellTab.Files, result.state.tab)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.WaitForOperation),
+            result.state.statusMessage,
+        )
+    }
+
+    @Test
     fun cancelledPickerDisownsALateSafResult() {
         val cancelled = UiReducer.reduce(begun(), UiIntent.CancelFilesPick).state
         val late =

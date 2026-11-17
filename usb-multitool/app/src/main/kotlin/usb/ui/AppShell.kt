@@ -176,6 +176,11 @@ private fun usbContentAvailable(presence: DevicePresence): Boolean =
  *   a gesture starting in a system back edge is ignored. The full log screen is an opaque
  *   layer above it and the system bottom inset is guarded while it shows; the covered tab
  *   is marked invisible to accessibility but keeps its state;
+ * While a Files pick session owns the screen the header, navigation bar and log
+ * layer hide; the tab swipe stays off and status stays non-interactive. The
+ * existing picker branch is still the tab content with its own continue/back
+ * controls, and Back routes to the reducer cancel, which refuses while a copy
+ * runs or a confirmation is open.
  * - bottom: one status surface that folds to a thin title strip attached to the navigation
  *   bar (fold only hides it visually, never clears the operation) and, independently, an
  *   inline journal list; plus the navigation bar.
@@ -230,11 +235,18 @@ fun AppShell(
         var panels by rememberSaveable(stateSaver = ShellPanelStateSaver) {
             mutableStateOf(ShellPanelState())
         }
+        val pickOpen = state.filesPickMode != null
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
-        BackHandler(enabled = panels.journalScreenOpen) {
+        // Modal pick task owns Back: cancel routes through the reducer, and Back stays
+        // inert while a copy runs or a confirmation is open (the reducer keeps the
+        // picker and reports why). Journal/Settings handlers are disabled while pickOpen.
+        BackHandler(enabled = pickOpen) {
+            onIntent(UiIntent.CancelFilesPick)
+        }
+        BackHandler(enabled = panels.journalScreenOpen && !pickOpen) {
             panels = panels.closeJournalScreen()
         }
-        BackHandler(enabled = state.tab == ShellTab.Settings) {
+        BackHandler(enabled = !pickOpen && state.tab == ShellTab.Settings) {
             onIntent(
                 UiIntent.SelectTab(
                     ShellTabPersistence.decode(settingsReturnTab) ?: ShellTab.Files,
@@ -269,14 +281,18 @@ fun AppShell(
                 completedHapticToken = token
             }
         }
-        LaunchedEffect(panels.journalScreenOpen) {
-            if (panels.journalScreenOpen) {
+        LaunchedEffect(panels.journalScreenOpen, pickOpen) {
+            if (panels.journalScreenOpen && !pickOpen) {
                 // Clear focus before fencing the covered group, then focus the journal layer.
                 focusManager.clearFocus(force = true)
                 logScreenFocus.requestFocusIfAttached("log screen")
-            } else if (restoreLogFocus) {
+            } else if (restoreLogFocus && !pickOpen) {
                 restoreLogFocus = false
                 logButtonFocus.requestFocusIfAttached("log open button")
+            } else if (pickOpen) {
+                // Journal is hidden beneath the modal picker: drop any focus stuck
+                // on the detached layer so keyboard traversal starts in the picker.
+                focusManager.clearFocus(force = true)
             }
         }
         LaunchedEffect(state.operation?.token, state.operation?.state) {
@@ -299,13 +315,34 @@ fun AppShell(
             contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 Column(
-                    modifier = if (panels.journalScreenOpen) {
-                        Modifier.windowInsetsPadding(
-                            WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+                    modifier = Modifier
+                        .then(
+                            if (panels.journalScreenOpen) {
+                                Modifier.windowInsetsPadding(
+                                    WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+                                )
+                            } else {
+                                Modifier
+                            },
                         )
-                    } else {
-                        Modifier
-                    },
+                        .focusProperties {
+                            // Keyboard traversal must not enter background status
+                            // while the pick task owns the screen.
+                            if (pickOpen) {
+                                onEnter = { cancelFocusChange() }
+                            }
+                        }
+                        .then(
+                            if (pickOpen) {
+                                // Background status is visible but inert: remove the whole
+                                // bar from the accessibility tree while the picker owns input.
+                                Modifier.semantics(mergeDescendants = true) {
+                                    hideFromAccessibility()
+                                }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     // Expanded status participates in layout; collapsed status is an overlay below.
                     AnimatedVisibility(
@@ -319,10 +356,10 @@ fun AppShell(
                             panels = panels,
                             onCollapseStatus = { panels = panels.collapseStatus() },
                             onExpandStatus = { panels = panels.expandStatus() },
-                            interactive = statusVisible && !panels.statusCollapsed,
+                            interactive = statusVisible && !panels.statusCollapsed && !pickOpen,
                         )
                     }
-                    if (!panels.journalScreenOpen) {
+                    if (!panels.journalScreenOpen && !pickOpen) {
                         NavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             tonalElevation = 0.dp,
@@ -390,7 +427,7 @@ fun AppShell(
                         ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (state.tab != ShellTab.Settings) {
+                    if (state.tab != ShellTab.Settings && !pickOpen) {
                         DeviceHeader(
                             state = state,
                             logButtonFocus = logButtonFocus,
@@ -413,25 +450,33 @@ fun AppShell(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .pointerInput(
-                                state.tab,
-                                swipeThreshold,
-                                layoutDirection,
-                                leftBackEdge,
-                                rightBackEdge,
-                            ) {
-                                detectShellSwipe(
-                                    thresholdPx = swipeThreshold,
-                                    isRtl = layoutDirection == LayoutDirection.Rtl,
-                                    leftBackEdgePx = leftBackEdge,
-                                    rightBackEdgePx = rightBackEdge,
-                                ) { direction ->
-                                    val target = ShellSwipePolicy.target(state.tab, direction)
-                                    if (target != null && target != state.tab) {
-                                        onIntent(UiIntent.SelectTab(target))
+                            .then(
+                                if (pickOpen) {
+                                    // Modal pick task owns its gestures; the tab swipe stays
+                                    // off so a sideways drag can never cancel the session.
+                                    Modifier
+                                } else {
+                                    Modifier.pointerInput(
+                                        state.tab,
+                                        swipeThreshold,
+                                        layoutDirection,
+                                        leftBackEdge,
+                                        rightBackEdge,
+                                    ) {
+                                        detectShellSwipe(
+                                            thresholdPx = swipeThreshold,
+                                            isRtl = layoutDirection == LayoutDirection.Rtl,
+                                            leftBackEdgePx = leftBackEdge,
+                                            rightBackEdgePx = rightBackEdge,
+                                        ) { direction ->
+                                            val target = ShellSwipePolicy.target(state.tab, direction)
+                                            if (target != null && target != state.tab) {
+                                                onIntent(UiIntent.SelectTab(target))
+                                            }
+                                        }
                                     }
-                                }
-                            },
+                                },
+                            ),
                     ) {
                         AnimatedContent(
                             targetState = state.tab,
@@ -453,6 +498,16 @@ fun AppShell(
                             },
                             label = "tab",
                         ) { target ->
+                            // P2: BeginFilesPick flips tab to Files while the old tab fades
+                            // out. The outgoing tab is not composed at all while pickOpen:
+                            // no pointer, focus, semantics, gestures, or already-running
+                            // handlers can leak. The incoming Files picker stays interactive.
+                            // AnimatedContent still animates: outgoing has no content, so
+                            // only the picker fades/scales in.
+                            if (pickOpen && target != ShellTab.Files) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                }
+                            } else {
                             // Nested presence transition: tab switches fade/scale above;
                             // USB attach/detach fades the empty state within the same tab.
                             val gated = target in listOf(ShellTab.Files, ShellTab.Partitions)
@@ -541,8 +596,9 @@ fun AppShell(
                 }
                 }
                 }
+                }
 
-                if (panels.journalScreenOpen) {
+                if (panels.journalScreenOpen && !pickOpen) {
                     // Opaque layer, not a replacement: it covers the tab, swallows taps
                     // that miss its own controls so nothing underneath reacts, and Back
                     // closes it. Compose keeps the tab (and its drafts) alive below.
@@ -567,10 +623,25 @@ fun AppShell(
                     }
                 }
                 AnimatedVisibility(
-                    visible = panels.statusCollapsed && statusVisible,
+                    visible = panels.statusCollapsed && statusVisible && !pickOpen,
                     enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(200)),
                     exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(100)),
-                    modifier = Modifier.align(Alignment.BottomEnd),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .focusProperties {
+                            if (pickOpen) {
+                                onEnter = { cancelFocusChange() }
+                            }
+                        }
+                        .then(
+                            if (pickOpen) {
+                                Modifier.semantics(mergeDescendants = true) {
+                                    hideFromAccessibility()
+                                }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     StatusLogPanel(
                         state = state,
@@ -578,7 +649,7 @@ fun AppShell(
                         panels = panels,
                         onCollapseStatus = { panels = panels.collapseStatus() },
                         onExpandStatus = { panels = panels.expandStatus() },
-                        interactive = statusVisible && panels.statusCollapsed,
+                        interactive = statusVisible && panels.statusCollapsed && !pickOpen,
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
@@ -1276,7 +1347,7 @@ internal fun StatusLogPanel(
                         Column(
                             modifier = Modifier
                                 .weight(1f)
-                                .verticalScroll(rememberScrollState()),
+                                .verticalScroll(rememberScrollState(), enabled = interactive),
                             verticalArrangement = Arrangement.Center,
                         ) {
                             Text(
@@ -1318,6 +1389,7 @@ internal fun StatusLogPanel(
                         }
                         IconButton(
                             onClick = { showDetailsDialog = true },
+                            enabled = interactive,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics { contentDescription = detailsDescription },
@@ -1331,6 +1403,7 @@ internal fun StatusLogPanel(
                         }
                         IconButton(
                             onClick = onCollapseStatus,
+                            enabled = interactive,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics { contentDescription = statusDescription },
@@ -1366,7 +1439,7 @@ internal fun StatusLogPanel(
             }
         }
     }
-    if (showDetailsDialog) {
+    if (showDetailsDialog && interactive) {
         val context = LocalContext.current
         val fullDetailsText = buildList {
             add(title)
@@ -1436,7 +1509,7 @@ internal fun StatusLogPanel(
             },
         )
     }
-    cancelRequest?.let { request ->
+    cancelRequest?.takeIf { interactive }?.let { request ->
         AlertDialog(
             onDismissRequest = { cancelRequest = null },
             title = { Text(stringResource(R.string.cancel_operation_title)) },
