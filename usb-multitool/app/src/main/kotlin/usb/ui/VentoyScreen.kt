@@ -6,7 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -53,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isFinite
 import usb.multitool.R
 import usb.ventoy.FolderReadProblem
 
@@ -145,107 +148,131 @@ fun VentoyScreen(
         onIntent(UiIntent.CheckVentoyUpstream)
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (usbGone) {
-            UsbEmptyState(
-                presence = state.presence,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            )
-        }
-        SectionCard(
-            title = stringResource(R.string.ventoy_section_title),
-            subtitle = stringResource(R.string.ventoy_version_subtitle),
-            titleColor = MaterialTheme.colorScheme.onSurface,
-            trailing = {
-                InfoHelpButton(
-                    infoTitle = stringResource(R.string.ventoy_help_title),
-                    infoText = stringResource(R.string.ventoy_help_text) +
-                        "\n\n" + stringResource(R.string.ventoy_help_details),
-                )
-            },
+    val scrollState = rememberScrollState()
+    // A detach inserts the empty state above the cards, so a remembered offset would leave
+    // the message off-screen. Only the presence change rewinds; later user scrolls and open
+    // dialogs/editors are untouched.
+    LaunchedEffect(usbGone) {
+        if (usbGone) scrollState.scrollTo(0)
+    }
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // One scroll container: a short viewport or a large font scale never clips the
+        // empty state, and every card stays reachable by scrolling.
+        val viewportHeight = if (maxHeight.isFinite) maxHeight else 0.dp
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            VentoyVersionRow(state = state, onIntent = onIntent)
-            if (!state.actionsEnabled) {
-                EmptyHint(UiReducer.presenceMessage(state.presence).localized())
-            }
-            if (!state.ventoyInstallAvailable) {
-                Text(
-                    text = stringResource(R.string.msg_ventoy_store_unavailable),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            if (!usbGone) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+            if (usbGone) {
+                // Centered in the visible viewport. All cards stay mounted below, so an
+                // open editor or dialog keeps its composition and unsaved drafts.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = viewportHeight),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    OutlinedButton(
-                        onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
-                        enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
-                            !state.ventoyDownloadInFlight &&
-                            (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                    ) {
-                        Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
-                    }
-                    Button(
-                        onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
-                        enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
-                            !state.ventoyDownloadInFlight &&
-                            (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(
-                            text = ventoyUpdateLabel(comparison),
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                    UsbEmptyState(
+                        presence = state.presence,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
                 }
             }
-            state.ventoyDownloadError?.let { error ->
-                Text(
-                    text = stringResource(R.string.ventoy_download_failed, error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+            SectionCard(
+                title = stringResource(R.string.ventoy_section_title),
+                subtitle = stringResource(R.string.ventoy_version_subtitle),
+                titleColor = MaterialTheme.colorScheme.onSurface,
+                trailing = {
+                    InfoHelpButton(
+                        infoTitle = stringResource(R.string.ventoy_help_title),
+                        infoText = stringResource(R.string.ventoy_help_text) +
+                            "\n\n" + stringResource(R.string.ventoy_help_details),
+                    )
+                },
+            ) {
+                VentoyVersionRow(state = state, onIntent = onIntent)
+                // The centered empty state already names the missing device; only Busy
+                // and PermissionRequired still need the per-card hint.
+                if (!state.actionsEnabled && !usbGone) {
+                    EmptyHint(UiReducer.presenceMessage(state.presence).localized())
+                }
+                if (!state.ventoyInstallAvailable) {
+                    Text(
+                        text = stringResource(R.string.msg_ventoy_store_unavailable),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (!usbGone) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
+                            enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
+                                !state.ventoyDownloadInFlight &&
+                                (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                        ) {
+                            Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
+                        }
+                        Button(
+                            onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
+                            enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
+                                !state.ventoyDownloadInFlight &&
+                                (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = ventoyUpdateLabel(comparison),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+                state.ventoyDownloadError?.let { error ->
+                    Text(
+                        text = stringResource(R.string.ventoy_download_failed, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                state.upstreamVentoyError?.let { error ->
+                    Text(
+                        text = stringResource(R.string.ventoy_upstream_check_failed, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
-            state.upstreamVentoyError?.let { error ->
-                Text(
-                    text = stringResource(R.string.ventoy_upstream_check_failed, error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+
+            GlobalSettingsCard(
+                state = state,
+                onIntent = onIntent,
+                onPickVentoySettingsFile = onPickVentoySettingsFile,
+            )
+
+            AutounattendSection(
+                state = state,
+                onIntent = onIntent,
+                onPickVentoySettingsFile = onPickVentoySettingsFile,
+                onPickWindowsFile = onPickWindowsFile,
+                leadingContent = {
+                    WindowsImageBlock(
+                        state = state,
+                        onIntent = onIntent,
+                    )
+                },
+            )
         }
-
-        GlobalSettingsCard(
-            state = state,
-            onIntent = onIntent,
-            onPickVentoySettingsFile = onPickVentoySettingsFile,
-        )
-
-        AutounattendSection(
-            state = state,
-            onIntent = onIntent,
-            onPickVentoySettingsFile = onPickVentoySettingsFile,
-            onPickWindowsFile = onPickWindowsFile,
-            leadingContent = {
-                WindowsImageBlock(
-                    state = state,
-                    onIntent = onIntent,
-                )
-            },
-        )
     }
 }
 

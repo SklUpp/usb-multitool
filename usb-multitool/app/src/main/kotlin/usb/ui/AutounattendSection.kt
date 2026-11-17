@@ -844,14 +844,18 @@ internal fun GlobalSettingsCard(
         when (settings) {
             null -> {
                 // null = not read yet, or nothing is attached to read from. No in-flight flag
-                // exists for this catalog, so never claim that a read is in progress.
-                EmptyHint(
-                    if (state.presence == DevicePresence.Ready) {
-                        stringResource(R.string.settings_not_loaded)
-                    } else {
-                        UiReducer.presenceMessage(state.presence).localized()
-                    },
-                )
+                // exists for this catalog, so never claim that a read is in progress. The
+                // detached card is normally hidden; if it stays mounted for live work, the
+                // centered empty state already names the missing device.
+                if (!settingsGone) {
+                    EmptyHint(
+                        if (state.presence == DevicePresence.Ready) {
+                            stringResource(R.string.settings_not_loaded)
+                        } else {
+                            UiReducer.presenceMessage(state.presence).localized()
+                        },
+                    )
+                }
                 if (!settingsGone) {
                     TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
                         Text(stringResource(R.string.settings_retry))
