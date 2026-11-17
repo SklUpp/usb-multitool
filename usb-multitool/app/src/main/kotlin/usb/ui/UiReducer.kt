@@ -747,6 +747,23 @@ sealed class UiIntent {
     /** Append a timestamped line to the bounded operation log. */
     data class AppendLog(val line: String) : UiIntent()
 
+    /** Explicit app-scoped eject request from the overflow menu; host fences it. */
+    data object RequestEject : UiIntent()
+    /**
+     * Host eject verdict for [ejectGeneration]. Accepted only while the same attachment
+     * is live and [ejectGeneration] is still newest; anything else is stale and dropped.
+     */
+    data class EjectResulted(
+        val ejectGeneration: Long,
+        val identity: String?,
+        val attachGeneration: Long,
+        val succeeded: Boolean,
+        val busy: Boolean = false,
+        val message: String? = null,
+    ) : UiIntent()
+    /** Explicit rescan after a successful eject; never automatic and never after failure. */
+    data object RequestEjectRescan : UiIntent()
+
     /**
      * Drop the in-app log immediately, without confirmation and regardless of a running
      * operation. New lines may still arrive; Android logcat is not touched.
@@ -801,6 +818,11 @@ sealed interface UiEffect {
         val startLba: ULong,
         val sectorCount: ULong,
     ) : UiEffect
+
+    /** Host-run app-scoped eject: sync+close owned resources, then release. */
+    data class EjectDevice(val ejectGeneration: Long) : UiEffect
+    /** Host-run explicit rescan after a successful eject; never emitted automatically. */
+    data class RescanAfterEject(val ejectGeneration: Long) : UiEffect
 
     data class CreateFolder(val path: String, val name: String) : UiEffect
 
@@ -1374,8 +1396,24 @@ object UiReducer {
                         state.operation?.state != OperationState.Running &&
                         state.operation?.state != OperationState.Queued &&
                         confirmationAfter == null
+                // Successful eject survives only on the same attachment it was pinned
+                // to. A new generation, detach or Absent clears it; Ready on the same
+                // attachment never reopens automatically — only explicit rescan does.
+                val ejectStillPinned =
+                    state.ejected &&
+                        state.ejectIdentity != null &&
+                        state.ejectAttachGeneration != null &&
+                        incoming != null &&
+                        incoming.identity == state.ejectIdentity &&
+                        incoming.attachGeneration == state.ejectAttachGeneration &&
+                        (intent.presence == DevicePresence.Ready ||
+                            intent.presence == DevicePresence.Busy ||
+                            intent.presence == DevicePresence.PermissionRequired)
                 // Only an open Files tab mounts; elsewhere the next tab entry re-lists.
-                val loadFilesNow = reloadFiles && state.tab == ShellTab.Files && actionsAfter
+                // A successful eject suppresses the automatic reload: the stick stays
+                // released until an explicit rescan or a new attachment generation.
+                val loadFilesNow =
+                    reloadFiles && !ejectStillPinned && state.tab == ShellTab.Files && actionsAfter
                 // Probe keeps the request id so a late list still binds; Ready/detach bump.
                 val filesGeneration =
                     if (probingRetain) {
@@ -1510,22 +1548,28 @@ object UiReducer {
                         filesPickSelections = retainedSelections,
                         // Probe keeps the last listing; Ready clears until FilesListed lands.
                         files = when {
+                            ejectStillPinned -> emptyList()
                             reloadFiles -> emptyList()
                             probingRetain -> state.files
                             else -> emptyList()
                         },
-                        filesError = if (probingRetain) state.filesError else null,
+                        filesError = if (probingRetain && !ejectStillPinned) state.filesError else null,
                         pendingFilesBatchConflict =
-                            if (keepVentoy && !pickLost) state.pendingFilesBatchConflict else null,
+                            if (keepVentoy && !pickLost && !ejectStillPinned) state.pendingFilesBatchConflict else null,
                         filesListGeneration = filesGeneration,
                         filesListingState = when {
+                            ejectStillPinned -> FilesListingState.Stale
                             loadFilesNow -> FilesListingState.Loading
                             reloadFiles -> FilesListingState.Stale
                             probingRetain -> state.filesListingState
                             else -> FilesListingState.Stale
                         },
                         // A refresh may describe another attachment or geometry.
-                        filesystemUsage = if (probingRetain) state.filesystemUsage else null,
+                        filesystemUsage = if (probingRetain && !ejectStillPinned) state.filesystemUsage else null,
+                        ejected = ejectStillPinned,
+                        // Same-attachment re-probe must not drop a running eject verdict:
+                        // the host completion (EjectResulted) clears the flight, not the probe.
+                        ejectInFlight = state.ejectInFlight && (ejectStillPinned || sameStick),
                         pendingConfirmation = confirmationAfter,
                         rawSourceCandidates =
                             if (probingRetain) state.rawSourceCandidates else null,
@@ -3948,6 +3992,10 @@ object UiReducer {
             is UiIntent.SetRescueMap ->
                 RescueBackupTransitions.setRescueMap(state, intent)
 
+            UiIntent.RequestEject -> requestEject(state)
+            is UiIntent.EjectResulted -> ejectResulted(state, intent)
+            UiIntent.RequestEjectRescan -> requestEjectRescan(state)
+
             is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
 
             is UiIntent.CancelOperation -> OperationTransitions.cancel(state, intent.token)
@@ -4470,6 +4518,110 @@ object UiReducer {
                     deferredImportFolderPick = null,
                 ),
             )
+        }
+    }
+
+    private fun requestEject(state: AppUiState): ReduceResult {
+        val device = state.device
+        when {
+            state.ejectInFlight || state.ejected ->
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.EjectRescanRequired)))
+            state.presence != DevicePresence.Ready || device == null ->
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDevice)))
+            state.isRunning || state.operation?.state == OperationState.Queued ||
+                state.pendingConfirmation != null || state.isoImportUsbInFlight != null ->
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)))
+            else -> {
+                val generation = state.ejectGeneration + 1L
+                return ReduceResult(
+                    state.copy(
+                        ejectInFlight = true,
+                        ejectGeneration = generation,
+                        ejectIdentity = device.identity,
+                        ejectAttachGeneration = device.attachGeneration,
+                        ejected = false,
+                        statusMessage = UiMessage.Key(UiMessageKey.EjectStarted),
+                    ),
+                    effects = listOf(UiEffect.EjectDevice(generation)),
+                )
+            }
+        }
+    }
+
+    private fun ejectResulted(state: AppUiState, intent: UiIntent.EjectResulted): ReduceResult {
+        if (intent.ejectGeneration != state.ejectGeneration || !state.ejectInFlight) {
+            return state
+                .let(::ReduceResult)
+                .let { result -> releaseDeferredFilesListing(result, allowRelease = true) }
+        }
+        val live = state.device
+        val pinned =
+            live != null &&
+                state.ejectIdentity != null &&
+                live.identity == state.ejectIdentity &&
+                state.ejectAttachGeneration != null &&
+                live.attachGeneration == state.ejectAttachGeneration &&
+                live.identity == intent.identity &&
+                live.attachGeneration == intent.attachGeneration
+        if (!pinned) {
+            return ReduceResult(
+                state.copy(
+                    ejectInFlight = false,
+                    statusMessage = UiMessage.Key(UiMessageKey.EjectStale),
+                ),
+            )
+        } else if (intent.succeeded) {
+            return ReduceResult(
+                state.copy(
+                    ejectInFlight = false,
+                    ejected = true,
+                    files = emptyList(),
+                    filesError = null,
+                    filesListingState = FilesListingState.Stale,
+                    filesystemUsage = null,
+                    statusMessage = UiMessage.Key(
+                        UiMessageKey.EjectSucceeded,
+                        listOf(live.label),
+                    ),
+                ),
+            )
+        } else if (intent.busy) {
+            return ReduceResult(
+                state.copy(
+                    ejectInFlight = false,
+                    statusMessage = UiMessage.Key(UiMessageKey.EjectBusy),
+                ),
+            )
+        } else {
+            return ReduceResult(
+                state.copy(
+                    ejectInFlight = false,
+                    statusMessage = intent.message?.let(UiMessage::Raw)
+                        ?: UiMessage.Key(UiMessageKey.VolumeSyncUnconfirmed, listOf("eject")),
+                ),
+            )
+        }
+    }
+
+    private fun requestEjectRescan(state: AppUiState): ReduceResult {
+        when {
+            state.ejectInFlight ->
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)))
+            !state.ejected ->
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.EjectRescanRequired)))
+            state.presence != DevicePresence.Ready || state.device == null ->
+                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDevice)))
+            else ->
+                return ReduceResult(
+                    state.copy(
+                        ejected = false,
+                        ejectIdentity = null,
+                        ejectAttachGeneration = null,
+                        filesListingState = FilesListingState.Stale,
+                        filesystemUsage = null,
+                    ),
+                    effects = listOf(UiEffect.RescanAfterEject(state.ejectGeneration)),
+                )
         }
     }
 

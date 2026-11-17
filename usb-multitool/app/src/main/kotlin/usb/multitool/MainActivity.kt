@@ -1,7 +1,9 @@
 package usb.multitool
+
 import usb.files.AttachmentChangedException
 import usb.files.AttachmentPin
 import usb.files.AttachmentState
+import usb.files.CloseEpochResult
 import usb.files.FilesVolumeSession
 import usb.files.FilesOperationPolicy
 import usb.files.FilesOperationRunner
@@ -1721,6 +1723,9 @@ class MainViewModel(
                     effect.usageGeneration,
                 )
             }
+            is UiEffect.EjectDevice -> runEject(effect.ejectGeneration)
+            is UiEffect.RescanAfterEject -> rescanAfterEject(effect.ejectGeneration)
+
             is UiEffect.CreateFolder -> {
                 createFolder(effect.path, effect.name)
             }
@@ -2774,6 +2779,135 @@ class MainViewModel(
         if (fence <= 0L) return
         val result = filesSession.withLock { filesSession.closeIfEpochAtMostLocked(fence) }
         trace.log("volume.close.epoch", "fence" to fence, "result" to result)
+    }
+
+    /**
+     * App-scoped eject on IO: pin attachment+generation, run the session eject under
+     * the files lock, fence stale completions, never auto-reopen. Mounted path uses
+     * the explicit sync/close order; unmounted path opens the pinned raw disk only to
+     * sync/close it. A foreign claim owner yields busy without touching the device.
+     */
+    private fun runEject(ejectGeneration: Long) {
+        val live = attachment.snapshot()
+        val pin = currentAttachmentPin()
+        val liveDevice = state.device
+        val pinIdentity = liveDevice?.identity
+        val pinGeneration = live.generation
+        if (pin == null || liveDevice == null || pinIdentity == null) {
+            onIntent(
+                UiIntent.EjectResulted(
+                    ejectGeneration = ejectGeneration,
+                    identity = pinIdentity,
+                    attachGeneration = pinGeneration,
+                    succeeded = false,
+                    busy = false,
+                    message = null,
+                ),
+            )
+            return
+        }
+        if (state.isRunning || state.operation?.state == OperationState.Queued ||
+            DiskController.get().executor.hasOutstandingWork() || activeHandles.isNotEmpty()
+        ) {
+            onIntent(
+                UiIntent.EjectResulted(
+                    ejectGeneration = ejectGeneration,
+                    identity = pinIdentity,
+                    attachGeneration = pinGeneration,
+                    succeeded = false,
+                    busy = true,
+                ),
+            )
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            val result: CloseEpochResult = filesSession.withLock {
+                filesSession.ejectLocked(
+                    pin = pin,
+                    openEjectedDisk = { lease -> usbOpenBoundary.openEjectedDisk(lease, pin) },
+                    releaseEjectedLease = { lease -> lease.confirmHigherLevelClose() },
+                )
+            }
+            trace.log("volume.eject", "result" to result, "gen" to pinGeneration)
+            withContext(Dispatchers.Main.immediate) {
+                if (!attachmentIs(pinGeneration, live.device)) {
+                    // Stale completion for a detached/swapped stick: never attribute
+                    // the old eject verdict to the new device. A confirmed failure
+                    // still surfaces its cause (claim stays latched fail-closed);
+                    // busy/stale stays a rescan prompt with nothing touched.
+                    if (result is CloseEpochResult.ClosedFailed) {
+                        onIntent(UiIntent.Status(UiMessage.Raw(
+                            result.error.message ?: result.error.javaClass.simpleName,
+                        )))
+                    }
+                    onIntent(
+                        UiIntent.EjectResulted(
+                            ejectGeneration = ejectGeneration,
+                            identity = pinIdentity,
+                            attachGeneration = pinGeneration,
+                            succeeded = false,
+                        ),
+                    )
+                    return@withContext
+                }
+                when (result) {
+                    is CloseEpochResult.ClosedOk ->
+                        onIntent(
+                            UiIntent.EjectResulted(
+                                ejectGeneration = ejectGeneration,
+                                identity = pinIdentity,
+                                attachGeneration = pinGeneration,
+                                succeeded = true,
+                            ),
+                        )
+                    is CloseEpochResult.ClosedFailed ->
+                        onIntent(
+                            UiIntent.EjectResulted(
+                                ejectGeneration = ejectGeneration,
+                                identity = pinIdentity,
+                                attachGeneration = pinGeneration,
+                                succeeded = false,
+                                message = result.error.message ?: result.error.javaClass.simpleName,
+                            ),
+                        )
+                    is CloseEpochResult.NotOwned ->
+                        onIntent(
+                            UiIntent.EjectResulted(
+                                ejectGeneration = ejectGeneration,
+                                identity = pinIdentity,
+                                attachGeneration = pinGeneration,
+                                succeeded = false,
+                                busy = true,
+                            ),
+                        )
+                }
+            }
+        }
+    }
+    /**
+     * Explicit rescan after a successful eject: clear the session eject marker, then
+     * run a fresh probe through the normal attach path. Never called automatically;
+     * a latched unconfirmed close still refuses remount.
+     */
+    private fun rescanAfterEject(ejectGeneration: Long) {
+        val pin = currentAttachmentPin()
+        val live = attachment.snapshot()
+        val cleared = filesSession.withLock { filesSession.consumeEjectedForRescan(pin) }
+        if (!cleared) {
+            onIntent(UiIntent.EjectResulted(
+                ejectGeneration = ejectGeneration,
+                identity = state.device?.identity,
+                attachGeneration = live.generation,
+                succeeded = false,
+            ))
+            return
+        }
+        val device = live.device
+        if (device == null) {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.NoDevice)))
+            return
+        }
+        onUsbDeviceAttached(device, hasPermission = usbManager?.hasPermission(device) == true)
     }
 
     /** Drop the mounted volume (and its USB claim) without blocking user code. */

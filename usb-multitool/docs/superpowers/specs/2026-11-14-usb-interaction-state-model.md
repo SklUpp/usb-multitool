@@ -223,3 +223,26 @@ FAT/exFAT, NTFS и EXT сохраняют собственные проверк�
 ## Проверка поведения
 
 Проверять BOT structural/non-meaningful CSW, запрет неизвестного OUT replay, восстановление и сохранение первичной ошибки, отказ при `NOT READY`, корректность close/latch и `Partial`. Результаты и точный проверенный срез — в [состоянии проекта](2026-11-14-project-progress.md).
+
+## App-scoped eject (sync and close, no hardware guarantee)
+
+Overflow menu "Sync and close device" performs app-owned safe removal only. It
+never claims Android system unmount, other apps released the device, or hardware
+power was cut.
+
+- Gate: `Ready`, no running/queued operation, no pending confirmation, no live
+  phone-import USB guard. During IO the entry is disabled with
+  `msg_wait_for_operation` / busy text; eject never interrupts live IO.
+- Order: `volume.sync()` -> `volume.close()` -> `disk.sync()`
+  (`SYNCHRONIZE CACHE(10)`) -> `disk.close()`. Every required step runs even
+  after an earlier failure; first error is primary, later distinct errors are
+  suppressed. Unsupported SCSI sync fails the eject, never success.
+- No mounted volume: the pinned raw disk is opened only to `sync()`/`close()`;
+  a free USB claim alone is never reported as a cache flush.
+- Fencing: pinned `AttachmentPin` + attach generation; stale completion,
+  detach/replug mid-eject, foreign `UsbExclusiveClaim` owner, and a newer live
+  attachment all fail without touching the device (busy/stale, never success).
+- After success: session and UI mark the attachment released. No automatic
+  reopen, probe, or `Ready` reload. Only explicit "Rescan device" or a new
+  attach generation re-probes. Failed close latches unconfirmed and still
+  refuses remount/rescan until a new session/process.

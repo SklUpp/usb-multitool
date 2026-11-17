@@ -91,6 +91,130 @@ class UsbOpenBoundaryTest {
     }
 
     @Test
+    fun ejectOpenFencesPinWithoutSecondClaim() {
+        val dev = device(7)
+        val attachment = AttachmentState(1L, dev)
+        val session = session(attachment)
+        var opens = 0
+        val boundary = boundary(attachment, session) { _, _, lease ->
+            opens++
+            disk(lease, FakeBotSession())
+        }
+        val pin = AttachmentPin(1L, "7:/dev/bus/usb/001/007")
+        val lease = session.claim.tryAcquire()
+        try {
+            val disk = boundary.openEjectedDisk(lease, pin)
+            assertEquals(1, opens)
+            disk.close()
+        } finally {
+            lease.close()
+        }
+        assertFalse(session.claim.isHeld())
+    }
+
+    @Test
+    fun ejectOpenRejectsStalePinWithoutOpening() {
+        val dev = device(7)
+        val attachment = AttachmentState(1L, dev)
+        val session = session(attachment)
+        var opens = 0
+        val boundary = boundary(attachment, session) { _, _, lease ->
+            opens++
+            disk(lease, FakeBotSession())
+        }
+        val lease = session.claim.tryAcquire()
+        try {
+            try {
+                boundary.openEjectedDisk(lease, AttachmentPin(2L, "7:/dev/bus/usb/001/007"))
+                error("stale pin must fail")
+            } catch (_: AttachmentChangedException) {
+            }
+            assertEquals(0, opens)
+        } finally {
+            lease.close()
+        }
+    }
+
+    @Test
+    fun ejectOpenFencesReplugDuringOpen() {
+        val first = device(7)
+        val second = device(8)
+        val attachment = AttachmentState(1L, first)
+        val session = session(attachment)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val boundary = boundary(attachment, session) { _, _, lease ->
+            entered.countDown()
+            assertTrue(release.await(5, TimeUnit.SECONDS))
+            disk(lease, FakeBotSession())
+        }
+        val pin = AttachmentPin(1L, "7:/dev/bus/usb/001/007")
+        val lease = session.claim.tryAcquire()
+        val thrown = AtomicReference<Throwable?>()
+        val worker = Thread {
+            try {
+                boundary.openEjectedDisk(lease, pin).close()
+            } catch (t: Throwable) {
+                thrown.set(t)
+            } finally {
+                lease.close()
+            }
+        }
+        worker.start()
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        attachment.publish(second, bumpGeneration = true)
+        release.countDown()
+        worker.join(5000)
+        assertFalse(worker.isAlive)
+        assertTrue(thrown.get() is AttachmentChangedException)
+    }
+    @Test
+    fun ejectStaleCloseFailureSurfacesEjectStaleCloseException() {
+        val first = device(7)
+        val second = device(8)
+        val attachment = AttachmentState(1L, first)
+        val session = session(attachment)
+        val closeFailure = IOException("stale eject close failed")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val boundary = boundary(attachment, session) { _, _, lease ->
+            entered.countDown()
+            assertTrue(release.await(5, TimeUnit.SECONDS))
+            disk(
+                lease,
+                object : FakeBotSession() {
+                    override fun close() {
+                        super.close()
+                        throw closeFailure
+                    }
+                },
+            )
+        }
+        val pin = AttachmentPin(1L, "7:/dev/bus/usb/001/007")
+        val lease = session.claim.tryAcquire()
+        val thrown = AtomicReference<Throwable?>()
+        val worker = Thread {
+            try {
+                boundary.openEjectedDisk(lease, pin)
+                error("stale eject open must fail")
+            } catch (t: Throwable) {
+                thrown.set(t)
+            } finally {
+                lease.close()
+            }
+        }
+        worker.start()
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        attachment.publish(second, bumpGeneration = true)
+        release.countDown()
+        worker.join(5000)
+        assertFalse(worker.isAlive)
+        val stale = thrown.get() as EjectStaleCloseException
+        assertSame(closeFailure, stale.cause)
+    }
+
+
+    @Test
     fun postOpenFencePreservesCloseFailureAsSuppressedAndKeepsClaimHeld() {
         val first = device(7)
         val second = device(8)

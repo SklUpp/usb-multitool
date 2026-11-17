@@ -158,6 +158,13 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_cannot_open_usb, *args.toTypedArray())
             UiMessageKey.VolumeSyncUnconfirmed ->
                 stringResource(R.string.msg_volume_sync_unconfirmed, *args.toTypedArray())
+            UiMessageKey.EjectSucceeded ->
+                stringResource(R.string.msg_eject_succeeded, *args.toTypedArray())
+            UiMessageKey.EjectStarted -> stringResource(R.string.msg_eject_started)
+            UiMessageKey.EjectBusy -> stringResource(R.string.msg_eject_busy)
+            UiMessageKey.EjectStale -> stringResource(R.string.msg_eject_stale)
+            UiMessageKey.EjectRescanRequired ->
+                stringResource(R.string.msg_eject_rescan_required)
             UiMessageKey.DeleteStagingFailed ->
                 stringResource(R.string.msg_delete_staging_failed, *args.toTypedArray())
             UiMessageKey.InvalidEntryName -> stringResource(R.string.msg_invalid_entry_name)
@@ -293,6 +300,7 @@ fun OperationTitle.localized(): String =
         OperationTitle.RescueBackup -> stringResource(R.string.op_rescue_backup)
         OperationTitle.GptCriticalBackup -> stringResource(R.string.op_gpt_backup)
         OperationTitle.RefreshPartitions -> stringResource(R.string.op_refresh)
+        OperationTitle.EjectDevice -> stringResource(R.string.op_eject)
         OperationTitle.SelfTest -> stringResource(R.string.op_self_test)
         OperationTitle.SelfTestRunning -> stringResource(R.string.op_self_test_running)
         OperationTitle.Upload -> stringResource(R.string.op_upload)

@@ -87,6 +87,7 @@ internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
     }
     OperationTitle.ProbeDevice,
     OperationTitle.RefreshPartitions,
+    OperationTitle.EjectDevice,
     OperationTitle.ListDataPartitionFiles,
     -> null
 }

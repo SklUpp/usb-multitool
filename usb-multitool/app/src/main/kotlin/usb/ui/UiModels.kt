@@ -249,6 +249,16 @@ enum class UiMessageKey {
     UploadedFile,
     CannotOpenUsb,
     VolumeSyncUnconfirmed,
+    /** App-scoped eject: caches flushed and owned volume/disk closed for this app only. */
+    EjectSucceeded,
+    /** Eject started; completion arrives as EjectResulted. */
+    EjectStarted,
+    /** Owned volume/disk refused eject: another session holds the USB claim. */
+    EjectBusy,
+    /** Stale eject or mismatched attachment; nothing was touched. */
+    EjectStale,
+    /** Explicit rescan is the only way back after a successful eject. */
+    EjectRescanRequired,
     DeleteStagingFailed,
     InvalidEntryName,
     RenameSameName,
@@ -1072,6 +1082,10 @@ sealed interface OperationTitle {
         override val logLabel: String get() = "Unbind image from unattend XML"
     }
 
+    data object EjectDevice : OperationTitle {
+        override val logLabel: String get() = "Eject device"
+    }
+
     data class ListPath(val path: String) : OperationTitle {
         override val logLabel: String get() = "List $path"
     }
@@ -1282,6 +1296,24 @@ data class AppUiState(
     /** Full set of image paths whose link needs explicit overwrite. */
     val linkOverwriteCandidatePaths: List<String> = emptyList(),
     val linkOverwriteCandidateTemplatePath: String? = null,
+    /**
+     * True while an accepted eject runs on IO; blocks files/disk intents and the
+     * overflow eject entry. Cleared only by [UiIntent.EjectResulted].
+     */
+    val ejectInFlight: Boolean = false,
+    /** Monotonic id of the newest eject request; stale completions are dropped. */
+    val ejectGeneration: Long = 0L,
+    /** Attachment identity pinned at eject accept; completion must still match it. */
+    val ejectIdentity: String? = null,
+    /** Attach generation pinned at eject accept; completion must still match it. */
+    val ejectAttachGeneration: Long? = null,
+    /**
+     * Successful eject marker: owned caches flushed and closed for this attachment.
+     * No automatic reopen or probe may clear it; only explicit rescan or a new
+     * attachment generation does.
+     */
+    val ejected: Boolean = false,
+
     val statusMessage: UiMessage? = null,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
@@ -1576,6 +1608,8 @@ data class AppUiState(
     val actionsEnabled: Boolean
         get() =
             presence == DevicePresence.Ready &&
+                !ejectInFlight &&
+                !ejected &&
                 operation?.state != OperationState.Running &&
                 operation?.state != OperationState.Queued &&
                 pendingConfirmation == null

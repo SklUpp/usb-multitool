@@ -593,6 +593,14 @@
     <string name="op_rescue_backup">Резервная копия образа</string>
     <string name="op_gpt_backup">Критическая копия GPT</string>
     <string name="op_refresh">Обновление разделов</string>
+    <string name="op_eject">Извлечение устройства</string>
+    <string name="action_eject">Синхронизировать и закрыть</string>
+    <string name="action_rescan">Повторно опросить</string>
+    <string name="msg_eject_started">Синхронизация и закрытие томов…</string>
+    <string name="msg_eject_succeeded">Кэши приложения для %1$s сброшены, том закрыт. Это приложение освободило устройство; системные маунты Android и питание вне его контроля.</string>
+    <string name="msg_eject_busy">Устройство занято: USB удерживает другая сессия. Дождитесь конца операции и повторите.</string>
+    <string name="msg_eject_stale">Результат извлечения устарел; ничего не тронуто. Повторно опросите или переподключите.</string>
+    <string name="msg_eject_rescan_required">Устройство освобождено. Для работы повторно опросите или переподключите.</string>
     <string name="op_self_test">Самотест</string>
     <string name="op_self_test_running">Самотест: выполняется…</string>
     <string name="op_upload">Загрузка</string>

@@ -1578,6 +1578,248 @@ class FilesVolumeSessionTest {
         }
     }
 
+    @Test
+    fun ejectMountedFlushesInOrderAndBlocksReuseUntilRescan() {
+        val events = mutableListOf<String>()
+        val session = pinnedSession { partitionId, writable ->
+            val disk = (mounted(partitionId, writable, volumeClose = null, diskClose = null) as MountedFilesVolume)
+            disk
+        }
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val result = session.withLock {
+            session.ejectLocked(
+                pin = pinA,
+                openEjectedDisk = { error("mounted eject must not open raw disk") },
+            )
+        }
+        assertEquals(CloseEpochResult.ClosedOk, result)
+        assertFalse(session.claim.isHeld())
+        assertEquals(pinA, session.withLock { session.ejectedLocked(pinA) })
+        assertThrows(EjectedException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+        assertThrows(EjectedException::class.java) {
+            session.openAfterCloseClaimed { }
+        }
+        assertTrue(session.withLock { session.consumeEjectedForRescan(pinA) })
+        assertNull(session.withLock { session.ejectedLocked(pinA) })
+    }
+
+    @Test
+    fun ejectUnmountedSyncsRawDiskAndReleases() {
+        val events = mutableListOf<String>()
+        val session = pinnedSession { _, _ -> error("no mount expected") }
+        val bot = object : FakeBotSession() {
+            override fun close() {
+                events += "disk"
+                super.close()
+            }
+        }
+        var opened = 0
+        val result = session.withLock {
+            session.ejectLocked(
+                pin = pinA,
+                openEjectedDisk = { lease ->
+                    opened++
+                    UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL), lease = lease)
+                },
+            )
+        }
+        assertEquals(CloseEpochResult.ClosedOk, result)
+        assertEquals(1, opened)
+        assertFalse(session.claim.isHeld())
+        assertEquals(pinA, session.withLock { session.ejectedLocked(pinA) })
+    }
+
+    @Test
+    fun ejectBusyWhenForeignClaimHeldAndTouchesNothing() {
+        val claim = UsbExclusiveClaim()
+        val foreign = claim.tryAcquire()
+        try {
+            var live: AttachmentPin? = pinA
+            val session = FilesVolumeSession(
+                currentAttachment = { live },
+                openMounted = { partitionId, writable, _, lease ->
+                    mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+                },
+                claim = claim,
+            )
+            var rawOpened = false
+            val result = session.withLock {
+                session.ejectLocked(pin = pinA, openEjectedDisk = {
+                    rawOpened = true
+                    throw AssertionError("busy eject must not open disk")
+                })
+            }
+            assertEquals(CloseEpochResult.NotOwned, result)
+            assertFalse(rawOpened)
+            assertNull(session.withLock { session.ejectedLocked(pinA) })
+        } finally {
+            foreign.close()
+        }
+    }
+
+    @Test
+    fun ejectStalePinTouchesNothing() {
+        val session = pinnedSession { _, _ -> error("stale eject must not mount") }
+        var rawOpened = false
+        val result = session.withLock {
+            session.ejectLocked(pin = pinB, openEjectedDisk = {
+                rawOpened = true
+                throw AssertionError("stale eject must not open disk")
+            })
+        }
+        assertEquals(CloseEpochResult.NotOwned, result)
+        assertFalse(rawOpened)
+        assertNull(session.withLock { session.ejectedLocked(pinA) })
+    }
+
+    @Test
+    fun ejectFailureLatchesAndBlocksRescan() {
+        val closeErr = IOException("eject sync unconfirmed")
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                mounted(partitionId, writable, volumeClose = closeErr, diskClose = null, lease = lease)
+            },
+        )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val result = session.withLock {
+            session.ejectLocked(pin = pinA, openEjectedDisk = { error("mounted path must not open raw") })
+        }
+        assertTrue(result is CloseEpochResult.ClosedFailed)
+        assertFalse(session.withLock { session.consumeEjectedForRescan(pinA) })
+        assertThrows(IllegalStateException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+        assertTrue(session.claim.isHeld())
+    }
+
+    @Test
+    fun rescanClearsOnlyEjectedNeverLatchedFailure() {
+        val session = pinnedSession { partitionId, writable ->
+            mounted(partitionId, writable, volumeClose = null, diskClose = null)
+        }
+        assertFalse(session.withLock { session.consumeEjectedForRescan(pinA) })
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val ok = session.withLock {
+            session.ejectLocked(pin = pinA, openEjectedDisk = { error("mounted path must not open raw") })
+        }
+        assertEquals(CloseEpochResult.ClosedOk, ok)
+        assertFalse(session.withLock { session.consumeEjectedForRescan(pinB) })
+        assertTrue(session.withLock { session.consumeEjectedForRescan(pinA) })
+    }
+
+    @Test
+    fun ejectRawSyncFailureStillClosesDiskAndLatches() {
+        val syncErr = IOException("SYNCHRONIZE CACHE failed")
+        val closeErr = IOException("fenced close failed")
+        var closes = 0
+        val session = pinnedSession { _, _ -> error("unmounted eject must not mount") }
+        val result = session.withLock {
+            session.ejectLocked(
+                pin = pinA,
+                openEjectedDisk = { lease ->
+                    val bot = object : FakeBotSession() {
+                        override fun close() {
+                            closes++
+                            super.close()
+                            throw closeErr
+                        }
+                    }
+                    object : UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL), lease = lease) {
+                        override fun sync(): Unit = throw syncErr
+                    }
+                },
+            )
+        }
+        assertTrue(result is CloseEpochResult.ClosedFailed)
+        assertSame(syncErr, (result as CloseEpochResult.ClosedFailed).error)
+        assertEquals(1, closes)
+        assertSame(closeErr, syncErr.suppressed.single())
+        // Fenced close not confirmed: bound lease stays held fail-closed; failure latched.
+        assertTrue(session.claim.isHeld())
+        assertThrows(IllegalStateException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+    }
+
+    @Test
+    fun ejectStaleAfterOpenReleasesBarrierWithoutLatch() {
+        var live: AttachmentPin? = pinA
+        var closes = 0
+        val session = FilesVolumeSession(
+            currentAttachment = { live },
+            openMounted = { _, _, _, _ -> error("unmounted eject must not mount") },
+        )
+        val result = session.withLock {
+            session.ejectLocked(
+                pin = pinA,
+                openEjectedDisk = { lease ->
+                    val bot = object : FakeBotSession() {
+                        override fun close() {
+                            closes++
+                            super.close()
+                        }
+                    }
+                    val disk = UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL), lease = lease)
+                    // Replug after open+hold, before the stale check: fenced close
+                    // succeeds, so the barrier must settle (no permanent Busy).
+                    live = pinB
+                    disk
+                },
+            )
+        }
+        assertEquals(CloseEpochResult.NotOwned, result)
+        assertEquals(1, closes)
+        assertFalse("stale success must not latch or hold the claim", session.claim.isHeld())
+        assertNull(session.withLock { session.ejectedLocked(pinA) })
+        // New attachment stays fully usable after the stale eject.
+        live = pinB
+        val second = FilesVolumeSession(
+            currentAttachment = { live },
+            openMounted = { partitionId, writable, _, lease ->
+                mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease)
+            },
+            claim = session.claim,
+        )
+        second.withLock { second.volumeForLocked(pinB, "1") }
+        assertNull(second.close())
+    }
+
+    @Test
+    fun ejectStaleCloseFailureLatchesInsteadOfNotOwned() {
+        var live: AttachmentPin? = pinA
+        val closeErr = IOException("stale fenced close failed")
+        val session = FilesVolumeSession(
+            currentAttachment = { live },
+            openMounted = { _, _, _, _ -> error("unmounted eject must not mount") },
+        )
+        val result = session.withLock {
+            session.ejectLocked(
+                pin = pinA,
+                openEjectedDisk = { lease ->
+                    val bot = object : FakeBotSession() {
+                        override fun close() {
+                            super.close()
+                            throw closeErr
+                        }
+                    }
+                    val disk = UsbDisk(session = bot, geometry = BlockGeometry(512, 64UL), lease = lease)
+                    live = pinB
+                    disk
+                },
+            )
+        }
+        // Stale fence, but the fenced close was not confirmed: latch like any
+        // unconfirmed close, never silent NotOwned.
+        assertTrue(result is CloseEpochResult.ClosedFailed)
+        live = pinA
+        assertThrows(IllegalStateException::class.java) {
+            session.withLock { session.volumeForLocked(pinA, "1") }
+        }
+    }
+
     private fun mounted(
         partitionId: String,
         writable: Boolean,

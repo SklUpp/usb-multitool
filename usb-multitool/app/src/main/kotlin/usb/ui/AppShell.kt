@@ -882,13 +882,19 @@ TopAppBar(
                         enabled = !operationLocked,
                         onClick = { moreOpen = false; onOpenSettings() },
                     )
-                    AppLanguage.entries.forEach { option ->
+                    val ejectEnabled =
+                        !operationLocked && state.presence == DevicePresence.Ready &&
+                            !state.ejectInFlight && !state.ejected
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_eject)) },
+                        enabled = ejectEnabled,
+                        onClick = { moreOpen = false; onIntent(UiIntent.RequestEject) },
+                    )
+                    if (state.ejected) {
                         DropdownMenuItem(
-                            text = { Text(languageName(option)) },
-                            onClick = {
-                                moreOpen = false
-                                onIntent(UiIntent.SetLanguage(option))
-                            },
+                            text = { Text(stringResource(R.string.action_rescan)) },
+                            enabled = !operationLocked && !state.ejectInFlight,
+                            onClick = { moreOpen = false; onIntent(UiIntent.RequestEjectRescan) },
                         )
                     }
                 }

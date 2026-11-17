@@ -21,6 +21,17 @@ import usb.fs.PartitionVolumeSession
 import usb.partition.PartitionTable
 
 /** USB disk/filesystem open boundary. Ownership remains with [filesSession] and its claim. */
+/** Eject raw open went stale mid-open and the fenced disk close failed: latch/report this. */
+class EjectStaleCloseException(cause: Throwable) : IllegalStateException(
+    "USB attachment changed during eject and the fenced close was not confirmed: " +
+        (cause.message ?: cause.javaClass.simpleName),
+    cause,
+) {
+    init {
+        cause.suppressed.forEach(::addSuppressed)
+    }
+}
+
 internal class UsbOpenBoundary(
     private val currentAttachment: () -> AttachmentState.Snapshot<UsbDevice>,
     private val usbManager: () -> UsbManager?,
@@ -112,37 +123,81 @@ internal class UsbOpenBoundary(
         revalidate: (AttachmentState.Snapshot<UsbDevice>) -> UsbDevice? = { it.device },
     ): RawUsbSession? =
         filesSession.openAfterCloseClaimed { lease ->
-            val pinned = currentAttachment()
-            val device = revalidate(pinned)
-            if (device == null) {
-                lease.close()
-                return@openAfterCloseClaimed null
-            }
-            val manager = usbManager() ?: throw DiskException.Disconnected()
-            val disk =
-                try {
-                    openDisk(manager, device, lease)
-                } catch (failure: Throwable) {
-                    lease.close()
-                    throw failure
-                }
-            // Second fence: the open itself can straddle a detach/replug.
-            val live = currentAttachment()
-            if (live.generation != pinned.generation ||
-                deviceKey(live.device) != deviceKey(device)
-            ) {
-                var closeFailure: Throwable? = null
-                try {
-                    disk.close()
-                } catch (t: Throwable) {
-                    closeFailure = t
-                }
-                throw AttachmentChangedException().also { changed ->
-                    closeFailure?.let(changed::addSuppressed)
-                }
-            }
-            RawUsbSession(disk, device)
+            openRawDiskClaimed(lease, revalidate)?.let { (disk, device) -> RawUsbSession(disk, device) }
         }
+
+    /**
+     * Eject-only raw open on an already-held session lease. Never takes a second claim
+     * and never closes a mount: [FilesVolumeSession.ejectLocked] holds the session lock
+     * while this runs. Pin/device/generation fenced before and after the USB open.
+     */
+    internal fun openEjectedDisk(
+        lease: UsbExclusiveClaim.Lease,
+        pin: AttachmentPin,
+    ): UsbDisk {
+        val pinned = currentAttachment()
+        val device = pinned.device ?: throw DiskException.Disconnected()
+        requireEjectAttachment(pin, pinned, device)
+        val manager = usbManager() ?: throw DiskException.Disconnected()
+        val disk = openDisk(manager, device, lease)
+        val live = currentAttachment()
+        val liveDevice = live.device
+        if (live.generation != pinned.generation ||
+            liveDevice == null ||
+            deviceKey(liveDevice) != deviceKey(device) ||
+            live.generation != pin.attachGeneration ||
+            deviceKey(liveDevice) != pin.deviceKey
+        ) {
+            val changed = AttachmentChangedException()
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                // Stale fence owns the verdict: surface the close outcome, fenced
+                // under the attachment cause, so ejectLocked can latch/report it
+                // instead of silently converting to NotOwned.
+                changed.addSuppressed(closeErr)
+                throw EjectStaleCloseException(closeErr)
+            }
+            throw changed
+        }
+        return disk
+    }
+
+    private fun openRawDiskClaimed(
+        lease: UsbExclusiveClaim.Lease,
+        revalidate: (AttachmentState.Snapshot<UsbDevice>) -> UsbDevice?,
+    ): Pair<UsbDisk, UsbDevice>? {
+        val pinned = currentAttachment()
+        val device = revalidate(pinned)
+        if (device == null) {
+            lease.close()
+            return null
+        }
+        val manager = usbManager() ?: throw DiskException.Disconnected()
+        val disk =
+            try {
+                openDisk(manager, device, lease)
+            } catch (failure: Throwable) {
+                lease.close()
+                throw failure
+            }
+        // Second fence: the open itself can straddle a detach/replug.
+        val live = currentAttachment()
+        if (live.generation != pinned.generation ||
+            deviceKey(live.device) != deviceKey(device)
+        ) {
+            var closeFailure: Throwable? = null
+            try {
+                disk.close()
+            } catch (t: Throwable) {
+                closeFailure = t
+            }
+            throw AttachmentChangedException().also { changed ->
+                closeFailure?.let(changed::addSuppressed)
+            }
+        }
+        return disk to device
+    }
 
     private fun requireAttachment(pin: AttachmentPin, device: UsbDevice) {
         // One snapshot: never compare pin against device/generation pair from different publishes.
@@ -150,6 +205,19 @@ internal class UsbOpenBoundary(
         if (live.generation != pin.attachGeneration ||
             deviceKey(device) != pin.deviceKey ||
             deviceKey(live.device) != pin.deviceKey
+        ) {
+            throw AttachmentChangedException()
+        }
+    }
+
+    private fun requireEjectAttachment(
+        pin: AttachmentPin,
+        pinned: AttachmentState.Snapshot<UsbDevice>,
+        device: UsbDevice,
+    ) {
+        if (pinned.generation != pin.attachGeneration ||
+            deviceKey(device) != pin.deviceKey ||
+            deviceKey(pinned.device) != pin.deviceKey
         ) {
             throw AttachmentChangedException()
         }

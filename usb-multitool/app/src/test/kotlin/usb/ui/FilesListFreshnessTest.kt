@@ -1112,6 +1112,143 @@ class FilesListFreshnessTest {
     }
 
     @Test
+    fun ejectRequestEmitsFencedEffectAndBlocksActions() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject)
+        assertTrue(requested.state.ejectInFlight)
+        assertEquals(1L, requested.state.ejectGeneration)
+        assertFalse(requested.state.actionsEnabled)
+        val effect = requested.effects.single() as UiEffect.EjectDevice
+        assertEquals(1L, effect.ejectGeneration)
+    }
+
+    @Test
+    fun ejectRequestRefusedDuringOperation() {
+        val running = ready().copy(
+            operation = OperationProgress(
+                token = OperationTokenGenerator.next(),
+                state = OperationState.Running,
+                title = OperationTitle.Upload,
+            ),
+        )
+        val refused = UiReducer.reduce(running, UiIntent.RequestEject)
+        assertTrue(refused.effects.isEmpty())
+        assertFalse(refused.state.ejectInFlight)
+    }
+
+    @Test
+    fun ejectSuccessMarksEjectedAndSuppressesAutoReload() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject)
+        val done = UiReducer.reduce(
+            requested.state,
+            UiIntent.EjectResulted(
+                ejectGeneration = requested.state.ejectGeneration,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = true,
+            ),
+        )
+        assertTrue(done.state.ejected)
+        assertFalse(done.state.actionsEnabled)
+        assertTrue(done.state.files.isEmpty())
+        val reannounced = UiReducer.reduce(
+            done.state,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Ready,
+                device = device,
+                partitions = listOf(data, other),
+                files = emptyList(),
+            ),
+        )
+        assertTrue(reannounced.state.ejected)
+        assertTrue(reannounced.effects.none { it is UiEffect.LoadFiles })
+        assertEquals(FilesListingState.Stale, reannounced.state.filesListingState)
+    }
+
+    @Test
+    fun ejectStaleCompletionDropped() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject)
+        val stale = UiReducer.reduce(
+            requested.state,
+            UiIntent.EjectResulted(
+                ejectGeneration = requested.state.ejectGeneration + 1L,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = true,
+            ),
+        )
+        assertFalse(stale.state.ejected)
+        assertTrue(stale.state.ejectInFlight)
+    }
+
+    @Test
+    fun ejectFailureKeepsDeviceUsable() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject)
+        val failed = UiReducer.reduce(
+            requested.state,
+            UiIntent.EjectResulted(
+                ejectGeneration = requested.state.ejectGeneration,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = false,
+                message = "SYNCHRONIZE CACHE failed",
+            ),
+        )
+        assertFalse(failed.state.ejected)
+        assertFalse(failed.state.ejectInFlight)
+        assertTrue(failed.state.actionsEnabled)
+    }
+
+    @Test
+    fun ejectRescanEmitsProbeOnlyAfterSuccess() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject)
+        val done = UiReducer.reduce(
+            requested.state,
+            UiIntent.EjectResulted(
+                ejectGeneration = requested.state.ejectGeneration,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = true,
+            ),
+        )
+        val rescan = UiReducer.reduce(done.state, UiIntent.RequestEjectRescan)
+        assertFalse(rescan.state.ejected)
+        val effect = rescan.effects.single() as UiEffect.RescanAfterEject
+        assertEquals(requested.state.ejectGeneration, effect.ejectGeneration)
+        val withoutEject = UiReducer.reduce(ready(), UiIntent.RequestEjectRescan)
+        assertTrue(withoutEject.effects.isEmpty())
+    }
+
+    @Test
+    fun sameDeviceReprobeKeepsEjectInFlightUntilVerdict() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject)
+        assertTrue(requested.state.ejectInFlight)
+        val reprobed = UiReducer.reduce(
+            requested.state,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Ready,
+                device = device,
+                partitions = listOf(data, other),
+                files = emptyList(),
+            ),
+        )
+        // Same-stick Ready must not drop the running eject: only EjectResulted
+        // clears the flight, and it must still be accepted afterwards.
+        assertTrue(reprobed.state.ejectInFlight)
+        assertFalse(reprobed.state.ejected)
+        val done = UiReducer.reduce(
+            reprobed.state,
+            UiIntent.EjectResulted(
+                ejectGeneration = requested.state.ejectGeneration,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = true,
+            ),
+        )
+        assertTrue(done.state.ejected)
+        assertFalse(done.state.ejectInFlight)
+    }
+
+    @Test
     fun runningOperationStillBlocksTheReadyLoad() {
         val probe =
             ready(path = "/ISO", files = listOf(FileEntry("old.bin", isDirectory = false, sizeBytes = 1uL)))

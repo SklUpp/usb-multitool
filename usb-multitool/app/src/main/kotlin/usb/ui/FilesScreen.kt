@@ -1,5 +1,17 @@
 package usb.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
@@ -49,10 +61,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -62,11 +76,71 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import usb.formatEtaDuration
 import usb.fs.FilesystemSpace
 import usb.multitool.R
 import usb.remainingSeconds
+
+/** Direction of a real directory move: deeper = forward, shallower = back, else none. */
+internal enum class DirectoryMotion {
+    Forward,
+    Back,
+}
+
+internal fun directoryMotion(previous: String, current: String): DirectoryMotion? {
+    val before = normalizeFatPath(previous)
+    val after = normalizeFatPath(current)
+    if (before == after) return null
+    if (after.startsWith(if (before == "/") "/" else "$before/")) return DirectoryMotion.Forward
+    if (before.startsWith(if (after == "/") "/" else "$after/")) return DirectoryMotion.Back
+    return null
+}
+
+internal fun AnimatedContentTransitionScope<DirectoryContentTarget>.directoryContentTransform(
+    motion: DirectoryMotion?,
+    reducedMotion: Boolean,
+    rtl: Boolean,
+    durationMs: Int = 220,
+): ContentTransform {
+    if (reducedMotion || motion == null) return EnterTransition.None togetherWith ExitTransition.None
+    // Shared Axis X: forward content exits left and enters from right; back mirrors.
+    // RTL mirrors physical direction so forward always follows reading order.
+    val forward = (motion == DirectoryMotion.Forward) != rtl
+    val enter = (fadeIn(tween(durationMs)) + slideInHorizontally(tween(durationMs)) { if (forward) it / 3 else -it / 3 })
+        .togetherWith(fadeOut(tween(durationMs / 2)) + slideOutHorizontally(tween(durationMs)) { if (forward) -it / 3 else it / 3 })
+    return enter.using(SizeTransform(clip = false))
+}
+
+/** Stable AnimatedContent target: path drives motion, pins make stale content distinct. */
+internal data class DirectoryContentTarget(
+    val partitionId: String,
+    val path: String,
+    val identity: String,
+    val attachGeneration: String,
+    val listGeneration: String,
+    val listingState: String,
+    val error: String,
+    val files: List<FileEntry> = emptyList(),
+    val visibleFiles: List<FileEntry> = emptyList(),
+)
+
+internal fun directoryContentKey(
+    state: AppUiState,
+    visibleFiles: List<FileEntry> = state.files,
+): DirectoryContentTarget =
+    DirectoryContentTarget(
+        partitionId = state.selectedPartitionId.orEmpty(),
+        path = normalizeFatPath(state.currentPath),
+        identity = state.device?.identity.orEmpty(),
+        attachGeneration = state.device?.attachGeneration?.toString().orEmpty(),
+        listGeneration = state.filesListGeneration.toString(),
+        listingState = state.filesListingState.name,
+        error = state.filesError.orEmpty(),
+        files = state.files,
+        visibleFiles = visibleFiles,
+    )
 
 /**
  * Files tab over real volume of selected partition.
@@ -142,6 +216,15 @@ fun FilesScreen(
         state.device?.identity,
         state.device?.attachGeneration,
     ) { mutableStateOf<FileEntry?>(null) }
+    val baseContext = LocalContext.current
+    val layoutDirection = LocalLayoutDirection.current
+    val reducedMotion = runCatching {
+        android.provider.Settings.Global.getFloat(
+            baseContext.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }.getOrDefault(false)
 
 
     val selected = state.selectedPartition()
@@ -262,6 +345,8 @@ fun FilesScreen(
                 selection = selection,
                 selectedNames = selectedNames,
                 fileListState = fileListState,
+                reducedMotion = reducedMotion,
+                rtl = layoutDirection == LayoutDirection.Rtl,
                 onToggleSelect = { entry ->
                     selectedNames = toggleSelectedName(selectedNames, entry.name)
                 },
@@ -652,6 +737,15 @@ private fun FilesPickScreen(
         }
     // Equality, not name: a replacement entry with the same name but new size is stale.
     val selectedPickEntry = selectedPickState?.value?.takeIf { selected -> selected in entries }
+    val pickContext = LocalContext.current
+    val pickLayoutDirection = LocalLayoutDirection.current
+    val pickReducedMotion = runCatching {
+        android.provider.Settings.Global.getFloat(
+            pickContext.contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) == 0f
+    }.getOrDefault(false)
     LaunchedEffect(entries, selectedPickState?.value, listingUsable) {
         val pickerState = selectedPickState
         if (pickerState != null &&
@@ -661,10 +755,28 @@ private fun FilesPickScreen(
         }
     }
 
-    LazyColumn(
+    // Simplified picker uses the same directional motion as the normal browser: forward
+    // content enters from the reading-start side, back mirrors it, reduced motion is flat.
+    AnimatedContent(
+        targetState = directoryContentKey(
+            state,
+            if (mode.target == FilesPickTarget.Folder) state.files.filter { it.isDirectory } else state.files,
+        ),
+        transitionSpec = {
+            directoryContentTransform(
+                directoryMotion(initialState.path, targetState.path),
+                pickReducedMotion,
+                pickLayoutDirection == LayoutDirection.Rtl,
+            )
+        },
+        label = "pick-folder",
         modifier = modifier.fillMaxSize(),
+    ) { target ->
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = 16.dp),
+        userScrollEnabled = !transition.isRunning,
     ) {
         item(key = "pick-partition") {
             PartitionChoiceRow(
@@ -674,7 +786,7 @@ private fun FilesPickScreen(
                 writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
                 sizeLabel = partition?.let { partitionSizeLabel(state, it) },
                 space = partition?.let(state::filesystemSpace),
-                enabled = canAct,
+                enabled = canAct && !transition.isRunning,
                 onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
             )
         }
@@ -682,12 +794,12 @@ private fun FilesPickScreen(
         item(key = "pick-folder") {
             SectionCard(
                 title = stringResource(R.string.files_section_folder),
-                subtitle = state.currentPath,
+                subtitle = target.path,
                 titleColor = MaterialTheme.colorScheme.onSurface,
                 trailing = {
                     IconButton(
                         onClick = { onIntent(UiIntent.NavigateUp) },
-                        enabled = canAct && state.currentPath != "/",
+                        enabled = canAct && target.path != "/" && !transition.isRunning,
                         modifier = Modifier.semantics { contentDescription = upDescription },
                     ) {
                         GlyphIcon(Glyph.ArrowUp, size = 22.dp)
@@ -707,14 +819,14 @@ private fun FilesPickScreen(
                     if (mode.target == FilesPickTarget.Folder) {
                         OutlinedButton(
                             onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
-                            enabled = canAct && listingUsable,
+                            enabled = canAct && listingUsable && !transition.isRunning,
                         ) {
                             Text(stringResource(R.string.import_folder_use))
                         }
                     }
                     TextButton(
                         onClick = { onIntent(UiIntent.CancelFilesPick) },
-                        enabled = canAct,
+                        enabled = canAct && !transition.isRunning,
                     ) {
                         Text(stringResource(R.string.files_pick_back))
                     }
@@ -727,7 +839,7 @@ private fun FilesPickScreen(
                             },
                             enabled =
                                     mode.partitionId == "1" &&
-                                canAct &&
+                                canAct && !transition.isRunning &&
                                     state.isoImportSafInFlight == null &&
                                     state.isoImportUsbInFlight == null &&
                                     state.pendingIsoImport == null,
@@ -798,7 +910,10 @@ private fun FilesPickScreen(
                         )
                     }
                     if (copying.state == OperationState.Running && copying.cancelable) {
-                        TextButton(onClick = { onIntent(UiIntent.CancelOperation(copying.token)) }) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.CancelOperation(copying.token)) },
+                            enabled = !transition.isRunning,
+                        ) {
                             Text(stringResource(R.string.action_cancel))
                         }
                     }
@@ -818,7 +933,10 @@ private fun FilesPickScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
-                    TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
+                    TextButton(
+                        onClick = { onIntent(UiIntent.CancelWindowsIsoImport) },
+                        enabled = !transition.isRunning,
+                    ) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }
@@ -834,30 +952,39 @@ private fun FilesPickScreen(
             }
         }
 
+        // Snapshot render: leaving content keeps its own listing state and rows, so the
+        // exit slide never swaps in the newly loaded directory. Header above stays on
+        // live state so the path toolbar always names the current directory.
+        val pickRows = target.visibleFiles
+        val pickListingState = target.listingState
+        val pickError = target.error.ifEmpty { null }
         when {
-            state.filesListingState == FilesListingState.Failed -> item(key = "pick-error") {
-                EmptyHint(state.filesError ?: stringResource(R.string.import_folder_read_failed))
+            pickListingState == FilesListingState.Failed.name -> item(key = "pick-error") {
+                EmptyHint(pickError ?: stringResource(R.string.import_folder_read_failed))
             }
-            state.filesListingState == FilesListingState.Loading -> item(key = "pick-loading") {
+            pickListingState == FilesListingState.Loading.name -> item(key = "pick-loading") {
                 EmptyHint(stringResource(R.string.files_listing))
             }
-            state.filesListingState == FilesListingState.Stale -> item(key = "pick-not-loaded") {
+            pickListingState == FilesListingState.Stale.name -> item(key = "pick-not-loaded") {
                 EmptyHint(stringResource(R.string.import_folder_not_loaded))
             }
-            entries.isEmpty() -> item(key = "pick-empty") {
+            pickRows.isEmpty() -> item(key = "pick-empty") {
                 EmptyHint(stringResource(R.string.files_empty_folder))
             }
-            else -> items(entries, key = { it.name }) { entry ->
+                else -> items(pickRows, key = { it.name }) { entry ->
+                // Snapshot row: leaving content never sees live-list swaps mid-transition.
+                val picked = selectedPickState?.value?.takeIf { it.name == entry.name }
+                    ?.takeIf { live -> live in pickRows }
                 Column(modifier = Modifier.animateItem()) {
                     // Keep the confirmation next to the chosen row, so it cannot be
                     // scrolled off-screen together with the header.
-                    if (selectedPickEntry == entry) {
+                    if (picked != null && selectedPickEntry != null) {
                         OutlinedButton(
                             onClick = {
                                 // The reducer revalidates the name against live files.
                                 onIntent(UiIntent.ConfirmFilesPickFile(entry.name))
                             },
-                            enabled = canAct && listingUsable,
+                            enabled = canAct && listingUsable && !transition.isRunning,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp),
@@ -867,18 +994,19 @@ private fun FilesPickScreen(
                     }
                     FileRow(
                         entry = entry,
-                        isSelected = selectedPickEntry == entry,
+                        isSelected = picked != null && selectedPickEntry != null,
                         multiSelectActive = false,
-                        actionsEnabled = canAct,
+                        actionsEnabled = canAct && !transition.isRunning,
                         onToggleSelect = {
+                            val live = entries.firstOrNull { it.name == entry.name } ?: return@FileRow
                             selectedPickState?.value =
-                                if (selectedPickState?.value == entry) null else entry
+                                if (selectedPickState?.value == live) null else live
                         },
                         onNavigate = {
                             selectedPickState?.value = null
                             onIntent(
                                 UiIntent.OpenDirectory(
-                                    fatChildPath(state.currentPath, entry.name),
+                                    fatChildPath(target.path, entry.name),
                                 ),
                             )
                         },
@@ -887,6 +1015,7 @@ private fun FilesPickScreen(
                 }
             }
         }
+    }
     }
 
     state.pendingIsoImport?.let { proposal ->
@@ -908,6 +1037,8 @@ private fun FolderCard(
     selection: ListingSelection,
     selectedNames: Set<String>,
     fileListState: LazyListState,
+    reducedMotion: Boolean,
+    rtl: Boolean,
     onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
     onClearSelection: () -> Unit,
@@ -922,125 +1053,148 @@ private fun FolderCard(
     modifier: Modifier = Modifier,
 ) {
     val loadingDescription = stringResource(R.string.files_listing)
-    Column(modifier = modifier.fillMaxWidth()) {
-        if (selection.entries.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
+    // Whole card (selection bar + list) slides as one snapshot: both read the same
+    // target so leaving content never mixes live state under the exit slide.
+    AnimatedContent(
+        targetState = directoryContentKey(state),
+        transitionSpec = {
+            directoryContentTransform(
+                directoryMotion(initialState.path, targetState.path),
+                reducedMotion,
+                rtl,
+            )
+        },
+        label = "folder",
+        modifier = modifier.fillMaxWidth(),
+    ) { target ->
+        // Snapshot render: leaving content keeps the exact files it captured, so
+        // navigation never swaps rows under the exit slide.
+        val rows = target.files
+        val rowsState = target.listingState
+        val rowsError = target.error.ifEmpty { null }
+        val locked = transition.isRunning
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (selection.entries.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FolderActionButton(
+                        glyph = Glyph.Download,
+                        description = stringResource(R.string.files_save_to_phone),
+                        enabled = filesBatchDownloadEnabled(canAct, selection.entries.map { it.toBatchItem() }) && !locked,
+                        onClick = onSaveToPhone,
+                    )
+                    FolderActionButton(
+                        glyph = Glyph.Pencil,
+                        description = stringResource(R.string.files_rename),
+                        enabled = filesBatchRenameEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
+                        onClick = onRename,
+                    )
+                    FolderActionButton(
+                        glyph = Glyph.Trash,
+                        description = stringResource(R.string.action_delete),
+                        enabled = filesBatchDeleteEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
+                        onClick = onDelete,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    FolderActionButton(
+                        glyph = Glyph.Close,
+                        description = stringResource(R.string.files_clear_selection),
+                        enabled = canAct && !locked,
+                        onClick = onClearSelection,
+                    )
+                }
+            }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.weight(1f, fill = false).fillMaxWidth(),
             ) {
-                FolderActionButton(
-                    glyph = Glyph.Download,
-                    description = stringResource(R.string.files_save_to_phone),
-                    enabled = filesBatchDownloadEnabled(canAct, selection.entries.map { it.toBatchItem() }),
-                    onClick = onSaveToPhone,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Pencil,
-                    description = stringResource(R.string.files_rename),
-                    enabled = filesBatchRenameEnabled(canWrite, selection.entries.map { it.toBatchItem() }),
-                    onClick = onRename,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Trash,
-                    description = stringResource(R.string.action_delete),
-                    enabled = filesBatchDeleteEnabled(canWrite, selection.entries.map { it.toBatchItem() }),
-                    onClick = onDelete,
-                    tint = MaterialTheme.colorScheme.error,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Close,
-                    description = stringResource(R.string.files_clear_selection),
-                    enabled = canAct,
-                    onClick = onClearSelection,
-                )
-            }
-        }
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        ) {
-        // One lazy area for the whole volume: the path/action sub-block is its first item, so
-        // a short window or a large font scrolls it away instead of squeezing the list to zero.
-        LazyColumn(
-            state = fileListState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 80.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            item(key = "folder-subblock") {
-                FolderSubblock(
-                    pathLabel = folderPathLabel(state.currentPath),
-                    canNavigateUp = canAct && state.currentPath != "/",
-                    canAct = canAct,
-                    canWrite = canWrite,
-                    onNavigateUp = onNavigateUp,
-                    onRefresh = onRefresh,
-                    onNewFolder = onNewFolder,
-                    isLoading = isLoading,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
-                )
-            }
-            when {
-                !state.actionsEnabled -> item(key = "presence") {
-                    EmptyHint(
-                        UiReducer.presenceMessage(state.presence).localized(),
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-                state.filesListingState == FilesListingState.Loading -> item(key = "loading") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 32.dp)
-                            .semantics { contentDescription = loadingDescription },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
-                    }
-                }
-                state.filesListingState == FilesListingState.Failed -> item(key = "error") {
-                    EmptyHint(
-                        state.filesError ?: stringResource(R.string.import_folder_read_failed),
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-                state.filesListingState == FilesListingState.Stale -> item(key = "not-loaded") {
-                    EmptyHint(
-                        stringResource(R.string.import_folder_not_loaded),
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-                state.files.isEmpty() -> item(key = "empty") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 32.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.files_empty_folder),
-                            style = MaterialTheme.typography.bodyMedium,
+                // One lazy area for the whole volume: the path/action sub-block is its
+                // first item, so a short window or a large font scrolls it away instead
+                // of squeezing the list to zero.
+                LazyColumn(
+                    state = fileListState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 80.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    userScrollEnabled = !locked,
+                ) {
+                    item(key = "folder-subblock") {
+                        FolderSubblock(
+                            pathLabel = folderPathLabel(target.path),
+                            canNavigateUp = canAct && target.path != "/" && !locked,
+                            canAct = canAct && !locked,
+                            canWrite = canWrite && !locked,
+                            onNavigateUp = onNavigateUp,
+                            onRefresh = onRefresh,
+                            onNewFolder = onNewFolder,
+                            isLoading = isLoading,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                         )
                     }
-                }
-                else -> items(state.files, key = { it.name }) { entry ->
-                    FileRow(
-                        modifier = Modifier.animateItem(),
-                        entry = entry,
-                        isSelected = entry.name in selectedNames,
-                        multiSelectActive = selectedNames.isNotEmpty(),
-                        actionsEnabled = canAct,
-                        onToggleSelect = { onToggleSelect(entry) },
-                        onNavigate = { onNavigate(entry) },
-                        onAction = { onAction(entry) },
-                    )
+                    when {
+                        !state.actionsEnabled -> item(key = "presence") {
+                            EmptyHint(
+                                UiReducer.presenceMessage(state.presence).localized(),
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                        rowsState == FilesListingState.Loading.name -> item(key = "loading") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 32.dp)
+                                    .semantics { contentDescription = loadingDescription },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
+                            }
+                        }
+                        rowsState == FilesListingState.Failed.name -> item(key = "error") {
+                            EmptyHint(
+                                rowsError ?: stringResource(R.string.import_folder_read_failed),
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                        rowsState == FilesListingState.Stale.name -> item(key = "not-loaded") {
+                            EmptyHint(
+                                stringResource(R.string.import_folder_not_loaded),
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                        rows.isEmpty() -> item(key = "empty") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.files_empty_folder),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        }
+                        else -> items(rows, key = { it.name }) { entry ->
+                            FileRow(
+                                modifier = Modifier.animateItem(),
+                                entry = entry,
+                                isSelected = entry.name in selectedNames,
+                                multiSelectActive = selectedNames.isNotEmpty(),
+                                actionsEnabled = canAct && !locked,
+                                onToggleSelect = { onToggleSelect(entry) },
+                                onNavigate = { onNavigate(entry) },
+                                onAction = { onAction(entry) },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
-}
 }
 
 /** Path row with Refresh/CreateFolder only. Selection Download/Rename/Delete/Clear live in the

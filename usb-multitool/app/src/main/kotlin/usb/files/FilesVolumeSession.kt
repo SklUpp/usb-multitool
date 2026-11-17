@@ -20,6 +20,9 @@ data class AttachmentPin(val attachGeneration: Long, val deviceKey: String)
 /** The live USB attachment no longer matches the operation's pin; no volume was touched. */
 class AttachmentChangedException : IllegalStateException("USB attachment changed")
 
+/** Pinned attachment was released by successful app-scoped eject; rescan or reconnect first. */
+class EjectedException : IllegalStateException("USB attachment was safely removed; rescan or reconnect")
+
 /**
  * Result of closing the session mount under an ownership check.
  */
@@ -95,6 +98,13 @@ class FilesVolumeSession(
     private var acquireSink: ((Long) -> Unit)? = null
     /** First close/sync failure; retained so retry cannot clear or remount. */
     private var unconfirmedClose: Throwable? = null
+    /**
+     * Attachment released by successful app-scoped eject: sync+close confirmed and
+     * the claim released. Reuse/mount stays refused until consumeEjectedForRescan
+     * or a newer attachment generation replaces it. Distinct from unconfirmedClose:
+     * rescan may clear this, never a latched failure.
+     */
+    @Volatile private var ejected: AttachmentPin? = null
 
     fun <T> withLock(body: () -> T): T = synchronized(lock, body)
 
@@ -148,6 +158,10 @@ class FilesVolumeSession(
         val lease =
             withLock {
                 requireFilesVolumeClosed(close())
+                val pin = currentAttachment()
+                ejected?.let { released ->
+                    if (released == pin) throw EjectedException()
+                }
                 claim.tryAcquire()
             }
         return try {
@@ -182,6 +196,167 @@ class FilesVolumeSession(
         if (current.epoch > fence) return CloseEpochResult.NotOwned
         return closeLockedResult()
     }
+
+    /**
+     * App-scoped eject for the pinned attachment. Must run under [withLock].
+     * Mounted path uses MountedFilesVolume.eject (volume.sync, volume.close,
+     * disk.sync, disk.close) on the already-owned mount lease. Unmounted path
+     * opens the pinned raw disk only to sync/close it. Success pins ejected;
+     * sync/close failure latches unconfirmedClose. Open failure touches nothing
+     * durable, so it never latches. Stale pin, newer live attachment, or foreign
+     * claim owner yields NotOwned without touching the device.
+     */
+    fun ejectLocked(
+        pin: AttachmentPin?,
+        openEjectedDisk: (UsbExclusiveClaim.Lease) -> usb.device.UsbDisk,
+        releaseEjectedLease: (UsbExclusiveClaim.Lease) -> Unit = { it.confirmHigherLevelClose() },
+    ): CloseEpochResult {
+        unconfirmedClose?.let { return CloseEpochResult.ClosedFailed(it) }
+        val pinned = try {
+            requireLiveAttachmentLocked(pin)
+        } catch (changed: AttachmentChangedException) {
+            return CloseEpochResult.NotOwned
+        }
+        ejected?.let { if (it == pinned) return CloseEpochResult.NotOwned }
+        val current = mounted
+        if (current != null && current.pin != pinned) {
+            return CloseEpochResult.NotOwned
+        }
+        if (current != null) {
+            // Mounted path already owns the process claim through the mount lease;
+            // no spare acquire (it would report Busy against ourselves).
+            mounted = null
+            return try {
+                current.volume.eject()
+                ejected = pinned
+                CloseEpochResult.ClosedOk
+            } catch (t: Throwable) {
+                unconfirmedClose = t
+                CloseEpochResult.ClosedFailed(t)
+            }
+        }
+        // Unmounted path: a free claim alone proves nothing, so open the pinned
+        // raw disk only to sync/close it. A foreign owner yields NotOwned (busy).
+        val lease = try {
+            claim.tryAcquire()
+        } catch (busy: UsbExclusiveClaim.BusyException) {
+            return CloseEpochResult.NotOwned
+        }
+        if (currentAttachment() != pinned) {
+            lease.close()
+            return CloseEpochResult.NotOwned
+        }
+        val disk: usb.device.UsbDisk = try {
+            openEjectedDisk(lease).also { lease.holdForHigherLevelClose() }
+        } catch (staleClose: usb.multitool.EjectStaleCloseException) {
+            // Stale fence, but the fenced close itself was not confirmed: this is
+            // an unconfirmed close like any other, never a silent NotOwned.
+            if (unconfirmedClose == null) unconfirmedClose = staleClose
+            try {
+                lease.close()
+            } catch (closeErr: Throwable) {
+                staleClose.addSuppressed(closeErr)
+            }
+            return CloseEpochResult.ClosedFailed(staleClose)
+        } catch (openErr: Throwable) {
+            // Open touched nothing durable: never latch, never report unconfirmed.
+            try {
+                lease.abortHigherLevelClose()
+                lease.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== openErr) openErr.addSuppressed(closeErr)
+            }
+            return if (openErr is AttachmentChangedException ||
+                openErr is UsbExclusiveClaim.BusyException
+            ) {
+                CloseEpochResult.NotOwned
+            } else {
+                CloseEpochResult.ClosedFailed(openErr)
+            }
+        }
+        if (currentAttachment() != pinned) {
+            // Open raced a detach/replug: the higher-level barrier was already held
+            // after open, so settle it explicitly. Successful fenced close confirms
+            // the barrier (claim releases; nothing durable was touched for the new
+            // attachment). A failed close keeps the barrier via the latch.
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                unconfirmedClose = closeErr
+                return CloseEpochResult.ClosedFailed(closeErr)
+            }
+            releaseEjectedLease(lease)
+            return CloseEpochResult.NotOwned
+        }
+        return try {
+            disk.sync()
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                unconfirmedClose = closeErr
+                throw closeErr
+            }
+            releaseEjectedLease(lease)
+            ejected = pinned
+            CloseEpochResult.ClosedOk
+        } catch (changed: AttachmentChangedException) {
+            // Stale completion: still close the disk we opened; the bound lease stays
+            // held and the close verdict (not the fence) decides latch vs release.
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== changed) changed.addSuppressed(closeErr)
+            }
+            try {
+                lease.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== changed) changed.addSuppressed(closeErr)
+            }
+            CloseEpochResult.NotOwned
+        } catch (busy: UsbExclusiveClaim.BusyException) {
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== busy) busy.addSuppressed(closeErr)
+            }
+            try {
+                lease.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== busy) busy.addSuppressed(closeErr)
+            }
+            CloseEpochResult.NotOwned
+        } catch (t: Throwable) {
+            // Sync failure with disk still open: close first so the bound lease is
+            // never held open; the close outcome is suppressed under the primary.
+            try {
+                disk.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== t) t.addSuppressed(closeErr)
+            }
+            if (unconfirmedClose == null) unconfirmedClose = t
+            try {
+                lease.close()
+            } catch (closeErr: Throwable) {
+                if (closeErr !== t) t.addSuppressed(closeErr)
+            }
+            CloseEpochResult.ClosedFailed(t)
+        }
+    }
+
+    /**
+     * Explicit rescan after a successful eject: clear only ejected for [pin].
+     * A latched unconfirmedClose is never cleared here; it still refuses remount.
+     */
+    fun consumeEjectedForRescan(pin: AttachmentPin?): Boolean {
+        if (pin == null || currentAttachment() != pin) return false
+        if (unconfirmedClose != null) return false
+        if (ejected != pin) return false
+        ejected = null
+        return true
+    }
+
+    /** Live eject marker for the pinned attachment; null means not ejected. */
+    fun ejectedLocked(pin: AttachmentPin?): AttachmentPin? = ejected?.takeIf { it == pin }
 
     /**
      * O2: after a body error, drop the mount this op acquired (if still live).
@@ -227,6 +402,9 @@ class FilesVolumeSession(
             throw refuseRemount(closeErr)
         }
         val pinned = requireLiveAttachmentLocked(pin)
+        ejected?.let { released ->
+            if (released == pinned) throw EjectedException()
+        }
         val current = mounted
         if (current != null &&
             current.pin == pinned &&

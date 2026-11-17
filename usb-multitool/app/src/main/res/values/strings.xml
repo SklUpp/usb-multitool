@@ -592,6 +592,14 @@
     <string name="op_rescue_backup">Rescue backup</string>
     <string name="op_gpt_backup">GPT critical backup</string>
     <string name="op_refresh">Refresh partitions</string>
+    <string name="op_eject">Eject device</string>
+    <string name="action_eject">Sync and close</string>
+    <string name="action_rescan">Rescan device</string>
+    <string name="msg_eject_started">Syncing and closing owned volumes…</string>
+    <string name="msg_eject_succeeded">App caches for %1$s were flushed and the volume was closed. This app released the device; Android system mounts and physical power are outside its control.</string>
+    <string name="msg_eject_busy">Device is busy: another session holds the USB claim. Wait for the current operation to finish and try again.</string>
+    <string name="msg_eject_stale">Eject result is stale; nothing was touched. Rescan or reconnect, then try again.</string>
+    <string name="msg_eject_rescan_required">Device is released. Rescan or reconnect to use it again.</string>
     <string name="op_self_test">Self-test</string>
     <string name="op_self_test_running">Self-test: running…</string>
     <string name="op_upload">Upload</string>
