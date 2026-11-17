@@ -50,6 +50,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
@@ -629,8 +630,10 @@ private fun WindowsImageBlock(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
+                        fontFamily = if (selectedImage != null || isImageImportTarget) FontFamily.Monospace else FontFamily.Default,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        overflow = TextOverflow.StartEllipsis,
+                        softWrap = false,
                     )
                 }
                 IconButton(
@@ -781,6 +784,7 @@ private fun ImportRow(
             } else {
                 MaterialTheme.colorScheme.onSurface
             },
+            fontFamily = if (destination == null) FontFamily.Default else FontFamily.Monospace,
         )
         OutlinedButton(
             onClick = onClick,
@@ -827,7 +831,7 @@ internal fun ImportFolderDialog(
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(stringResource(R.string.import_folder_title), style = MaterialTheme.typography.titleLarge)
-                Text(text = stringResource(R.string.import_folder_current, currentPath), style = MaterialTheme.typography.labelMedium, modifier = Modifier.semantics { heading() })
+                Text(text = stringResource(R.string.import_folder_current, currentPath), style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace), softWrap = true, modifier = Modifier.semantics { heading() })
             }
             IconButton(onClick = onDismiss, modifier = Modifier.semantics { contentDescription = cancelDescription }) { GlyphIcon(Glyph.Close) }
         }
@@ -849,7 +853,7 @@ internal fun ImportFolderDialog(
                     val name = usb.ventoy.folderName(folder)
                     val openLabel = stringResource(R.string.import_folder_open, name)
                     ListItem(
-                        headlineContent = { Text(text = "$name/", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        headlineContent = { Text(text = "$name/", style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), maxLines = 1, overflow = TextOverflow.StartEllipsis, softWrap = false) },
                         leadingContent = {
                             Icon(
                                 painter = painterResource(R.drawable.ic_file_folder),
@@ -861,7 +865,7 @@ internal fun ImportFolderDialog(
                 }
             }
         }
-        ListItem(headlineContent = { Text(stringResource(R.string.import_folder_use)) }, supportingContent = { Text(text = stringResource(R.string.import_destination_line, currentPath), style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, enabled = trusted && !blocked, onClick = { onPick(currentPath) }))
+        ListItem(headlineContent = { Text(stringResource(R.string.import_folder_use)) }, supportingContent = { Text(text = stringResource(R.string.import_destination_line, currentPath), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), softWrap = true) }, modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, enabled = trusted && !blocked, onClick = { onPick(currentPath) }))
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (parent != null) {
                 TextButton(onClick = onUp, enabled = !blocked) { Text(stringResource(R.string.import_folder_up)) }
@@ -906,11 +910,13 @@ internal fun ImportOverwriteDialog(
                     } else {
                         "${proposal.directory}/${proposal.targetName}"
                     },
+                    monospaceValue = true,
                 )
                 proposal.sizeBytes?.let { size ->
                     InfoRow(
                         stringResource(R.string.import_size_label),
                         DeviceIdentity.formatCapacity(size.coerceAtLeast(0L).toULong()),
+                        monospaceValue = true,
                     )
                 }
                 if (proposal.templateMarkers.isNotEmpty()) {

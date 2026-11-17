@@ -1244,6 +1244,7 @@ private fun FolderSubblock(
                         .clickable(enabled = canNavigateUp, onClick = onNavigateUp),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.StartEllipsis,
@@ -1359,7 +1360,10 @@ private fun PartitionChoiceRow(
                     }
                     Text(
                         text = listOfNotNull(sizeLabel, freeSpaceText(space)).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1748,7 +1752,10 @@ private fun FileActionSheet(
             supportingContent = {
                 Text(
                     DeviceIdentity.formatCapacity(entry.sizeBytes),
-                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
                 )
             },
         )

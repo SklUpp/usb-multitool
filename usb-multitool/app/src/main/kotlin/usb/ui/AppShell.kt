@@ -2006,7 +2006,7 @@ internal fun <T> CompactChoice(
 }
 
 @Composable
-internal fun InfoRow(label: String, value: String) {
+internal fun InfoRow(label: String, value: String, monospaceValue: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2022,12 +2022,20 @@ internal fun InfoRow(label: String, value: String) {
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodySmall,
+            style = if (monospaceValue) {
+                MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontFeatureSettings = "tnum",
+                )
+            } else {
+                MaterialTheme.typography.bodySmall
+            },
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
             textAlign = TextAlign.End,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            overflow = if (monospaceValue) TextOverflow.StartEllipsis else TextOverflow.Ellipsis,
+            softWrap = false,
         )
     }
 }

@@ -248,7 +248,10 @@ fun PartitionsScreen(
                                 state.diskSectorSize,
                             )
                         },
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
                     )
                     if (creatableRegions.size > 1) {
                         CompactChoice(
@@ -343,7 +346,10 @@ fun PartitionsScreen(
                                     sliderEnd.toLong(),
                                     (sliderEnd - sliderStart).toLong(),
                                 ),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -404,7 +410,10 @@ fun PartitionsScreen(
                                     (parsedStart + parsedCount - 1UL).toLong(),
                                     parsedCount.toLong(),
                                 ),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -414,7 +423,10 @@ fun PartitionsScreen(
                                     R.string.partitions_free_tail,
                                     tailSectors.toLong(),
                                 ),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -663,7 +675,10 @@ fun PartitionsScreen(
                     )
                     Text(
                         text = stickyRowFacts.joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -883,9 +898,11 @@ fun PartitionsScreen(
                             )
                             Text(
                                 text = rowFacts.joinToString(" · "),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontFamily = FontFamily.Monospace,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -896,9 +913,11 @@ fun PartitionsScreen(
                                         DeviceIdentity.formatCapacity(rowSpace.freeBytes),
                                         DeviceIdentity.formatCapacity(rowSpace.totalBytes),
                                     ),
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontFeatureSettings = "tnum",
+                                    ),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -1462,8 +1481,10 @@ fun PartitionsScreen(
                     text = rawName,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.StartEllipsis,
+                    softWrap = false,
                 )
                 Text(
                     text = stringResource(
@@ -1600,7 +1621,10 @@ fun PartitionsScreen(
                             (range.startLba + range.sectorCount - 1UL).toLong(),
                             DeviceIdentity.formatCapacity(range.byteLength(geometry.sectorSize)),
                         ),
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -2052,7 +2076,10 @@ private fun MibBoundaryTicks(
                     0L,
                     regionStartLba.toLong(),
                 ),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontFeatureSettings = "tnum",
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
@@ -2061,7 +2088,10 @@ private fun MibBoundaryTicks(
                     maxMib.toLong(),
                     rightEdgeLastLba.toLong(),
                 ),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontFeatureSettings = "tnum",
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
