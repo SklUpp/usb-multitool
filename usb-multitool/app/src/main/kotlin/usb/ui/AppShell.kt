@@ -55,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -2118,46 +2119,48 @@ internal fun InfoHint(
     }
 }
 
-/**
- * 48 dp help target for a [SectionCard] `trailing` slot. The glyph is centred in the
- * button and in the section heading row, so it no longer floats at a different baseline.
- */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun InfoHelpButton(infoTitle: String, infoText: String) {
     var showInfo by remember { mutableStateOf(false) }
+    val closeLabel = stringResource(R.string.info_close)
     IconButton(
         onClick = { showInfo = true },
         modifier = Modifier
             .size(48.dp)
             .semantics { contentDescription = infoTitle },
     ) {
+        // Material Symbols outlined "info" (google/material-design-icons,
+        // src/action/info/materialiconsoutlined/24px.svg, Apache 2.0).
         Icon(
-            painter = painterResource(R.drawable.ic_info_duotone),
+            painter = painterResource(R.drawable.ic_info_outlined),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
         )
     }
     if (showInfo) {
-        AlertDialog(
-            onDismissRequest = { showInfo = false },
-            title = { Text(infoTitle) },
-            text = {
-                // Policy explanations run long at large font scales; the text slot does not
-                // scroll by itself, so the paragraph keeps its own scroll.
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = 320.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    Text(infoText)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showInfo = false }) {
-                    Text(stringResource(R.string.info_close))
-                }
-            },
-        )
+        ModalBottomSheet(onDismissRequest = { showInfo = false }) {
+            // Single scroll for title + body + close, so the close action is never
+            // clipped on short screens or at large font scales; one close only.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = infoTitle,
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(text = infoText)
+                TextButton(
+                    onClick = { showInfo = false },
+                    modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp),
+                ) { Text(closeLabel) }
+            }
+        }
     }
 }
 
