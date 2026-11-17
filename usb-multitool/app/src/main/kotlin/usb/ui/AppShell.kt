@@ -2233,7 +2233,7 @@ internal enum class Glyph {
     FolderPlus,
     /** Copy from the phone into the mounted volume. */
     Upload,
-    /** Save a volume entry onto the phone. */
+    /** Downward arrow: fetch bytes from the network into app storage. */
     Download,
     Pencil,
     Trash,

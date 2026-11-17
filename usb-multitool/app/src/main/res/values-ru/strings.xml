@@ -334,12 +334,14 @@
     <string name="ventoy_section_title">Ventoy</string>
     <string name="ventoy_version_subtitle">Версия</string>
     <string name="ventoy_help_title">Установка и обновление Ventoy</string>
-    <string name="ventoy_help_text">Версии в приложении, на флешке (VTOYEFI) и на сервере показаны отдельно. Установка стирает все разделы и файлы и форматирует раздел данных; требуется подтверждение. Обновление перезаписывает загрузочные файлы, сохраняя данные, но атомарность не обещается.</string>
+    <string name="ventoy_help_text">Версии в пакете, загруженная, на накопителе (VTOYEFI) и на сервере показаны отдельно; каждая подпись называет свой источник. Установка стирает все разделы и файлы и форматирует раздел данных; требуется подтверждение. Обновление перезаписывает загрузочные файлы, сохраняя данные, но атомарность не обещается.</string>
     <string name="ventoy_help_details">Проверка и загрузка не пишут на флешку; проверенный релиз хранится в приватном хранилище и используется для установки/обновления до очистки данных. Для закреплённых релизов требуются независимые SHA-256 архива и компонентов. Непривязанный upstream загружается только после отдельного предупреждения об отсутствии независимой доверенной SHA; структурная проверка не доказывает подлинность.</string>
 
-    <string name="ventoy_version_bundled">приложение</string>
-    <string name="ventoy_version_installed">флешка</string>
-    <string name="ventoy_version_upstream">сервер</string>
+    <string name="ventoy_version_bundled">В пакете</string>
+    <string name="ventoy_version_downloaded">Загружено</string>
+    <string name="ventoy_version_downloaded_pinned">Загружено (закреплено)</string>
+    <string name="ventoy_version_installed">На накопителе</string>
+    <string name="ventoy_version_upstream">На сервере</string>
     <string name="ventoy_version_na">n/a</string>
     <string name="ventoy_version_error">ошибка чтения</string>
     <string name="confirm_ventoy_release">Релиз Ventoy: %1$s</string>
@@ -358,12 +360,10 @@
     <string name="ventoy_download_warning_confirm">Скачать</string>
     <string name="ventoy_download_warning_cancel">Отмена</string>
     <string name="ventoy_download_warning_body">Приложение скачает официальный архив по HTTPS. На флешку ничего не записывается; установка или обновление остаются отдельным подтверждаемым действием.</string>
-    <string name="ventoy_badge_downloaded">Загружен %1$s</string>
-    <string name="ventoy_badge_pinned">Закреплён %1$s</string>
     <string name="ventoy_check_version">Проверить версию на сервере</string>
     <string name="ventoy_check_download">Проверить и загрузить релиз</string>
     <string name="ventoy_download_already_latest_title">Ventoy уже последней версии</string>
-    <string name="ventoy_download_already_latest_body">Целевая версия приложения %1$s совпадает с upstream %2$s. Более новой версии для загрузки нет.</string>
+    <string name="ventoy_download_already_latest_body">Текущий релиз %1$s совпадает с upstream %2$s. Более новой версии для загрузки нет.</string>
     <string name="ventoy_download_recovered">%1$s не сохранён; доступен сохранённый %2$s.</string>
     <string name="ventoy_download_unconfirmed">%1$s опубликован, но каталог не подтверждён как устойчивый и может не пережить перезапуск.</string>
     <string name="ventoy_download_unknown">Состояние хранилища после %1$s неизвестно; перед установкой проверьте его снова.</string>

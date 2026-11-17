@@ -61,7 +61,6 @@ private enum class DownloadPrompt {
     Unpinned,
     AlreadyLatest,
 }
-private val DownloadedReleaseOrange = Color(0xFFE65100)
 @Composable
 fun VentoyScreen(
     state: AppUiState,
@@ -319,29 +318,32 @@ private fun VentoyVersionRow(
             .animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        VentoyStatusLine(
+        // Every fact names its own source; the bundled value never borrows the download.
+        VentoyVersionFact(
             glyph = Glyph.Package,
             label = stringResource(R.string.ventoy_version_bundled),
-            value = state.downloadedVentoyRelease?.release ?: state.bundledVentoyRelease,
-            valueColor = if (state.downloadedVentoyRelease != null) DownloadedReleaseOrange else null,
+            value = state.bundledVentoyRelease,
         )
-        VentoyStatusLine(
+        state.downloadedVentoyRelease?.let { downloaded ->
+            VentoyVersionFact(
+                glyph = Glyph.Download,
+                label = stringResource(
+                    if (downloaded.independentlyPinned) {
+                        R.string.ventoy_version_downloaded_pinned
+                    } else {
+                        R.string.ventoy_version_downloaded
+                    },
+                ),
+                value = downloaded.release,
+                valueColor = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+        VentoyVersionFact(
             glyph = Glyph.Usb,
             label = stringResource(R.string.ventoy_version_installed),
             value = state.installedVentoyRelease,
             readError = state.installedVentoyReadError,
         )
-        state.downloadedVentoyRelease?.let { downloaded ->
-            Badge(
-                text = stringResource(
-                    if (downloaded.independentlyPinned) R.string.ventoy_badge_pinned
-                    else R.string.ventoy_badge_downloaded,
-                    downloaded.release,
-                ),
-                container = MaterialTheme.colorScheme.tertiaryContainer,
-                content = DownloadedReleaseOrange,
-            )
-        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -372,11 +374,6 @@ private fun VentoyVersionRow(
                     }
                 }
             }
-            Text(
-                text = ":",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-            )
         }
     }
     val prompt = downloadPrompt
@@ -472,25 +469,31 @@ private fun VentoyVersionFact(
         value != null -> value
         else -> naText
     }
-    val factDescription = "$label: ${readError ?: value ?: "n/a"}"
-    val errorDescription = readError
+    val factDescription = "$label: ${readError ?: value ?: naText}"
 
-    Row(
+    // Label above, value below: both wrap, so a large font scale never lets the
+    // source label eat the width of the version and never ellipsizes the value.
+    Column(
         modifier = modifier.semantics(mergeDescendants = true) {
             contentDescription = factDescription
         },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        GlyphIcon(
-            glyph = glyph,
-            size = 14.dp,
-        )
-        Text(
-            text = ":",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            GlyphIcon(
+                glyph = glyph,
+                size = 14.dp,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+        }
         Text(
             text = displayValue,
             style = MaterialTheme.typography.bodySmall,
@@ -500,37 +503,7 @@ private fun VentoyVersionFact(
             } else {
                 MaterialTheme.colorScheme.onSurface
             },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = if (errorDescription != null) {
-                Modifier.semantics { contentDescription = errorDescription }
-            } else {
-                Modifier
-            },
-        )
-    }
-}
-/** Two-line package/device status: label above, value below. */
-@Composable
-private fun VentoyStatusLine(
-    glyph: Glyph,
-    label: String,
-    value: String?,
-    valueColor: Color? = null,
-    readError: String? = null,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        VentoyVersionFact(
-            glyph = glyph,
-            label = label,
-            value = value,
-            readError = readError,
-            valueColor = valueColor,
+            modifier = Modifier.padding(start = 18.dp),
         )
     }
 }

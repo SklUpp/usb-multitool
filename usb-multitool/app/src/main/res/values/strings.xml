@@ -334,11 +334,13 @@
     <string name="ventoy_section_title">Ventoy</string>
     <string name="ventoy_version_subtitle">Version</string>
     <string name="ventoy_help_title">Ventoy install and update</string>
-    <string name="ventoy_help_text">Bundled, USB (VTOYEFI), and server versions are shown separately. Install erases all partitions and files and formats the data partition; confirmation is required. Update rewrites boot files and keeps data files; it does not promise atomicity.</string>
+    <string name="ventoy_help_text">Bundled in app, downloaded, on USB (VTOYEFI), and server versions are shown separately; every label names its own source. Install erases all partitions and files and formats the data partition; confirmation is required. Update rewrites boot files and keeps data files; it does not promise atomicity.</string>
     <string name="ventoy_help_details">Check never writes the stick. Download keeps validated bytes app-private until app data is cleared. Pinned releases require independent archive and member SHA-256 pins. An unpinned latest release is downloaded only after a separate warning that no independent trusted SHA is available; structural validation does not prove authenticity.</string>
-    <string name="ventoy_version_bundled">app</string>
-    <string name="ventoy_version_installed">USB</string>
-    <string name="ventoy_version_upstream">server</string>
+    <string name="ventoy_version_bundled">Bundled in app</string>
+    <string name="ventoy_version_downloaded">Downloaded</string>
+    <string name="ventoy_version_downloaded_pinned">Downloaded (pinned)</string>
+    <string name="ventoy_version_installed">On USB</string>
+    <string name="ventoy_version_upstream">Server</string>
     <string name="ventoy_version_na">n/a</string>
     <string name="ventoy_version_error">read error</string>
     <string name="confirm_ventoy_release">Ventoy release: %1$s</string>
@@ -346,8 +348,6 @@
     <string name="confirm_ventoy_unpinned">No independent trusted SHA is available for this release. Archive/member structure and checksums were validated, but authenticity is not independently verified. Source: %1$s</string>
     <string name="ventoy_check_version">Check upstream version</string>
     <string name="ventoy_check_download">Check and download release</string>
-    <string name="ventoy_badge_downloaded">Downloaded %1$s</string>
-    <string name="ventoy_badge_pinned">Pinned %1$s</string>
     <string name="ventoy_download_failed">Ventoy download/store warning: %1$s</string>
     <string name="ventoy_upstream_check_failed">Upstream version check failed: %1$s</string>
     <string name="ventoy_install">Install</string>
@@ -358,7 +358,7 @@
     <string name="ventoy_download_warning_title">Download this Ventoy release?</string>
     <string name="ventoy_download_unpinned_warning_title">Download without an independent trusted SHA?</string>
     <string name="ventoy_download_already_latest_title">Ventoy is already latest</string>
-    <string name="ventoy_download_already_latest_body">Installed app target %1$s matches upstream %2$s. No newer release is available to download.</string>
+    <string name="ventoy_download_already_latest_body">Current release %1$s matches upstream %2$s. No newer release is available to download.</string>
     <string name="ventoy_download_warning_confirm">Download</string>
     <string name="ventoy_download">Download release</string>
     <string name="ventoy_download_warning_body">The app fetches the official archive over HTTPS. Nothing is written to the stick; installing or updating stays a separate confirmed action.</string>
