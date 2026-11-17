@@ -72,6 +72,8 @@ fun VentoyScreen(
     val bundled = state.bundledVentoyRelease
     val target = ventoyTargetRelease(bundled, state.downloadedVentoyRelease?.release)
     val comparison = ventoyReleaseComparison(state.installedVentoyRelease, target)
+    // Absent/Disconnected hides device-gated actions; Busy keeps them with enabled guards.
+    val usbGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
     // Remember epoch we already asked catalogs for so actionsEnabled flicker mid-flight
     // does not triple-mount while caches are still null. Cleared when all three land or
     // epoch moves (invalidate).
@@ -172,34 +174,36 @@ fun VentoyScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
-                    enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
-                        !state.ventoyDownloadInFlight &&
-                        (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+            if (!usbGone) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
-                }
-                Button(
-                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
-                    enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
-                        !state.ventoyDownloadInFlight &&
-                        (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(
-                        text = ventoyUpdateLabel(comparison),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    OutlinedButton(
+                        onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
+                        enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
+                            !state.ventoyDownloadInFlight &&
+                            (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                    ) {
+                        Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
+                        enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
+                            !state.ventoyDownloadInFlight &&
+                            (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = ventoyUpdateLabel(comparison),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
             state.ventoyDownloadError?.let { error ->
@@ -587,44 +591,49 @@ private fun WindowsImageBlock(
     }
 
     val chooseDescription = stringResource(R.string.import_choose)
+    // Detached stick hides the USB-gated picker row; Busy keeps it with enabled guards.
+    // Live import status + cancel below stays in all states.
+    val showImagePicker = state.presence != DevicePresence.Absent && state.presence != DevicePresence.Disconnected
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
+        if (showImagePicker) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(
-                    text = stringResource(R.string.windows_selected_image),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (selectedImage != null || isImageImportTarget) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            IconButton(
-                onClick = { imageSourcePrompt = true },
-                enabled = state.actionsEnabled,
-                modifier = Modifier.semantics { contentDescription = chooseDescription },
-            ) {
-                GlyphIcon(Glyph.Folder, size = 20.dp)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.windows_selected_image),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (selectedImage != null || isImageImportTarget) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(
+                    onClick = { imageSourcePrompt = true },
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier.semantics { contentDescription = chooseDescription },
+                ) {
+                    GlyphIcon(Glyph.Folder, size = 20.dp)
+                }
             }
         }
 

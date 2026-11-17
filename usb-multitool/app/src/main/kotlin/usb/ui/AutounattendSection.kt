@@ -116,6 +116,8 @@ internal fun AutounattendSection(
 ) {
     val template = state.windowsTemplatePath
     val document = (state.autounattendState as? AutounattendState.Parsed)?.document
+    // Detached stick hides USB-gated rows below; help + live import status/cancel stay.
+    val xmlGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
     var pickerOpen by remember(
         state.device?.identity,
         state.device?.attachGeneration,
@@ -251,30 +253,32 @@ internal fun AutounattendSection(
             fontWeight = FontWeight.SemiBold,
         )
         if (template == null) {
-            EmptyHint(stringResource(R.string.unattend_no_template))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = { templateSourcePrompt = true },
-                    enabled = state.actionsEnabled,
+            if (!xmlGone) {
+                EmptyHint(stringResource(R.string.unattend_no_template))
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.unattend_choose_template))
-                }
-                Button(
-                    onClick = { generateOpen = true },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                ) {
-                    Text(stringResource(R.string.unattend_generate))
+                    Button(
+                        onClick = { templateSourcePrompt = true },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                    ) {
+                        Text(stringResource(R.string.unattend_choose_template))
+                    }
+                    Button(
+                        onClick = { generateOpen = true },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                    ) {
+                        Text(stringResource(R.string.unattend_generate))
+                    }
                 }
             }
         } else {
@@ -350,60 +354,62 @@ internal fun AutounattendSection(
                     }
                 }
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            if (!xmlGone) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { templateSourcePrompt = true },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                    ) {
+                        Text(stringResource(R.string.unattend_choose_template))
+                    }
+                    Button(
+                        onClick = { generateOpen = true },
+                        enabled = state.actionsEnabled &&
+                            state.autounattendState !is AutounattendState.Unreadable &&
+                            document?.layoutProblems.isNullOrEmpty(),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                    ) {
+                        Text(stringResource(R.string.unattend_generate))
+                    }
+                }
                 OutlinedButton(
-                    onClick = { templateSourcePrompt = true },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                ) {
-                    Text(stringResource(R.string.unattend_choose_template))
-                }
-                Button(
-                    onClick = { generateOpen = true },
+                    onClick = { xmlEditorOpen = true },
                     enabled = state.actionsEnabled &&
-                        state.autounattendState !is AutounattendState.Unreadable &&
-                        document?.layoutProblems.isNullOrEmpty(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
+                        document != null &&
+                        document.sourceText != null,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.unattend_generate))
+                    Text(stringResource(R.string.unattend_open_editor))
                 }
-            }
-            OutlinedButton(
-                onClick = { xmlEditorOpen = true },
-                enabled = state.actionsEnabled &&
-                    document != null &&
-                    document.sourceText != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.unattend_open_editor))
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TextButton(
-                    onClick = { onIntent(UiIntent.LoadAutounattend(template)) },
-                    enabled = state.actionsEnabled,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.unattend_refresh))
-                }
-                TextButton(onClick = { onIntent(UiIntent.ClearWindowsTemplate) }) {
-                    Text(stringResource(R.string.unattend_clear_template))
+                    TextButton(
+                        onClick = { onIntent(UiIntent.LoadAutounattend(template)) },
+                        enabled = state.actionsEnabled,
+                    ) {
+                        Text(stringResource(R.string.unattend_refresh))
+                    }
+                    TextButton(onClick = { onIntent(UiIntent.ClearWindowsTemplate) }) {
+                        Text(stringResource(R.string.unattend_clear_template))
+                    }
                 }
             }
         }
     }
 
-    if (template != null) {
+    if (template != null && !xmlGone) {
         val candidates = state.autounattendCandidates
         SectionCard(
             title = stringResource(R.string.unattend_bindings_title),
@@ -708,6 +714,8 @@ internal fun GlobalSettingsCard(
     onIntent: (UiIntent) -> Unit,
     onPickVentoySettingsFile: () -> Unit,
 ) {
+    // Detached stick hides USB-gated rows; help + staged discard stay mounted.
+    val settingsGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
     var sourceMenuOpen by remember { mutableStateOf(false) }
     var editorOpen by remember { mutableStateOf(false) }
     var editorBaseline by remember { mutableStateOf<List<VentoyControlSetting>?>(null) }
@@ -808,23 +816,25 @@ internal fun GlobalSettingsCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            OutlinedButton(
-                onClick = { sourceMenuOpen = true },
-                enabled = state.actionsEnabled,
-                modifier = Modifier.weight(1f),
+        if (!settingsGone) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(stringResource(R.string.settings_source_choose))
-            }
-            if (customPath) {
-                TextButton(
-                    onClick = { onIntent(UiIntent.UseDefaultVentoySettingsFile) },
+                OutlinedButton(
+                    onClick = { sourceMenuOpen = true },
                     enabled = state.actionsEnabled,
+                    modifier = Modifier.weight(1f),
                 ) {
-                    Text(stringResource(R.string.settings_source_use_default))
+                    Text(stringResource(R.string.settings_source_choose))
+                }
+                if (customPath) {
+                    TextButton(
+                        onClick = { onIntent(UiIntent.UseDefaultVentoySettingsFile) },
+                        enabled = state.actionsEnabled,
+                    ) {
+                        Text(stringResource(R.string.settings_source_use_default))
+                    }
                 }
             }
         }
@@ -839,8 +849,10 @@ internal fun GlobalSettingsCard(
                         UiReducer.presenceMessage(state.presence).localized()
                     },
                 )
-                TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
-                    Text(stringResource(R.string.settings_retry))
+                if (!settingsGone) {
+                    TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
+                        Text(stringResource(R.string.settings_retry))
+                    }
                 }
                 StagedControls(state = state, onIntent = onIntent)
                 return@SectionCard
@@ -875,8 +887,10 @@ internal fun GlobalSettingsCard(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
-                    Text(stringResource(R.string.settings_retry))
+                if (!settingsGone) {
+                    TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
+                        Text(stringResource(R.string.settings_retry))
+                    }
                 }
                 // Staged choices stay actionable: an install can still write them, and a
                 // failed settings retry must remain reachable without re-reading.
@@ -885,14 +899,23 @@ internal fun GlobalSettingsCard(
             }
             is VentoyGlobalSettings.Present -> Unit
         }
-        OutlinedButton(
-            onClick = {
-                editorBaseline = state.pendingVentoyControls
-                editorOpen = true
-            },
-            enabled = state.actionsEnabled && settings != null,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.settings_open_editor)) }
+        if (!settingsGone) {
+            OutlinedButton(
+                onClick = {
+                    editorBaseline = state.pendingVentoyControls
+                    editorOpen = true
+                },
+                enabled = state.actionsEnabled && settings != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.settings_open_editor)) }
+            // Retry must be reachable from every loaded state, not just the unread one.
+            TextButton(
+                onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
+                enabled = state.actionsEnabled,
+            ) {
+                Text(stringResource(R.string.unattend_refresh))
+            }
+        }
         if (editorOpen) {
             GlobalSettingsEditorDialog(
                 state = state,
@@ -904,19 +927,11 @@ internal fun GlobalSettingsCard(
                 },
             )
         }
-
         Text(
             text = stringResource(R.string.settings_applies_note),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // Retry must be reachable from every loaded state, not just the unread one.
-        TextButton(
-            onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
-            enabled = state.actionsEnabled,
-        ) {
-            Text(stringResource(R.string.unattend_refresh))
-        }
     }
     if (sourceMenuOpen) {
         SettingsSourceDialog(
