@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -992,13 +993,12 @@ private fun FilesPickScreen(
                             Text(stringResource(R.string.files_pick_use_file))
                         }
                     }
-                    FileRow(
+                    FilesPickRow(
                         entry = entry,
                         isSelected = picked != null && selectedPickEntry != null,
-                        multiSelectActive = false,
                         actionsEnabled = canAct && !transition.isRunning,
                         onToggleSelect = {
-                            val live = entries.firstOrNull { it.name == entry.name } ?: return@FileRow
+                            val live = entries.firstOrNull { it.name == entry.name } ?: return@FilesPickRow
                             selectedPickState?.value =
                                 if (selectedPickState?.value == live) null else live
                         },
@@ -1010,7 +1010,6 @@ private fun FilesPickScreen(
                                 ),
                             )
                         },
-                        showActions = false,
                     )
                 }
             }
@@ -1557,6 +1556,97 @@ private fun FileRow(
                 }
             }
         }
+    }
+}
+
+/**
+ * Picker row only: full name (extension included) wraps in the headline without truncation,
+ * size stays in the supporting line with tabular monospace figures. Folders show the type
+ * label instead of a size. Selection visuals, click/long-press behavior and [fatChildPath]
+ * navigation match [FileRow]; the normal browser keeps [FileRow] untouched.
+ */
+@Composable
+private fun FilesPickRow(
+    entry: FileEntry,
+    isSelected: Boolean,
+    actionsEnabled: Boolean,
+    onToggleSelect: () -> Unit,
+    onNavigate: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clickLabel = if (entry.isDirectory) {
+        stringResource(R.string.files_open_folder)
+    } else {
+        stringResource(R.string.files_select_file)
+    }
+    val longClickLabel = stringResource(R.string.files_select_file)
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        } else {
+            Color.Transparent
+        },
+        border = if (isSelected) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface)
+        } else {
+            null
+        },
+        modifier = modifier
+            .fillMaxWidth()
+            .semantics { selected = isSelected }
+            .combinedClickable(
+                enabled = actionsEnabled,
+                onClickLabel = clickLabel,
+                onLongClickLabel = longClickLabel,
+                role = Role.Button,
+                onClick = { if (entry.isDirectory) onNavigate() else onToggleSelect() },
+                onLongClick = onToggleSelect,
+            ),
+    ) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    text = entry.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                    softWrap = true,
+                )
+            },
+            supportingContent = {
+                if (entry.isDirectory) {
+                    Text(
+                        text = stringResource(R.string.type_folder),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        text = DeviceIdentity.formatCapacity(entry.sizeBytes),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            },
+            leadingContent = {
+                Icon(
+                    painter = painterResource(
+                        if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
+                    ),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                )
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        )
     }
 }
 
