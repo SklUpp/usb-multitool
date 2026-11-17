@@ -151,6 +151,12 @@ fun VentoyScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (usbGone) {
+            UsbEmptyState(
+                presence = state.presence,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            )
+        }
         SectionCard(
             title = stringResource(R.string.ventoy_section_title),
             subtitle = stringResource(R.string.ventoy_version_subtitle),

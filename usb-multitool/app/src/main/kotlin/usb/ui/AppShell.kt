@@ -528,21 +528,10 @@ fun AppShell(
                                 label = "presence",
                             ) { showContent ->
                             if (!showContent) {
-                                Column(
+                                UsbEmptyState(
+                                    presence = state.presence,
                                     modifier = Modifier.fillMaxSize(),
-                                    verticalArrangement = Arrangement.Center,
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    GlyphIcon(Glyph.Usb, size = 48.dp)
-                                    Text(stringResource(R.string.usb_empty_title), style = MaterialTheme.typography.titleMedium)
-                                    Text(
-                                        stringResource(
-                                            if (state.presence == DevicePresence.PermissionRequired) R.string.usb_empty_permission
-                                            else R.string.usb_empty_otg,
-                                        ),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                }
+                                )
                             } else {
                             when (target) {
                                 ShellTab.Files -> FilesScreen(
@@ -2090,6 +2079,32 @@ internal fun EmptyHint(text: String, modifier: Modifier = Modifier) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * Shared detached-drive header: USB icon + title + OTG hint (permission text only for
+ * PermissionRequired). Busy never renders here; callers gate on Absent/Disconnected.
+ */
+@Composable
+internal fun UsbEmptyState(
+    presence: DevicePresence,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        GlyphIcon(Glyph.Usb, size = 48.dp)
+        Text(stringResource(R.string.usb_empty_title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(
+                if (presence == DevicePresence.PermissionRequired) R.string.usb_empty_permission
+                else R.string.usb_empty_otg,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
 }
 
 /**
