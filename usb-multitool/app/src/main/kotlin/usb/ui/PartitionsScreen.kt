@@ -9,6 +9,7 @@ import usb.partition.TableScheme
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -29,6 +30,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -653,13 +656,18 @@ fun PartitionsScreen(
                 partitionSizeLabel(state, stickyPartition),
                 lbaRangeLabel(stickyPartition.startLba, stickyPartition.sectorCount),
             )
+            val revealLabel = stringResource(R.string.partitions_reveal_selected_action)
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
                     .fillMaxWidth()
                     .zIndex(1f)
-                    .clickable { revealToken++ },
+                    .clickable(
+                        onClickLabel = revealLabel,
+                        role = Role.Button,
+                        onClick = { revealToken++ },
+                    ),
             ) {
                 Column(
                     modifier = Modifier
@@ -707,76 +715,72 @@ fun PartitionsScreen(
                 else -> diskUsageCaption(state)
             },
             trailing = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.partitions_scheme_help_title),
-                        infoText = stringResource(R.string.partitions_scheme_help_text),
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        if (!state.partitionTableRecognized &&
-                            state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
-                            state.tableValid && !state.partitionTableAmbiguous) {
-                            val segmentHaptic = LocalHapticFeedback.current
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                listOf(PartitionScheme.Gpt, PartitionScheme.Mbr).forEachIndexed { index, scheme ->
-                                    SegmentedButton(
-                                        selected = initializeScheme == scheme,
-                                        onClick = {
-                                            if (initializeScheme != scheme) {
-                                                initializeScheme = scheme
-                                                segmentHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            }
-                                        },
-                                        enabled = state.actionsEnabled,
-                                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 2),
-                                    ) {
-                                        Text(scheme.toTableScheme().name)
-                                    }
-                                }
-                            }
-                            FilledTonalButton(
+                InfoHelpButton(
+                    infoTitle = stringResource(R.string.partitions_scheme_help_title),
+                    infoText = stringResource(R.string.partitions_scheme_help_text),
+                )
+            },
+        ) {
+            // Scheme controls live in the card body: an unweighted trailing Row with
+            // fillMaxWidth() used to squeeze the weighted heading to zero width.
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (!state.partitionTableRecognized &&
+                    state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
+                    state.tableValid && !state.partitionTableAmbiguous) {
+                    val segmentHaptic = LocalHapticFeedback.current
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        listOf(PartitionScheme.Gpt, PartitionScheme.Mbr).forEachIndexed { index, scheme ->
+                            SegmentedButton(
+                                selected = initializeScheme == scheme,
                                 onClick = {
-                                    onIntent(UiIntent.RequestInitializePartitionTable(initializeScheme))
+                                    if (initializeScheme != scheme) {
+                                        initializeScheme = scheme
+                                        segmentHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    }
                                 },
-                                enabled = state.actionsEnabled && !schemeBlocked,
-                                modifier = Modifier.fillMaxWidth(),
+                                enabled = state.actionsEnabled,
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = 2),
                             ) {
-                                Text(stringResource(R.string.partitions_scheme_initialize_action))
-                            }
-                        } else {
-                            Badge(
-                                text = currentScheme?.toTableScheme()?.name
-                                    ?: stringResource(R.string.partitions_scheme_unknown),
-                            )
-                            val target = currentScheme?.let {
-                                if (it == PartitionScheme.Gpt) PartitionScheme.Mbr else PartitionScheme.Gpt
-                            }
-                            if (target != null) {
-                                FilledTonalButton(
-                                    onClick = {
-                                        if (currentScheme == PartitionScheme.Gpt) schemePrompt = target
-                                        else schemeChangePrompt = target
-                                    },
-                                    enabled = state.actionsEnabled && !schemeBlocked,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    GlyphIcon(Glyph.Gpt, size = 20.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(stringResource(R.string.partitions_scheme_convert_to, target.toTableScheme().name))
-                                }
+                                Text(scheme.toTableScheme().name)
                             }
                         }
                     }
+                    FilledTonalButton(
+                        onClick = {
+                            onIntent(UiIntent.RequestInitializePartitionTable(initializeScheme))
+                        },
+                        enabled = state.actionsEnabled && !schemeBlocked,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.partitions_scheme_initialize_action))
+                    }
+                } else {
+                    Badge(
+                        text = currentScheme?.toTableScheme()?.name
+                            ?: stringResource(R.string.partitions_scheme_unknown),
+                    )
+                    val target = currentScheme?.let {
+                        if (it == PartitionScheme.Gpt) PartitionScheme.Mbr else PartitionScheme.Gpt
+                    }
+                    if (target != null) {
+                        FilledTonalButton(
+                            onClick = {
+                                if (currentScheme == PartitionScheme.Gpt) schemePrompt = target
+                                else schemeChangePrompt = target
+                            },
+                            enabled = state.actionsEnabled && !schemeBlocked,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            GlyphIcon(Glyph.Gpt, size = 20.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.partitions_scheme_convert_to, target.toTableScheme().name))
+                        }
+                    }
                 }
-            },
-        ) {
+            }
             if (state.partitions.isNotEmpty()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -836,105 +840,117 @@ fun PartitionsScreen(
                     },
                 )
             }
-            orderedPartitions.forEachIndexed { index, partition ->
-                val isSelected = partition.id == state.selectedPartitionId
-                val access = state.partitionWriteAccess(partition)
-                val accessLabel = when (access) {
-                    PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
-                    PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
-                    PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
-                    PartitionWriteAccess.Unknown -> stringResource(R.string.partitions_write_unknown)
-                }
-                val displayName = partition.name.ifBlank { partition.id }
-                val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
-                val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
-                val rowTitle = "${index + 1}. $title"
-                val rowSpace = state.filesystemSpace(partition)
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            if (isSelected) {
-                                Modifier
-                                    .bringIntoViewRequester(revealRequester)
-                                    .onGloballyPositioned {
-                                        selectedRowBottomPx = it.positionInRoot().y + it.size.height
-                                    }
-                            } else {
-                                Modifier
-                            },
-                        )
-                        .selectable(
-                            selected = isSelected,
-                            enabled = state.actionsEnabled,
-                            role = Role.RadioButton,
-                            onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
-                        ),
-                ) {
-                    Row(
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectableGroup(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                orderedPartitions.forEachIndexed { index, partition ->
+                    val isSelected = partition.id == state.selectedPartitionId
+                    val access = state.partitionWriteAccess(partition)
+                    val accessLabel = when (access) {
+                        PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
+                        PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
+                        PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
+                        PartitionWriteAccess.Unknown -> stringResource(R.string.partitions_write_unknown)
+                    }
+                    val displayName = partition.name.ifBlank { partition.id }
+                    val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
+                    val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
+                    val rowTitle = "${index + 1}. $title"
+                    val rowSpace = state.filesystemSpace(partition)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                        },
+                        border = if (isSelected) {
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                        } else {
+                            null
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .then(
+                                if (isSelected) {
+                                    Modifier
+                                        .bringIntoViewRequester(revealRequester)
+                                        .onGloballyPositioned {
+                                            selectedRowBottomPx = it.positionInRoot().y + it.size.height
+                                        }
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .selectable(
+                                selected = isSelected,
+                                enabled = state.actionsEnabled,
+                                role = Role.RadioButton,
+                                onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
+                            ),
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = rowTitle,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            val rowFacts = listOfNotNull(
-                                partitionSizeLabel(state, partition),
-                                lbaRangeLabel(partition.startLba, partition.sectorCount),
-                            )
-                            Text(
-                                text = rowFacts.joinToString(" · "),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (rowSpace != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = stringResource(
-                                        R.string.filesystem_usage_known,
-                                        DeviceIdentity.formatCapacity(rowSpace.freeBytes),
-                                        DeviceIdentity.formatCapacity(rowSpace.totalBytes),
-                                    ),
+                                    text = rowTitle,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                val rowFacts = listOfNotNull(
+                                    partitionSizeLabel(state, partition),
+                                    lbaRangeLabel(partition.startLba, partition.sectorCount),
+                                )
+                                Text(
+                                    text = rowFacts.joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontFamily = FontFamily.Monospace,
                                         fontFeatureSettings = "tnum",
                                     ),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                if (rowSpace != null) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.filesystem_usage_known,
+                                            DeviceIdentity.formatCapacity(rowSpace.freeBytes),
+                                            DeviceIdentity.formatCapacity(rowSpace.totalBytes),
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontFeatureSettings = "tnum",
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
-                        }
-                        if (partition.filesystemLabel.isNotEmpty()) {
-                            Badge(text = partition.filesystemLabel)
-                        }
-                        if (partition.isEfiType) {
-                            Badge(text = "EFI")
-                        }
-                        if (access != PartitionWriteAccess.Unknown) {
-                            Badge(
-                                text = accessLabel,
-                                container = MaterialTheme.colorScheme.tertiaryContainer,
-                                content = MaterialTheme.colorScheme.onTertiaryContainer,
-                            )
+                            if (partition.filesystemLabel.isNotEmpty()) {
+                                Badge(text = partition.filesystemLabel)
+                            }
+                            if (partition.isEfiType) {
+                                Badge(text = "EFI")
+                            }
+                            if (access != PartitionWriteAccess.Unknown) {
+                                Badge(
+                                    text = accessLabel,
+                                    container = MaterialTheme.colorScheme.tertiaryContainer,
+                                    content = MaterialTheme.colorScheme.onTertiaryContainer,
+                                )
+                            }
                         }
                     }
                 }
@@ -980,6 +996,15 @@ fun PartitionsScreen(
                     }
                 },
             ) {
+                // The write-block reason used to be computed and then only used to disable
+                // controls; a disabled destructive action must say why it is unavailable.
+                blockedHint?.let { hint ->
+                    Text(
+                        text = hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 val access = state.partitionWriteAccess(selected)
                 val geometryKnown = selected.startLba != null && selected.sectorCount != null
                 val renameEnabled = state.actionsEnabled && state.tableValid &&
@@ -1032,9 +1057,12 @@ fun PartitionsScreen(
                 val editRoleEnabled = state.actionsEnabled && state.tableValid &&
                     !state.partitionTableDamaged && geometryKnown &&
                     state.isEfiWriteAllowed(selected)
+                val efiToggleLabel = stringResource(R.string.partitions_efi_toggle_action)
+                val efiToggleState =
+                    stringResource(if (selected.isEfiType) R.string.answer_yes else R.string.answer_no)
                 InteractiveInfoRow(
                     label = stringResource(R.string.partitions_efi_label),
-                    value = stringResource(if (selected.isEfiType) R.string.answer_yes else R.string.answer_no),
+                    value = efiToggleState,
                     enabled = editRoleEnabled,
                     trailingContent = {
                         TextButton(
@@ -1049,8 +1077,12 @@ fun PartitionsScreen(
                                 }
                             },
                             enabled = editRoleEnabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = efiToggleLabel
+                                stateDescription = efiToggleState
+                            },
                         ) {
-                            Text(stringResource(if (selected.isEfiType) R.string.answer_yes else R.string.answer_no))
+                            Text(efiToggleState)
                         }
                     },
                 )
@@ -1084,9 +1116,12 @@ fun PartitionsScreen(
                         infoText = stringResource(R.string.efi_policy_info_text),
                     )
                 }
+                val bootableToggleLabel = stringResource(R.string.partitions_bootable_toggle_action)
+                val bootableToggleState =
+                    stringResource(if (selected.bootable) R.string.answer_yes else R.string.answer_no)
                 InteractiveInfoRow(
                     label = stringResource(R.string.bootable_label),
-                    value = stringResource(if (selected.bootable) R.string.answer_yes else R.string.answer_no),
+                    value = bootableToggleState,
                     enabled = editRoleEnabled,
                     trailingContent = {
                         TextButton(
@@ -1101,8 +1136,12 @@ fun PartitionsScreen(
                                 }
                             },
                             enabled = editRoleEnabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = bootableToggleLabel
+                                stateDescription = bootableToggleState
+                            },
                         ) {
-                            Text(stringResource(if (selected.bootable) R.string.answer_yes else R.string.answer_no))
+                            Text(bootableToggleState)
                         }
                     },
                 )
@@ -1860,6 +1899,7 @@ private fun PartitionSelectStrip(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
+                    .selectableGroup()
                     .horizontalScroll(scroll),
                 horizontalArrangement = Arrangement.spacedBy(gap),
             ) {
@@ -1901,6 +1941,7 @@ private fun PartitionSelectStrip(
                                 } else {
                                     Modifier.clickable(
                                         enabled = state.actionsEnabled && freeSelectable,
+                                        role = Role.Button,
                                         onClick = { segment.free?.let(onSelectFree) },
                                     )
                                 },
@@ -1921,6 +1962,17 @@ private fun PartitionSelectStrip(
                                         MaterialTheme.colorScheme.primary
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.border(
+                                            width = 2.dp,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            shape = RoundedCornerShape(4.dp),
+                                        )
+                                    } else {
+                                        Modifier
                                     },
                                 ),
                         )
@@ -1983,7 +2035,7 @@ private fun InteractiveInfoRow(
                     text = value,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

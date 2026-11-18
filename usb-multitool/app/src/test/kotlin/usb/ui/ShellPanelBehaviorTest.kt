@@ -189,4 +189,28 @@ class ShellPanelBehaviorTest {
         recognizer.cancel()
         assertNull("system back / ACTION_CANCEL must not switch tabs", recognizer.up())
     }
+
+    @Test
+    fun openPickerKeepsItsContentWhenTheStickDisappears() {
+        assertTrue(
+            "the picker owns Back/cancel even without a listed volume",
+            shellTabContentVisible(ShellTab.Files, DevicePresence.Absent, pickOpen = true),
+        )
+        assertFalse(shellTabContentVisible(ShellTab.Files, DevicePresence.Absent, pickOpen = false))
+        assertFalse(
+            shellTabContentVisible(ShellTab.Partitions, DevicePresence.Disconnected, pickOpen = false),
+        )
+        assertTrue(shellTabContentVisible(ShellTab.Ventoy, DevicePresence.Absent, pickOpen = false))
+    }
+
+    @Test
+    fun progressLineShowsOnlyMeasuredFacts() {
+        assertEquals(
+            "42% · 12.3 MiB/s · 3 min",
+            operationProgressFacts("42%", "12.3 MiB/s", "3 min"),
+        )
+        assertEquals("42% · 3 min", operationProgressFacts("42%", null, "3 min"))
+        assertEquals("42% · 12.3 MiB/s", operationProgressFacts("42%", "12.3 MiB/s", null))
+        assertEquals("", operationProgressFacts(null, null, null))
+    }
 }

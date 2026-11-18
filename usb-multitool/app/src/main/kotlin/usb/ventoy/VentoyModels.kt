@@ -156,48 +156,83 @@ object VentoyControlCatalog {
 
     fun known(key: String): VentoyKnownControl? = known.firstOrNull { it.key == key }
 
-    /** Null when [key] is writable; otherwise a stable human-readable problem. */
-    fun keyProblem(key: String): String? =
+    /**
+     * Typed validation result. The UI localizes it with its own resources while keeping
+     * the exact key, limit, expected and received values; [keyProblem] and [valueProblem]
+     * stay the stable English text for logs, the reducer and the host.
+     */
+    sealed interface Issue {
+        data object EmptyKey : Issue
+        data class KeyTooLong(val max: Int) : Issue
+        data object KeyCharset : Issue
+        data class ValueTooLong(val max: Int) : Issue
+        data object ValueControlChars : Issue
+        data class ValueNotAllowed(val key: String, val expected: String, val actual: String) : Issue
+        data class DuplicateKey(val key: String) : Issue
+    }
+
+    /** Null when [key] is writable; otherwise the typed problem. */
+    fun keyIssue(key: String): Issue? =
         when {
-            key.isBlank() -> "key is empty"
-            key.length > MAX_KEY_LENGTH -> "key is longer than $MAX_KEY_LENGTH characters"
-            !keyPattern.matches(key) ->
-                "key may contain only letters, digits, '_', '.', and '-'"
+            key.isBlank() -> Issue.EmptyKey
+            key.length > MAX_KEY_LENGTH -> Issue.KeyTooLong(MAX_KEY_LENGTH)
+            !keyPattern.matches(key) -> Issue.KeyCharset
             else -> null
         }
 
+    /** Null when [key] is writable; otherwise a stable human-readable problem. */
+    fun keyProblem(key: String): String? = keyIssue(key)?.let { issueText(it) }
+
     /** Null when [value] is writable for [key]; unknown and cleared values stay bounded text. */
-    fun valueProblem(key: String, value: String?): String? {
+    fun valueIssue(key: String, value: String?): Issue? {
         if (value == null) return null
         val knownControl = known(key)
         if (knownControl != null) {
             return if (value in knownControl.allowed) {
                 null
             } else {
-                "$key expects ${knownControl.expected}, got \"$value\""
+                Issue.ValueNotAllowed(key, knownControl.expected, value)
             }
         }
         return when {
-            value.length > MAX_VALUE_LENGTH -> "value is longer than $MAX_VALUE_LENGTH characters"
-            value.any { it.code < 0x20 } -> "value must not contain control characters"
+            value.length > MAX_VALUE_LENGTH -> Issue.ValueTooLong(MAX_VALUE_LENGTH)
+            value.any { it.code < 0x20 } -> Issue.ValueControlChars
             else -> null
         }
     }
 
+    /** English text form of [valueIssue]; used by logs, the reducer and the host. */
+    fun valueProblem(key: String, value: String?): String? = valueIssue(key, value)?.let { issueText(it) }
+
     /** First problem in [settings], including duplicate keys; null when all are writable. */
-    fun problem(settings: List<VentoyControlSetting>): String? {
+    fun issue(settings: List<VentoyControlSetting>): Issue? {
         val seen = HashSet<String>()
         for (setting in settings) {
             // Removal only matches an existing key; it never writes the key itself, so keys
             // with spaces or non-ASCII characters stay removable.
             if (setting.value != null) {
-                keyProblem(setting.key)?.let { return it }
-                valueProblem(setting.key, setting.value)?.let { return it }
+                keyIssue(setting.key)?.let { return it }
+                valueIssue(setting.key, setting.value)?.let { return it }
             }
-            if (!seen.add(setting.key)) return "duplicate key \"${setting.key}\""
+            if (!seen.add(setting.key)) return Issue.DuplicateKey(setting.key)
         }
         return null
     }
+
+    /** English text form of [issue]; used by logs, the reducer and the host. */
+    fun problem(settings: List<VentoyControlSetting>): String? = issue(settings)?.let { issueText(it) }
+
+    private fun issueText(issue: Issue): String =
+        when (issue) {
+            Issue.EmptyKey -> "key is empty"
+            is Issue.KeyTooLong -> "key is longer than ${issue.max} characters"
+            Issue.KeyCharset -> "key may contain only letters, digits, '_', '.', and '-'"
+            is Issue.ValueTooLong -> "value is longer than ${issue.max} characters"
+            Issue.ValueControlChars -> "value must not contain control characters"
+            is Issue.ValueNotAllowed ->
+                "${issue.key} expects ${issue.expected}, got \"${issue.actual}\""
+            is Issue.DuplicateKey -> "duplicate key \"${issue.key}\""
+        }
 }
 
 /**

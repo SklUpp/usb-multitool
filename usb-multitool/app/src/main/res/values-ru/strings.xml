@@ -66,6 +66,9 @@
     <string name="partitions_filesystem_label">Файловая система</string>
     <string name="partitions_size_label">Размер</string>
     <string name="partitions_delete_action">Удалить раздел…</string>
+    <string name="partitions_reveal_selected_action">Показать выбранный раздел</string>
+    <string name="partitions_efi_toggle_action">Изменить роль EFI</string>
+    <string name="partitions_bootable_toggle_action">Изменить флаг загрузки</string>
     <string name="partitions_region_label">Регион</string>
     <string name="partitions_create_action">Создать раздел…</string>
     <string name="partitions_capacity_unknown">Ёмкость неизвестна</string>
@@ -75,7 +78,7 @@
     <string name="partitions_strip_scale_note">Относительно LBA диска: для каждого раздела и свободной области сохраняется минимум 48 dp; при нехватке места полоса прокручивается по горизонтали. Точные LBA и размер — в списке.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Информация о разделе</string>
-    <string name="partitions_info_help_text">Имя — это имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна. RO означает гарантированную защиту EFI от записи; прочерк — состояние записи не проверено, потому что просмотр монтирует тома только для чтения, а записываемый том создаётся лишь на время операции. Свободное место измеряется внутри файловой системы, а не в свободной области таблицы.</string>
+    <string name="partitions_info_help_text">Имя — это имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна. RO означает гарантированную защиту EFI от записи; состояние записи показывается только когда измерено, иначе явно остаётся неизвестным. Свободное место измеряется внутри файловой системы, а не в свободной области таблицы.</string>
     <string name="partitions_info_name_label">Имя</string>
     <string name="partitions_write_state_label">Состояние записи</string>
     <string name="partitions_write_ro">Защита EFI от записи активна</string>
@@ -256,9 +259,14 @@
     <string name="files_open_folder">Открыть папку</string>
     <string name="files_select_file">Выбрать файл</string>
     <string name="files_pick_hint">Выберите файл</string>
+    <string name="files_pick_folder_hint">Откройте нужную папку ниже, затем подтвердите выбор этой папки.</string>
     <string name="files_pick_device">Выбрать с устройства</string>
     <string name="files_pick_use_file">Использовать файл</string>
-    <string name="files_pick_back">Назад</string>
+    <string name="files_pick_close">Закрыть выбор</string>
+    <string name="files_pick_title_image">Выбор образа Windows</string>
+    <string name="files_pick_title_raw">Выбор источника raw-образа</string>
+    <string name="files_pick_title_ventoy">Выбор ventoy.json</string>
+    <string name="files_pick_title_template">Выбор unattend XML</string>
     <string name="files_more_actions">Дополнительные действия с файлом</string>
     <string name="type_folder">Папка</string>
     <string name="type_iso">ISO-образ</string>
@@ -534,6 +542,12 @@
         <item quantity="many">%d регионов</item>
         <item quantity="other">%d регионов</item>
     </plurals>
+    <plurals name="files_delete_files_confirm">
+        <item quantity="one">Удалить %d файл? Это действие нельзя отменить.</item>
+        <item quantity="few">Удалить %d файла? Это действие нельзя отменить.</item>
+        <item quantity="many">Удалить %d файлов? Это действие нельзя отменить.</item>
+        <item quantity="other">Удалить %d файлов? Это действие нельзя отменить.</item>
+    </plurals>
     <string name="confirm_title">Подтверждение действия</string>
     <string name="notification_channel_operations">Операции с диском</string>
     <string name="notification_operation_text">Выполняется операция с диском</string>
@@ -721,6 +735,15 @@
     <string name="settings_add_header">Добавить или перезаписать ключ</string>
     <string name="settings_key_label">Ключ</string>
     <string name="settings_value_label">Значение</string>
+    <string name="settings_problem_key_empty">Ключ не может быть пустым</string>
+    <string name="settings_problem_key_too_long">Ключ длиннее %1$d символов</string>
+    <string name="settings_problem_key_charset">В ключе допустимы только буквы, цифры, \'_\', \'.\' и \'-\'</string>
+    <string name="settings_problem_value_too_long">Значение длиннее %1$d символов</string>
+    <string name="settings_problem_value_control_chars">Значение не должно содержать управляющие символы</string>
+    <string name="settings_problem_value_not_allowed">%1$s ожидает %2$s, получено &quot;%3$s&quot;</string>
+    <string name="settings_problem_duplicate_key">Повторяющийся ключ &quot;%1$s&quot;</string>
+    <string name="settings_problem_duplicate_keys">Нельзя безопасно изменить повторяющиеся ключи Ventoy: %1$s</string>
+    <string name="settings_problem_no_changes">Нет изменений настроек Ventoy для применения</string>
     <string name="settings_clear_field">Очистить</string>
     <string name="settings_delete_row">Удалить строку</string>
     <string name="settings_add">Добавить параметр</string>
@@ -795,7 +818,7 @@
     <string name="unattend_unknown_note">Неизвестные элементы внутри файла сохраняются; результат не будет байт-в-байт идентичен исходному.</string>
     <string name="unattend_open_editor">Открыть редактор</string>
     <string name="unattend_editor_title">Редактирование unattend XML</string>
-    <string name="unattend_editor_help">Редактируйте полный текст файла ответов. Применить записывает точные байты после проверки; Отмена отбрасывает черновик. Неизвестные элементы остаются как введены.</string>
+    <string name="unattend_editor_help">Редактируйте полный текст файла ответов. «Сохранить» записывает точные байты после проверки; X отбрасывает черновик. Неизвестные элементы остаются как введены.</string>
     <string name="unattend_editor_invalid">XML отклонён: нужен корректный unattend XML без DOCTYPE и ENTITY.</string>
     <string name="unattend_editor_destructive_ack">Я понимаю, что эти разделы могут стереть диски на целевом компьютере</string>
     <string name="windows_selected_image">Выбранный образ:</string>

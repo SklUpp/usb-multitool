@@ -66,6 +66,9 @@
     <string name="partitions_filesystem_label">File system</string>
     <string name="partitions_size_label">Size</string>
     <string name="partitions_delete_action">Delete partition…</string>
+    <string name="partitions_reveal_selected_action">Show selected partition</string>
+    <string name="partitions_efi_toggle_action">Change EFI role</string>
+    <string name="partitions_bootable_toggle_action">Change bootable flag</string>
     <string name="partitions_region_label">Region</string>
     <string name="partitions_create_action">Create partition…</string>
     <string name="partitions_capacity_unknown">Capacity unknown</string>
@@ -75,7 +78,7 @@
     <string name="partitions_strip_scale_note">Relative to disk LBA; each partition and free region keeps a 48 dp minimum and scrolls horizontally when needed. Exact LBA and size are in the list.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Partition information</string>
-    <string name="partitions_info_help_text">Name is the table entry name; the volume label comes from the filesystem and can be unknown. RO means guaranteed EFI write protection; a dash means the write state is not verified because browsing mounts volumes read-only and a writable mount exists only per mutation. Free space is measured inside the filesystem, not the table free region.</string>
+    <string name="partitions_info_help_text">Name is the table entry name; the volume label comes from the filesystem and can be unknown. RO means guaranteed EFI write protection; the write state is shown only when measured and otherwise stays explicitly unknown. Free space is measured inside the filesystem, not the table free region.</string>
     <string name="partitions_info_name_label">Name</string>
     <string name="partitions_write_state_label">Write state</string>
     <string name="partitions_write_ro">EFI write protection is active</string>
@@ -256,9 +259,14 @@
     <string name="files_open_folder">Open folder</string>
     <string name="files_select_file">Select file</string>
     <string name="files_pick_hint">Choose a file</string>
+    <string name="files_pick_folder_hint">Open the folder you need below, then confirm this folder.</string>
     <string name="files_pick_device">Choose from device</string>
     <string name="files_pick_use_file">Use file</string>
-    <string name="files_pick_back">Back</string>
+    <string name="files_pick_close">Close picker</string>
+    <string name="files_pick_title_image">Choose Windows image</string>
+    <string name="files_pick_title_raw">Choose raw image source</string>
+    <string name="files_pick_title_ventoy">Choose ventoy.json</string>
+    <string name="files_pick_title_template">Choose unattend XML</string>
     <string name="files_more_actions">More file actions</string>
     <string name="type_folder">Folder</string>
     <string name="type_iso">ISO image</string>
@@ -533,6 +541,12 @@
         <item quantity="many">%d regions</item>
         <item quantity="other">%d regions</item>
     </plurals>
+    <plurals name="files_delete_files_confirm">
+        <item quantity="one">Delete %d file? This cannot be undone.</item>
+        <item quantity="few">Delete %d files? This cannot be undone.</item>
+        <item quantity="many">Delete %d files? This cannot be undone.</item>
+        <item quantity="other">Delete %d files? This cannot be undone.</item>
+    </plurals>
     <string name="confirm_title">Confirm action</string>
     <string name="notification_channel_operations">Disk operations</string>
     <string name="notification_operation_text">Disk operation in progress</string>
@@ -720,6 +734,15 @@
     <string name="settings_add_header">Add or overwrite a key</string>
     <string name="settings_key_label">Key</string>
     <string name="settings_value_label">Value</string>
+    <string name="settings_problem_key_empty">Key cannot be empty</string>
+    <string name="settings_problem_key_too_long">Key is longer than %1$d characters</string>
+    <string name="settings_problem_key_charset">Key may contain only letters, digits, \'_\', \'.\', and \'-\'</string>
+    <string name="settings_problem_value_too_long">Value is longer than %1$d characters</string>
+    <string name="settings_problem_value_control_chars">Value must not contain control characters</string>
+    <string name="settings_problem_value_not_allowed">%1$s expects %2$s, got &quot;%3$s&quot;</string>
+    <string name="settings_problem_duplicate_key">Duplicate key &quot;%1$s&quot;</string>
+    <string name="settings_problem_duplicate_keys">Cannot edit duplicate Ventoy keys safely: %1$s</string>
+    <string name="settings_problem_no_changes">No Ventoy setting changes to apply</string>
     <string name="settings_clear_field">Clear</string>
     <string name="settings_delete_row">Delete row</string>
     <string name="settings_add">Add parameter</string>
@@ -794,7 +817,7 @@
     <string name="unattend_unknown_note">Unknown elements inside the file are preserved; the result is not byte-identical to the source.</string>
     <string name="unattend_open_editor">Open editor</string>
     <string name="unattend_editor_title">Edit unattend XML</string>
-    <string name="unattend_editor_help">Edit the full answer-file text. Apply writes the exact bytes after validation; Cancel discards the draft. Unknown elements stay as typed.</string>
+    <string name="unattend_editor_help">Edit the full answer-file text. Save writes the exact bytes after validation; the X discards the draft. Unknown elements stay as typed.</string>
     <string name="unattend_editor_invalid">The XML is refused: it must be well-formed unattend XML without DOCTYPE or ENTITY declarations.</string>
     <string name="unattend_editor_destructive_ack">I understand these sections can erase disks on the target computer</string>
     <string name="windows_selected_image">Selected image:</string>

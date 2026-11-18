@@ -161,6 +161,22 @@ private fun reducedMotionEnabled(context: Context): Boolean = runCatching {
 private fun usbContentAvailable(presence: DevicePresence): Boolean =
     presence == DevicePresence.Ready || presence == DevicePresence.Busy
 
+/**
+ * Which tab may render its content. An open Files pick session stays mounted even when the
+ * stick disappears: the reducer still owns exit/cancel, and hiding it would strand the
+ * session behind a disabled header with no visible close control.
+ */
+internal fun shellTabContentVisible(
+    tab: ShellTab,
+    presence: DevicePresence,
+    pickOpen: Boolean,
+): Boolean =
+    when {
+        tab == ShellTab.Files && pickOpen -> true
+        tab == ShellTab.Files || tab == ShellTab.Partitions -> usbContentAvailable(presence)
+        else -> true
+    }
+
 
 /**
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
@@ -213,6 +229,8 @@ fun AppShell(
     val isDark = state.darkTheme
     val colors = if (isDark) darkDesignColors() else lightDesignColors()
     val baseContext = LocalContext.current
+    // One PackageManager read per composition scope, not one per Settings recomposition.
+    val installedVersion = remember { installedVersionName(baseContext) }
     val localizedContext = remember(baseContext, state.language) {
         createLocalizedContext(baseContext, state.language)
     }
@@ -511,8 +529,7 @@ fun AppShell(
                             } else {
                             // Nested presence transition: tab switches fade/scale above;
                             // USB attach/detach fades the empty state within the same tab.
-                            val gated = target in listOf(ShellTab.Files, ShellTab.Partitions)
-                            val visible = !gated || usbContentAvailable(state.presence)
+                            val visible = shellTabContentVisible(target, state.presence, pickOpen)
                             AnimatedContent(
                                 targetState = visible,
                                 transitionSpec = {
@@ -568,7 +585,7 @@ fun AppShell(
                                 )
                                 ShellTab.Settings -> SettingsScreen(
                                     state = state,
-                                    versionName = installedVersionName(LocalContext.current),
+                                    versionName = installedVersion,
                                     onIntent = onIntent,
                                     onBack = {
                                         onIntent(
@@ -1050,6 +1067,13 @@ private fun LogOpenButton(
     }
 }
 
+/**
+ * One numeric progress line: percent, throughput and ETA only when measured. Each fact
+ * stays separate so a missing speed never hides a known ETA and vice versa.
+ */
+internal fun operationProgressFacts(metric: String?, speed: String?, eta: String?): String =
+    listOfNotNull(metric, speed, eta).filter { it.isNotEmpty() }.joinToString(" · ")
+
 /** Operation status surface; Journal and overwrite prompts stay outside status. */
 @Composable
 internal fun StatusLogPanel(
@@ -1106,6 +1130,10 @@ internal fun StatusLogPanel(
         op.bytesDone > 0L -> DeviceIdentity.formatCapacity(op.bytesDone.toULong())
         else -> operationStateLabel(op.state)
     }
+    val speedLabel =
+        op?.takeIf { running && it.bytesPerSecond > 0L }
+            ?.let { formatBinaryBytesPerSecond(it.bytesPerSecond) }
+    val progressFacts = operationProgressFacts(metric, speedLabel, etaLabel)
     val readbackNote = op?.rawWriteResult?.let { result ->
         when (val verdict = result.readback) {
             ReadbackVerdict.Verified -> if (result.writtenBytes.toULong() == result.range.byteLength(state.diskSectorSize)) stringResource(R.string.raw_readback_verified) else stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
@@ -1116,8 +1144,7 @@ internal fun StatusLogPanel(
     }
     val accessibleMessage = buildList {
         add(title)
-        metric?.let(::add)
-        etaLabel?.let(::add)
+        progressFacts.takeIf { it.isNotEmpty() }?.let(::add)
         details.forEach(::add)
         readbackNote?.takeIf { it !in details }?.let(::add)
     }.joinToString(" · ")
@@ -1359,12 +1386,14 @@ internal fun StatusLogPanel(
                                 )
                             }
                         }
-                        metric?.let {
+                        if (metric != null) {
                             Text(
-                                text = if (running && etaLabel != null && op != null && op.bytesTotal > 0L) "$it · $etaLabel" else it,
+                                text = progressFacts,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = content,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                         if (interactive && cancelable) {
@@ -2068,8 +2097,6 @@ internal fun SwitchRow(
                     text = it,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

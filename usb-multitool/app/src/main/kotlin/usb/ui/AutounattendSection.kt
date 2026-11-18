@@ -1,5 +1,6 @@
 package usb.ui
 
+import android.content.res.Resources
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -1003,6 +1005,7 @@ private fun GlobalSettingsEditorDialog(
     }
     // MD3 full-screen dialog: single TopAppBar (X/title/Save), no bottom duplicate footer.
     // Backend/commit path untouched: save lambda identical to old Apply footer.
+    val context = LocalContext.current
     fun commitDrafts() {
         val rawOriginalCounts = entries.groupingBy { it.key }.eachCount()
         val duplicateOriginalCounts = rawOriginalCounts.filterValues { it > 1 }
@@ -1036,16 +1039,23 @@ private fun GlobalSettingsEditorDialog(
         }.toSet()
         val merged = (renamedOrDeleted + knownRemoved).map { VentoyControlSetting(it, null) } + settings
         val validation = when {
-            blankExistingKey || blankNewKey -> "Key cannot be empty"
-            duplicateKeys.isNotEmpty() -> "Cannot edit duplicate Ventoy keys safely: ${duplicateKeys.joinToString()}"
-            else -> VentoyControlCatalog.problem(merged)
+            blankExistingKey || blankNewKey ->
+                context.resources.controlIssueText(VentoyControlCatalog.Issue.EmptyKey)
+            duplicateKeys.isNotEmpty() ->
+                context.resources.getString(
+                    R.string.settings_problem_duplicate_keys,
+                    duplicateKeys.joinToString(),
+                )
+            else -> VentoyControlCatalog.issue(merged)?.let {
+                context.resources.controlIssueText(it)
+            }
         }
         if (validation != null) {
             applyProblem = validation
         } else if (state.ventoySettingsSource.isDefaultPath() &&
             settings.isEmpty() && renamedOrDeleted.isEmpty() && knownRemoved.isEmpty()
         ) {
-            applyProblem = "No Ventoy setting changes to apply"
+            applyProblem = context.resources.getString(R.string.settings_problem_no_changes)
         } else {
             applyProblem = null
             onIntent(UiIntent.CommitAndApplyVentoyControls(
@@ -1147,6 +1157,7 @@ private fun AutounattendRawEditorDialog(
     }
     val invalidMessage = stringResource(R.string.unattend_editor_invalid)
     val destructiveAckRequired = stringResource(R.string.unattend_editor_destructive_ack)
+    val xmlFieldDescription = stringResource(R.string.unattend_editor_title)
     val closeLabel = stringResource(R.string.settings_cancel)
     val saveLabel = stringResource(R.string.settings_save)
     fun commitDraft() {
@@ -1237,7 +1248,8 @@ private fun AutounattendRawEditorDialog(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .weight(1f)
+                        .semantics { contentDescription = xmlFieldDescription },
                     enabled = actionsEnabled,
                     textStyle = MaterialTheme.typography.bodySmall,
                 )
@@ -1528,11 +1540,36 @@ private fun ExtraControlRow(
     }
 }
 
+/** Localized typed control problem; the key, limit and received value are preserved. */
+private fun Resources.controlIssueText(issue: VentoyControlCatalog.Issue): String =
+    when (issue) {
+        VentoyControlCatalog.Issue.EmptyKey ->
+            getString(R.string.settings_problem_key_empty)
+        is VentoyControlCatalog.Issue.KeyTooLong ->
+            getString(R.string.settings_problem_key_too_long, issue.max)
+        VentoyControlCatalog.Issue.KeyCharset ->
+            getString(R.string.settings_problem_key_charset)
+        is VentoyControlCatalog.Issue.ValueTooLong ->
+            getString(R.string.settings_problem_value_too_long, issue.max)
+        VentoyControlCatalog.Issue.ValueControlChars ->
+            getString(R.string.settings_problem_value_control_chars)
+        is VentoyControlCatalog.Issue.ValueNotAllowed ->
+            getString(
+                R.string.settings_problem_value_not_allowed,
+                issue.key,
+                issue.expected,
+                issue.actual,
+            )
+        is VentoyControlCatalog.Issue.DuplicateKey ->
+            getString(R.string.settings_problem_duplicate_key, issue.key)
+    }
+
 @Composable
 private fun AddControlRow(actionsEnabled: Boolean, onIntent: (UiIntent) -> Unit) {
     var key by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
-    var problem by remember { mutableStateOf<String?>(null) }
+    var problem by remember { mutableStateOf<VentoyControlCatalog.Issue?>(null) }
+    val resources = LocalContext.current.resources
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = stringResource(R.string.settings_add_header),
@@ -1565,7 +1602,10 @@ private fun AddControlRow(actionsEnabled: Boolean, onIntent: (UiIntent) -> Unit)
         }
         problem?.let {
             Text(
-                text = stringResource(R.string.settings_validation, it),
+                text = stringResource(
+                    R.string.settings_validation,
+                    resources.controlIssueText(it),
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -1574,8 +1614,8 @@ private fun AddControlRow(actionsEnabled: Boolean, onIntent: (UiIntent) -> Unit)
             onClick = {
                 val trimmed = key.trim()
                 val validation =
-                    VentoyControlCatalog.keyProblem(trimmed)
-                        ?: VentoyControlCatalog.valueProblem(trimmed, value)
+                    VentoyControlCatalog.keyIssue(trimmed)
+                        ?: VentoyControlCatalog.valueIssue(trimmed, value)
                 if (validation != null) {
                     problem = validation
                 } else {

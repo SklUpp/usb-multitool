@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -67,10 +68,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.disabled
@@ -79,6 +82,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import usb.formatBinaryBytesPerSecond
 import usb.formatEtaDuration
 import usb.fs.FilesystemSpace
 import usb.multitool.R
@@ -578,7 +582,7 @@ fun FilesScreen(
             count == 1 ->
                 stringResource(R.string.files_delete_confirm, singleName)
             else ->
-                stringResource(R.string.files_delete_confirm, "$count items")
+                pluralStringResource(R.plurals.files_delete_files_confirm, count, count)
         }
         AlertDialog(
             onDismissRequest = { pendingDeleteSelection = null },
@@ -670,6 +674,57 @@ fun FilesScreen(
     }
 }
 
+@Composable
+private fun filesPickTitle(mode: FilesPickMode): String =
+    stringResource(
+        when (mode.purpose) {
+            FilesPickPurpose.WindowsImage -> R.string.files_pick_title_image
+            FilesPickPurpose.RawSource -> R.string.files_pick_title_raw
+            FilesPickPurpose.VentoyConfig -> R.string.files_pick_title_ventoy
+            FilesPickPurpose.WindowsTemplate -> R.string.files_pick_title_template
+        },
+    )
+
+/**
+ * Fixed picker header: names the task and keeps the exit reachable above the scrolling
+ * folder card. Cancellation still goes through the reducer, so a running operation and an
+ * open confirmation keep their guards: the header only submits the same intent as Back.
+ */
+@Composable
+private fun FilesPickHeader(mode: FilesPickMode, onCancel: () -> Unit) {
+    val title = filesPickTitle(mode)
+    val closeDescription = stringResource(R.string.files_pick_close)
+    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { heading() },
+            )
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = closeDescription },
+            ) {
+                GlyphIcon(Glyph.Close, size = 22.dp)
+            }
+        }
+    }
+}
+
 /**
  * Simplified Files screen: only navigation, one explicit choice, and (for the install
  * image) the phone copy action. Every destructive or unrelated file action is absent;
@@ -693,7 +748,7 @@ private fun FilesPickScreen(
     val upDescription = stringResource(R.string.files_up)
     val hint = stringResource(
         if (mode.target == FilesPickTarget.Folder) {
-            R.string.import_folder_use
+            R.string.files_pick_folder_hint
         } else {
             R.string.files_pick_hint
         },
@@ -758,161 +813,208 @@ private fun FilesPickScreen(
 
     // Simplified picker uses the same directional motion as the normal browser: forward
     // content enters from the reading-start side, back mirrors it, reduced motion is flat.
-    AnimatedContent(
-        targetState = directoryContentKey(
-            state,
-            if (mode.target == FilesPickTarget.Folder) state.files.filter { it.isDirectory } else state.files,
-        ),
-        transitionSpec = {
-            directoryContentTransform(
-                directoryMotion(initialState.path, targetState.path),
-                pickReducedMotion,
-                pickLayoutDirection == LayoutDirection.Rtl,
-            )
-        },
-        label = "pick-folder",
-        modifier = modifier.fillMaxSize(),
-    ) { target ->
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 16.dp),
-        userScrollEnabled = !transition.isRunning,
-    ) {
-        item(key = "pick-partition") {
-            PartitionChoiceRow(
-                options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
-                partitions = state.partitions,
-                selectedId = mode.partitionId,
-                writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
-                sizeLabel = partition?.let { partitionSizeLabel(state, it) },
-                space = partition?.let(state::filesystemSpace),
-                enabled = canAct && !transition.isRunning,
-                onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
-            )
-        }
-
-        item(key = "pick-folder") {
-            SectionCard(
-                title = stringResource(R.string.files_section_folder),
-                subtitle = target.path,
-                titleColor = MaterialTheme.colorScheme.onSurface,
-                trailing = {
-                    IconButton(
-                        onClick = { onIntent(UiIntent.NavigateUp) },
-                        enabled = canAct && target.path != "/" && !transition.isRunning,
-                        modifier = Modifier.semantics { contentDescription = upDescription },
-                    ) {
-                        GlyphIcon(Glyph.ArrowUp, size = 22.dp)
-                    }
-                },
-            ) {
-                Text(
-                    text = hint,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+    Column(modifier = modifier.fillMaxSize()) {
+    FilesPickHeader(mode = mode, onCancel = { onIntent(UiIntent.CancelFilesPick) })
+        AnimatedContent(
+            targetState = directoryContentKey(
+                state,
+                if (mode.target == FilesPickTarget.Folder) state.files.filter { it.isDirectory } else state.files,
+            ),
+            transitionSpec = {
+                directoryContentTransform(
+                    directoryMotion(initialState.path, targetState.path),
+                    pickReducedMotion,
+                    pickLayoutDirection == LayoutDirection.Rtl,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                ) {
-                    if (mode.target == FilesPickTarget.Folder) {
-                        OutlinedButton(
-                            onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
-                            enabled = canAct && listingUsable && !transition.isRunning,
+            },
+            label = "pick-folder",
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) { target ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 16.dp),
+            userScrollEnabled = !transition.isRunning,
+        ) {
+            item(key = "pick-partition") {
+                PartitionChoiceRow(
+                    options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
+                    partitions = state.partitions,
+                    selectedId = mode.partitionId,
+                    writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
+                    sizeLabel = partition?.let { partitionSizeLabel(state, it) },
+                    space = partition?.let(state::filesystemSpace),
+                    enabled = canAct && !transition.isRunning,
+                    onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
+                )
+            }
+
+            item(key = "pick-folder") {
+                SectionCard(
+                    title = stringResource(R.string.files_section_folder),
+                    titleColor = MaterialTheme.colorScheme.onSurface,
+                    trailing = {
+                        IconButton(
+                            onClick = { onIntent(UiIntent.NavigateUp) },
+                            enabled = canAct && target.path != "/" && !transition.isRunning,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics { contentDescription = upDescription },
                         ) {
-                            Text(stringResource(R.string.import_folder_use))
+                            GlyphIcon(Glyph.ArrowUp, size = 22.dp)
                         }
-                    }
-                    TextButton(
-                        onClick = { onIntent(UiIntent.CancelFilesPick) },
-                        enabled = canAct && !transition.isRunning,
+                    },
+                ) {
+                    // One monospace line with a trailing slash, start-ellipsized like the browser
+                    // path: a deep FAT path must not wrap and push the rows down.
+                    Text(
+                        text = folderPathLabel(target.path),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.StartEllipsis,
+                        softWrap = false,
+                    )
+                    Text(
+                        text = hint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     ) {
-                        Text(stringResource(R.string.files_pick_back))
-                    }
-                    if (mode.purpose == FilesPickPurpose.WindowsImage &&
-                        mode.target == FilesPickTarget.File
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                onRequestDeviceImage(state.currentPath, mode.sessionId)
-                            },
-                            enabled =
-                                    mode.partitionId == "1" &&
-                                canAct && !transition.isRunning &&
-                                    state.isoImportSafInFlight == null &&
-                                    state.isoImportUsbInFlight == null &&
-                                    state.pendingIsoImport == null,
+                        if (mode.target == FilesPickTarget.Folder) {
+                            OutlinedButton(
+                                onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
+                                enabled = canAct && listingUsable && !transition.isRunning,
+                            ) {
+                                Text(stringResource(R.string.import_folder_use))
+                            }
+                        }
+                        if (mode.purpose == FilesPickPurpose.WindowsImage &&
+                            mode.target == FilesPickTarget.File
                         ) {
-                            Text(stringResource(R.string.files_pick_device))
+                            OutlinedButton(
+                                onClick = {
+                                    onRequestDeviceImage(state.currentPath, mode.sessionId)
+                                },
+                                enabled =
+                                        mode.partitionId == "1" &&
+                                    canAct && !transition.isRunning &&
+                                        state.isoImportSafInFlight == null &&
+                                        state.isoImportUsbInFlight == null &&
+                                        state.pendingIsoImport == null,
+                            ) {
+                                Text(stringResource(R.string.files_pick_device))
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (copying != null) {
-            item(key = "pick-copy") {
-                SectionCard(
-                    title = stringResource(R.string.import_title),
-                    titleColor = MaterialTheme.colorScheme.onSurface,
-                ) {
-                    val failed =
-                        copying.state == OperationState.Failed ||
-                            copying.state == OperationState.Partial
-                    Text(
-                        text =
-                            "${operationLabel(copying)} · " +
-                                operationStateLabel(copying.state),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color =
-                            if (failed) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                    )
-                    if (copying.bytesTotal > 0L) {
-                        LinearProgressIndicator(
-                            progress = { copying.fraction },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 4.dp),
-                        )
+            if (copying != null) {
+                item(key = "pick-copy") {
+                    SectionCard(
+                        title = stringResource(R.string.import_title),
+                        titleColor = MaterialTheme.colorScheme.onSurface,
+                    ) {
+                        val failed =
+                            copying.state == OperationState.Failed ||
+                                copying.state == OperationState.Partial
                         Text(
                             text =
-                                "${DeviceIdentity.formatCapacity(copying.bytesDone.coerceAtLeast(0L).toULong())}" +
-                                    " / ${DeviceIdentity.formatCapacity(copying.bytesTotal.toULong())}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                "${operationLabel(copying)} · " +
+                                    operationStateLabel(copying.state),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color =
+                                if (failed) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
                         )
-                        if (copying.state == OperationState.Running) {
-                            remainingSeconds(copying.bytesDone, copying.bytesTotal, copying.bytesPerSecond)?.let { eta ->
+                        if (copying.bytesTotal > 0L) {
+                            LinearProgressIndicator(
+                                progress = { copying.fraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 4.dp),
+                            )
+                            Text(
+                                text =
+                                    "${DeviceIdentity.formatCapacity(copying.bytesDone.coerceAtLeast(0L).toULong())}" +
+                                        " / ${DeviceIdentity.formatCapacity(copying.bytesTotal.toULong())}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            val copyPercent =
+                                if (copying.bytesTotal > 0L) "${(copying.fraction * 100).toInt()}%" else null
+                            val copySpeed =
+                                copying
+                                    .takeIf {
+                                        it.state == OperationState.Running && it.bytesPerSecond > 0L
+                                    }
+                                    ?.let { formatBinaryBytesPerSecond(it.bytesPerSecond) }
+                            val copyEta =
+                                if (copying.state == OperationState.Running) {
+                                    remainingSeconds(
+                                        copying.bytesDone,
+                                        copying.bytesTotal,
+                                        copying.bytesPerSecond,
+                                    )?.let { stringResource(R.string.op_eta, formatEtaDuration(it)) }
+                                } else {
+                                    null
+                                }
+                            val copyProgress = operationProgressFacts(copyPercent, copySpeed, copyEta)
+                            if (copyProgress.isNotEmpty()) {
                                 Text(
-                                    text = stringResource(R.string.op_eta, formatEtaDuration(eta)),
+                                    text = copyProgress,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
+                        (copying.errorMessage ?: copying.resultMessage)?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color =
+                                    if (failed) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                            )
+                        }
+                        if (copying.state == OperationState.Running && copying.cancelable) {
+                            TextButton(
+                                onClick = { onIntent(UiIntent.CancelOperation(copying.token)) },
+                                enabled = !transition.isRunning,
+                            ) {
+                                Text(stringResource(R.string.action_cancel))
+                            }
+                        }
                     }
-                    (copying.errorMessage ?: copying.resultMessage)?.let { message ->
+                }
+            }
+
+            if (state.isoImportSafInFlight != null) {
+                item(key = "pick-inspecting") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Text(
-                            text = message,
+                            text = stringResource(R.string.import_inspecting),
                             style = MaterialTheme.typography.bodySmall,
-                            color =
-                                if (failed) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
+                            modifier = Modifier.weight(1f),
                         )
-                    }
-                    if (copying.state == OperationState.Running && copying.cancelable) {
                         TextButton(
-                            onClick = { onIntent(UiIntent.CancelOperation(copying.token)) },
+                            onClick = { onIntent(UiIntent.CancelWindowsIsoImport) },
                             enabled = !transition.isRunning,
                         ) {
                             Text(stringResource(R.string.action_cancel))
@@ -920,101 +1022,79 @@ private fun FilesPickScreen(
                     }
                 }
             }
-        }
-
-        if (state.isoImportSafInFlight != null) {
-            item(key = "pick-inspecting") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+            state.isoImportError?.let { problem ->
+                item(key = "pick-import-error") {
                     Text(
-                        text = stringResource(R.string.import_inspecting),
+                        text = stringResource(unreadableText(problem)),
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.error,
                     )
-                    TextButton(
-                        onClick = { onIntent(UiIntent.CancelWindowsIsoImport) },
-                        enabled = !transition.isRunning,
-                    ) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
                 }
             }
-        }
-        state.isoImportError?.let { problem ->
-            item(key = "pick-import-error") {
-                Text(
-                    text = stringResource(unreadableText(problem)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
 
-        // Snapshot render: leaving content keeps its own listing state and rows, so the
-        // exit slide never swaps in the newly loaded directory. Header above stays on
-        // live state so the path toolbar always names the current directory.
-        val pickRows = target.visibleFiles
-        val pickListingState = target.listingState
-        val pickError = target.error.ifEmpty { null }
-        when {
-            pickListingState == FilesListingState.Failed.name -> item(key = "pick-error") {
-                EmptyHint(pickError ?: stringResource(R.string.import_folder_read_failed))
-            }
-            pickListingState == FilesListingState.Loading.name -> item(key = "pick-loading") {
-                EmptyHint(stringResource(R.string.files_listing))
-            }
-            pickListingState == FilesListingState.Stale.name -> item(key = "pick-not-loaded") {
-                EmptyHint(stringResource(R.string.import_folder_not_loaded))
-            }
-            pickRows.isEmpty() -> item(key = "pick-empty") {
-                EmptyHint(stringResource(R.string.files_empty_folder))
-            }
-                else -> items(pickRows, key = { it.name }) { entry ->
-                // Snapshot row: leaving content never sees live-list swaps mid-transition.
-                val picked = selectedPickState?.value?.takeIf { it.name == entry.name }
-                    ?.takeIf { live -> live in pickRows }
-                Column(modifier = Modifier.animateItem()) {
-                    // Keep the confirmation next to the chosen row, so it cannot be
-                    // scrolled off-screen together with the header.
-                    if (picked != null && selectedPickEntry != null) {
-                        OutlinedButton(
-                            onClick = {
-                                // The reducer revalidates the name against live files.
-                                onIntent(UiIntent.ConfirmFilesPickFile(entry.name))
-                            },
-                            enabled = canAct && listingUsable && !transition.isRunning,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                        ) {
-                            Text(stringResource(R.string.files_pick_use_file))
+            // Snapshot render: leaving content keeps its own listing state and rows, so the
+            // exit slide never swaps in the newly loaded directory. Header above stays on
+            // live state so the path toolbar always names the current directory.
+            val pickRows = target.visibleFiles
+            val pickListingState = target.listingState
+            val pickError = target.error.ifEmpty { null }
+            when {
+                pickListingState == FilesListingState.Failed.name -> item(key = "pick-error") {
+                    EmptyHint(pickError ?: stringResource(R.string.import_folder_read_failed))
+                }
+                pickListingState == FilesListingState.Loading.name -> item(key = "pick-loading") {
+                    EmptyHint(stringResource(R.string.files_listing))
+                }
+                pickListingState == FilesListingState.Stale.name -> item(key = "pick-not-loaded") {
+                    EmptyHint(stringResource(R.string.import_folder_not_loaded))
+                }
+                pickRows.isEmpty() -> item(key = "pick-empty") {
+                    EmptyHint(stringResource(R.string.files_empty_folder))
+                }
+                    else -> items(pickRows, key = { it.name }) { entry ->
+                    // Snapshot row: leaving content never sees live-list swaps mid-transition.
+                    val picked = selectedPickState?.value?.takeIf { it.name == entry.name }
+                        ?.takeIf { live -> live in pickRows }
+                    Column(modifier = Modifier.animateItem()) {
+                        // Keep the confirmation next to the chosen row, so it cannot be
+                        // scrolled off-screen together with the header.
+                        if (picked != null && selectedPickEntry != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    // The reducer revalidates the name against live files.
+                                    onIntent(UiIntent.ConfirmFilesPickFile(entry.name))
+                                },
+                                enabled = canAct && listingUsable && !transition.isRunning,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                            ) {
+                                Text(stringResource(R.string.files_pick_use_file))
+                            }
                         }
+                        FilesPickRow(
+                            entry = entry,
+                            isSelected = picked != null && selectedPickEntry != null,
+                            actionsEnabled = canAct && !transition.isRunning,
+                            onToggleSelect = {
+                                val live = entries.firstOrNull { it.name == entry.name } ?: return@FilesPickRow
+                                selectedPickState?.value =
+                                    if (selectedPickState?.value == live) null else live
+                            },
+                            onNavigate = {
+                                selectedPickState?.value = null
+                                onIntent(
+                                    UiIntent.OpenDirectory(
+                                        fatChildPath(target.path, entry.name),
+                                    ),
+                                )
+                            },
+                        )
                     }
-                    FilesPickRow(
-                        entry = entry,
-                        isSelected = picked != null && selectedPickEntry != null,
-                        actionsEnabled = canAct && !transition.isRunning,
-                        onToggleSelect = {
-                            val live = entries.firstOrNull { it.name == entry.name } ?: return@FilesPickRow
-                            selectedPickState?.value =
-                                if (selectedPickState?.value == live) null else live
-                        },
-                        onNavigate = {
-                            selectedPickState?.value = null
-                            onIntent(
-                                UiIntent.OpenDirectory(
-                                    fatChildPath(target.path, entry.name),
-                                ),
-                            )
-                        },
-                    )
                 }
             }
         }
-    }
+        }
     }
 
     state.pendingIsoImport?.let { proposal ->
@@ -1229,8 +1309,8 @@ private fun FolderSubblock(
                     onClick = onNavigateUp,
                     enabled = canNavigateUp,
                     modifier = Modifier
-                        .size(40.dp)
-                        .semantics { contentDescription = upDescription }
+                        .size(48.dp)
+                        .semantics { contentDescription = upDescription },
                 ) {
                     GlyphIcon(glyph = Glyph.ArrowUp, size = 22.dp)
                 }
@@ -1239,9 +1319,14 @@ private fun FolderSubblock(
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
+                        .clickable(
+                            enabled = canNavigateUp,
+                            onClickLabel = upDescription,
+                            role = Role.Button,
+                            onClick = onNavigateUp,
+                        )
                         .padding(start = 4.dp)
-                        .clearAndSetSemantics { contentDescription = pathA11y }
-                        .clickable(enabled = canNavigateUp, onClick = onNavigateUp),
+                        .semantics { contentDescription = pathA11y },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = FontFamily.Monospace,
@@ -1382,19 +1467,22 @@ private fun PartitionChoiceRow(
             onDismissRequest = { expanded = false },
         ) {
             options.forEach { (value, text) ->
+                val isSelected = value == selectedId
                 DropdownMenuItem(
                     text = { Text(text) },
                     onClick = {
                         expanded = false
                         onSelect(value)
                     },
-                    trailingIcon = if (value == selectedId) {
+                    modifier =
+                        if (isSelected) {
+                            Modifier.semantics { this.selected = true }
+                        } else {
+                            Modifier
+                        },
+                    trailingIcon = if (isSelected) {
                         {
-                            Text(
-                                text = "✓",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
+                            GlyphIcon(Glyph.Check, size = 18.dp)
                         }
                     } else {
                         null
@@ -1508,8 +1596,10 @@ private fun FileRow(
             )
             val shownName = entry.name
             val parts = fileNameParts(entry.name, entry.isDirectory)
-            // The suffix is its own node so a long file name ellipsizes the base and never the
-            // extension; folders show the icon and their real name, without a trailing slash.
+            // The suffix is its own node so a long file name ellipsizes the base and keeps
+            // the extension start visible. Without a cap the suffix is measured with the
+            // whole row width: an unusually long "extension" then clips mid-glyph and
+            // collapses the base to zero.
             // The row announces the real full name once, through semantics.
             Row(
                 modifier = Modifier
@@ -1534,6 +1624,10 @@ private fun FileRow(
                         fontWeight = weight,
                         maxLines = 1,
                         softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .widthIn(max = 96.dp)
+                            .padding(start = 2.dp),
                     )
                 }
             }
