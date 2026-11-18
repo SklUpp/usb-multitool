@@ -1316,6 +1316,11 @@ data class AppUiState(
     val ejected: Boolean = false,
 
     val statusMessage: UiMessage? = null,
+    /**
+     * Bumps on every new transient message, even when [statusMessage] repeats the previous
+     * value, so the shell can show each emission once. Clearing a message never bumps.
+     */
+    val statusSequence: Long = 0L,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
     /** Provider DISPLAY_NAME for [imageUri], never an opaque document id. */
@@ -1677,6 +1682,17 @@ data class AppUiState(
     val efiPartitions: List<PartitionTab>
         get() = partitions.filter { it.readOnly }
 }
+
+/**
+ * The only way transitions publish a transient message: every non-null message bumps
+ * [AppUiState.statusSequence], so a repeated message is still a new emission for the shell.
+ * Clearing with null keeps the sequence untouched.
+ */
+internal fun AppUiState.withStatus(message: UiMessage?): AppUiState =
+    copy(
+        statusMessage = message,
+        statusSequence = if (message != null) statusSequence + 1 else statusSequence,
+    )
 
 /**
  * True while the pinned attachment, selected partition and exact geometry are still live.

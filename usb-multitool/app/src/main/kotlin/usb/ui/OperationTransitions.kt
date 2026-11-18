@@ -38,25 +38,46 @@ internal object OperationTransitions {
                 terminal && state.presence == DevicePresence.Busy -> DevicePresence.Ready
                 else -> state.presence
             },
-            statusMessage = when (progress.state) {
-                OperationState.Completed ->
-                    progress.readScanResult?.let(UiMessage::ReadScan)
-                        ?: progress.resultMessage?.let(UiMessage::Raw)
-                        ?: state.statusMessage?.takeUnless { it.isDefaultStateStatus() }
-                        ?: UiMessage.Key(UiMessageKey.Success)
-                OperationState.Cancelled ->
-                    progress.readScanResult?.let(UiMessage::ReadScan)
-                        ?: UiMessage.Key(UiMessageKey.CancelledStatus)
-                OperationState.Failed -> progress.errorMessage?.let(UiMessage::Raw)
-                    ?: UiMessage.Key(UiMessageKey.FailedStatus)
-                OperationState.Partial ->
-                    progress.readScanResult?.let(UiMessage::ReadScan)
-                        ?: (progress.resultMessage ?: progress.errorMessage)?.let(UiMessage::Raw)
-                        ?: UiMessage.Key(UiMessageKey.PartialStatus)
-                OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
-                OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
-            },
-        )
+        ).let { next ->
+            val carriedPrevious = if (progress.state == OperationState.Completed) {
+                state.statusMessage?.takeUnless { it.isDefaultStateStatus() }
+            } else {
+                null
+            }
+            val completedHasNew =
+                progress.readScanResult != null || progress.resultMessage != null
+            if (progress.state == OperationState.Completed && !completedHasNew &&
+                carriedPrevious != null
+            ) {
+                // Carried forward, not a new emission: no sequence bump.
+                next.copy(statusMessage = carriedPrevious)
+            } else {
+                val message = when (progress.state) {
+                    OperationState.Completed ->
+                        progress.readScanResult?.let(UiMessage::ReadScan)
+                            ?: progress.resultMessage?.let(UiMessage::Raw)
+                            ?: carriedPrevious
+                            ?: UiMessage.Key(UiMessageKey.Success)
+                    OperationState.Cancelled ->
+                        progress.readScanResult?.let(UiMessage::ReadScan)
+                            ?: UiMessage.Key(UiMessageKey.CancelledStatus)
+                    OperationState.Failed -> progress.errorMessage?.let(UiMessage::Raw)
+                        ?: UiMessage.Key(UiMessageKey.FailedStatus)
+                    OperationState.Partial ->
+                        progress.readScanResult?.let(UiMessage::ReadScan)
+                            ?: (progress.resultMessage ?: progress.errorMessage)
+                                ?.let(UiMessage::Raw)
+                            ?: UiMessage.Key(UiMessageKey.PartialStatus)
+                    OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
+                    OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
+                }
+                // Tickers post Running/Queued every 120 ms. Only the transition into that
+                // state is a new emission; repeated ticks must not restart the snackbar.
+                val sameStateTick = progress.state == previous?.state &&
+                    (progress.state == OperationState.Running || progress.state == OperationState.Queued)
+                if (sameStateTick) next.copy(statusMessage = message) else next.withStatus(message)
+            }
+        }
         return ReduceResult(base)
     }
 

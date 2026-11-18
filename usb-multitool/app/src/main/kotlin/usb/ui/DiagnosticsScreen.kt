@@ -75,7 +75,8 @@ fun DiagnosticsScreen(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(scrollState),
+            .verticalScroll(scrollState)
+            .padding(bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (usbPresent) {

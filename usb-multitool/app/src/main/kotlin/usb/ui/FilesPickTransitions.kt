@@ -13,30 +13,30 @@ internal object FilesPickTransitions {
     fun begin(state: AppUiState, intent: UiIntent.BeginFilesPick): ReduceResult {
         if (state.filesPickMode != null) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
             )
         }
         if (!state.actionsEnabled) {
-            return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            return ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         }
         if (state.pendingIsoImport != null ||
             state.isoImportSafInFlight != null ||
             state.isoImportUsbInFlight != null
         ) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)),
+                state.withStatus(UiMessage.Key(UiMessageKey.WaitForOperation)),
             )
         }
         val device =
             state.device
                 ?: return ReduceResult(
-                    state.copy(statusMessage = UiReducer.presenceMessage(state.presence)),
+                    state.withStatus(UiReducer.presenceMessage(state.presence)),
                 )
         if (intent.expectedIdentity != null || intent.expectedAttachGeneration != null) {
             if (device.identity != intent.expectedIdentity ||
                 device.attachGeneration != intent.expectedAttachGeneration
             ) {
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.TargetChanged)))
             }
         }
         val explicit = intent.partitionId
@@ -53,31 +53,25 @@ internal object FilesPickTransitions {
         return when {
             partition == null ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage =
-                            UiMessage.Key(
+                    state.withStatus(UiMessage.Key(
                                 if (intent.purpose == FilesPickPurpose.RawSource) {
                                     UiMessageKey.SelectPartitionFirst
                                 } else {
                                     UiMessageKey.VentoyDataPartitionMissing
                                 },
-                            ),
-                    ),
+                            )),
                 )
             partition.startLba == null || partition.sectorCount == null ->
                 ReduceResult(
-                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)),
+                    state.withStatus(UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)),
                 )
             intent.purpose == FilesPickPurpose.WindowsImage && partition.readOnly ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage =
-                            UiReducer.message(UiMessageKey.ReadOnlyPartition, partition.name),
-                    ),
+                    state.withStatus(UiReducer.message(UiMessageKey.ReadOnlyPartition, partition.name)),
                 )
             path == null ->
                 ReduceResult(
-                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                    state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                 )
             else -> {
                 val session = newFilesPickSession()
@@ -136,12 +130,12 @@ internal object FilesPickTransitions {
         val mode = state.filesPickMode ?: return ReduceResult(state)
         if (!mode.matches(state)) return abortPinLost(state)
         if (!state.actionsEnabled) {
-            return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            return ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         }
         val partition = state.partitions.firstOrNull { it.id == partitionId }
-            ?: return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            ?: return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
         if (partition.startLba == null || partition.sectorCount == null) {
-            return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)))
+            return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)))
         }
         if (partition.id == mode.partitionId) return ReduceResult(state)
         val session = newFilesPickSession()
@@ -162,8 +156,7 @@ internal object FilesPickTransitions {
                 isoImportError = null,
                 isoImportSafInFlight = null,
                 isoImportGeneration = state.isoImportGeneration + 1,
-                statusMessage = null,
-            ),
+            ).withStatus(null),
             effects = buildList {
                 add(UiEffect.CancelPendingWindowsImport(mode.sessionId))
                 if (hostInspection) add(UiEffect.CancelIsoImportInspection)
@@ -179,7 +172,7 @@ internal object FilesPickTransitions {
                 ?: return ReduceResult(state)
         val blocked = filesPickExitBlock(state)
         if (blocked != null) {
-            return ReduceResult(state.copy(statusMessage = blocked))
+            return ReduceResult(state.withStatus(blocked))
         }
         val hostInspection =
             state.isoImportSafInFlight != null || state.isoImportUsbInFlight != null
@@ -188,19 +181,17 @@ internal object FilesPickTransitions {
                 tab = mode.returnTab,
                 filesPickSession = newFilesPickSession(),
                 filesPickMode = null,
-                statusMessage =
-                    if (hostInspection) {
-                        UiMessage.Key(UiMessageKey.ImportInspectionCancelling)
-                    } else {
-                        null
-                    },
                 pendingIsoImport = null,
                 deferredIsoImport = null,
                 isoImportError = null,
                 isoImportSafInFlight = null,
                 // The USB guard ends only when the host reports the closed disk (Finished).
                 isoImportGeneration = state.isoImportGeneration + 1,
-            ),
+            ).withStatus(if (hostInspection) {
+                        UiMessage.Key(UiMessageKey.ImportInspectionCancelling)
+                    } else {
+                        null
+                    }),
             effects =
                 buildList {
                     if (hostInspection) add(UiEffect.CancelIsoImportInspection)
@@ -221,13 +212,12 @@ internal object FilesPickTransitions {
                 tab = mode.returnTab,
                 filesPickSession = newFilesPickSession(),
                 filesPickMode = null,
-                statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
                 pendingIsoImport = null,
                 deferredIsoImport = null,
                 isoImportError = null,
                 isoImportSafInFlight = null,
                 isoImportGeneration = state.isoImportGeneration + 1,
-            ),
+            ).withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             effects =
                 buildList {
                     if (hostInspection) add(UiEffect.CancelIsoImportInspection)
@@ -242,27 +232,27 @@ internal object FilesPickTransitions {
                 ?: return ReduceResult(state)
         if (mode.target != FilesPickTarget.File) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         if (!mode.matches(state)) return abortPinLost(state)
         if (!state.actionsEnabled) {
-            return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            return ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         }
         // A stale or failed listing cannot confirm a row; Loaded includes valid empty folders.
         if (state.filesListingState != FilesListingState.Loaded) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         val entry = state.files.firstOrNull { it.name == name && !it.isDirectory }
         if (entry == null) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         if (mode.purpose != FilesPickPurpose.RawSource && mode.partitionId != "1") {
-            return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired)))
+            return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired)))
         }
         val path = fatChildPath(state.currentPath, entry.name)
         val selection = mode.selection(path, entry.name, entry.sizeBytes, isDirectory = false)
@@ -299,21 +289,21 @@ internal object FilesPickTransitions {
                 ?: return ReduceResult(state)
         if (mode.target != FilesPickTarget.Folder) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         if (!mode.matches(state)) return abortPinLost(state)
         if (!state.actionsEnabled) {
-            return ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            return ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         }
         val path = safePickPath(state.currentPath)
         if (path == null || state.filesListingState != FilesListingState.Loaded) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         if (mode.purpose != FilesPickPurpose.RawSource && mode.partitionId != "1") {
-            return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired)))
+            return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.VentoyDataPartitionRequired)))
         }
         val name = if (path == "/") "/" else path.substringAfterLast('/')
         return finishFilesPick(
@@ -336,13 +326,13 @@ internal object FilesPickTransitions {
             mode.target != FilesPickTarget.File
         ) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
             )
         }
         if (pickSessionId != mode.sessionId) {
             // A copy started by an older session must never select into this one.
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         if (!mode.matches(state)) return abortPinLost(state)
@@ -353,7 +343,7 @@ internal object FilesPickTransitions {
             fatChildPath(state.currentPath, leaf) != path
         ) {
             return ReduceResult(
-                state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
             )
         }
         return finishFilesPick(
@@ -407,7 +397,6 @@ internal object FilesPickTransitions {
                 filesPickSession = newFilesPickSession(),
                 filesPickMode = null,
                 filesPickSelections = state.filesPickSelections + (mode.purpose to selection),
-                statusMessage = status,
                 pendingIsoImport = null,
                 deferredIsoImport = null,
                 isoImportError = null,
@@ -419,7 +408,7 @@ internal object FilesPickTransitions {
                     } else {
                         state.isoImportGeneration
                     },
-            ),
+            ).withStatus(status),
             effects =
                 buildList {
                     effect?.let(::add)

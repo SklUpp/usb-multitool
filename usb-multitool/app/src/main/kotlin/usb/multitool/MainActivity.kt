@@ -119,6 +119,7 @@ import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.ui.filesystemUsageKey
+import usb.ui.withStatus
 import usb.ui.needsFilesystemUsageRequest
 import usb.ui.scheduleFilesystemUsageRequest
 import usb.ui.fatChildPath
@@ -666,19 +667,19 @@ class MainViewModel(
         // Surviving UI staged path after process death is not session-owned — clear label only.
         val staleStaged = state.stagedRawImagePath
         if (staleStaged != null && !ImageStaging.isManaged(filesDir, staleStaged)) {
-            state = state.copy(
-                stagedRawImagePath = null,
-                stagedRawImageLabel = null,
-                statusMessage = UiMessage.Key(UiMessageKey.StaleStagedImage),
-            )
+            state =
+                state.copy(
+                    stagedRawImagePath = null,
+                    stagedRawImageLabel = null,
+                ).withStatus(UiMessage.Key(UiMessageKey.StaleStagedImage))
         }
         var stagingMutationFailed = false
         fun deleteOwnedOrReport(path: String?): Boolean {
             return runCatching { ImageStaging.deleteIfManaged(filesDir, path) }
                 .onFailure { err ->
                     stagingMutationFailed = true
-                    state = state.copy(
-                        statusMessage = UiMessage.Key(
+                    state = state.withStatus(
+                        UiMessage.Key(
                             UiMessageKey.CannotDeleteStaging,
                             listOf(err.message ?: err.javaClass.simpleName),
                         ),
@@ -707,7 +708,9 @@ class MainViewModel(
                 result.copy(
                     state = result.state.copy(
                         operation = state.operation,
+                        // Carried forward, not a new emission: no sequence bump.
                         statusMessage = state.statusMessage,
+                        statusSequence = state.statusSequence,
                     ),
                 )
             } else {

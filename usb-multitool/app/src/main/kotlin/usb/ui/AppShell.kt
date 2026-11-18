@@ -2,7 +2,6 @@ package usb.ui
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
@@ -19,7 +18,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +32,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -44,7 +41,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -184,7 +180,7 @@ internal fun shellTabContentVisible(
  *
  * Layout contract:
  * - safe drawing insets bound the whole shell (targetSdk 36 draws edge to edge), so neither
- *   the header, the tabs, the status strip nor the log layer touches the system bars;
+ *   the header, the tabs, the progress row nor the log layer touches the system bars;
  * - top: one compact device header whose title/subtitle surface is separate from the
  *   language, theme and log controls (no max-height clipping);
  * - middle: the active tab (weight 1, own scroll), always composed; a horizontal swipe
@@ -194,14 +190,16 @@ internal fun shellTabContentVisible(
  *   a gesture starting in a system back edge is ignored. The full log screen is an opaque
  *   layer above it and the system bottom inset is guarded while it shows; the covered tab
  *   is marked invisible to accessibility but keeps its state;
- * While a Files pick session owns the screen the header, navigation bar and log
- * layer hide; the tab swipe stays off and status stays non-interactive. The
- * existing picker branch is still the tab content with its own continue/back
- * controls, and Back routes to the reducer cancel, which refuses while a copy
- * runs or a confirmation is open.
- * - bottom: one status surface that folds to a thin title strip attached to the navigation
- *   bar (fold only hides it visually, never clears the operation) and, independently, an
- *   inline journal list; plus the navigation bar.
+ * While a Files pick session owns the screen the header, navigation bar, progress row and
+ * log layer hide; the tab swipe stays off. The existing picker branch is still the tab
+ * content with its own continue/back controls, and Back routes to the reducer cancel,
+ * which refuses while a copy runs or a confirmation is open.
+ * - bottom: the navigation bar. Progress is part of this bar, so it stays visible while
+ *   the journal covers the tabs and never squeezes the content: a compact row with title,
+ *   measured facts and cancel, plus the terminal outcome and a completed raw write's
+ *   readback verdict (both persistent, up to three wrapped lines). Transient status
+ *   messages surface as snackbars keyed by [AppUiState.statusSequence], never as a
+ *   floating surface.
  */
 @Composable
 fun AppShell(
@@ -251,11 +249,12 @@ fun AppShell(
     ) {
     MaterialTheme(colorScheme = colors, shapes = AppShapes) {
         // Presentation-only state, saved across rotation and restored back-stack entry:
-        // collapsing the status or closing the journal never destroys a running operation.
+        // closing the journal never destroys a running operation.
         var panels by rememberSaveable(stateSaver = ShellPanelStateSaver) {
             mutableStateOf(ShellPanelState())
         }
         val pickOpen = state.filesPickMode != null
+        val snackbarHostState = remember { SnackbarHostState() }
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         // Modal pick task owns Back: cancel routes through the reducer, and Back stays
         // inert while a copy runs or a confirmation is open (the reducer keeps the
@@ -315,24 +314,24 @@ fun AppShell(
                 focusManager.clearFocus(force = true)
             }
         }
-        LaunchedEffect(state.operation?.token, state.operation?.state) {
-            // Evaluate only when operation facts change. A later tab switch must not reopen a
-            // status the user deliberately collapsed.
-            val operation = state.operation ?: return@LaunchedEffect
-            val isFinished = operation.state == OperationState.Completed ||
-                operation.state == OperationState.Failed ||
-                operation.state == OperationState.Partial
-            val ownerTab = operation.title.shellTab()
-            if (isFinished && ownerTab != null && ownerTab != state.tab) {
-                panels = panels.expandStatus()
-            }
+        // One snackbar per emission, keyed by the reducer-maintained sequence. Recomposition
+        // and activity recreation keep `lastShown`, so only a new message shows again; a
+        // lower sequence means a fresh state and its first message still counts.
+        var lastShownStatusSequence by rememberSaveable { mutableStateOf(0L) }
+        val statusSnackbarText = state.statusMessage?.localized()
+        LaunchedEffect(state.statusSequence) {
+            val sequence = state.statusSequence
+            if (sequence == 0L || sequence == lastShownStatusSequence) return@LaunchedEffect
+            val text = statusSnackbarText ?: return@LaunchedEffect
+            lastShownStatusSequence = sequence
+            snackbarHostState.showSnackbar(text)
         }
-        val statusVisible = state.operation != null || state.statusMessage != null
         Scaffold(
             modifier = modifier.fillMaxSize(),
             // targetSdk 36 draws edge to edge: the header, the tab content and the log
             // layer must stay inside the status/navigation bars and any display cutout.
             contentWindowInsets = WindowInsets.safeDrawing,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 Column(
                     modifier = Modifier
@@ -344,39 +343,15 @@ fun AppShell(
                             } else {
                                 Modifier
                             },
-                        )
-                        .focusProperties {
-                            // Keyboard traversal must not enter background status
-                            // while the pick task owns the screen.
-                            if (pickOpen) {
-                                onEnter = { cancelFocusChange() }
-                            }
-                        }
-                        .then(
-                            if (pickOpen) {
-                                // Background status is visible but inert: remove the whole
-                                // bar from the accessibility tree while the picker owns input.
-                                Modifier.semantics(mergeDescendants = true) {
-                                    hideFromAccessibility()
-                                }
-                            } else {
-                                Modifier
-                            },
                         ),
                 ) {
-                    // Expanded status participates in layout; collapsed status is an overlay below.
-                    AnimatedVisibility(
-                        visible = !panels.statusCollapsed && statusVisible,
-                        enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(200)),
-                        exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(100)),
-                    ) {
-                        StatusLogPanel(
+                    // Progress lives in the bottom bar so it stays visible while the journal
+                    // covers the tabs, and overflows the content instead of squeezing it.
+                    if (!pickOpen) {
+                        OperationProgressRow(
                             state = state,
                             onIntent = onIntent,
-                            panels = panels,
-                            onCollapseStatus = { panels = panels.collapseStatus() },
-                            onExpandStatus = { panels = panels.expandStatus() },
-                            interactive = statusVisible && !panels.statusCollapsed && !pickOpen,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         )
                     }
                     if (!panels.journalScreenOpen && !pickOpen) {
@@ -500,13 +475,7 @@ fun AppShell(
                     ) {
                         AnimatedContent(
                             targetState = state.tab,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(
-                                    bottom = if (panels.statusCollapsed &&
-                                        (state.operation != null || state.statusMessage != null)
-                                    ) 72.dp else 0.dp,
-                                ),
+                            modifier = Modifier.fillMaxSize(),
                             transitionSpec = {
                                 if (reducedMotion) {
                                     EnterTransition.None togetherWith ExitTransition.None
@@ -622,44 +591,8 @@ fun AppShell(
                             onBack = { panels = panels.closeJournalScreen() },
                             onIntent = onIntent,
                             onExportTrace = onExportTrace,
-                            modifier = Modifier.padding(
-                                bottom = if (panels.statusCollapsed &&
-                                    (state.operation != null || state.statusMessage != null)
-                                ) 80.dp else 0.dp,
-                            ),
                         )
                     }
-                }
-                AnimatedVisibility(
-                    visible = panels.statusCollapsed && statusVisible && !pickOpen,
-                    enter = if (reducedMotion) EnterTransition.None else fadeIn(tween(200)),
-                    exit = if (reducedMotion) ExitTransition.None else fadeOut(tween(100)),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .focusProperties {
-                            if (pickOpen) {
-                                onEnter = { cancelFocusChange() }
-                            }
-                        }
-                        .then(
-                            if (pickOpen) {
-                                Modifier.semantics(mergeDescendants = true) {
-                                    hideFromAccessibility()
-                                }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    StatusLogPanel(
-                        state = state,
-                        onIntent = onIntent,
-                        panels = panels,
-                        onCollapseStatus = { panels = panels.collapseStatus() },
-                        onExpandStatus = { panels = panels.expandStatus() },
-                        interactive = statusVisible && panels.statusCollapsed && !pickOpen,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
                 }
             }
         }
@@ -802,19 +735,16 @@ fun AppShell(
 }
 
 /**
- * Saves the shell presentation flags across rotation and activity recreation. They are
- * plain booleans, so a list saver is enough; nothing here belongs to the reducer or to
+ * Saves the shell presentation flags across rotation and activity recreation. It is a
+ * plain boolean, so a list saver is enough; nothing here belongs to the reducer or to
  * the running operation.
  */
 private val ShellPanelStateSaver = listSaver<ShellPanelState, Boolean>(
     save = {
-        listOf(it.statusCollapsed, it.journalScreenOpen)
+        listOf(it.journalScreenOpen)
     },
     restore = {
-        ShellPanelState(
-            statusCollapsed = it[0],
-            journalScreenOpen = it[1],
-        )
+        ShellPanelState(journalScreenOpen = it[0])
     },
 )
 
@@ -1075,56 +1005,25 @@ private fun LogOpenButton(
 internal fun operationProgressFacts(metric: String?, speed: String?, eta: String?): String =
     listOfNotNull(metric, speed, eta).filter { it.isNotEmpty() }.joinToString(" · ")
 
-/** Operation status surface; Journal and overwrite prompts stay outside status. */
+/**
+ * Inline operation row in the bottom bar: title, measured facts, the persistent readback
+ * verdict of a raw write, the terminal outcome and the existing cancel action. Progress
+ * never floats over the screen; transient messages are snackbars, but results stay.
+ */
 @Composable
-internal fun StatusLogPanel(
+internal fun OperationProgressRow(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
-    panels: ShellPanelState,
-    onCollapseStatus: () -> Unit,
-    onExpandStatus: () -> Unit,
     modifier: Modifier = Modifier,
-    interactive: Boolean = true,
 ) {
-    val op = state.operation
-    if (op == null && state.statusMessage == null) return
-    val collapsed = panels.statusCollapsed
-    val failed = op?.state == OperationState.Failed
-    val partial = op?.state == OperationState.Partial
-    val cancelled = op?.state == OperationState.Cancelled
-    val completed = op?.state == OperationState.Completed
-    val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
-    val cancelable = op?.let { running && it.cancelable } == true
-    val container = when {
-        failed -> MaterialTheme.colorScheme.errorContainer
-        partial || cancelled -> MaterialTheme.colorScheme.tertiaryContainer
-        completed -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.inverseSurface
-    }
-    val content = when {
-        failed -> MaterialTheme.colorScheme.onErrorContainer
-        partial || cancelled -> MaterialTheme.colorScheme.onTertiaryContainer
-        completed -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.inverseOnSurface
-    }
-    val operationName = op?.let { operationLabel(it) }
-    val title = if (op != null) {
-        "$operationName · ${operationStateLabel(op.state)}"
-    } else {
-        stringResource(R.string.status_title)
-    }
-    val operationDetail = op?.errorMessage ?: op?.readScanResult?.let { readScanSummary(it) } ?: op?.resultMessage
-    val statusText = state.statusMessage?.localized()
-    val details = buildList {
-        operationDetail?.let(::add)
-        statusText?.takeIf { it != operationDetail }?.let(::add)
-    }
-    val batchCurrentFile = op?.title?.reportsCurrentFileBytes() == true
-    val etaSeconds = if (op != null && running) remainingSeconds(op.bytesDone, op.bytesTotal, op.bytesPerSecond) else null
+    val op = state.operation ?: return
+    val running = op.state == OperationState.Running || op.state == OperationState.Queued
+    val cancelable = running && op.cancelable
+    val batchCurrentFile = op.title.reportsCurrentFileBytes()
+    val etaSeconds = if (running) remainingSeconds(op.bytesDone, op.bytesTotal, op.bytesPerSecond) else null
     val etaLabel = etaSeconds?.let { stringResource(R.string.op_eta, formatEtaDuration(it)) }
     val metric = when {
-        op == null -> null
-        completed -> "✓"
+        op.state == OperationState.Completed -> "✓"
         op.bytesTotal > 0L && batchCurrentFile ->
             stringResource(R.string.op_batch_current_file_pct, (op.fraction * 100).toInt())
         op.bytesTotal > 0L -> "${(op.fraction * 100).toInt()}%"
@@ -1132,404 +1031,132 @@ internal fun StatusLogPanel(
         else -> operationStateLabel(op.state)
     }
     val speedLabel =
-        op?.takeIf { running && it.bytesPerSecond > 0L }
-            ?.let { formatBinaryBytesPerSecond(it.bytesPerSecond) }
+        if (running && op.bytesPerSecond > 0L) formatBinaryBytesPerSecond(op.bytesPerSecond) else null
     val progressFacts = operationProgressFacts(metric, speedLabel, etaLabel)
-    val readbackNote = op?.rawWriteResult?.let { result ->
-        when (val verdict = result.readback) {
-            ReadbackVerdict.Verified -> if (result.writtenBytes.toULong() == result.range.byteLength(state.diskSectorSize)) stringResource(R.string.raw_readback_verified) else stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
-            is ReadbackVerdict.Mismatch -> stringResource(R.string.raw_readback_mismatch, verdict.mismatchedSectors.toLong(), verdict.firstMismatchLba.toLong())
-            is ReadbackVerdict.Unverified -> stringResource(R.string.raw_readback_unverified, verdict.range.startLba.toLong(), verdict.range.sectorCount.toLong())
-            is ReadbackVerdict.Incomplete -> stringResource(R.string.raw_readback_incomplete, stringResource(when (verdict.reason) { ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled; ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed; ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error }))
+    // Data-integrity result: stays visible after the operation ends, unlike a snackbar.
+    val readback = op.rawWriteResult?.let { result ->
+        val text = when (val verdict = result.readback) {
+            ReadbackVerdict.Verified ->
+                if (result.writtenBytes.toULong() == result.range.byteLength(state.diskSectorSize)) {
+                    stringResource(R.string.raw_readback_verified)
+                } else {
+                    stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
+                }
+            is ReadbackVerdict.Mismatch -> stringResource(
+                R.string.raw_readback_mismatch,
+                verdict.mismatchedSectors.toLong(),
+                verdict.firstMismatchLba.toLong(),
+            )
+            is ReadbackVerdict.Unverified -> stringResource(
+                R.string.raw_readback_unverified,
+                verdict.range.startLba.toLong(),
+                verdict.range.sectorCount.toLong(),
+            )
+            is ReadbackVerdict.Incomplete -> stringResource(
+                R.string.raw_readback_incomplete,
+                stringResource(
+                    when (verdict.reason) {
+                        ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled
+                        ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed
+                        ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error
+                    },
+                ),
+            )
         }
+        val color = when (result.readback) {
+            is ReadbackVerdict.Mismatch, is ReadbackVerdict.Incomplete ->
+                MaterialTheme.colorScheme.error
+            is ReadbackVerdict.Unverified -> MaterialTheme.colorScheme.tertiary
+            ReadbackVerdict.Verified -> MaterialTheme.colorScheme.primary
+        }
+        text to color
     }
-    val accessibleMessage = buildList {
-        add(title)
-        progressFacts.takeIf { it.isNotEmpty() }?.let(::add)
-        details.forEach(::add)
-        readbackNote?.takeIf { it !in details }?.let(::add)
-    }.joinToString(" · ")
+    // Terminal outcome (error, read-scan summary or result) with the status panel's order
+    // and strings: it must outlive the operation, so it cannot be a snackbar.
+    val outcome = op.errorMessage
+        ?: op.readScanResult?.let { readScanSummary(it) }
+        ?: op.resultMessage
+    val outcomeColor =
+        if (op.state == OperationState.Failed || op.errorMessage != null) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    val operationName = operationLabel(op)
+    val title = "$operationName · ${operationStateLabel(op.state)}"
+    val cancelDescription = stringResource(R.string.action_cancel)
     data class CancelRequest(val token: OperationToken, val name: String)
     var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
-    var showDetailsDialog by remember { mutableStateOf(false) }
-    val cancelDescription = stringResource(R.string.action_cancel)
-    val statusDescription = if (collapsed) stringResource(R.string.status_expand) else stringResource(R.string.status_collapse)
-    val detailsDescription = stringResource(R.string.status_title)
-    fun requestCancel() {
-        op?.takeIf { cancelable }?.let {
-            cancelRequest = CancelRequest(it.token, operationName ?: title)
-        }
-    }
-    val circleDiameter = 64.dp
-    val circleRadius = 32.dp
-    val statusSurface = Modifier
-        .then(
-            if (collapsed) {
-                Modifier
-                    .size(circleDiameter)
-                    .clip(CircleShape)
-                    .combinedClickable(
-                        enabled = interactive,
-                        role = Role.Button,
-                        onClickLabel = statusDescription,
-                        onLongClickLabel = if (interactive && cancelable) cancelDescription else null,
-                        onClick = onExpandStatus,
-                        onLongClick = if (interactive && cancelable) ::requestCancel else null,
-                    )
-            } else {
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .height(circleDiameter)
-            },
-        )
-        .semantics {
-            liveRegion = LiveRegionMode.Polite
-            contentDescription = accessibleMessage
-        }
-    Column(
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.medium,
         modifier = modifier
-            .then(if (collapsed) Modifier else Modifier.fillMaxWidth())
-            .animateContentSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .fillMaxWidth()
+            .then(
+                if (running) {
+                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                } else {
+                    Modifier
+                },
+            ),
     ) {
-        Surface(
-            shape = if (collapsed) CircleShape else RoundedCornerShape(circleRadius),
-            color = container,
-            modifier = statusSurface,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (collapsed) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    // Line 1: Primary progress metric
-                    if (completed) {
-                        GlyphIcon(Glyph.Check, size = 20.dp, tint = content)
-                    } else if (failed) {
-                        Text(
-                            text = "!",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            textAlign = TextAlign.Center,
-                        )
-                    } else if (partial) {
-                        Text(
-                            text = "±",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            textAlign = TextAlign.Center,
-                        )
-                    } else if (cancelled) {
-                        Text(
-                            text = "✕",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            textAlign = TextAlign.Center,
-                        )
-                    } else if (metric != null) {
-                        Text(
-                            text = metric,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (op != null) {
-                        Text(
-                            text = operationStateLabel(op.state),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else {
-                        Text(
-                            text = stringResource(R.string.status_title),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = content,
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-
-                    // Line 2: Secondary progress value / status text
-                    if (completed) {
-                        Text(
-                            text = stringResource(R.string.op_completed),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (failed) {
-                        Text(
-                            text = stringResource(R.string.op_failed),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (partial) {
-                        Text(
-                            text = stringResource(R.string.op_partial),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (cancelled) {
-                        Text(
-                            text = stringResource(R.string.op_cancelled),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (etaSeconds != null) {
-                        Text(
-                            text = formatEtaDuration(etaSeconds),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Clip,
-                        )
-                    } else if (op != null && op.bytesPerSecond > 0L) {
-                        Text(
-                            text = formatBinaryBytesPerSecond(op.bytesPerSecond),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (op != null && op.bytesTotal > 0L && op.bytesDone > 0L) {
-                        Text(
-                            text = DeviceIdentity.formatCapacity(op.bytesDone.toULong()),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else if (operationName != null) {
-                        Text(
-                            text = operationName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    } else {
-                        Text(
-                            text = statusText ?: "",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.9f),
-                            maxLines = 1,
-                            textAlign = TextAlign.Center,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = 16.dp, end = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        if (completed) {
-                            GlyphIcon(Glyph.Check, size = 20.dp, tint = content)
-                        }
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .verticalScroll(rememberScrollState(), enabled = interactive),
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            val primaryDetail = details.firstOrNull() ?: readbackNote
-                            if (primaryDetail != null) {
-                                Text(
-                                    text = primaryDetail,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = content,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                        if (metric != null) {
-                            Text(
-                                text = progressFacts,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = content,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (interactive && cancelable) {
-                            IconButton(
-                                onClick = ::requestCancel,
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .semantics { contentDescription = cancelDescription },
-                            ) {
-                                GlyphIcon(glyph = Glyph.Stop, size = 18.dp, tint = content)
-                            }
-                        }
-                        IconButton(
-                            onClick = { showDetailsDialog = true },
-                            enabled = interactive,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .semantics { contentDescription = detailsDescription },
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_info_outlined),
-                                contentDescription = null,
-                                tint = content,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                        IconButton(
-                            onClick = onCollapseStatus,
-                            enabled = interactive,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .semantics { contentDescription = statusDescription },
-                        ) {
-                            GlyphIcon(glyph = Glyph.ChevronDown, size = 18.dp, tint = content)
-                        }
-                    }
-                    if (op != null && running) {
-                        if (op.bytesTotal > 0L) {
-                            LinearProgressIndicator(
-                                progress = { op.fraction },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .align(Alignment.BottomCenter)
-                                    .height(3.dp)
-                                    .clip(CircleShape),
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = content.copy(alpha = 0.2f),
-                            )
-                        } else {
-                            LinearProgressIndicator(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .align(Alignment.BottomCenter)
-                                    .height(3.dp)
-                                    .clip(CircleShape),
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = content.copy(alpha = 0.2f),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if (showDetailsDialog && interactive) {
-        val context = LocalContext.current
-        val fullDetailsText = buildList {
-            add(title)
-            if (op != null) {
-                add("#${op.token.value}")
-                if (op.bytesTotal > 0L && batchCurrentFile) {
-                    add(
-                        stringResource(
-                            R.string.op_batch_current_file_bytes,
-                            DeviceIdentity.formatCapacity(op.bytesDone.toULong()),
-                            DeviceIdentity.formatCapacity(op.bytesTotal.toULong()),
-                        ),
-                    )
-                } else if (op.bytesTotal > 0L) {
-                    add("${(op.fraction * 100).toInt()}% · ${DeviceIdentity.formatCapacity(op.bytesDone.toULong())} / ${DeviceIdentity.formatCapacity(op.bytesTotal.toULong())}")
-                } else if (op.bytesDone > 0L) {
-                    add(DeviceIdentity.formatCapacity(op.bytesDone.toULong()))
-                }
-                if (op.bytesPerSecond > 0L) {
-                    add(formatBinaryBytesPerSecond(op.bytesPerSecond))
-                }
-                if (running && etaLabel != null) etaLabel.let(::add)
-                op.errorMessage?.let(::add)
-                op.resultMessage?.let(::add)
-                op.readScanResult?.let { add(readScanSummary(it)) }
-                readbackNote?.let { if (it !in details) add(it) }
-            }
-            statusText?.takeIf { it != op?.errorMessage && it != op?.resultMessage }?.let(::add)
-        }.joinToString("\n")
-        AlertDialog(
-            onDismissRequest = { showDetailsDialog = false },
-            title = {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                ) {
+                Text(
+                    text = progressFacts,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                readback?.let { (text, color) ->
                     Text(
-                        text = fullDetailsText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        text = text,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = color,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val clipboard = context.getSystemService(ClipboardManager::class.java)
-                        clipboard?.setPrimaryClip(ClipData.newPlainText("status", fullDetailsText))
-                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.LogCopied)))
-                    },
+                outcome?.let { text ->
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = outcomeColor,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (cancelable) {
+                IconButton(
+                    onClick = { cancelRequest = CancelRequest(op.token, operationName) },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = cancelDescription },
                 ) {
-                    Text(stringResource(R.string.log_copy_all))
+                    GlyphIcon(
+                        glyph = Glyph.Stop,
+                        size = 18.dp,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDetailsDialog = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
+            }
+        }
     }
-    cancelRequest?.takeIf { interactive }?.let { request ->
+    cancelRequest?.let { request ->
         AlertDialog(
             onDismissRequest = { cancelRequest = null },
             title = { Text(stringResource(R.string.cancel_operation_title)) },
@@ -1663,6 +1290,7 @@ private fun LogScreen(
                             columnCount = 1,
                         )
                     },
+                contentPadding = PaddingValues(bottom = 16.dp),
             ) {
                 items(lines.size) { index ->
                     Text(
@@ -2276,9 +1904,9 @@ internal enum class Glyph {
     ChevronDown,
     ChevronUp,
     ChevronLeft,
-    /** Two crossing strokes: folding the status block without clearing it. */
+    /** Two crossing strokes: dismiss or clear. */
     Close,
-    /** Filled square: compact cancel while the status is folded. */
+    /** Filled square: cancel a running operation. */
     Stop,
     /** Three stacked lines: the in-app operation log. */
     Log,

@@ -15,16 +15,14 @@ internal object RawTransitions {
         val hasSource = state.imageUri != null || state.stagedRawImagePath != null
         return when {
             device == null || !state.actionsEnabled ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             !hasSource ->
                 ReduceResult(
-                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectImageFirst)),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SelectImageFirst)),
                 )
             geometry == null ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.CannotReadPartitionTable),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.CannotReadPartitionTable)),
                 )
             else -> {
                 val sourceBytes = state.rawWriteDecodedBytes()
@@ -32,9 +30,7 @@ internal object RawTransitions {
                     state.imageUri != null && state.stagedRawImagePath == null
                 if (contentNeedsDigest && state.rawDecodedSha256 == null) {
                     return ReduceResult(
-                        state.copy(
-                            statusMessage = UiMessage.Key(UiMessageKey.RawRangeInvalid),
-                        ),
+                        state.withStatus(UiMessage.Key(UiMessageKey.RawRangeInvalid)),
                     )
                 }
                 val plan =
@@ -46,9 +42,7 @@ internal object RawTransitions {
                 when (plan) {
                     is usb.partition.RawWritePlan.Rejected ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Key(UiMessageKey.RawRangeInvalid),
-                            ),
+                            state.withStatus(UiMessage.Key(UiMessageKey.RawRangeInvalid)),
                         )
                     is usb.partition.RawWritePlan.Ready -> {
                         val range = plan.range
@@ -146,7 +140,7 @@ internal object RawTransitions {
 
     fun setStagedRawImage(state: AppUiState, intent: UiIntent.SetStagedRawImage): ReduceResult =
         if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
-            ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.CannotChangeStaged)))
+            ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.CannotChangeStaged)))
         } else {
             val generation = state.rawSizeGeneration + 1L
             val cheap =
@@ -175,8 +169,7 @@ internal object RawTransitions {
                     rawMeasurementPending = cheap == null && limit == null,
                     rawMeasurementWaitingForPrevious = false,
                     rawSizeGeneration = generation,
-                    statusMessage = UiReducer.message(UiMessageKey.StagedImageReady, intent.label),
-                ),
+                ).withStatus(UiReducer.message(UiMessageKey.StagedImageReady, intent.label)),
                 effects =
                     if (cheap == null && limit != null) {
                         listOf(
@@ -195,7 +188,7 @@ internal object RawTransitions {
 
     fun clearStagedRawImage(state: AppUiState, intent: UiIntent.ClearStagedRawImage): ReduceResult =
         if (state.isRunning || state.operation?.state == OperationState.Queued || state.pendingConfirmation != null) {
-            ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.CannotClearStaged)))
+            ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.CannotClearStaged)))
         } else {
             ReduceResult(
                 state.copy(
@@ -213,8 +206,7 @@ internal object RawTransitions {
                     rawMeasurementPending = false,
                     rawMeasurementWaitingForPrevious = false,
                     rawSizeGeneration = state.rawSizeGeneration + 1L,
-                    statusMessage = UiMessage.Key(UiMessageKey.StagedCleared),
-                ),
+                ).withStatus(UiMessage.Key(UiMessageKey.StagedCleared)),
                 effects = listOf(UiEffect.CancelRawSourceMeasure),
             )
         }
@@ -331,22 +323,19 @@ internal object RawTransitions {
         return when {
             !state.actionsEnabled ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage =
-                            if (state.isRunning ||
+                    state.withStatus(if (state.isRunning ||
                                 state.operation?.state == OperationState.Queued ||
                                 state.pendingConfirmation != null
                             ) {
                                 UiMessage.Key(UiMessageKey.WaitForOperation)
                             } else {
                                 UiReducer.presenceMessage(state.presence)
-                            },
-                    ),
+                            }),
                 )
             device == null ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             partition == null ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectPartitionFirst)))
+                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SelectPartitionFirst)))
             else -> {
                 val generation = state.rawSourceCandidatesGeneration + 1
                 ReduceResult(
@@ -404,15 +393,21 @@ internal object RawTransitions {
                         "${intent.unreadable} folder(s) could not be read; " +
                             "files in them are not listed",
                     )
-                else -> state.statusMessage
+                else -> null
             }
-            ReduceResult(
+            val next =
                 state.copy(
                     rawSourceCandidates = accepted,
                     rawSourceCandidatesTruncated = intent.truncated,
                     rawSourceCandidatesError = null,
-                    statusMessage = notice,
-                ),
+                )
+            ReduceResult(
+                if (notice != null) {
+                    next.withStatus(notice)
+                } else {
+                    // Carried forward, not a new emission: no sequence bump.
+                    next.copy(statusMessage = state.statusMessage)
+                },
             )
         }
     }
@@ -438,13 +433,14 @@ internal object RawTransitions {
                     rawSourceCandidates = emptyList(),
                     rawSourceCandidatesError = intent.message,
                     rawSourceCandidatesTruncated = false,
-                    statusMessage =
-                        if (opOwnsStatus) {
-                            state.statusMessage
-                        } else {
-                            UiMessage.Raw(intent.message)
-                        },
-                )
+                ).let { nextState ->
+                    if (opOwnsStatus) {
+                        // Carried forward, not a new emission: no sequence bump.
+                        nextState.copy(statusMessage = state.statusMessage)
+                    } else {
+                        nextState.withStatus(UiMessage.Raw(intent.message))
+                    }
+                }
             if (opOwnsStatus) {
                 ReduceResult(appendLogLine(next, "Raw sources: ${intent.message}"))
             } else {
@@ -465,36 +461,30 @@ internal object RawTransitions {
         return when {
             !state.actionsEnabled ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage =
-                            if (state.pendingConfirmation != null) {
+                    state.withStatus(if (state.pendingConfirmation != null) {
                                 UiMessage.Key(UiMessageKey.WaitForOperation)
                             } else {
                                 UiReducer.presenceMessage(state.presence)
-                            },
-                    ),
+                            }),
                 )
             device == null ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             partition == null ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectPartitionFirst)))
+                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SelectPartitionFirst)))
             candidate == null ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage =
-                            UiMessage.Raw("Selected source is no longer listed; reload the list"),
-                    ),
+                    state.withStatus(UiMessage.Raw("Selected source is no longer listed; reload the list")),
                 )
             else -> {
                 val name = candidate.path.substringAfterLast('/')
                 val parent = candidate.path.substringBeforeLast('/', "").ifEmpty { "/" }
                 if (name != candidate.name || name.isEmpty()) {
                     ReduceResult(
-                        state.copy(statusMessage = UiMessage.Raw("Invalid source path ${candidate.path}")),
+                        state.withStatus(UiMessage.Raw("Invalid source path ${candidate.path}")),
                     )
                 } else {
                     ReduceResult(
-                        state.copy(statusMessage = UiReducer.message(UiMessageKey.StagingFile, name)),
+                        state.withStatus(UiReducer.message(UiMessageKey.StagingFile, name)),
                         effects = listOf(
                             UiEffect.StageUsbImageForRawWrite(
                                 path = parent,

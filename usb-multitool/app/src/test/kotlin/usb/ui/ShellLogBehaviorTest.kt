@@ -54,9 +54,8 @@ class ShellLogBehaviorTest {
             presence = DevicePresence.Busy,
             tab = ShellTab.Partitions,
             operation = runningOperation(),
-            statusMessage = UiMessage.Key(UiMessageKey.RunningStatus),
             logLines = listOf("first", "second"),
-        )
+        ).withStatus(UiMessage.Key(UiMessageKey.RunningStatus))
         val cleared = UiReducer.reduce(running, UiIntent.ClearLog)
         assertEquals(emptyList<String>(), cleared.state.logLines)
         // Clearing is log-only: the running operation and every other field survive.

@@ -93,8 +93,7 @@ class VentoyUiStateTest {
         ventoyGlobalSettings = usb.ventoy.VentoyGlobalSettings.Empty,
         ventoyFolderPath = "/",
         ventoyFolders = listOf("/ISO"),
-        statusMessage = UiMessage.Key(UiMessageKey.Probing),
-    )
+    ).withStatus(UiMessage.Key(UiMessageKey.Probing))
 
     // --- same-stick retain / different attach wipe ---
 
@@ -176,7 +175,7 @@ class VentoyUiStateTest {
 
     @Test
     fun readyClearsOnlyProbingKeepsOtherStatus() {
-        val err = ready().copy(statusMessage = UiMessage.Key(UiMessageKey.NoPartitionsFound))
+        val err = ready().withStatus(UiMessage.Key(UiMessageKey.NoPartitionsFound))
         val kept = UiReducer.reduce(
             err,
             UiIntent.DeviceChanged(
@@ -559,7 +558,7 @@ class VentoyUiStateTest {
 
     @Test
     fun settingsErrorStillSurfacesOnMatchingEpoch() {
-        val base = ready().copy(ventoyCacheEpoch = 1L, statusMessage = null)
+        val base = ready().copy(ventoyCacheEpoch = 1L).withStatus(null)
         val next = UiReducer.reduce(
             base,
             UiIntent.VentoyGlobalSettingsLoaded(
@@ -647,7 +646,7 @@ class VentoyUiStateTest {
 
     @Test
     fun settingsRefreshDropsLateErrorAndKeepsNewSuccess() {
-        val base = withVentoy().copy(ventoyCacheEpoch = 1L, statusMessage = null)
+        val base = withVentoy().copy(ventoyCacheEpoch = 1L).withStatus(null)
         val first = UiReducer.reduce(base, UiIntent.LoadVentoyGlobalSettings)
         val firstToken = first.state.ventoyGlobalSettingsRequest
         val second = UiReducer.reduce(first.state, UiIntent.LoadVentoyGlobalSettings)

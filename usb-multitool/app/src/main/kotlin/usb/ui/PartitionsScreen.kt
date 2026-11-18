@@ -37,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -47,8 +48,9 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -66,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -95,6 +98,7 @@ import usb.multitool.R
  *
  * Raw range writing keeps its exact geometry rules and is not part of the strip.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PartitionsScreen(
     state: AppUiState,
@@ -113,9 +117,8 @@ fun PartitionsScreen(
     var renameText by remember { mutableStateOf("") }
     var labelTargetId by remember { mutableStateOf<String?>(null) }
     var labelBinding by remember { mutableStateOf<PartitionBinding?>(null) }
-    var filesystemMenuExpanded by remember { mutableStateOf(false) }
-    var filesystemMenuTarget by remember { mutableStateOf<PartitionBinding?>(null) }
     var labelText by remember { mutableStateOf("") }
+    var filesystemMenuTarget by remember { mutableStateOf<PartitionBinding?>(null) }
     val partitionGeometryKey = state.partitions.map { it.id to (it.startLba to it.sectorCount) }
     var schemePrompt by remember(state.device, state.partitionScheme, partitionGeometryKey) {
         mutableStateOf<PartitionScheme?>(null)
@@ -637,7 +640,6 @@ fun PartitionsScreen(
         selected?.startLba,
         selected?.sectorCount,
     ) {
-        filesystemMenuExpanded = false
         filesystemMenuTarget = null
     }
 
@@ -698,7 +700,8 @@ fun PartitionsScreen(
                 .fillMaxWidth()
                 .zIndex(0f)
                 .onGloballyPositioned { viewportTopPx = it.positionInRoot().y }
-                .verticalScroll(screenScroll),
+                .verticalScroll(screenScroll)
+                .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
         SectionCard(
@@ -1149,46 +1152,68 @@ fun PartitionsScreen(
                     },
                     enabled = false,
                 )
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    InteractiveInfoRow(
-                        label = stringResource(R.string.partitions_filesystem_label),
-                        value = selected.filesystemLabel.ifEmpty { "—" },
-                        enabled = state.actionsEnabled && blockedHint == null,
-                        trailingGlyph = Glyph.ChevronDown,
-                        onClick = {
-                            state.device?.let { device ->
-                                filesystemMenuTarget = PartitionBinding(
-                                    device = device,
-                                    partitionId = selected.id,
-                                    startLba = selected.startLba,
-                                    sectorCount = selected.sectorCount,
-                                )
-                                filesystemMenuExpanded = true
-                            }
-                        },
-                    )
-                    DropdownMenu(
-                        expanded = filesystemMenuExpanded,
-                        onDismissRequest = { filesystemMenuExpanded = false },
-                    ) {
-                        FormatCatalog.supportedFormatIds().forEach { formatId ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        stringResource(R.string.partitions_format_target) +
-                                            " " + FormatCatalog.label(formatId),
-                                    )
-                                },
-                                onClick = {
-                                    filesystemMenuExpanded = false
-                                    val target = filesystemMenuTarget
-                                    if (target != null && target.matches(latestState)) {
-                                        onIntent(UiIntent.SelectFormatFilesystem(formatId))
-                                        onIntent(UiIntent.RequestDestructive(DestructiveAction.FORMAT_PARTITION))
-                                    }
-                                    filesystemMenuTarget = null
-                                },
+                InteractiveInfoRow(
+                    label = stringResource(R.string.partitions_filesystem_label),
+                    value = selected.filesystemLabel.ifEmpty { "—" },
+                    enabled = state.actionsEnabled && blockedHint == null,
+                    trailingGlyph = Glyph.ChevronDown,
+                    onClick = {
+                        state.device?.let { device ->
+                            filesystemMenuTarget = PartitionBinding(
+                                device = device,
+                                partitionId = selected.id,
+                                startLba = selected.startLba,
+                                sectorCount = selected.sectorCount,
                             )
+                        }
+                    },
+                )
+                val formatTarget = filesystemMenuTarget
+                if (formatTarget != null) {
+                    ModalBottomSheet(onDismissRequest = { filesystemMenuTarget = null }) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(bottom = 16.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.partitions_format_sheet_title),
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                            )
+                            Text(
+                                text = listOfNotNull(
+                                    selected.name.ifBlank { selected.id },
+                                    partitionSizeLabel(state, selected),
+                                ).joinToString(" · "),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                            )
+                            FormatCatalog.supportedFormatIds().forEach { formatId ->
+                                ListItem(
+                                    headlineContent = { Text(FormatCatalog.label(formatId)) },
+                                    supportingContent = { Text(formatDescription(formatId)) },
+                                    leadingContent = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_file),
+                                            contentDescription = null,
+                                        )
+                                    },
+                                    modifier = Modifier.clickable {
+                                        filesystemMenuTarget = null
+                                        if (formatTarget.matches(latestState)) {
+                                            onIntent(UiIntent.SelectFormatFilesystem(formatId))
+                                            onIntent(
+                                                UiIntent.RequestDestructive(
+                                                    DestructiveAction.FORMAT_PARTITION,
+                                                ),
+                                            )
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -1264,11 +1289,23 @@ fun PartitionsScreen(
                     state.rawGeometry?.metadataProblem ==
                     RawSchemeProblem.GptBackupMetadataUnknown)
             val changeBlocked = mbrTooLarge || backupUnknown
-            AlertDialog(
-                onDismissRequest = { schemePrompt = null },
-                title = {
+            val changeBlockedReason = when {
+                mbrTooLarge -> R.string.msg_scheme_mbr_too_large
+                state.rawGeometry == null -> R.string.partitions_scheme_backup_unverified
+                else -> R.string.partitions_scheme_backup_unknown
+            }
+            ModalBottomSheet(onDismissRequest = { schemePrompt = null }) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -1278,79 +1315,86 @@ fun PartitionsScreen(
                                 promptTarget.toTableScheme().name,
                             ),
                             modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleLarge,
                         )
                         InfoHelpButton(
                             infoTitle = stringResource(R.string.partitions_scheme_help_title),
                             infoText = stringResource(R.string.partitions_scheme_help_text),
                         )
                     }
-                },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Text(stringResource(R.string.partitions_scheme_choice_note))
-                        if (repairAvailable) {
-                            Text(stringResource(R.string.partitions_scheme_repair_note))
-                        } else {
-                            Text(stringResource(R.string.partitions_gpt_repair_blocked))
-                        }
-                        if (changeBlocked) {
+                    Text(
+                        text = stringResource(R.string.partitions_scheme_choice_note),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                    )
+                    // Two full-width rows and no Cancel: swipe or the backdrop dismisses.
+                    ListItem(
+                        headlineContent = {
+                            Text(stringResource(R.string.partitions_gpt_repair))
+                        },
+                        supportingContent = {
                             Text(
-                                text = stringResource(
-                                    when {
-                                        mbrTooLarge -> R.string.msg_scheme_mbr_too_large
-                                        state.rawGeometry == null ->
-                                            R.string.partitions_scheme_backup_unverified
-                                        else -> R.string.partitions_scheme_backup_unknown
+                                stringResource(
+                                    if (repairAvailable) {
+                                        R.string.partitions_scheme_repair_note
+                                    } else {
+                                        R.string.partitions_gpt_repair_blocked
                                     },
                                 ),
-                                color = MaterialTheme.colorScheme.error,
                             )
-                        }
-                    }
-                },
-                confirmButton = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (repairAvailable) {
-                            TextButton(
-                                onClick = {
-                                    schemePrompt = null
-                                    onIntent(
-                                        UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR),
-                                    )
-                                },
-                            ) {
-                                Text(stringResource(R.string.partitions_gpt_repair))
-                            }
-                        }
-                        TextButton(
-                            onClick = {
-                                schemePrompt = null
-                                schemeChangePrompt = promptTarget
-                            },
-                            enabled = !changeBlocked,
-                        ) {
+                        },
+                        leadingContent = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_tab_partitions),
+                                contentDescription = null,
+                            )
+                        },
+                        modifier = Modifier.clickable(enabled = repairAvailable) {
+                            schemePrompt = null
+                            onIntent(
+                                UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR),
+                            )
+                        },
+                    )
+                    ListItem(
+                        headlineContent = {
                             Text(
-                                text = stringResource(
+                                stringResource(
                                     R.string.partitions_scheme_choice_change,
                                     promptTarget.toTableScheme().name,
                                 ),
-                                color = MaterialTheme.colorScheme.error,
-                                fontWeight = FontWeight.Bold,
                             )
-                        }
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { schemePrompt = null }) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                },
-            )
+                        },
+                        supportingContent = {
+                            Text(
+                                text = stringResource(
+                                    if (changeBlocked) {
+                                        changeBlockedReason
+                                    } else {
+                                        R.string.partitions_scheme_prompt_note
+                                    },
+                                ),
+                                color = if (changeBlocked) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_danger),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        modifier = Modifier.clickable(enabled = !changeBlocked) {
+                            schemePrompt = null
+                            schemeChangePrompt = promptTarget
+                        },
+                    )
+                }
+            }
         }
 
         val changeTarget = schemeChangePrompt
@@ -2258,3 +2302,14 @@ private fun PickerButtons(
         }
     }
 }
+
+/** One-line engine summary shown under the filesystem label in the format sheet. */
+@Composable
+private fun formatDescription(id: FilesystemId): String = stringResource(
+    when (id) {
+        FilesystemId.FAT -> R.string.partitions_format_fat_desc
+        FilesystemId.EXFAT -> R.string.partitions_format_exfat_desc
+        FilesystemId.EXT -> R.string.partitions_format_ext_desc
+        FilesystemId.NTFS -> R.string.partitions_format_ntfs_desc
+    },
+)

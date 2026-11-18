@@ -52,21 +52,19 @@ internal object PartitionTransitions {
         return when {
             state.partitionTableAmbiguous ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.PartitionTableAmbiguous),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)),
                 )
             state.partitionTableDamaged ->
                 ReduceResult(
-                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.GptPrimaryDamaged)),
+                    state.withStatus(UiMessage.Key(UiMessageKey.GptPrimaryDamaged)),
                 )
             device == null || !state.actionsEnabled || !state.tableValid || !valid ->
                 ReduceResult(
-                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.InvalidFreeRegion)),
+                    state.withStatus(UiMessage.Key(UiMessageKey.InvalidFreeRegion)),
                 )
-            nameProblem != null -> ReduceResult(state.copy(statusMessage = nameProblem))
-            formatProblem != null -> ReduceResult(state.copy(statusMessage = formatProblem))
-            labelProblem != null -> ReduceResult(state.copy(statusMessage = labelProblem))
+            nameProblem != null -> ReduceResult(state.withStatus(nameProblem))
+            formatProblem != null -> ReduceResult(state.withStatus(formatProblem))
+            labelProblem != null -> ReduceResult(state.withStatus(labelProblem))
             else -> {
                 val base = DestructiveConfirmation.request(device, DestructiveAction.CREATE_PARTITION)
                 ReduceResult(state.copy(pendingConfirmation = base.copy(
@@ -115,7 +113,7 @@ internal object PartitionTransitions {
             }
         }
         return if (problem != null || device == null || target == null) {
-            ReduceResult(state.copy(statusMessage = problem))
+            ReduceResult(state.withStatus(problem))
         } else {
             val base = DestructiveConfirmation.request(
                 device,
@@ -166,7 +164,7 @@ internal object PartitionTransitions {
             }
         }
         return if (problem != null || device == null || target == null) {
-            ReduceResult(state.copy(statusMessage = problem))
+            ReduceResult(state.withStatus(problem))
         } else {
             val base = DestructiveConfirmation.request(
                 device,
@@ -222,7 +220,7 @@ internal object PartitionTransitions {
             else -> null
         }
         return if (problem != null || device == null) {
-            ReduceResult(state.copy(statusMessage = problem))
+            ReduceResult(state.withStatus(problem))
         } else {
             val base = DestructiveConfirmation.request(
                 device,
@@ -289,7 +287,7 @@ internal object PartitionTransitions {
             else -> null
         }
         if (problem != null || device == null || target == null) {
-            return ReduceResult(state.copy(statusMessage = problem))
+            return ReduceResult(state.withStatus(problem))
         }
         val base = DestructiveConfirmation.request(device, action, target.name, target = target)
         return ReduceResult(

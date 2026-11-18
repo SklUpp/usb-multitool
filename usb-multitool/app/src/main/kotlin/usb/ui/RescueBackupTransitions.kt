@@ -12,16 +12,14 @@ internal object RescueBackupTransitions {
                 backupFolderUri = intent.uri,
                 backupFolderName = intent.name,
                 backupFolderUsable = intent.uri != null && intent.usable,
-                statusMessage =
-                    when {
+            ).withStatus(when {
                         intent.uri == null -> UiMessage.Key(UiMessageKey.ChooseBackupFolder)
                         intent.usable -> UiReducer.message(
                             UiMessageKey.BackupFolderReady,
                             intent.name ?: intent.uri.orEmpty(),
                         )
                         else -> UiMessage.Key(UiMessageKey.BackupFolderPermissionLost)
-                    },
-            ),
+                    }),
         )
 
     fun setBackupFile(state: AppUiState, intent: UiIntent.SetBackupFile): ReduceResult {
@@ -39,8 +37,7 @@ internal object RescueBackupTransitions {
                     backupSelectionGeneration = intent.requestId,
                     pendingConfirmation =
                         if (clearConfirm) null else state.pendingConfirmation,
-                    statusMessage =
-                        when {
+                ).withStatus(when {
                             intent.uri == null -> UiMessage.Key(UiMessageKey.BackupCleared)
                             inspection != null && inspectionError != null -> UiReducer.message(
                                 UiMessageKey.SourceInspectionRejected,
@@ -51,8 +48,7 @@ internal object RescueBackupTransitions {
                                 UiMessageKey.BackupReady,
                                 DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
                             )
-                        },
-                ),
+                        }),
             )
         }
     }
@@ -80,16 +76,14 @@ internal object RescueBackupTransitions {
                     rescueImageSelectionGeneration = intent.requestId,
                     pendingConfirmation =
                         if (clearConfirm) null else state.pendingConfirmation,
-                    statusMessage =
-                        if (intent.uri == null) {
+                ).withStatus(if (intent.uri == null) {
                             UiMessage.Key(UiMessageKey.RescueImageCleared)
                         } else {
                             UiReducer.message(
                                 UiMessageKey.RescueImageReady,
                                 DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
                             )
-                        },
-                ),
+                        }),
             )
         }
     }
@@ -109,8 +103,7 @@ internal object RescueBackupTransitions {
                     rescueMapSelectionGeneration = intent.requestId,
                     pendingConfirmation =
                         if (clearConfirm) null else state.pendingConfirmation,
-                    statusMessage =
-                        when {
+                ).withStatus(when {
                             intent.uri == null -> UiMessage.Key(UiMessageKey.RescueMapCleared)
                             inspection != null && inspectionError != null -> UiReducer.message(
                                 UiMessageKey.SourceInspectionRejected,
@@ -121,8 +114,7 @@ internal object RescueBackupTransitions {
                                 UiMessageKey.RescueMapReady,
                                 DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
                             )
-                        },
-                ),
+                        }),
             )
         }
     }
@@ -130,7 +122,7 @@ internal object RescueBackupTransitions {
     /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */
     private fun nonDestructiveEffect(state: AppUiState, effect: UiEffect): ReduceResult =
         if (!state.actionsEnabled) {
-            ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         } else {
             ReduceResult(state, effects = listOf(effect))
         }

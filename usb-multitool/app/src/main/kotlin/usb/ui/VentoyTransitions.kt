@@ -55,22 +55,18 @@ internal object VentoyTransitions {
                     ReduceResult(state)
                 }
             !state.actionsEnabled ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             state.partitionTableAmbiguous ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.PartitionTableAmbiguous),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)),
                 )
             state.partitionTableDamaged ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.GptPrimaryDamaged),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.GptPrimaryDamaged)),
                 )
             !state.tableValid ->
                 ReduceResult(
-                    state.copy(statusMessage = UiMessage.Key(UiMessageKey.TableDamaged)),
+                    state.withStatus(UiMessage.Key(UiMessageKey.TableDamaged)),
                 )
             else -> {
                 val target = state.partitions.firstOrNull {
@@ -81,18 +77,14 @@ internal object VentoyTransitions {
                 when {
                     target == null ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiReducer.message(
+                            state.withStatus(UiReducer.message(
                                     UiMessageKey.EfiPartitionMissing,
                                     intent.partitionId,
-                                ),
-                            ),
+                                )),
                         )
                     start == null || count == null ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Key(UiMessageKey.EfiGeometryUnknown),
-                            ),
+                            state.withStatus(UiMessage.Key(UiMessageKey.EfiGeometryUnknown)),
                         )
                     else ->
                         ReduceResult(
@@ -125,8 +117,7 @@ internal object VentoyTransitions {
             ReduceResult(
                 state.copy(
                     ventoySettingsSourceLoading = false,
-                    statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                ),
+                ).withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
             )
         } else {
             val token = state.ventoyGlobalSettingsRequest + 1L
@@ -165,46 +156,34 @@ internal object VentoyTransitions {
         return when {
             normalized == null ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceInvalid),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceInvalid)),
                 )
             !state.actionsEnabled ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             device == null ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             intent.identity != null && intent.identity != device.identity ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
                 )
             intent.attachGeneration != null &&
                 intent.attachGeneration != device.attachGeneration ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
                 )
             intent.partitionId != null && pinnedPartition == null ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
                 )
             pinnedPartition != null && pinnedStart != null &&
                 pinnedStart != pinnedPartition.startLba ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
                 )
             pinnedPartition != null && pinnedCount != null &&
                 pinnedCount != pinnedPartition.sectorCount ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
                 )
             else -> {
                 val picked = VentoySettingsSource.UsbFile(normalized)
@@ -234,16 +213,14 @@ internal object VentoyTransitions {
         when {
             intent.uri.isBlank() ->
                 ReduceResult(
-                    state.copy(
-                        statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceInvalid),
-                    ),
+                    state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceInvalid)),
                 )
             !state.actionsEnabled ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             intent.identity != null && intent.identity != state.device?.identity ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
             intent.attachGeneration != null && intent.attachGeneration != state.device?.attachGeneration ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
             else ->
                 startSettingsSourceRead(
                     state = state,
@@ -257,7 +234,7 @@ internal object VentoyTransitions {
 
     fun useDefaultVentoySettingsFile(state: AppUiState): ReduceResult =
         if (!state.actionsEnabled) {
-            ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+            ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         } else {
             startSettingsSourceRead(
                 state = state,
@@ -296,7 +273,7 @@ internal object VentoyTransitions {
         partitionSectorCount: ULong? = null,
     ): ReduceResult {
         val dataPartition = state.ventoyDataPartition()
-            ?: return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.VentoyDataPartitionMissing)))
+            ?: return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.VentoyDataPartitionMissing)))
         val token = state.ventoyGlobalSettingsRequest + 1L
         val pinnedPartitionId = partitionId ?: dataPartition.id
         val pinnedStart = partitionStartLba ?: dataPartition.startLba
@@ -325,8 +302,7 @@ internal object VentoyTransitions {
                     } else {
                         emptyList()
                     },
-                statusMessage = null,
-            ),
+            ).withStatus(null),
             effects = listOf(
                 UiEffect.LoadVentoyGlobalSettings(requestToken = token, source = source),
             ),
@@ -342,13 +318,11 @@ internal object VentoyTransitions {
             ReduceResult(
                 state.copy(
                     ventoyFoldersPending = true,
-                    statusMessage =
-                        if (state.presence == DevicePresence.Ready) {
+                ).withStatus(if (state.presence == DevicePresence.Ready) {
                             UiMessage.Key(UiMessageKey.WaitForOperation)
                         } else {
                             UiReducer.presenceMessage(state.presence)
-                        },
-                ),
+                        }),
             )
         } else {
             UiReducer.startFolderRead(state, state.ventoyFolderPath, keepList = true)
@@ -368,9 +342,7 @@ internal object VentoyTransitions {
                 target == null || target !in state.ventoyFolders.orEmpty() ->
                     // The row came from a list that no longer matches the state.
                     ReduceResult(
-                        state.copy(
-                            statusMessage = UiMessage.Key(UiMessageKey.FolderListChanged),
-                        ),
+                        state.withStatus(UiMessage.Key(UiMessageKey.FolderListChanged)),
                     )
                 else -> UiReducer.startFolderRead(state, target, keepList = false)
             }
@@ -420,13 +392,15 @@ internal object VentoyTransitions {
                     ventoyGlobalSettings = intent.settings,
                     ventoySettingsSource = intent.source,
                     ventoySettingsSourceLoading = false,
-                    statusMessage =
-                        when (val loaded = intent.settings) {
-                            is VentoyGlobalSettings.ReadError ->
-                                if (loaded.damagedLayout) state.statusMessage else UiMessage.Raw(loaded.message)
-                            else -> state.statusMessage
-                        },
-                ),
+                ).let { nextState ->
+                    val loaded = intent.settings
+                    if (loaded is VentoyGlobalSettings.ReadError && !loaded.damagedLayout) {
+                        nextState.withStatus(UiMessage.Raw(loaded.message))
+                    } else {
+                        // Carried forward, not a new emission: no sequence bump.
+                        nextState.copy(statusMessage = state.statusMessage)
+                    }
+                },
             )
         }
 
@@ -442,7 +416,7 @@ internal object VentoyTransitions {
                     ?: VentoyControlCatalog.valueProblem(intent.key, intent.value)
             }
         return if (problem != null) {
-            ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
+            ReduceResult(state.withStatus(UiMessage.Raw(problem)))
         } else {
             val staged = LinkedHashMap<String, VentoyControlSetting>()
             state.pendingVentoyControls.forEach { staged[it.key] = it }
@@ -450,8 +424,7 @@ internal object VentoyTransitions {
             ReduceResult(
                 state.copy(
                     pendingVentoyControls = staged.values.toList(),
-                    statusMessage = null,
-                ),
+                ).withStatus(null),
             )
         }
     }
@@ -470,14 +443,14 @@ internal object VentoyTransitions {
     fun requestApplyVentoyControls(state: AppUiState): ReduceResult =
         when {
             !state.actionsEnabled ->
-                ReduceResult(state.copy(statusMessage = UiReducer.presenceMessage(state.presence)))
+                ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             !state.settingsSourceGeometryMatches() ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
             !state.ventoySettingsSource.isDefaultPath() &&
                 state.ventoySettingsSource !is VentoySettingsSource.Document &&
                 state.ventoyGlobalSettings !is VentoyGlobalSettings.Present &&
                 state.ventoyGlobalSettings !is VentoyGlobalSettings.Empty ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SettingsSourceUnavailable)))
+                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceUnavailable)))
             (state.ventoySettingsSource is VentoySettingsSource.Document ||
                 state.ventoySettingsSource is VentoySettingsSource.UsbFile) &&
                 (state.ventoyGlobalSettings is VentoyGlobalSettings.Present ||
@@ -499,7 +472,7 @@ internal object VentoyTransitions {
                     ),
                 )
             state.pendingVentoyControls.isEmpty() ->
-                ReduceResult(state.copy(statusMessage = UiMessage.Raw("No Ventoy setting changes to apply")))
+                ReduceResult(state.withStatus(UiMessage.Raw("No Ventoy setting changes to apply")))
             else ->
                 ReduceResult(
                     state,

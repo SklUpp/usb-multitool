@@ -3,93 +3,16 @@ package usb.ui
 import kotlin.math.abs
 
 /**
- * Shell-owned presentation state. It stays separate from [AppUiState]: collapsing status or
- * opening the journal never touches operation progress, cancellation, or readback verdict.
+ * Shell-owned presentation state. It stays separate from [AppUiState]: opening the journal
+ * never touches operation progress, cancellation, or readback verdict.
  */
 internal data class ShellPanelState(
-    /** Status body is folded into the compact bottom affordance. */
-    val statusCollapsed: Boolean = false,
     /** Opaque full journal layer covers the tabs. */
     val journalScreenOpen: Boolean = false,
 ) {
-    /** Fold the status into the compact bottom affordance, keeping every operation value. */
-    fun collapseStatus(): ShellPanelState =
-        if (statusCollapsed) this else copy(statusCollapsed = true)
-
-    /** Restore the expanded status row. */
-    fun expandStatus(): ShellPanelState =
-        if (!statusCollapsed) this else copy(statusCollapsed = false)
-
     fun openJournalScreen(): ShellPanelState = copy(journalScreenOpen = true)
 
     fun closeJournalScreen(): ShellPanelState = copy(journalScreenOpen = false)
-}
-/** Screen that owns operation details; null keeps auto-expansion conservative. */
-internal fun OperationTitle.shellTab(): ShellTab? = when (this) {
-    OperationTitle.Upload,
-    is OperationTitle.UploadBatch,
-    is OperationTitle.ListPath,
-    is OperationTitle.NewFolder,
-    is OperationTitle.DeleteEntry,
-    is OperationTitle.DeleteBatch,
-    is OperationTitle.RenameEntry,
-    is OperationTitle.DownloadEntry,
-    is OperationTitle.DownloadBatch,
-    -> ShellTab.Files
-    OperationTitle.AutounattendXmlLink,
-    OperationTitle.ReadXmlBindings,
-    OperationTitle.RemoveXmlBindings,
-    OperationTitle.SaveGlobalWindowsControls,
-    OperationTitle.ReadUnattendXml,
-    OperationTitle.ListVentoyImages,
-    OperationTitle.GenerateUnattendXml,
-    OperationTitle.WriteUnattendXml,
-    OperationTitle.ReadVentoyGlobalSettings,
-    OperationTitle.ListVentoyFolders,
-    OperationTitle.SetVentoyGlobalSetting,
-    OperationTitle.BindImagesToUnattendXml,
-    OperationTitle.UnbindImageFromUnattendXml,
-    is OperationTitle.ImportTarget,
-    -> ShellTab.Ventoy
-    OperationTitle.CheckRawRange,
-    OperationTitle.ListRawSources,
-    is OperationTitle.StageForRawWrite,
-    is OperationTitle.FormatTarget,
-    -> ShellTab.Partitions
-    OperationTitle.ReadScan,
-    OperationTitle.RescueBackup,
-    OperationTitle.GptCriticalBackup,
-    OperationTitle.SelfTest,
-    OperationTitle.SelfTestRunning,
-    -> ShellTab.Diagnostics
-    is OperationTitle.Destructive -> when (action) {
-        DestructiveAction.VENTOY_INSTALL,
-        DestructiveAction.VENTOY_UPDATE,
-        DestructiveAction.VENTOY_LINK_XML,
-        DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
-        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT,
-        -> ShellTab.Ventoy
-        DestructiveAction.WIPE,
-        DestructiveAction.GPT_RESTORE,
-        DestructiveAction.RESCUE_RESTORE,
-        -> ShellTab.Diagnostics
-        DestructiveAction.RAW_WRITE,
-        DestructiveAction.FORMAT_PARTITION,
-        DestructiveAction.DELETE_PARTITION,
-        DestructiveAction.CREATE_PARTITION,
-        DestructiveAction.GPT_REPAIR,
-        DestructiveAction.SET_PARTITION_ROLE,
-        DestructiveAction.SET_PARTITION_BOOTABLE,
-        DestructiveAction.RENAME_PARTITION,
-        DestructiveAction.RENAME_VOLUME_LABEL,
-        DestructiveAction.INITIALIZE_PARTITION_TABLE,
-        -> ShellTab.Partitions
-    }
-    OperationTitle.ProbeDevice,
-    OperationTitle.RefreshPartitions,
-    OperationTitle.EjectDevice,
-    OperationTitle.ListDataPartitionFiles,
-    -> null
 }
 
 /** Four primary destinations shown in bottom navigation; Settings is explicit menu route. */

@@ -1107,7 +1107,7 @@ object UiReducer {
                 if (intent.tab != state.tab &&
                     (state.isRunning || state.operation?.state == OperationState.Queued)
                 ) {
-                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)))
+                    ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.WaitForOperation)))
                 } else {
                     val enteringFiles = intent.tab == ShellTab.Files && state.tab != ShellTab.Files
                     // Any other tab leaves pick mode, exactly like CancelFilesPick. A running
@@ -1120,7 +1120,7 @@ object UiReducer {
                         null
                     }
                 if (pickExitBlock != null) {
-                    ReduceResult(state.copy(statusMessage = pickExitBlock))
+                    ReduceResult(state.withStatus(pickExitBlock))
                 } else {
                     val leavingPick = intent.tab != ShellTab.Files && state.filesPickMode != null
                     val cancelHost =
@@ -1131,12 +1131,6 @@ object UiReducer {
                         if (leavingPick) {
                             state.copy(
                                 tab = intent.tab,
-                                statusMessage =
-                                    if (cancelHost) {
-                                        UiMessage.Key(UiMessageKey.ImportInspectionCancelling)
-                                    } else {
-                                        null
-                                    },
                                 filesPickSession = newFilesPickSession(),
                                 filesPickMode = null,
                                 pendingIsoImport = null,
@@ -1144,10 +1138,15 @@ object UiReducer {
                                 isoImportError = null,
                                 isoImportSafInFlight = null,
                                 isoImportGeneration = state.isoImportGeneration + 1,
-                            )
+                            ).withStatus(if (cancelHost) {
+                                        UiMessage.Key(UiMessageKey.ImportInspectionCancelling)
+                                    } else {
+                                        null
+                                    })
                         } else {
                             state.copy(
                                 tab = intent.tab,
+                                // Carried forward, not a new emission: no sequence bump.
                                 statusMessage = state.statusMessage.takeIf {
                                     it is UiMessage.Key && it.key == UiMessageKey.VolumeSyncUnconfirmed
                                 },
@@ -1191,12 +1190,12 @@ object UiReducer {
                     // The session is pinned to one partition; switching would browse another
                     // volume while the caller still thinks it is choosing from the pinned one.
                     ReduceResult(
-                        state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                        state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                     )
                 } else if (!state.actionsEnabled) {
                     // Switching mid-operation would post a Running LoadFiles over the live
                     // operation and orphan it from Cancel; report only why nothing changed.
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     val clearConflict = state.pendingFilesBatchConflict != null
                     ReduceResult(
@@ -1246,11 +1245,10 @@ object UiReducer {
                             tab = mode.returnTab,
                             filesPickSession = newFilesPickSession(),
                             filesPickMode = null,
-                            statusMessage = intent.failure?.let(UiMessage::Key),
-                        ),
+                        ).withStatus(intent.failure?.let(UiMessage::Key)),
                     )
                 } else if (intent.failure != null && !intent.cancelled) {
-                    ReduceResult(state.copy(statusMessage = UiMessage.Key(intent.failure)))
+                    ReduceResult(state.withStatus(UiMessage.Key(intent.failure)))
                 } else {
                     ReduceResult(state)
                 }
@@ -1292,12 +1290,10 @@ object UiReducer {
                     val id = intent.id
                     if (id !in FormatCatalog.supportedFormatIds()) {
                         ReduceResult(
-                            state.copy(
-                                statusMessage = message(UiMessageKey.FormatUnsupported, FormatCatalog.label(id)),
-                            ),
+                            state.withStatus(message(UiMessageKey.FormatUnsupported, FormatCatalog.label(id))),
                         )
                     } else {
-                        ReduceResult(state.copy(selectedFormatId = id, statusMessage = null))
+                        ReduceResult(state.copy(selectedFormatId = id).withStatus(null))
                     }
                 }
             }
@@ -1774,16 +1770,19 @@ object UiReducer {
                             state.linkOverwriteCandidateIdentity.takeIf { candidateMatchesDevice },
                         linkOverwriteCandidateGeneration =
                             state.linkOverwriteCandidateGeneration.takeIf { candidateMatchesDevice },
-                        statusMessage =
-                            if (intent.presence == DevicePresence.Ready) {
-                                // Probe posts Probing before Ready; keep other statuses (errors).
-                                state.statusMessage.takeUnless {
+                    ).let { next ->
+                        if (intent.presence == DevicePresence.Ready) {
+                            // Probe posts Probing before Ready; keep other statuses (errors),
+                            // and carrying one forward must not bump the sequence.
+                            next.copy(
+                                statusMessage = state.statusMessage.takeUnless {
                                     it is UiMessage.Key && it.key == UiMessageKey.Probing
-                                }
-                            } else {
-                                presenceMessage(intent.presence)
-                            },
-                    ),
+                                },
+                            )
+                        } else {
+                            next.withStatus(presenceMessage(intent.presence))
+                        }
+                    },
                     effects =
                         buildList {
                             if (loadFilesNow) add(UiEffect.LoadFiles(path = path))
@@ -1896,17 +1895,14 @@ object UiReducer {
                         else -> null
                     }
                 if (device != null && state.actionsEnabled && missingInput != null) {
-                    ReduceResult(state.copy(statusMessage = missingInput))
+                    ReduceResult(state.withStatus(missingInput))
                 } else if (device == null || !state.actionsEnabled) {
                     ReduceResult(
-                        state.copy(
-                            statusMessage =
-                                when {
+                        state.withStatus(when {
                                     device == null -> presenceMessage(state.presence)
                                     state.isRunning -> UiMessage.Key(UiMessageKey.WaitForOperation)
                                     else -> presenceMessage(state.presence)
-                                },
-                        ),
+                                }),
                     )
                 } else {
                     val targetPart = if (intent.action == DestructiveAction.DELETE_PARTITION ||
@@ -2189,19 +2185,17 @@ object UiReducer {
                         ReduceResult(
                             state.copy(
                                 pendingConfirmation = null,
-                                statusMessage = UiMessage.Key(UiMessageKey.NoIsoForLink),
-                            ),
+                            ).withStatus(UiMessage.Key(UiMessageKey.NoIsoForLink)),
                         )
                     } else {
                         ReduceResult(
                             state.copy(
                                 pendingConfirmation = null,
-                                statusMessage = message(
+                            ).withStatus(message(
                                     UiMessageKey.WritingXml,
                                     paths.first().substringAfterLast('/') +
                                         if (paths.size > 1) " +${paths.size - 1}" else "",
-                                ),
-                            ),
+                                )),
                             effects = listOf(
                                 UiEffect.LinkXml(
                                     imagePaths = paths,
@@ -2227,16 +2221,14 @@ object UiReducer {
                                 state.copy(
                                     pendingConfirmation = null,
                                     pendingAutounattendRawWrite = null,
-                                    statusMessage = UiMessage.Key(UiMessageKey.TargetChanged),
-                                ),
+                                ).withStatus(UiMessage.Key(UiMessageKey.TargetChanged)),
                             )
                         } else {
                             ReduceResult(
                                 state.copy(
                                     pendingConfirmation = null,
                                     pendingAutounattendRawWrite = null,
-                                    statusMessage = UiMessage.Raw("Writing unattend XML"),
-                                ),
+                                ).withStatus(UiMessage.Raw("Writing unattend XML")),
                                 effects = listOf(
                                     UiEffect.WriteAutounattendRaw(
                                         xmlName = pendingRaw.xmlName,
@@ -2258,8 +2250,7 @@ object UiReducer {
                             state.copy(
                                 pendingConfirmation = null,
                                 pendingAutounattendGeneration = null,
-                                statusMessage = UiMessage.Key(UiMessageKey.TargetChanged),
-                            ),
+                            ).withStatus(UiMessage.Key(UiMessageKey.TargetChanged)),
                         )
                     } else {
                         val layout = pendingGen.params.diskLayout
@@ -2274,8 +2265,7 @@ object UiReducer {
                                 state.copy(
                                     pendingConfirmation = null,
                                     pendingAutounattendGeneration = null,
-                                    statusMessage = layoutProblemMessage(layoutProblems),
-                                ),
+                                ).withStatus(layoutProblemMessage(layoutProblems)),
                             )
                         } else if (layout != null && layout.writeLayout && pendingGen.params.intents.diskLayout == XmlFieldIntent.Set) {
                             // Overwrite acknowledged; still need separate target-PC layout ack.
@@ -2290,18 +2280,16 @@ object UiReducer {
                                 state.copy(
                                     pendingConfirmation = null,
                                     diskLayoutConfirmation = layoutConfirmation(layout, plan),
-                                    statusMessage = UiMessage.Raw(
+                                ).withStatus(UiMessage.Raw(
                                         "Confirm the target PC disk layout before generating XML",
-                                    ),
-                                ),
+                                    )),
                             )
                         } else {
                             ReduceResult(
                                 state.copy(
                                     pendingConfirmation = null,
                                     pendingAutounattendGeneration = null,
-                                    statusMessage = UiMessage.Raw("Generating unattend XML"),
-                                ),
+                                ).withStatus(UiMessage.Raw("Generating unattend XML")),
                                 effects = listOf(
                                     UiEffect.GenerateAutounattend(
                                         xmlName = pendingGen.xmlName,
@@ -2351,6 +2339,7 @@ object UiReducer {
                         linkOverwriteCandidateGeneration = null,
                         linkOverwriteCandidatePaths = emptyList(),
                         linkOverwriteCandidateTemplatePath = null,
+                        // Carried forward, not a new emission: no sequence bump.
                         statusMessage = state.statusMessage.takeUnless {
                             it == UiMessage.Key(UiMessageKey.LinkOverwriteNeeded)
                         },
@@ -2363,7 +2352,7 @@ object UiReducer {
                         state.linkOverwriteCandidateIdentity == device?.identity &&
                         state.linkOverwriteCandidateGeneration == device?.attachGeneration
                 if (!state.actionsEnabled || device == null) {
-                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)))
+                    ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.NoDeviceForLink)))
                 } else if (!candidateMatches) {
                     ReduceResult(state.copy(
                         linkOverwriteCandidate = null,
@@ -2371,8 +2360,7 @@ object UiReducer {
                         linkOverwriteCandidateGeneration = null,
                         linkOverwriteCandidatePaths = emptyList(),
                         linkOverwriteCandidateTemplatePath = null,
-                        statusMessage = UiMessage.Key(UiMessageKey.LinkMismatch),
-                    ))
+                    ).withStatus(UiMessage.Key(UiMessageKey.LinkMismatch)))
                 } else {
                     val paths =
                         intent.imagePaths.takeIf { it.isNotEmpty() }
@@ -2392,8 +2380,7 @@ object UiReducer {
                         linkOverwriteCandidateGeneration = null,
                         linkOverwriteCandidatePaths = emptyList(),
                         linkOverwriteCandidateTemplatePath = null,
-                        statusMessage = null,
-                    ))
+                    ).withStatus(null))
                 }
             }
             is UiIntent.LinkOverwriteAvailable -> {
@@ -2413,21 +2400,20 @@ object UiReducer {
                         linkOverwriteCandidateGeneration = device.attachGeneration,
                         linkOverwriteCandidatePaths = intent.imagePaths,
                         linkOverwriteCandidateTemplatePath = intent.templatePath,
-                        statusMessage = UiMessage.Key(UiMessageKey.LinkOverwriteNeeded),
-                    ))
+                    ).withStatus(UiMessage.Key(UiMessageKey.LinkOverwriteNeeded)))
                 }
             }
 
             is UiIntent.IsoActionRequested -> {
                 if (!state.actionsEnabled) {
                     ReduceResult(
-                        state.copy(statusMessage = presenceMessage(state.presence)),
+                        state.withStatus(presenceMessage(state.presence)),
                     )
                 } else when (intent.action) {
                     IsoAction.SendToRawWriter -> {
                         val name = intent.fileName.substringAfterLast('/')
                         ReduceResult(
-                            state.copy(statusMessage = message(UiMessageKey.StagingFile, name)),
+                            state.withStatus(message(UiMessageKey.StagingFile, name)),
                             listOf(
                                 UiEffect.StageUsbImageForRawWrite(
                                     path = state.currentPath,
@@ -2440,7 +2426,7 @@ object UiReducer {
                         val device = state.device
                         if (device == null) {
                             ReduceResult(
-                                state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)),
+                                state.withStatus(UiMessage.Key(UiMessageKey.NoDeviceForLink)),
                             )
                         } else {
                             ReduceResult(
@@ -2452,8 +2438,7 @@ object UiReducer {
                                             isoName = intent.fileName,
                                             linkOverwrite = false,
                                         ),
-                                    statusMessage = null,
-                                ),
+                                ).withStatus(null),
                             )
                         }
                     }
@@ -2475,7 +2460,6 @@ object UiReducer {
                             rangeProbeRequestedRange = null,
                             imageName = null,
                             imageSizeBytes = null,
-                            statusMessage = UiMessage.Key(UiMessageKey.ImageCleared),
                             rawDecodedSizeBytes = state.rawDecodedSizeBytes.takeIf {
                                 key != null && state.rawDecodedSizeSource == key
                             },
@@ -2487,7 +2471,7 @@ object UiReducer {
                             rawMeasurementPending = state.rawMeasurementPending && key != null,
                             rawMeasurementWaitingForPrevious =
                                 state.rawMeasurementWaitingForPrevious && key != null,
-                        ),
+                        ).withStatus(UiMessage.Key(UiMessageKey.ImageCleared)),
                         effects =
                             if (key == null) {
                                 listOf(UiEffect.CancelRawSourceMeasure)
@@ -2520,11 +2504,10 @@ object UiReducer {
                             rawMeasurementPending = limit == null,
                             rawMeasurementWaitingForPrevious = false,
                             rawSizeGeneration = generation,
-                            statusMessage = UiMessage.Key(
+                        ).withStatus(UiMessage.Key(
                                 UiMessageKey.ImageReady,
                                 listOf(intent.name ?: uri),
-                            ),
-                        ),
+                            )),
                         effects =
                             if (limit != null) {
                                 listOf(
@@ -2569,20 +2552,17 @@ object UiReducer {
                 when {
                     !state.actionsEnabled ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage =
-                                    if (state.isRunning ||
+                            state.withStatus(if (state.isRunning ||
                                         state.operation?.state == OperationState.Queued ||
                                         state.pendingConfirmation != null
                                     ) {
                                         UiMessage.Key(UiMessageKey.WaitForOperation)
                                     } else {
                                         presenceMessage(state.presence)
-                                    },
-                            ),
+                                    }),
                         )
                     device == null ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     else -> {
                         val generation = state.windowsIsoCandidatesGeneration + 1
                         ReduceResult(
@@ -2617,12 +2597,15 @@ object UiReducer {
                             .distinctBy { it.path.lowercase() }
                             .sortedBy { it.path.lowercase() }
                             .toList()
+                    // Only fires while Ventoy tab open (or manual refresh).
                     ReduceResult(
                         state.copy(
                             windowsIsoCandidates = files,
                             windowsIsoCandidatesError = intent.error,
-                            // Only fires while Ventoy tab open (or manual refresh).
+                            // Only a new error bumps; null keeps the carried message and sequence.
                             statusMessage = intent.error?.let(UiMessage::Raw) ?: state.statusMessage,
+                            statusSequence =
+                                if (intent.error != null) state.statusSequence + 1 else state.statusSequence,
                         ),
                     )
                 }
@@ -2637,16 +2620,14 @@ object UiReducer {
                     }
                 when {
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     device == null ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.NoDeviceForLink)))
                     selected == null ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "\"${intent.isoName}\" is not on the Ventoy data partition; reload the list or import it",
-                                ),
-                            ),
+                                )),
                         )
                     else -> {
                         ReduceResult(
@@ -2658,8 +2639,7 @@ object UiReducer {
                                         isoName = selected.path,
                                         linkOverwrite = false,
                                     ),
-                                statusMessage = null,
-                            ),
+                            ).withStatus(null),
                         )
                     }
                 }
@@ -2702,11 +2682,8 @@ object UiReducer {
                 val importDirectory = pick?.let { state.currentPath } ?: intent.directory
                 if (staleContext || pickProblem != null) {
                     ReduceResult(
-                        state.copy(
-                            statusMessage =
-                                pickProblem
-                                    ?: UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
-                        ),
+                        state.withStatus(pickProblem
+                                    ?: UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                     )
                 } else when {
                     !state.actionsEnabled ||
@@ -2714,9 +2691,7 @@ object UiReducer {
                         state.isoImportSafInFlight != null ||
                         state.isoImportUsbInFlight != null ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage =
-                                    if (state.isoImportSafInFlight != null ||
+                            state.withStatus(if (state.isoImportSafInFlight != null ||
                                         state.isoImportUsbInFlight != null ||
                                         state.isRunning ||
                                         state.operation?.state == OperationState.Queued ||
@@ -2725,13 +2700,12 @@ object UiReducer {
                                         UiMessage.Key(UiMessageKey.WaitForOperation)
                                     } else {
                                         presenceMessage(state.presence)
-                                    },
-                            ),
+                                    }),
                         )
                     state.device == null ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     uri.isEmpty() ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Raw("No file selected for ISO import")))
+                        ReduceResult(state.withStatus(UiMessage.Raw("No file selected for ISO import")))
                     else -> {
                         val generation = state.isoImportGeneration + 1
                         ReduceResult(
@@ -2843,8 +2817,7 @@ object UiReducer {
                             deferredIsoImport = null,
                             isoImportSafInFlight = null,
                             isoImportGeneration = state.isoImportGeneration + 1,
-                            statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
-                        ),
+                        ).withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         effects =
                             if (state.isoImportSafInFlight != null ||
                                 state.isoImportUsbInFlight != null
@@ -2890,10 +2863,9 @@ object UiReducer {
                                 pendingIsoImport = proposal,
                                 deferredIsoImport = null,
                                 isoImportError = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "${importTarget(proposal.directory, intent.targetName)} already exists; confirm overwrite to replace it",
-                                ),
-                            ),
+                                )),
                         )
                     } else if (!state.actionsEnabled) {
                         // A same-stick probe turned the UI non-actionable after the SAF read
@@ -2904,20 +2876,18 @@ object UiReducer {
                                 pendingIsoImport = null,
                                 deferredIsoImport = proposal,
                                 isoImportError = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Import of ${intent.targetName} waits for the stick to settle",
-                                ),
-                            ),
+                                )),
                         )
                     } else {
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
                                 deferredIsoImport = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Importing ${intent.targetName} into ${proposal.directory}",
-                                ),
-                            ),
+                                )),
                             effects = listOf(
                                 UiEffect.ImportIso(
                                     isoImport = proposal,
@@ -2954,38 +2924,34 @@ object UiReducer {
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
-                                statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
-                            ),
+                            ).withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     proposal.identity != device.identity ||
                         proposal.attachGeneration != device.attachGeneration ||
                         proposal.requestGeneration != state.isoImportGeneration ->
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
-                                statusMessage = UiMessage.Raw("USB attachment changed; re-select the ISO"),
-                            ),
+                            ).withStatus(UiMessage.Raw("USB attachment changed; re-select the ISO")),
                         )
                     proposal.exists && !intent.overwrite ->
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Overwrite of ${importTarget(proposal.directory, proposal.targetName)} was not confirmed",
-                                ),
-                            ),
+                                )),
                         )
                     else -> {
                         val overwrite = proposal.exists && intent.overwrite
                         ReduceResult(
                             state.copy(
                                 pendingIsoImport = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Importing ${proposal.targetName} into ${proposal.directory}",
-                                ),
-                            ),
+                                )),
                             effects = listOf(
                                 UiEffect.ImportIso(
                                     isoImport = proposal,
@@ -3094,7 +3060,7 @@ object UiReducer {
 
             UiIntent.SaveWindowsControls ->
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     ReduceResult(
                         state,
@@ -3104,7 +3070,7 @@ object UiReducer {
 
             is UiIntent.ToggleWindowsImage -> {
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     // Same source the bindings UI renders; windowsIsoCandidates is template picker only.
                     val image =
@@ -3114,11 +3080,9 @@ object UiReducer {
                     when {
                         image == null ->
                             ReduceResult(
-                                state.copy(
-                                    statusMessage = UiMessage.Raw(
+                                state.withStatus(UiMessage.Raw(
                                         "Selected image is no longer listed; reload the list",
-                                    ),
-                                ),
+                                    )),
                             )
                         // Bound rows use Unbind; problem rows stay untoggleable.
                         image.bound || image.problem != null ->
@@ -3171,12 +3135,10 @@ object UiReducer {
                         livePartition.id != "1" ||
                         picked.partitionId != "1"
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else if (stalePin || normalized == null) {
                     ReduceResult(
-                        state.copy(
-                            statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
-                        ),
+                        state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                     )
                 } else {
                     // Single-use token: clear the consumed entry in the same transition so a
@@ -3249,12 +3211,10 @@ object UiReducer {
                         intent.partitionStartLba != livePartition1.startLba ||
                         intent.partitionSectorCount != livePartition1.sectorCount
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else if (stalePin || normalized == null) {
                     ReduceResult(
-                        state.copy(
-                            statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid),
-                        ),
+                        state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                     )
                 } else {
                     val generation = state.autounattendRequestGeneration + 1
@@ -3310,26 +3270,22 @@ object UiReducer {
                         }
                 when {
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     device == null ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.NoDeviceForLink)))
                     selected.isEmpty() ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Raw("Select at least one image")))
+                        ReduceResult(state.withStatus(UiMessage.Raw("Select at least one image")))
                     (intent.templatePath ?: state.windowsTemplatePath) == null ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "Select an existing XML template from the stick or import one first",
-                                ),
-                            ),
+                                )),
                         )
                     !known ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "The image list changed; reload it before linking",
-                                ),
-                            ),
+                                )),
                         )
                     else -> {
                         val paths = selected
@@ -3345,8 +3301,7 @@ object UiReducer {
                                         allowDestructiveTemplate = intent.allowDestructiveTemplate,
                                         templateSha256 = intent.expectedTemplateSha256,
                                     ),
-                                statusMessage = null,
-                            ),
+                            ).withStatus(null),
                         )
                     }
                 }
@@ -3357,20 +3312,17 @@ object UiReducer {
                 when {
                     !state.actionsEnabled ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage =
-                                    if (state.isRunning ||
+                            state.withStatus(if (state.isRunning ||
                                         state.operation?.state == OperationState.Queued ||
                                         state.pendingConfirmation != null
                                     ) {
                                         UiMessage.Key(UiMessageKey.WaitForOperation)
                                     } else {
                                         presenceMessage(state.presence)
-                                    },
-                            ),
+                                    }),
                         )
                     device == null ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     else -> {
                         val generation = state.windowsImageLinksGeneration + 1
                         ReduceResult(
@@ -3406,7 +3358,10 @@ object UiReducer {
                     ReduceResult(
                         state.copy(
                             windowsImageLinks = links,
+                            // Only a new error bumps; null keeps the carried message and sequence.
                             statusMessage = intent.error?.let(UiMessage::Raw) ?: state.statusMessage,
+                            statusSequence =
+                                if (intent.error != null) state.statusSequence + 1 else state.statusSequence,
                         ),
                     )
                 }
@@ -3421,26 +3376,23 @@ object UiReducer {
                         }
                 when {
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     device == null ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.NoDeviceForLink)))
                     !known ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "These bindings changed; reload the list before removing them",
-                                ),
-                            ),
+                                )),
                         )
                     else ->
                         ReduceResult(
                             state.copy(
                                 pendingWindowsUnlink = intent.imagePaths,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Remove ${intent.imagePaths.size} binding(s)? " +
                                         "Image files and XML files are kept",
-                                ),
-                            ),
+                                )),
                         )
                 }
             }
@@ -3451,22 +3403,20 @@ object UiReducer {
                     paths.isNullOrEmpty() ->
                         ReduceResult(state.copy(pendingWindowsUnlink = null))
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     state.device == null ->
                         ReduceResult(
                             state.copy(
                                 pendingWindowsUnlink = null,
-                                statusMessage = UiMessage.Key(UiMessageKey.NoDeviceForLink),
-                            ),
+                            ).withStatus(UiMessage.Key(UiMessageKey.NoDeviceForLink)),
                         )
                     else ->
                         ReduceResult(
                             state.copy(
                                 pendingWindowsUnlink = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Removing ${paths.size} binding(s); files stay on the stick",
-                                ),
-                            ),
+                                )),
                             effects = listOf(
                                 UiEffect.UnlinkXml(
                                     imagePaths = paths,
@@ -3481,7 +3431,7 @@ object UiReducer {
 
             is UiIntent.LoadAutounattend ->
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     val generation = state.autounattendRequestGeneration + 1
                     // The document and the whole-partition image list are two asynchronous
@@ -3556,39 +3506,32 @@ object UiReducer {
                     } else emptyList()
                 when {
                     device == null ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     !planMatches ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "Generation plan changed; review and confirm it again",
-                                ),
-                            ),
+                                )),
                         )
                     layoutProblems.isNotEmpty() ->
                         ReduceResult(
                             state.copy(
                                 diskLayoutConfirmation = null,
                                 pendingAutounattendGeneration = null,
-                                statusMessage = layoutProblemMessage(layoutProblems),
-                            ),
+                            ).withStatus(layoutProblemMessage(layoutProblems)),
                         )
                     state.autounattendState is AutounattendState.Unreadable && sameTarget ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "Existing XML cannot be safely extended; choose another file",
-                                ),
-                            ),
+                                )),
                         )
                     state.autounattendState is AutounattendState.Parsed &&
                         sameTarget && !intent.overwriteXml ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Key(UiMessageKey.XmlOverwriteRequired),
-                            ),
+                            state.withStatus(UiMessage.Key(UiMessageKey.XmlOverwriteRequired)),
                         )
                     // F4: replacing an existing Parsed XML needs an explicit destructive confirm
                     // (source name on the dialog) before layout ack or generate.
@@ -3616,8 +3559,7 @@ object UiReducer {
                                         DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
                                         xmlTargetName = intent.xmlName,
                                     ),
-                                statusMessage = UiMessage.Key(UiMessageKey.ConfirmXmlOverwrite),
-                            ),
+                            ).withStatus(UiMessage.Key(UiMessageKey.ConfirmXmlOverwrite)),
                         )
                     }
                     device != null && layout != null && layout.writeLayout ->
@@ -3638,17 +3580,15 @@ object UiReducer {
                                     ),
                                 diskLayoutConfirmation =
                                     layoutConfirmation(layout, planSha256),
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "Confirm the target PC disk layout before generating XML",
-                                ),
-                            ),
+                                )),
                         )
                     else ->
                         ReduceResult(
                             state.copy(
                                 pendingAutounattendRawWrite = null,
-                                statusMessage = UiMessage.Raw("Generating unattend XML"),
-                            ),
+                            ).withStatus(UiMessage.Raw("Generating unattend XML")),
                             effects = listOf(
                                 UiEffect.GenerateAutounattend(
                                     xmlName = intent.xmlName,
@@ -3680,17 +3620,15 @@ object UiReducer {
                             intent.attachGeneration != device.attachGeneration)
                 when {
                     device == null || !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     attachmentStale ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.TargetChanged)),
                         )
                     state.autounattendState is AutounattendState.Parsed &&
                         sameTarget && !intent.overwriteXml ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Key(UiMessageKey.XmlOverwriteRequired),
-                            ),
+                            state.withStatus(UiMessage.Key(UiMessageKey.XmlOverwriteRequired)),
                         )
                     state.autounattendState is AutounattendState.Parsed &&
                         sameTarget && intent.overwriteXml ->
@@ -3718,16 +3656,14 @@ object UiReducer {
                                         DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
                                         xmlTargetName = intent.xmlName,
                                     ),
-                                statusMessage = UiMessage.Key(UiMessageKey.ConfirmXmlOverwrite),
-                            ),
+                            ).withStatus(UiMessage.Key(UiMessageKey.ConfirmXmlOverwrite)),
                         )
                     else ->
                         ReduceResult(
                             state.copy(
                                 pendingAutounattendGeneration = null,
                                 pendingAutounattendRawWrite = null,
-                                statusMessage = UiMessage.Raw("Writing unattend XML"),
-                            ),
+                            ).withStatus(UiMessage.Raw("Writing unattend XML")),
                             effects = listOf(
                                 UiEffect.WriteAutounattendRaw(
                                     xmlName = intent.xmlName,
@@ -3746,11 +3682,9 @@ object UiReducer {
                 when {
                     !intent.acknowledged ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage = UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                     "The target-PC disk warning must be acknowledged explicitly",
-                                ),
-                            ),
+                                )),
                         )
                     pending == null ->
                         ReduceResult(state.copy(diskLayoutConfirmation = null))
@@ -3760,13 +3694,12 @@ object UiReducer {
                             state.copy(
                                 diskLayoutConfirmation = null,
                                 pendingAutounattendGeneration = null,
-                                statusMessage = UiMessage.Raw(
+                            ).withStatus(UiMessage.Raw(
                                     "USB attachment changed; re-open the unattend generator",
-                                ),
-                            ),
+                                )),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     else -> {
                         val layout = pending.params.diskLayout
                         val layoutProblems =
@@ -3790,28 +3723,25 @@ object UiReducer {
                                 state.copy(
                                     diskLayoutConfirmation = null,
                                     pendingAutounattendGeneration = null,
-                                    statusMessage = layoutProblemMessage(layoutProblems),
-                                ),
+                                ).withStatus(layoutProblemMessage(layoutProblems)),
                             )
                         } else if (!snapshotMatches) {
                             ReduceResult(
                                 state.copy(
                                     diskLayoutConfirmation = null,
                                     pendingAutounattendGeneration = null,
-                                    statusMessage = UiMessage.Raw(
+                                ).withStatus(UiMessage.Raw(
                                         "Generation plan changed; review and confirm it again",
-                                    ),
-                                ),
+                                    )),
                             )
                         } else {
                             ReduceResult(
                                 state.copy(
                                     diskLayoutConfirmation = null,
                                     pendingAutounattendGeneration = null,
-                                    statusMessage = UiMessage.Raw(
+                                ).withStatus(UiMessage.Raw(
                                         "Generating unattend XML with disk layout",
-                                    ),
-                                ),
+                                    )),
                                 effects = listOf(
                                     UiEffect.GenerateAutounattend(
                                         xmlName = pending.xmlName,
@@ -3858,24 +3788,24 @@ object UiReducer {
                 VentoyTransitions.discardStagedVentoyControl(state, intent)
             is UiIntent.CommitAndApplyVentoyControls -> {
                 if (intent.duplicateKeys.isNotEmpty()) {
-                    ReduceResult(state.copy(statusMessage = UiMessage.Raw("Cannot edit duplicate Ventoy keys safely: ${intent.duplicateKeys.joinToString()}")))
+                    ReduceResult(state.withStatus(UiMessage.Raw("Cannot edit duplicate Ventoy keys safely: ${intent.duplicateKeys.joinToString()}")))
                 } else {
                     val merged = intent.removedKeys.map { VentoyControlSetting(it, null) } + intent.settings
                     VentoyControlCatalog.problem(merged)?.let { problem ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
+                        ReduceResult(state.withStatus(UiMessage.Raw(problem)))
                     } ?: VentoyTransitions.requestApplyVentoyControls(
-                        state.copy(pendingVentoyControls = merged, statusMessage = null),
+                        state.copy(pendingVentoyControls = merged).withStatus(null),
                     )
                 }
             }
             is UiIntent.CommitVentoyControls -> {
                 val merged = intent.removedKeys.map { VentoyControlSetting(it, null) } + intent.settings
                 VentoyControlCatalog.problem(merged)?.let { problem ->
-                    ReduceResult(state.copy(statusMessage = UiMessage.Raw(problem)))
-                } ?: ReduceResult(state.copy(pendingVentoyControls = merged, statusMessage = null))
+                    ReduceResult(state.withStatus(UiMessage.Raw(problem)))
+                } ?: ReduceResult(state.copy(pendingVentoyControls = merged).withStatus(null))
             }
              is UiIntent.RestoreVentoyControls ->
-                 ReduceResult(state.copy(pendingVentoyControls = intent.settings, statusMessage = null))
+                 ReduceResult(state.copy(pendingVentoyControls = intent.settings).withStatus(null))
             UiIntent.RequestApplyVentoyControls -> VentoyTransitions.requestApplyVentoyControls(state)
 
             UiIntent.CheckVentoyUpstream -> {
@@ -4053,7 +3983,7 @@ object UiReducer {
 
             is UiIntent.RequestBindAutounattend ->
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     ReduceResult(
                         state,
@@ -4070,7 +4000,7 @@ object UiReducer {
 
             is UiIntent.RequestUnbindAutounattend ->
                 if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     ReduceResult(
                         state,
@@ -4087,8 +4017,10 @@ object UiReducer {
                 ReduceResult(
                     state.copy(
                         autounattendBindings = intent.bindings,
-                        statusMessage =
-                            intent.error?.let(UiMessage::Raw) ?: state.statusMessage,
+                        // Only a new error bumps; null keeps the carried message and sequence.
+                        statusMessage = intent.error?.let(UiMessage::Raw) ?: state.statusMessage,
+                        statusSequence =
+                            if (intent.error != null) state.statusSequence + 1 else state.statusSequence,
                     ),
                 )
 
@@ -4107,10 +4039,10 @@ object UiReducer {
 
             UiIntent.RunSelfTest ->
                 if (state.operation?.state == OperationState.Queued || state.operation?.state == OperationState.Running) {
-                    ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.OperationInProgress)))
+                    ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.OperationInProgress)))
                 } else {
                     ReduceResult(
-                        state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelfTestStarting)),
+                        state.withStatus(UiMessage.Key(UiMessageKey.SelfTestStarting)),
                         effects = listOf(UiEffect.RunSelfTest),
                     )
                 }
@@ -4124,7 +4056,7 @@ object UiReducer {
             is UiIntent.EjectResulted -> ejectResulted(state, intent)
             UiIntent.RequestEjectRescan -> requestEjectRescan(state)
 
-            is UiIntent.Status -> ReduceResult(state.copy(statusMessage = intent.message))
+            is UiIntent.Status -> ReduceResult(state.withStatus(intent.message))
 
             is UiIntent.CancelOperation -> OperationTransitions.cancel(state, intent.token)
 
@@ -4134,11 +4066,11 @@ object UiReducer {
                 when {
                     target == null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     mode != null && !mode.matches(state) ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     else -> {
                         val invalidated = OperationTransitions.filesInvalidate(state).copy(
@@ -4179,7 +4111,7 @@ object UiReducer {
                 if (mode != null && !mode.matches(state)) {
                     FilesPickTransitions.abortPinLost(state)
                 } else if (!state.actionsEnabled) {
-                    ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                    ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     // A manual refresh preempts an in-flight list: its older answer is
                     // dropped by the generation bump.
@@ -4193,14 +4125,14 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     block != null ->
-                        ReduceResult(state.copy(statusMessage = block))
+                        ReduceResult(state.withStatus(block))
                     !validEntryName(name) ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.InvalidFolderName)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.InvalidFolderName)))
                     else ->
                         ReduceResult(
                             state,
@@ -4220,14 +4152,14 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     block != null ->
-                        ReduceResult(state.copy(statusMessage = block))
+                        ReduceResult(state.withStatus(block))
                     !validEntryName(intent.name) ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.SelectEntryToDelete)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SelectEntryToDelete)))
                     else ->
                         ReduceResult(
                             state,
@@ -4247,18 +4179,18 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     bindingProblem(state, intent.binding) != null ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.TargetChanged)))
                     block != null ->
-                        ReduceResult(state.copy(statusMessage = block))
+                        ReduceResult(state.withStatus(block))
                     !validEntryName(intent.from) || !validEntryName(intent.to) ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.InvalidEntryName)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.InvalidEntryName)))
                     intent.from == intent.to ->
-                        ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.RenameSameName)))
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.RenameSameName)))
                     else ->
                         ReduceResult(
                             state,
@@ -4280,12 +4212,12 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     block != null ->
-                        ReduceResult(state.copy(statusMessage = block))
+                        ReduceResult(state.withStatus(block))
                     else ->
                         ReduceResult(
                             state,
@@ -4304,13 +4236,13 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     !intent.binding.matches(state) ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     else ->
                         ReduceResult(
@@ -4325,16 +4257,16 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     !intent.selection.matches(state) ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     block != null ->
-                        ReduceResult(state.copy(statusMessage = block))
+                        ReduceResult(state.withStatus(block))
                     else ->
                         ReduceResult(
                             state.copy(pendingFilesBatchConflict = null),
@@ -4347,13 +4279,13 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     !intent.selection.matches(state) ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
                     else ->
                         ReduceResult(
@@ -4368,16 +4300,16 @@ object UiReducer {
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.FilesPickActive)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.FilesPickActive)),
                         )
                     !state.actionsEnabled ->
-                        ReduceResult(state.copy(statusMessage = presenceMessage(state.presence)))
+                        ReduceResult(state.withStatus(presenceMessage(state.presence)))
                     !pinOk ->
                         ReduceResult(
-                            state.copy(statusMessage = UiMessage.Key(UiMessageKey.TargetChanged)),
+                            state.withStatus(UiMessage.Key(UiMessageKey.TargetChanged)),
                         )
                     block != null ->
-                        ReduceResult(state.copy(statusMessage = block))
+                        ReduceResult(state.withStatus(block))
                     intent.uris.isEmpty() ->
                         ReduceResult(state)
                     else ->
@@ -4409,14 +4341,11 @@ object UiReducer {
                         ReduceResult(state)
                     intent.decision == FilesConflictDecision.ReplaceFile && pending.isDirectory ->
                         ReduceResult(
-                            state.copy(
-                                statusMessage =
-                                    UiMessage.Raw(
+                            state.withStatus(UiMessage.Raw(
                                         usb.files.FilesOperationPolicy.directoryConflictSkipOnlyMessage(
                                             pending.pathLabel,
                                         ),
-                                    ),
-                            ),
+                                    )),
                         )
                     else ->
                         ReduceResult(
@@ -4474,8 +4403,7 @@ object UiReducer {
                             filesError = null,
                             filesListGeneration = generation,
                             filesListingState = FilesListingState.Loading,
-                            statusMessage = UiMessage.Raw(intent.message),
-                        ),
+                        ).withStatus(UiMessage.Raw(intent.message)),
                         effects = listOf(UiEffect.LoadFiles(path = "/")),
                     )
                 } else {
@@ -4484,8 +4412,7 @@ object UiReducer {
                             files = emptyList(),
                             filesError = intent.message,
                             filesListingState = FilesListingState.Failed,
-                            statusMessage = UiMessage.Raw(intent.message),
-                        ),
+                        ).withStatus(UiMessage.Raw(intent.message)),
                     )
                 }
 
@@ -4653,12 +4580,12 @@ object UiReducer {
         val device = state.device
         when {
             state.ejectInFlight || state.ejected ->
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.EjectRescanRequired)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.EjectRescanRequired)))
             state.presence != DevicePresence.Ready || device == null ->
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDevice)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.NoDevice)))
             state.isRunning || state.operation?.state == OperationState.Queued ||
                 state.pendingConfirmation != null || state.isoImportUsbInFlight != null ->
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.WaitForOperation)))
             else -> {
                 val generation = state.ejectGeneration + 1L
                 return ReduceResult(
@@ -4668,8 +4595,7 @@ object UiReducer {
                         ejectIdentity = device.identity,
                         ejectAttachGeneration = device.attachGeneration,
                         ejected = false,
-                        statusMessage = UiMessage.Key(UiMessageKey.EjectStarted),
-                    ),
+                    ).withStatus(UiMessage.Key(UiMessageKey.EjectStarted)),
                     effects = listOf(UiEffect.EjectDevice(generation)),
                 )
             }
@@ -4695,8 +4621,7 @@ object UiReducer {
             return ReduceResult(
                 state.copy(
                     ejectInFlight = false,
-                    statusMessage = UiMessage.Key(UiMessageKey.EjectStale),
-                ),
+                ).withStatus(UiMessage.Key(UiMessageKey.EjectStale)),
             )
         } else if (intent.succeeded) {
             return ReduceResult(
@@ -4707,26 +4632,23 @@ object UiReducer {
                     filesError = null,
                     filesListingState = FilesListingState.Stale,
                     filesystemUsage = null,
-                    statusMessage = UiMessage.Key(
+                ).withStatus(UiMessage.Key(
                         UiMessageKey.EjectSucceeded,
                         listOf(live.label),
-                    ),
-                ),
+                    )),
             )
         } else if (intent.busy) {
             return ReduceResult(
                 state.copy(
                     ejectInFlight = false,
-                    statusMessage = UiMessage.Key(UiMessageKey.EjectBusy),
-                ),
+                ).withStatus(UiMessage.Key(UiMessageKey.EjectBusy)),
             )
         } else {
             return ReduceResult(
                 state.copy(
                     ejectInFlight = false,
-                    statusMessage = intent.message?.let(UiMessage::Raw)
-                        ?: UiMessage.Key(UiMessageKey.VolumeSyncUnconfirmed, listOf("eject")),
-                ),
+                ).withStatus(intent.message?.let(UiMessage::Raw)
+                        ?: UiMessage.Key(UiMessageKey.VolumeSyncUnconfirmed, listOf("eject"))),
             )
         }
     }
@@ -4734,11 +4656,11 @@ object UiReducer {
     private fun requestEjectRescan(state: AppUiState): ReduceResult {
         when {
             state.ejectInFlight ->
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.WaitForOperation)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.WaitForOperation)))
             !state.ejected ->
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.EjectRescanRequired)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.EjectRescanRequired)))
             state.presence != DevicePresence.Ready || state.device == null ->
-                return ReduceResult(state.copy(statusMessage = UiMessage.Key(UiMessageKey.NoDevice)))
+                return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.NoDevice)))
             else ->
                 return ReduceResult(
                     state.copy(
@@ -4781,7 +4703,7 @@ object UiReducer {
                 (status.key == UiMessageKey.DeviceBusy ||
                     status.key == UiMessageKey.WaitForOperation)
         return if (blockedStatus) {
-            started.copy(state = started.state.copy(statusMessage = null))
+            started.copy(state = started.state.withStatus(null))
         } else {
             started
         }
@@ -4908,11 +4830,9 @@ object UiReducer {
         return ReduceResult(
             state.copy(
                 deferredIsoImport = null,
-                statusMessage =
-                    UiMessage.Raw(
+            ).withStatus(UiMessage.Raw(
                         "Importing ${proposal.targetName} into ${proposal.directory}",
-                    ),
-            ),
+                    )),
             effects = listOf(
                 UiEffect.ImportIso(
                     isoImport = proposal,

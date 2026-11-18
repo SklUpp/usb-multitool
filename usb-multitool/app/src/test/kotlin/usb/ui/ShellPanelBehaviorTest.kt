@@ -13,31 +13,61 @@ import org.junit.Test
 class ShellPanelBehaviorTest {
 
     @Test
-    fun collapseFoldsOnlyStatusAndKeepsJournalIndependent() {
-        val open = ShellPanelState(journalScreenOpen = true)
-        val folded = open.collapseStatus()
-        assertTrue(folded.statusCollapsed)
-        assertTrue(folded.journalScreenOpen)
-        assertEquals(folded, folded.collapseStatus())
-    }
-    @Test
-    fun expansionChangesOnlyStatusFlag() {
-        val folded = ShellPanelState(statusCollapsed = true, journalScreenOpen = true)
-        val expanded = folded.expandStatus()
-        assertFalse(expanded.statusCollapsed)
-        assertTrue(expanded.journalScreenOpen)
-        assertEquals(expanded, expanded.expandStatus())
+    fun repeatedStatusIntentsBumpTheSequence() {
+        val message = UiMessage.Key(UiMessageKey.LogCopied)
+        val first = UiReducer.reduce(AppUiState(), UiIntent.Status(message)).state
+        assertEquals(1L, first.statusSequence)
+        val second = UiReducer.reduce(first, UiIntent.Status(message)).state
+        assertEquals(2L, second.statusSequence)
+        assertEquals(message, second.statusMessage)
     }
 
     @Test
-    fun journalLayerRemainsIndependentOfStatus() {
-        val folded = ShellPanelState(statusCollapsed = true)
-        val opened = folded.openJournalScreen()
-        assertTrue(opened.journalScreenOpen)
-        assertTrue(opened.statusCollapsed)
-        val closed = opened.closeJournalScreen()
+    fun repeatedRunningTicksDoNotBumpTheSequence() {
+        val token = usb.service.OperationToken(1L)
+        val progress = OperationProgress(
+            state = OperationState.Running,
+            title = OperationTitle.Upload,
+            token = token,
+        )
+        val begun = UiReducer.reduce(
+            AppUiState(),
+            UiIntent.OperationBegan(progress),
+        ).state
+        val tick = begun.copy(statusSequence = 0L)
+        val first = UiReducer.reduce(tick, UiIntent.OperationUpdated(progress)).state
+        val second = UiReducer.reduce(first, UiIntent.OperationUpdated(progress)).state
+        assertEquals(
+            "progress tickers post every 120 ms; only a state change may re-emit the status",
+            first.statusSequence,
+            second.statusSequence,
+        )
+    }
+
+    @Test
+    fun clearingStatusKeepsTheSequence() {
+        val message = UiMessage.Key(UiMessageKey.LogCopied)
+        val shown = UiReducer.reduce(AppUiState(), UiIntent.Status(message)).state
+        val cleared = UiReducer.reduce(shown, UiIntent.Status(null)).state
+        assertEquals(1L, cleared.statusSequence)
+        assertNull(cleared.statusMessage)
+    }
+
+    @Test
+    fun journalLayerOpensAndClosesIdempotently() {
+        val closed = ShellPanelState()
         assertFalse(closed.journalScreenOpen)
-        assertTrue(closed.statusCollapsed)
+        val opened = closed.openJournalScreen()
+        assertTrue(opened.journalScreenOpen)
+        assertEquals(opened, opened.openJournalScreen())
+    }
+
+    @Test
+    fun closingTheJournalReturnsToTheIdleShell() {
+        val closed = ShellPanelState(journalScreenOpen = true).closeJournalScreen()
+        assertFalse(closed.journalScreenOpen)
+        assertEquals(ShellPanelState(), closed)
+        assertEquals(closed, closed.closeJournalScreen())
     }
 
 

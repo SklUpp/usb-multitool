@@ -24,9 +24,8 @@ class RawSourceCandidatesFreshnessTest {
             selectedPartitionId = part.id,
             rawSourceCandidatesGeneration = generation,
             rawSourceCandidatesIdentity = device.identity,
-            statusMessage = status,
             operation = operation,
-        )
+        ).withStatus(status)
 
     @Test
     fun matchingFailureSetsBoundErrorAndStatusWhenIdle() {
