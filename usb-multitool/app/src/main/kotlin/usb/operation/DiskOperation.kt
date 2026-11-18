@@ -14,6 +14,12 @@ sealed class OperationState {
 
 open class DiskOperation(
     open val name: String = "",
+    /**
+     * Whether this operation needs the foreground service and its wake lock. Metadata
+     * reads (USB probe, partition refresh) are short and run with the screen the user
+     * just opened, so they must not raise a second system notification on attach.
+     */
+    open val foregroundService: Boolean = true,
     @Volatile var bytesDone: Long = 0L,
     @Volatile var bytesTotal: Long = -1L,
     @Volatile var state: OperationState = OperationState.Queued,

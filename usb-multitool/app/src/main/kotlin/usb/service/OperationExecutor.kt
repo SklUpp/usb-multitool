@@ -141,8 +141,9 @@ class OperationExecutor(
                     stopIfIdleLocked(force = true)
                     return@withLock false
                 }
-                val wasEmpty = queue.isEmpty() && !running
-                if (wasEmpty) {
+                // Only long I/O raises the foreground service. A queued foreground job
+                // starts it even when a metadata read is already running.
+                if (handle.operation.foregroundService) {
                     try {
                         serviceControl.startForeground()
                     } catch (t: Throwable) {
@@ -284,15 +285,19 @@ class OperationExecutor(
         }
 
         if (op.state != OperationState.Running) return
-        try {
-            wakeLock.acquire()
-        } catch (t: Throwable) {
-            op.complete(
-                OperationState.Failed(
-                    DiskException.IoFailure("Wake lock acquire failed: ${t.message ?: t.javaClass.simpleName}", t),
-                ),
-            )
-            return
+        var wakeLockHeld = false
+        if (op.operation.foregroundService) {
+            try {
+                wakeLock.acquire()
+                wakeLockHeld = true
+            } catch (t: Throwable) {
+                op.complete(
+                    OperationState.Failed(
+                        DiskException.IoFailure("Wake lock acquire failed: ${t.message ?: t.javaClass.simpleName}", t),
+                    ),
+                )
+                return
+            }
         }
         var terminal: OperationState = OperationState.Completed
         var cancelledThrown = false
@@ -321,9 +326,11 @@ class OperationExecutor(
                 terminal = classifyThrown(op, cancelled = false)
             }
         } finally {
-            try {
-                wakeLock.release()
-            } catch (_: Throwable) {}
+            if (wakeLockHeld) {
+                try {
+                    wakeLock.release()
+                } catch (_: Throwable) {}
+            }
             op.withLifecycleLock {
                 synchronized(connectionLifecycleLock) {
                     val finalTerminal = when {

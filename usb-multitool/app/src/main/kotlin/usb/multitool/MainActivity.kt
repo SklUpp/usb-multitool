@@ -2383,6 +2383,8 @@ class MainViewModel(
 
         var probeCloseFailure: Throwable? = null
         val op = object : DiskOperation(name = OperationTitle.ProbeDevice.logLabel) {
+            // A probe is a short metadata read, not long I/O: no service notification.
+            override val foregroundService: Boolean = false
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == gen) { "USB attach generation changed" }
@@ -2590,6 +2592,7 @@ class MainViewModel(
         if (usbManager == null) return
         val gen = attachGeneration
         val op = object : DiskOperation(name = OperationTitle.RefreshPartitions.logLabel) {
+            override val foregroundService: Boolean = false
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == gen) { "USB attach generation changed" }

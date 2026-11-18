@@ -40,6 +40,33 @@ class OperationExecutorTest {
         assertEquals(OperationState.Completed, first.await())
     }
 
+    @Test fun metadataReadDoesNotRaiseForegroundServiceButLongIoDoes() = runTest {
+        var starts = 0
+        var wakeAcquires = 0
+        val control = object : ServiceControl {
+            override fun startForeground() { starts++ }
+            override fun stopWhenIdle() = Unit
+        }
+        val wake = object : OperationWakeLock {
+            override fun acquire() { wakeAcquires++ }
+            override fun release() = Unit
+        }
+        val executor = OperationExecutor(this, wake, control)
+        executor
+            .submit(
+                object : DiskOperation("probe") {
+                    override val foregroundService: Boolean = false
+                    override suspend fun run() = Unit
+                },
+            )
+            .await()
+        assertEquals("a short metadata read must not post the service notification", 0, starts)
+        assertEquals(0, wakeAcquires)
+        executor.submit(object : DiskOperation("write") { override suspend fun run() = Unit }).await()
+        assertEquals("long I/O still owns the foreground service", 1, starts)
+        assertEquals(1, wakeAcquires)
+    }
+
     @Test fun terminalHandleIgnoresLateCancel() = runTest {
         val executor = OperationExecutor(this)
         val handle = executor.submit(object : DiskOperation("done") {
