@@ -305,8 +305,6 @@ fun DiagnosticsScreen(
             }
         }
 
-        PerformanceSettingsSection()
-
         if (!usbPresent) {
             EmptyHint(UiReducer.presenceMessage(state.presence).localized())
         }

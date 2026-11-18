@@ -27,7 +27,7 @@
    - *Проверено*: scoped JVM unit-тесты `XmlPathTest`, `XmlTextTest` и `AutounattendRawWriteUiTest` прошли, exit 0. Сквозное сохранение произвольных структур XML/JSON и резервное копирование при множественных коллизиях требуют проверки в CI.
 
 4. **Диагностика и сброс параметров (Diagnostics)**:
-   - *Реализовано в коде*: кнопки сброса параметров (`PerformanceSettingsSection.kt:33-119`, `DiagnosticsScreen.kt:303`) для трёх настраиваемых значений (SCSI chunk size, JNI cap, Rescue checkpoint interval) со значком ↻ и восстановлением дефолтов `TransferTuning.DEFAULT_*`. Выбор и отображение общей backup-папки (`DiagnosticsScreen.kt`, `MainActivity.kt`).
+   - *Реализовано в коде*: кнопки сброса параметров (`PerformanceSettingsSection.kt`, единственное место — экран «Настройки»; в «Обслуживании» дубль удалён 2026-11-18) для трёх настраиваемых значений (SCSI chunk size, JNI cap, Rescue checkpoint interval) со значком ↻ и восстановлением дефолтов `TransferTuning.DEFAULT_*`. Выбор и отображение общей backup-папки (`DiagnosticsScreen.kt`, `MainActivity.kt`).
    - *Независимо отрецензировано*: аудит `AuditDiagnostics` подтвердил реализацию сброса всех настраиваемых параметров; требование выбора backup-папки в исходном `New file (1).txt` отсутствует.
    - *Проверено*: тесты UI редуктора backup-папки пройдены; адресные тесты сброса производительности отсутствуют (пробел тестового покрытия при наличии кода).
 
