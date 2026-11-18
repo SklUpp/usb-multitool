@@ -417,10 +417,12 @@ private fun DiagTile(
     modifier: Modifier = Modifier,
     highlighted: Boolean = false,
 ) {
-    val container = if (highlighted) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (enabled) 1f else 0.6f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.35f else 0.18f)
+    // Disabled tiles follow the M3 disabled tokens: a neutral onSurface container at 0.12
+    // and content at 0.38, so a tile never looks tappable and never reads as an error.
+    val container = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+        highlighted -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
     }
     val content = if (highlighted) {
         MaterialTheme.colorScheme.onPrimaryContainer
@@ -429,7 +431,7 @@ private fun DiagTile(
     }
     // A disabled tile must not look tappable: the container is muted and the glyph and both
     // labels are faded together, matching the board's .dis rule.
-    val contentAlpha = if (enabled) 1f else 0.45f
+    val contentAlpha = if (enabled) 1f else 0.38f
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = container,

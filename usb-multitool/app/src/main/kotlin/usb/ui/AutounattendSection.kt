@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.compose.animation.animateContentSize
 import android.content.res.Resources
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1100,7 +1101,8 @@ private fun GlobalSettingsEditorDialog(
                     Column(
                         modifier = Modifier
                             .weight(1f, fill = true)
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScroll(rememberScrollState())
+                            .animateContentSize(),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         VentoyControlCatalog.known.forEach { known ->

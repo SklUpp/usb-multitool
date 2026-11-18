@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -1633,7 +1634,12 @@ private fun LogScreen(
                     .size(48.dp)
                     .semantics { contentDescription = clearLabel },
             ) {
-                GlyphIcon(glyph = Glyph.Trash, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_sweep_outlined),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
             }
             IconButton(
                 onClick = onExportTrace,
@@ -2228,11 +2234,14 @@ internal fun Badge(
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            modifier = Modifier
+                .widthIn(max = 160.dp)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = content,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

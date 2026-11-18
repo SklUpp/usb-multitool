@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -288,7 +289,7 @@ fun FilesScreen(
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.tertiaryContainer,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().animateContentSize(),
             ) {
                 Text(
                     text = blockedRelease!!.localized(),
@@ -332,7 +333,7 @@ fun FilesScreen(
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.tertiaryContainer,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().animateContentSize(),
                     ) {
                         Text(
                             text = blockedRelease!!.localized(),
@@ -435,10 +436,22 @@ fun FilesScreen(
             onClick = { if (canWrite) onRequestBatchUpload() },
             icon = { GlyphIcon(Glyph.Plus, size = 24.dp) },
             text = { Text(uploadDescription) },
+            // M3 disabled tokens; ExtendedFAB has no `enabled`, so the colors carry it.
+            containerColor =
+                if (canWrite) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                },
+            contentColor =
+                if (canWrite) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
-                .alpha(if (canWrite) 1f else 0.38f)
                 .semantics {
                     contentDescription = uploadDescription
                     if (!canWrite) disabled()

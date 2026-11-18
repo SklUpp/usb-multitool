@@ -669,6 +669,7 @@ private fun WindowsImageBlock(
                     text = stringResource(unreadableText(problem)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.animateContentSize(),
                 )
                 TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
                     Text(stringResource(R.string.import_error_dismiss))
