@@ -72,8 +72,9 @@ import kotlin.math.roundToInt
  * Pan model: the wide strip itself never pans by swipe — a swipe on it always moves the
  * start. Overlong content is panned only by the thin slider below the strip, and the pan
  * is a `graphicsLayer` translation clipped to the viewport, so there is no scroll gesture
- * to steal the drag. While the start is dragged the view auto-pans just enough to keep
- * the marker inside the viewport; a manual pan stays where the user left it.
+ * to steal the drag. Pan state is not keyed on content width (that reset every remeasure).
+ * Drag uses content-space deltas from the marker so pan and LBA stay in sync; while the
+ * start is dragged the view auto-pans just enough to keep the marker inside the viewport.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -296,20 +297,25 @@ private fun RawUnifiedMap(
             }
             return contentPx
         }
+        // When sectorCount is unknown (measuring / Rejected), maxStart is 0 and must not
+        // pin the marker; allow any disk LBA. Fit clamp applies only once a count exists.
+        val ceiling = if (sectorCount == null) disk else maxStart
         fun chooseStart(candidate: ULong): ULong {
-            if (candidate > maxStart) return candidate
-            if (!confirmed) return candidate
+            val clamped = candidate.coerceAtMost(ceiling)
+            if (!confirmed) return clamped
             val tolerancePx = with(density) { SNAP_TOLERANCE_DP.dp.toPx() }
+            val candidateX = xForLba(clamped)
             val nearest = geometry.snapPoints
                 .asSequence()
-                .filter { it <= maxStart }
-                .minByOrNull { abs(xForLba(it) - xForLba(candidate)) }
-            return nearest?.takeIf { abs(xForLba(it) - xForLba(candidate)) <= tolerancePx } ?: candidate
+                .filter { it <= ceiling }
+                .minByOrNull { abs(xForLba(it) - candidateX) }
+            // Nearest confirmed edge within tolerance wins, including slow drags.
+            return nearest?.takeIf { abs(xForLba(it) - candidateX) <= tolerancePx } ?: clamped
         }
         val maxPanPx = (contentPx - availablePx).coerceAtLeast(0f)
-        // Pan is state, not a scroll modifier: the strip owns no pan gesture, so a swipe on
-        // it always moves the start and only the slider below changes what is visible.
-        var panOffset by remember(contentPx) { mutableStateOf(0f) }
+        // Pan must survive contentPx remeasures: remember(contentPx) recreated state at 0
+        // on every width tweak, so a new drag looked like a jump back to the strip start.
+        var panOffset by remember { mutableStateOf(0f) }
         fun currentPan(): Float = panOffset.coerceIn(0f, maxPanPx)
         fun panTo(value: Float) {
             panOffset = value.coerceIn(0f, maxPanPx)
@@ -324,9 +330,17 @@ private fun RawUnifiedMap(
                 markerX > pan + availablePx - marginPx -> panTo(markerX - availablePx + marginPx)
             }
         }
+        // Shrink-only coerce when the content gets shorter; never force pan back to 0.
+        LaunchedEffect(maxPanPx) {
+            if (panOffset > maxPanPx) panOffset = maxPanPx
+        }
+        // External start edits (typed LBA) still bring the marker on-screen once.
+        // Drag path below owns pan during gestures so absolute pointer+pan feedback cannot
+        // ratchet pan when xForLba/lbaAtX are not inverses under min segment widths.
         LaunchedEffect(startLba, contentPx, availablePx) {
             keepMarkerVisible(xForLba(startLba))
         }
+        val latestStartLba by rememberUpdatedState(startLba)
         Column(Modifier.fillMaxWidth()) {
             Box(
                 Modifier
@@ -352,13 +366,24 @@ private fun RawUnifiedMap(
                         contentDescription = spoken
                         if (snapState != null) stateDescription = snapState
                     }
-                    .pointerInput(geometry, contentPx, sectorCount) {
-                        detectDragGestures { change, _ ->
-                            // Pointer x is viewport space; add the pan to reach content space.
-                            val next = chooseStart(lbaAtX(change.position.x + currentPan()))
-                            onStartChange(next)
-                            keepMarkerVisible(xForLba(next))
-                        }
+                    .pointerInput(geometry, contentPx, ceiling, confirmed) {
+                        // Local drag LBA tracks deltas in content space so pan changes and
+                        // non-invertible width mapping cannot desync pointer vs marker.
+                        var dragLba = latestStartLba
+                        detectDragGestures(
+                            onDragStart = {
+                                dragLba = latestStartLba
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                val proposedX = (xForLba(dragLba) + dragAmount.x)
+                                    .coerceIn(0f, contentPx)
+                                val next = chooseStart(lbaAtX(proposedX))
+                                dragLba = next
+                                onStartChange(next)
+                                keepMarkerVisible(xForLba(next))
+                            },
+                        )
                     },
             ) {
                 Box(
@@ -543,7 +568,7 @@ private const val MIN_SEGMENT_WIDTH_DP = 4
 
 // Touch tolerance for snapping; [RawRangeGeometry.snapPoints] already lists section starts
 // and section ends, so both ends of any partition are snap targets without extra lookups.
-private const val SNAP_TOLERANCE_DP = 16
+private const val SNAP_TOLERANCE_DP = 24
 private const val MAP_HEIGHT_DP = 56
 private const val MARKER_VISIBLE_MARGIN_DP = 8
 private const val PAN_TOUCH_HEIGHT_DP = 48

@@ -188,32 +188,36 @@ internal fun shellTabContentVisible(
  *
  * Layout contract:
  * - safe drawing insets bound the whole shell (targetSdk 36 draws edge to edge), so neither
- *   the header, the tabs, the status line nor the log layer touches the system bars;
+ *   the header, the tabs, the status block nor the log layer touches the system bars;
  * - top: one compact device header whose title/subtitle surface is separate from the
  *   language, theme and log controls (no max-height clipping). Directly under it a
- *   permanent one-line status line (`surface` + 1 dp `outlineVariant`) shows
- *   `name · state · progress` while an operation runs and the neutral ready line otherwise;
- *   it is present on every tab, including Settings, and is tappable (48 dp) only while an
- *   operation exists, opening the centred details dialog. The line carries no cancel;
+ *   permanent status block (inset `surfaceContainer*` band, shared 12 dp side rhythm with
+ *   the header and tab content) shows the ready label while idle, a standalone
+ *   [AppUiState.statusMessage] when one is set without an operation, and `name` /
+ *   `state · progress` while an operation exists; a thin progress track appears only while
+ *   running. Gaps header → block → content stay in the 8–12 dp band. The block stays on
+ *   Files, Partitions, Ventoy and Service, hides on Settings and while the journal is
+ *   open, and is tappable (48 dp) only while an operation exists, opening the centred
+ *   details dialog. The block carries no cancel. It is the only status surface: both
+ *   operation facts and non-operation rejections/errors land here, never a snackbar;
  * - middle: the active tab (weight 1, own scroll), always composed; a horizontal swipe
  *   selects the adjacent tab through the reducer and the content slides in the tab
  *   direction (RTL included). A child that consumes the drag keeps it; once the shell
  *   qualifies its own gesture it consumes the drag so a clickable row is not tapped, and
  *   a gesture starting in a system back edge is ignored. The full log screen is an opaque
- *   layer that covers the tab content but never the header or the status line, so the
- *   running operation keeps its progress entry point while the journal is open; the
- *   system bottom inset is guarded while it shows; the covered tab is marked invisible to
- *   accessibility but keeps its state, and the header's log/more controls are disabled so
- *   focus stays inside the journal;
- * While a Files pick session owns the screen the header, status line, navigation bar and
+ *   layer that covers the tab content and hides the status block; the header stays so the
+ *   journal can close from it. The system bottom inset is guarded while it shows; the
+ *   covered tab is marked invisible to accessibility but keeps its state, and the
+ *   header's log/more controls are disabled so focus stays inside the journal;
+ * While a Files pick session owns the screen the header, status block, navigation bar and
  * log layer hide; the tab swipe stays off. The existing picker branch is still the tab
  * content with its own continue/back controls, and Back routes to the reducer cancel,
  * which refuses while a copy runs or a confirmation is open.
  * - bottom: only the navigation bar. Operation details live in a centred dialog opened
- *   from the status line: the same fact order (name as title, then state, progress,
+ *   from the status block: the same fact order (name as title, then state, progress,
  *   readback verdict, result), missing facts omitted, plus the two-step cancel action;
- *   closing the dialog never cancels. Transient status messages surface as snackbars keyed
- *   by [AppUiState.statusSequence], never as a floating surface.
+ *   closing the dialog never cancels. Status text lives only in the permanent block
+ *   (operation facts and standalone status messages) and the details dialog.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -269,7 +273,7 @@ fun AppShell(
             mutableStateOf(ShellPanelState())
         }
         val pickOpen = state.filesPickMode != null
-        val snackbarHostState = remember { SnackbarHostState() }
+        // Shell status lives in OperationStatusLine only; LogScreen keeps its own host.
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         // The strip only opens the sheet; closing also follows the operation away or the picker in.
         var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
@@ -342,27 +346,15 @@ fun AppShell(
                 focusManager.clearFocus(force = true)
             }
         }
-        // One snackbar per emission, keyed by the reducer-maintained sequence. Recomposition
-        // and activity recreation keep `lastShown`, so only a new message shows again; a
-        // lower sequence means a fresh state and its first message still counts.
-        var lastShownStatusSequence by rememberSaveable { mutableStateOf(0L) }
-        val statusSnackbarText = state.statusMessage?.localized()
         LaunchedEffect(state.operation?.token, pickOpen) {
             if (state.operation == null || pickOpen) operationDetailsOpen = false
-        }
-        LaunchedEffect(state.statusSequence) {
-            val sequence = state.statusSequence
-            if (sequence == 0L || sequence == lastShownStatusSequence) return@LaunchedEffect
-            val text = statusSnackbarText ?: return@LaunchedEffect
-            lastShownStatusSequence = sequence
-            snackbarHostState.showSnackbar(text)
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
             // targetSdk 36 draws edge to edge: the header, the tab content and the log
             // layer must stay inside the status/navigation bars and any display cutout.
             contentWindowInsets = WindowInsets.safeDrawing,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            // No shell-level snackbar host: status stays in the permanent block.
             bottomBar = {
                 Column(
                     modifier = Modifier
@@ -419,16 +411,15 @@ fun AppShell(
                     .fillMaxSize(),
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // Header and the permanent status line sit above the tab content and
-                    // outside the journal layer: the status line keeps its place directly
-                    // under the header on every tab, on Settings and while the journal is
-                    // open. The picker still owns the whole screen.
+                    // Header and status block share the 12 dp side rhythm. Status hides on
+                    // Settings and while the journal covers the work tabs; the picker still
+                    // owns the whole screen (header + status + nav).
                     if (!pickOpen) {
                         if (state.tab != ShellTab.Settings) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
+                                    .padding(horizontal = 12.dp),
                             ) {
                                 DeviceHeader(
                                     state = state,
@@ -447,11 +438,13 @@ fun AppShell(
                                     },
                                 )
                             }
+                            if (!panels.journalScreenOpen) {
+                                OperationStatusLine(
+                                    state = state,
+                                    onOpenDetails = { operationDetailsOpen = true },
+                                )
+                            }
                         }
-                        OperationStatusLine(
-                            state = state,
-                            onOpenDetails = { operationDetailsOpen = true },
-                        )
                     }
                     // Tab content and the journal share this weight box: the journal covers
                     // the tab content only, never the status line above it.
@@ -463,7 +456,7 @@ fun AppShell(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 16.dp)
+                                .padding(horizontal = 12.dp)
                                 .padding(top = 8.dp)
                                 .focusProperties {
                                     // A focus group boundary is the supported subtree gate: keyboard
@@ -1003,6 +996,8 @@ TopAppBar(
         ),
         // Scaffold's safeDrawing inset already places the content below the status bar;
         // the app bar's own status-bar inset would add a second gap above the title.
+        // Keep the M3 default 64 dp height so the two-line title is not clipped at large
+        // fontScale; status block outer pad stays 4+4 dp so idle stack has no dead band.
         windowInsets = WindowInsets(0, 0, 0, 0),
     )
 }
@@ -1214,10 +1209,13 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
 }
 
 /**
- * Permanent status line directly under the header: `surface` with a 1 dp `outlineVariant`
- * divider, no card and no shadow. It never scrolls, never hides and stays outside the
- * journal layer. Without an operation it shows the neutral ready line and is not
- * tappable; with one the tap (48 dp target) opens the details dialog.
+ * Permanent status block under the header: inset `surfaceContainer*` band (not a card,
+ * not an error banner). Without an operation it shows [AppUiState.statusMessage] when set,
+ * otherwise the ready label — both non-tappable, neutral ink (`onSurfaceVariant`; the
+ * field carries no severity). With an operation it splits title / `state · progress`
+ * (result kept when present so errors stay on-block), a trailing chevron, and a thin
+ * progress track only while running. Tap (48 dp) opens details only when an operation
+ * exists; cancel lives only in the dialog.
  */
 @Composable
 private fun OperationStatusLine(
@@ -1225,58 +1223,134 @@ private fun OperationStatusLine(
     onOpenDetails: () -> Unit,
 ) {
     val facts = operationStatusFacts(state)
-    val running = state.operation?.state == OperationState.Running ||
-        state.operation?.state == OperationState.Queued
-    val lineColor =
-        if (facts == null) MaterialTheme.colorScheme.onSurfaceVariant else facts.tone.contentColor()
+    val operation = state.operation
+    val running = operation?.state == OperationState.Running ||
+        operation?.state == OperationState.Queued
+    val tappable = facts != null
+    val standaloneMessage = facts == null && state.statusMessage != null
     val openLabel = stringResource(R.string.shell_status_open_details)
-    Column(
+    // No operation: surface standalone statusMessage (Ventoy/Service rejections, link-load
+    // failures, etc.) so removing the snackbar does not hide them. Field has no severity →
+    // neutral ink; still not tappable.
+    val titleText = facts?.name
+        ?: state.statusMessage?.localized()
+        ?: stringResource(R.string.shell_status_ready)
+    val detailText = facts?.let { fact ->
+        listOfNotNull(fact.state, fact.progress, fact.result).joinToString(FACT_SEPARATOR)
+            .takeIf { it.isNotEmpty() }
+    }
+    val titleColor = when {
+        facts == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        facts.tone == StatusTone.Error -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val detailColor = when (facts?.tone) {
+        StatusTone.Error -> MaterialTheme.colorScheme.error
+        StatusTone.Warning -> MaterialTheme.colorScheme.tertiary
+        StatusTone.Success -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    // Passive idle / standalone message: quieter low container. Active/terminal: high.
+    // Never errorContainer — failure is ink, not a banner.
+    val containerColor = if (facts == null) {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface),
+            .padding(horizontal = 12.dp)
+            .padding(top = 4.dp, bottom = 4.dp),
+        color = containerColor,
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (facts != null) {
-                        Modifier.clickable(
-                            role = Role.Button,
-                            onClickLabel = openLabel,
-                            onClick = onOpenDetails,
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (tappable) {
+                            Modifier.clickable(
+                                role = Role.Button,
+                                onClickLabel = openLabel,
+                                onClick = onOpenDetails,
+                            )
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .heightIn(min = if (tappable) 48.dp else 0.dp)
+                    .then(
+                        // Announce both running operations and standalone messages: the
+                        // snackbar that used to announce the latter is gone.
+                        if (running || standaloneMessage) {
+                            // mergeDescendants makes the announcement carry the child texts:
+                            // the clickable running row merges already, the standalone row
+                            // has no click handler and would otherwise be textless.
+                            Modifier.semantics(mergeDescendants = true) {
+                                liveRegion = LiveRegionMode.Polite
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = titleText,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = titleColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (detailText != null) {
+                        Text(
+                            text = detailText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = detailColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                    } else {
-                        Modifier
-                    },
-                )
-                // Interactive target >= 48 dp; the ready line stays a compact label.
-                .heightIn(min = if (facts != null) 48.dp else 36.dp)
-                .then(
-                    if (running) {
-                        Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                    } else {
-                        Modifier
-                    },
-                )
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = facts?.summary ?: stringResource(R.string.shell_status_ready),
-                modifier = Modifier.fillMaxWidth(),
-                style = MaterialTheme.typography.labelMedium,
-                color = lineColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+                    }
+                }
+                if (tappable) {
+                    GlyphIcon(
+                        glyph = Glyph.ChevronDown,
+                        size = 18.dp,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (running) {
+                val total = operation?.bytesTotal ?: 0L
+                val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
+                val track = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                if (total > 0L) {
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = track,
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    )
+                } else {
+                    // Running without a known total: real indeterminate track, never on Ready.
+                    LinearProgressIndicator(
+                        modifier = track,
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    )
+                }
+            }
         }
-        // Separate always-composed sibling: never measured inside the text box.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(MaterialTheme.colorScheme.outlineVariant),
-        )
     }
 }
 

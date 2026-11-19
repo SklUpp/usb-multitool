@@ -646,25 +646,32 @@ fun PartitionsScreen(
 
     Box(modifier = modifier.fillMaxWidth()) {
         selected?.takeIf { stickyVisible }?.let { stickyPartition ->
-            val stickyIndex = orderedPartitions.indexOfFirst { it.id == stickyPartition.id }
             val stickyDisplayName = stickyPartition.name.ifBlank { stickyPartition.id }
             val stickyDisplayLabel = stickyPartition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
             val stickyTitlePart = stickyDisplayLabel?.let { "$stickyDisplayName ($it)" } ?: stickyDisplayName
             val stickyRowTitle = listOfNotNull(
-                if (stickyIndex >= 0) "${stickyIndex + 1}. $stickyTitlePart" else stickyTitlePart,
+                stickyTitlePart,
                 stickyPartition.filesystemLabel.takeIf { it.isNotEmpty() },
             ).joinToString("   ")
             val stickyRowFacts = listOfNotNull(
                 partitionSizeLabel(state, stickyPartition),
-                lbaRangeLabel(stickyPartition.startLba, stickyPartition.sectorCount),
+                lbaRangeLabel(
+                    stickyPartition.startLba,
+                    stickyPartition.sectorCount,
+                    R.string.partitions_row_sectors,
+                ),
             )
             val revealLabel = stringResource(R.string.partitions_reveal_selected_action)
+            // Parent insets: clear top gap under the status band and side gaps so the
+            // elevated sticky card does not touch section/status edges.
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
+                shadowElevation = 4.dp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .zIndex(1f)
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
                     .clickable(
                         onClickLabel = revealLabel,
                         role = Role.Button,
@@ -832,10 +839,12 @@ fun PartitionsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    // Insets so the elevated selected card clears section edges top/sides.
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
                     .selectableGroup(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                orderedPartitions.forEachIndexed { index, partition ->
+                orderedPartitions.forEach { partition ->
                     val isSelected = partition.id == state.selectedPartitionId
                     val access = state.partitionWriteAccess(partition)
                     val readOnly = access == PartitionWriteAccess.ReadOnly ||
@@ -851,8 +860,7 @@ fun PartitionsScreen(
                     }
                     val displayName = partition.name.ifBlank { partition.id }
                     val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
-                    val title = displayLabel?.let { "$displayName ($it)" } ?: displayName
-                    val rowTitle = "${index + 1}. $title"
+                    val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
                     val rowSpace = state.filesystemSpace(partition)
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -861,6 +869,7 @@ fun PartitionsScreen(
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
                         },
+                        shadowElevation = if (isSelected) 3.dp else 0.dp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .then(

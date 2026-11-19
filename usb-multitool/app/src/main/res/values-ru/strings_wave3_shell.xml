@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Permanent status line while no operation exists: neutral, not tappable. -->
+    <!-- Permanent status block while no operation exists: neutral, not tappable. -->
     <string name="shell_status_ready">Готово</string>
-    <!-- Accessibility action label of the tappable status line. -->
+    <!-- Accessibility action label of the tappable status block. -->
     <string name="shell_status_open_details">Открыть подробности операции</string>
     <!-- Dismisses the details dialog; it never cancels the operation. -->
     <string name="shell_status_close">Закрыть</string>
