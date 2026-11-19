@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Permanent status block while no operation exists: neutral, not tappable. -->
+    <!-- Permanent status block subject while idle. -->
     <string name="shell_status_ready">Готово</string>
-    <!-- Accessibility action label of the tappable status block. -->
-    <string name="shell_status_open_details">Открыть подробности операции</string>
-    <!-- Dismisses the details dialog; it never cancels the operation. -->
+    <!-- Status block title: Статус: &lt;операция|сообщение|Готово&gt;. -->
+    <string name="shell_status_title">Статус: %1$s</string>
+    <!-- Accessibility action label: the block opens the status dialog (idle too). -->
+    <string name="shell_status_open_details">Открыть статус</string>
+    <!-- Status dialog title (operation name is supporting text when present). -->
+    <string name="status_dialog_title">Статус</string>
+    <!-- Dismisses the status dialog; it never cancels the operation. -->
     <string name="shell_status_close">Закрыть</string>
 </resources>

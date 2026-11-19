@@ -24,6 +24,8 @@ internal object OperationTransitions {
         val terminal = progress.state.isTerminal()
         val base = state.copy(
             operation = progress,
+            // New token/begin only: ticks must keep the scoped log intact.
+            operationLogLines = if (begin) emptyList() else state.operationLogLines,
             pendingVentoyControls =
                 if (terminal && progress.state == OperationState.Completed &&
                     progress.title.clearsPendingVentoyControls() &&

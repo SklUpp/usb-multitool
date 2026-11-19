@@ -189,16 +189,14 @@ internal fun shellTabContentVisible(
  * Layout contract:
  * - safe drawing insets bound the whole shell (targetSdk 36 draws edge to edge), so neither
  *   the header, the tabs, the status block nor the log layer touches the system bars;
- * - top: one compact device header whose title/subtitle surface is separate from the
- *   language, theme and log controls (no max-height clipping). Directly under it a
- *   permanent status block (inset `surfaceContainer*` band, shared 12 dp side rhythm with
- *   the header and tab content) shows the ready label while idle, a standalone
- *   [AppUiState.statusMessage] when one is set without an operation, and `name` /
- *   `state · progress` while an operation exists; a thin progress track appears only while
- *   running. Gaps header → block → content stay in the 8–12 dp band. The block stays on
- *   Files, Partitions, Ventoy and Service, hides on Settings and while the journal is
- *   open, and is tappable (48 dp) only while an operation exists, opening the centred
- *   details dialog. The block carries no cancel. It is the only status surface: both
+ * - top: one compact device header (also on Settings) whose title/subtitle surface is
+ *   separate from the language, theme and log controls (no max-height clipping). Directly
+ *   under it a permanent status block (inset `surfaceContainer*` band, shared 12 dp side
+ *   rhythm) titled `Status: &lt;operation|message|Ready&gt;`, always tappable (48 dp) with
+ *   chevron; thin progress track only while running. Gaps header → block → content stay in
+ *   the 8–12 dp band. The block stays on Files, Partitions, Ventoy and Service, hides on
+ *   Settings and while the journal is open, and opens the centred status dialog even when
+ *   idle. The block carries no cancel and no dividers. It is the only status surface: both
  *   operation facts and non-operation rejections/errors land here, never a snackbar;
  * - middle: the active tab (weight 1, own scroll), always composed; a horizontal swipe
  *   selects the adjacent tab through the reducer and the content slides in the tab
@@ -213,11 +211,10 @@ internal fun shellTabContentVisible(
  * log layer hide; the tab swipe stays off. The existing picker branch is still the tab
  * content with its own continue/back controls, and Back routes to the reducer cancel,
  * which refuses while a copy runs or a confirmation is open.
- * - bottom: only the navigation bar. Operation details live in a centred dialog opened
- *   from the status block: the same fact order (name as title, then state, progress,
- *   readback verdict, result), missing facts omitted, plus the two-step cancel action;
- *   closing the dialog never cancels. Status text lives only in the permanent block
- *   (operation facts and standalone status messages) and the details dialog.
+ * - bottom: only the navigation bar. Status details live in a centred dialog opened from
+ *   the status block: title Status, operation name as supporting text, facts, technical
+ *   log (operation-scoped + device summary), two-step cancel when running; closing never
+ *   cancels. Status text lives in the permanent block and the status dialog.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -275,7 +272,7 @@ fun AppShell(
         val pickOpen = state.filesPickMode != null
         // Shell status lives in OperationStatusLine only; LogScreen keeps its own host.
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
-        // The strip only opens the sheet; closing also follows the operation away or the picker in.
+        // Strip opens the status dialog; picker ownership still forces it closed.
         var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
         // Modal pick task owns Back: cancel routes through the reducer, and Back stays
         // inert while a copy runs or a confirmation is open (the reducer keeps the
@@ -346,8 +343,8 @@ fun AppShell(
                 focusManager.clearFocus(force = true)
             }
         }
-        LaunchedEffect(state.operation?.token, pickOpen) {
-            if (state.operation == null || pickOpen) operationDetailsOpen = false
+        LaunchedEffect(pickOpen) {
+            if (pickOpen) operationDetailsOpen = false
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
@@ -412,38 +409,36 @@ fun AppShell(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     // Header and status block share the 12 dp side rhythm. Status hides on
-                    // Settings and while the journal covers the work tabs; the picker still
-                    // owns the whole screen (header + status + nav).
+                    // Settings and while the journal covers the work tabs; header stays on
+                    // Settings so its bar sits under DeviceHeader. Picker owns whole screen.
                     if (!pickOpen) {
-                        if (state.tab != ShellTab.Settings) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp),
-                            ) {
-                                DeviceHeader(
-                                    state = state,
-                                    logButtonFocus = logButtonFocus,
-                                    journalOpen = panels.journalScreenOpen,
-                                    onIntent = onIntent,
-                                    onOpenSettings = {
-                                        if (state.tab in PrimaryShellTabs) {
-                                            settingsReturnTab = state.tab.name
-                                        }
-                                        onIntent(UiIntent.SelectTab(ShellTab.Settings))
-                                    },
-                                    onOpenLog = {
-                                        restoreLogFocus = true
-                                        panels = panels.openJournalScreen()
-                                    },
-                                )
-                            }
-                            if (!panels.journalScreenOpen) {
-                                OperationStatusLine(
-                                    state = state,
-                                    onOpenDetails = { operationDetailsOpen = true },
-                                )
-                            }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp),
+                        ) {
+                            DeviceHeader(
+                                state = state,
+                                logButtonFocus = logButtonFocus,
+                                journalOpen = panels.journalScreenOpen,
+                                onIntent = onIntent,
+                                onOpenSettings = {
+                                    if (state.tab in PrimaryShellTabs) {
+                                        settingsReturnTab = state.tab.name
+                                    }
+                                    onIntent(UiIntent.SelectTab(ShellTab.Settings))
+                                },
+                                onOpenLog = {
+                                    restoreLogFocus = true
+                                    panels = panels.openJournalScreen()
+                                },
+                            )
+                        }
+                        if (!panels.journalScreenOpen && state.tab != ShellTab.Settings) {
+                            OperationStatusLine(
+                                state = state,
+                                onOpenDetails = { operationDetailsOpen = true },
+                            )
                         }
                     }
                     // Tab content and the journal share this weight box: the journal covers
@@ -642,10 +637,10 @@ fun AppShell(
         }
         }
 
-        if (operationDetailsOpen && state.operation != null && !pickOpen) {
-            // Centred dialog with the same facts the status line summarizes. Closing it
-            // never cancels: only its explicit cancel button reaches the reducer.
-            OperationDetailsDialog(
+        if (operationDetailsOpen && !pickOpen) {
+            // Centred status dialog: works idle and during an operation. Closing never
+            // cancels; only the explicit cancel button reaches the reducer.
+            StatusDialog(
                 state = state,
                 onIntent = onIntent,
                 onDismiss = { operationDetailsOpen = false },
@@ -1210,12 +1205,10 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
 
 /**
  * Permanent status block under the header: inset `surfaceContainer*` band (not a card,
- * not an error banner). Without an operation it shows [AppUiState.statusMessage] when set,
- * otherwise the ready label — both non-tappable, neutral ink (`onSurfaceVariant`; the
- * field carries no severity). With an operation it splits title / `state · progress`
- * (result kept when present so errors stay on-block), a trailing chevron, and a thin
- * progress track only while running. Tap (48 dp) opens details only when an operation
- * exists; cancel lives only in the dialog.
+ * not an error banner). Always tappable (48 dp) with chevron; title is
+ * `Status: &lt;operation|message|Ready&gt;`. Idle/standalone use neutral ink. Polite live
+ * region only while running or a standalone message is shown — not idle Ready. Thin
+ * rounded progress track only while running. No dividers; cancel lives only in the dialog.
  */
 @Composable
 private fun OperationStatusLine(
@@ -1226,19 +1219,17 @@ private fun OperationStatusLine(
     val operation = state.operation
     val running = operation?.state == OperationState.Running ||
         operation?.state == OperationState.Queued
-    val tappable = facts != null
     val standaloneMessage = facts == null && state.statusMessage != null
     val openLabel = stringResource(R.string.shell_status_open_details)
-    // No operation: surface standalone statusMessage (Ventoy/Service rejections, link-load
-    // failures, etc.) so removing the snackbar does not hide them. Field has no severity →
-    // neutral ink; still not tappable.
-    val titleText = facts?.name
+    val subject = facts?.name
         ?: state.statusMessage?.localized()
         ?: stringResource(R.string.shell_status_ready)
+    val titleText = stringResource(R.string.shell_status_title, subject)
     val detailText = facts?.let { fact ->
         listOfNotNull(fact.state, fact.progress, fact.result).joinToString(FACT_SEPARATOR)
             .takeIf { it.isNotEmpty() }
     }
+    // Idle / standalone: neutral ink. Active error: error ink. Else onSurface.
     val titleColor = when {
         facts == null -> MaterialTheme.colorScheme.onSurfaceVariant
         facts.tone == StatusTone.Error -> MaterialTheme.colorScheme.error
@@ -1272,25 +1263,15 @@ private fun OperationStatusLine(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(
-                        if (tappable) {
-                            Modifier.clickable(
-                                role = Role.Button,
-                                onClickLabel = openLabel,
-                                onClick = onOpenDetails,
-                            )
-                        } else {
-                            Modifier
-                        },
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = openLabel,
+                        onClick = onOpenDetails,
                     )
-                    .heightIn(min = if (tappable) 48.dp else 0.dp)
+                    .heightIn(min = 48.dp)
                     .then(
-                        // Announce both running operations and standalone messages: the
-                        // snackbar that used to announce the latter is gone.
+                        // Announce running ops and standalone messages only — not idle Ready.
                         if (running || standaloneMessage) {
-                            // mergeDescendants makes the announcement carry the child texts:
-                            // the clickable running row merges already, the standalone row
-                            // has no click handler and would otherwise be textless.
                             Modifier.semantics(mergeDescendants = true) {
                                 liveRegion = LiveRegionMode.Polite
                             }
@@ -1320,13 +1301,11 @@ private fun OperationStatusLine(
                         )
                     }
                 }
-                if (tappable) {
-                    GlyphIcon(
-                        glyph = Glyph.ChevronDown,
-                        size = 18.dp,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                GlyphIcon(
+                    glyph = Glyph.ChevronDown,
+                    size = 18.dp,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (running) {
                 val total = operation?.bytesTotal ?: 0L
@@ -1334,6 +1313,7 @@ private fun OperationStatusLine(
                 val track = Modifier
                     .fillMaxWidth()
                     .height(2.dp)
+                    .clip(RoundedCornerShape(1.dp))
                 if (total > 0L) {
                     LinearProgressIndicator(
                         progress = { fraction },
@@ -1355,81 +1335,111 @@ private fun OperationStatusLine(
 }
 
 /**
- * Centred operation details, opened from the status line: the same fact order (name as
- * title, then state, progress, readback verdict, result), nothing repeated, missing facts
- * omitted. Closing the dialog only dismisses it; the cancel button keeps the two-step
- * confirmation and the original [UiIntent.CancelOperation] intent.
+ * Centred status dialog from the status block. Title is always Status; operation name is
+ * supporting text when present. Works idle (device summary + technical log, no cancel) and
+ * during an operation (facts + log + two-step cancel). No title X; bottom Close only
+ * dismisses — cancel stays the destructive confirmButton.
  */
 @Composable
-private fun OperationDetailsDialog(
+private fun StatusDialog(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val op = state.operation ?: return
-    val facts = operationStatusFacts(state) ?: return
-    val running = op.state == OperationState.Running || op.state == OperationState.Queued
-    val cancelable = running && op.cancelable
+    val op = state.operation
+    val facts = operationStatusFacts(state)
+    val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
+    val cancelable = running == true && op?.cancelable == true
     data class CancelRequest(val token: OperationToken, val name: String)
     var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
     val closeLabel = stringResource(R.string.shell_status_close)
+    val deviceLines = deviceStatusSummaryLines(state)
+    val techLines = state.operationLogLines + deviceLines
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = facts.name,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics { heading() },
+                    text = stringResource(R.string.status_dialog_title),
+                    modifier = Modifier.semantics { heading() },
                     style = MaterialTheme.typography.titleMedium,
                 )
-                // Closing is always safe here: it never cancels the operation.
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = closeLabel },
-                ) { GlyphIcon(Glyph.Close, size = 20.dp) }
+                facts?.name?.let { name ->
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         text = {
             Column(
                 modifier = Modifier
-                    .heightIn(max = 360.dp)
+                    .heightIn(max = 420.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = facts.state,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = facts.tone.contentColor(),
-                )
-                facts.progress?.let {
-                    Text(text = it, style = MaterialTheme.typography.bodyMedium)
+                if (facts != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = facts.state,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = facts.tone.contentColor(),
+                        )
+                        facts.progress?.let {
+                            Text(text = it, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        facts.readback?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = facts.readbackTone.contentColor(),
+                            )
+                        }
+                        facts.result?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = facts.resultTone.contentColor(),
+                            )
+                        }
+                    }
                 }
-                facts.readback?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = facts.readbackTone.contentColor(),
-                    )
-                }
-                facts.result?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = facts.resultTone.contentColor(),
-                    )
+                // Technical log: device summary + operation-scoped lines. Spacing only —
+                // no literal dividers. Error red / warning tertiary via journalRow tones.
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = RoundedCornerShape(8.dp),
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (techLines.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.log_empty),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            techLines.forEach { line ->
+                                StatusTechLogRow(line = line)
+                            }
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
-            if (cancelable) {
+            if (cancelable && op != null && facts != null) {
                 TextButton(
                     onClick = { cancelRequest = CancelRequest(op.token, facts.name) },
                     modifier = Modifier.heightIn(min = 48.dp),
@@ -1474,6 +1484,63 @@ private fun OperationDetailsDialog(
             },
         )
     }
+}
+
+/** Device presence / identity / size / scheme / FS usage lines for the status dialog log. */
+@Composable
+private fun deviceStatusSummaryLines(state: AppUiState): List<String> {
+    val lines = ArrayList<String>(6)
+    lines += when (state.presence) {
+        DevicePresence.Ready -> stringResource(R.string.shell_status_ready)
+        DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
+        DevicePresence.Busy -> stringResource(R.string.header_busy)
+        DevicePresence.Disconnected -> stringResource(R.string.header_disconnected)
+        DevicePresence.Absent -> stringResource(R.string.header_absent)
+    }
+    // Presence Ready already added as Ready; still add concrete device facts when present.
+    state.device?.label?.takeIf { it.isNotBlank() }?.let { lines += it }
+    state.device?.capacityLabel?.let { lines += it }
+    state.partitionScheme?.name?.let { lines += it }
+    state.selectedPartition()?.let { partition ->
+        state.filesystemSpace(partition)?.let { space ->
+            lines += stringResource(
+                R.string.filesystem_usage_known,
+                DeviceIdentity.formatCapacity(space.freeBytes),
+                DeviceIdentity.formatCapacity(space.totalBytes),
+            )
+        }
+    }
+    return lines
+}
+
+/** One monospace technical-log row; journal row format, error/warning tones only special. */
+@Composable
+private fun StatusTechLogRow(line: String) {
+    val row = journalRow(line)
+    val stampColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val levelColor = when (row.tone) {
+        StatusTone.Error -> MaterialTheme.colorScheme.error
+        StatusTone.Warning -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(
+        text = buildAnnotatedString {
+            row.time?.let {
+                withStyle(SpanStyle(color = stampColor)) { append(it) }
+                append(FACT_SEPARATOR)
+            }
+            withStyle(SpanStyle(color = levelColor, fontWeight = FontWeight.Medium)) {
+                append(row.level)
+            }
+            append(FACT_SEPARATOR)
+            append(row.text)
+        },
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontFamily = FontFamily.Monospace,
+            fontFeatureSettings = "tnum",
+        ),
+        color = MaterialTheme.colorScheme.onSurface,
+    )
 }
 
 /** One journal row: `HH:mm:ss · Level · text`, blanks omitted. */

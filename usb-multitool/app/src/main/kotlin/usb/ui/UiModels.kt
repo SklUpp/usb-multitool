@@ -1610,6 +1610,12 @@ data class AppUiState(
      */
     val logLines: List<String> = emptyList(),
     /**
+     * Log lines scoped to the current operation (and idle gap after clear). Same cap as
+     * [logLines]; cleared when a new operation begins and when the operation is cleared.
+     * Status dialog reads this list, not the full journal.
+     */
+    val operationLogLines: List<String> = emptyList(),
+    /**
      * Release bundled with this APK. Read from the real bundled assets at startup; null
      * until that read lands. Never guessed from the current download.
      */

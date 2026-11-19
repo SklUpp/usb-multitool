@@ -104,39 +104,91 @@ internal object VentoyTransitions {
     fun setVtoyLocalAccount(state: AppUiState, intent: UiIntent.SetVtoyLocalAccount): ReduceResult =
         ReduceResult(state.copy(vtoyLocalAccount = intent.enabled))
 
-    fun loadVentoyGlobalSettings(state: AppUiState): ReduceResult =
-        if (state.ventoySettingsSourceStartLba == null ||
-            state.ventoySettingsSourceSectorCount == null
-        ) {
-            startSettingsSourceRead(
+    fun loadVentoyGlobalSettings(state: AppUiState): ReduceResult {
+        val source = state.ventoySettingsSource
+        // Phone documents never touch stick geometry.
+        if (source is VentoySettingsSource.Document) {
+            return startSettingsSourceRead(
                 state = state,
-                source = state.ventoySettingsSource,
+                source = source,
                 device = state.device,
             )
-        } else if (!state.settingsSourceGeometryMatches()) {
-            ReduceResult(
-                state.copy(
-                    ventoySettingsSourceLoading = false,
-                ).withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)),
-            )
-        } else {
-            val token = state.ventoyGlobalSettingsRequest + 1L
-            val device = state.device
-            ReduceResult(
-                state.copy(
-                    ventoyGlobalSettingsRequest = token,
-                    ventoySettingsSourceLoading = true,
-                    ventoySettingsSourceIdentity = device?.identity,
-                    ventoySettingsSourceAttachGeneration = device?.attachGeneration,
-                ),
-                effects = listOf(
-                    UiEffect.LoadVentoyGlobalSettings(
-                        requestToken = token,
-                        source = state.ventoySettingsSource,
-                    ),
-                ),
-            )
         }
+        val pinsPresent =
+            state.ventoySettingsSourceStartLba != null &&
+                state.ventoySettingsSourceSectorCount != null
+        val geometryOk = pinsPresent && state.settingsSourceGeometryMatches()
+        return when {
+            // Missing or stale pins after install/repartition: re-bind to the live data
+            // partition when the UI already knows it. A hard SettingsSourceStale here left
+            // ventoyGlobalSettings null until the user tapped Retry by hand.
+            !geometryOk -> {
+                val dataPartition = state.ventoyDataPartition()
+                when {
+                    dataPartition != null ->
+                        startSettingsSourceRead(
+                            state = state,
+                            source = source,
+                            device = state.device,
+                        )
+                    // Install/update just rewrote the table; refreshPartitions has not
+                    // landed yet. Default path is resolved by the host via VentoyLayout.probe,
+                    // so the read can proceed without UI pins. Custom USB paths cannot.
+                    source.isDefaultPath() -> fireUnpinnedSettingsRead(state, source)
+                    else ->
+                        ReduceResult(
+                            state.withStatus(UiMessage.Key(UiMessageKey.VentoyDataPartitionMissing)),
+                        )
+                }
+            }
+            else -> {
+                val token = state.ventoyGlobalSettingsRequest + 1L
+                val device = state.device
+                ReduceResult(
+                    state.copy(
+                        ventoyGlobalSettingsRequest = token,
+                        ventoySettingsSourceLoading = true,
+                        ventoySettingsSourceIdentity = device?.identity,
+                        ventoySettingsSourceAttachGeneration = device?.attachGeneration,
+                    ),
+                    effects = listOf(
+                        UiEffect.LoadVentoyGlobalSettings(
+                            requestToken = token,
+                            source = source,
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * Read the default stick config without UI partition pins. Used right after a layout
+     * mutation while [AppUiState.partitions] is still empty/stale; the host probes the live
+     * disk. Pins are filled on the next load once part1 is known.
+     */
+    private fun fireUnpinnedSettingsRead(
+        state: AppUiState,
+        source: VentoySettingsSource,
+    ): ReduceResult {
+        val token = state.ventoyGlobalSettingsRequest + 1L
+        val device = state.device
+        return ReduceResult(
+            state.copy(
+                ventoyGlobalSettingsRequest = token,
+                ventoySettingsSource = source,
+                ventoySettingsSourceLoading = true,
+                ventoySettingsSourceIdentity = device?.identity,
+                ventoySettingsSourceAttachGeneration = device?.attachGeneration,
+                ventoySettingsSourcePartitionId = null,
+                ventoySettingsSourceStartLba = null,
+                ventoySettingsSourceSectorCount = null,
+            ).withStatus(null),
+            effects = listOf(
+                UiEffect.LoadVentoyGlobalSettings(requestToken = token, source = source),
+            ),
+        )
+    }
 
     fun selectVentoySettingsUsbFile(
         state: AppUiState,
@@ -244,14 +296,17 @@ internal object VentoyTransitions {
         }
 
     /**
-     * A chosen USB file is valid only while the partition it was picked on still has the same
-     * geometry. Repartitioning the same stick must not make a stale path address new bytes.
+     * Settings pins are valid only while the partition they name still has the same
+     * geometry. Install/update rewrites part1; keeping old start/count must not block a
+     * reload forever or let Apply address pre-mutation bytes. Applies to Default and
+     * UsbFile alike — Default previously skipped this check and left Apply fail-closed
+     * after repartition until a manual refresh.
      */
     private fun AppUiState.settingsSourceGeometryMatches(): Boolean {
-        if (ventoySettingsSource !is VentoySettingsSource.UsbFile) return true
         val partitionId = ventoySettingsSourcePartitionId ?: return true
         val partition =
             partitions.firstOrNull { it.id == partitionId } ?: return false
+        if (partition.readOnly || partition.isEfiType) return false
         val expectedStart = ventoySettingsSourceStartLba
         val expectedCount = ventoySettingsSourceSectorCount
         if (expectedStart != null && partition.startLba != expectedStart) return false

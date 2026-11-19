@@ -84,39 +84,61 @@ fun VentoyScreen(
     val releaseActionEnabled = state.actionsEnabled && state.ventoyInstallAvailable &&
         !state.ventoyDownloadInFlight &&
         (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null)
-    // Remember epoch we already asked catalogs for so actionsEnabled flicker mid-flight
-    // does not triple-mount while caches are still null. Cleared when all three land or
-    // epoch moves (invalidate).
+    // Remember epoch+part1 geometry we already asked catalogs for so actionsEnabled
+    // flicker mid-flight does not triple-mount while caches are still null. Cleared when
+    // all three land, epoch moves (invalidate), or part1 geometry changes after install.
     var catalogLoadEpoch by remember { mutableStateOf<Long?>(null) }
+    var catalogLoadPart1Start by remember { mutableStateOf<ULong?>(null) }
+    var catalogLoadPart1Count by remember { mutableStateOf<ULong?>(null) }
     // One automatic upstream check per attachment while no release is known: a failed
     // check ends as n/a and does not retry on every recomposition. The check itself
     // is global, so a landed release is kept and not re-requested.
     var upstreamCheckedGeneration by remember { mutableStateOf<Long?>(null) }
+    val dataPart = state.ventoyDataPartition()
+    val dataPartStart = dataPart?.startLba
+    val dataPartCount = dataPart?.sectorCount
 
     LaunchedEffect(
         state.ventoyGlobalSettings,
         state.ventoyFolders,
         state.windowsIsoCandidates,
         state.ventoyCacheEpoch,
+        dataPartStart,
+        dataPartCount,
     ) {
         if (state.ventoyGlobalSettings != null &&
             state.ventoyFolders != null &&
             state.windowsIsoCandidates != null
         ) {
+            // Keep geometry markers so a later part1 move still re-pins settings.
             catalogLoadEpoch = null
         } else if (catalogLoadEpoch != null && catalogLoadEpoch != state.ventoyCacheEpoch) {
             catalogLoadEpoch = null
+            catalogLoadPart1Start = null
+            catalogLoadPart1Count = null
+        } else if (
+            catalogLoadEpoch != null &&
+            (catalogLoadPart1Start != dataPartStart || catalogLoadPart1Count != dataPartCount)
+        ) {
+            // refreshPartitions after install/update: allow another automatic pass.
+            catalogLoadEpoch = null
+            catalogLoadPart1Start = null
+            catalogLoadPart1Count = null
         }
     }
 
-    // Keys = external readiness only. Do not key on cache==null: fill/empty toggles would
-    // re-enter while catalogLoadEpoch is cleared and remount. Null checks stay in the body.
+    // Keys = external readiness + live part1 geometry. Do not key on cache==null:
+    // fill/empty toggles would re-enter while catalogLoadEpoch is cleared and remount.
+    // Null checks stay in the body. Part1 keys cover the post-install DeviceChanged that
+    // used to leave settings stuck on "not loaded" after a failed first pass.
     LaunchedEffect(
         state.presence,
         state.device?.identity,
         state.device?.attachGeneration,
         state.actionsEnabled,
         state.ventoyCacheEpoch,
+        dataPartStart,
+        dataPartCount,
     ) {
         if (state.presence != DevicePresence.Ready ||
             state.device == null ||
@@ -124,20 +146,44 @@ fun VentoyScreen(
         ) {
             return@LaunchedEffect
         }
-        val need =
+        val pinsStale =
+            state.ventoySettingsSource !is usb.ventoy.VentoySettingsSource.Document &&
+                state.ventoySettingsSourceStartLba != null &&
+                dataPart != null &&
+                (state.ventoySettingsSourceStartLba != dataPart.startLba ||
+                    state.ventoySettingsSourceSectorCount != dataPart.sectorCount)
+        val pinsMissingNeedBind =
+            state.ventoySettingsSource !is usb.ventoy.VentoySettingsSource.Document &&
+                dataPart != null &&
+                (state.ventoySettingsSourceStartLba == null ||
+                    state.ventoySettingsSourceSectorCount == null)
+        val needCatalogs =
             state.ventoyGlobalSettings == null ||
                 state.ventoyFolders == null ||
                 state.windowsIsoCandidates == null
-        if (!need) return@LaunchedEffect
-        if (catalogLoadEpoch == state.ventoyCacheEpoch) {
+        val needSettingsRepin = pinsStale || pinsMissingNeedBind
+        if (!needCatalogs && !needSettingsRepin) return@LaunchedEffect
+        if (needCatalogs &&
+            catalogLoadEpoch == state.ventoyCacheEpoch &&
+            catalogLoadPart1Start == dataPartStart &&
+            catalogLoadPart1Count == dataPartCount
+        ) {
             return@LaunchedEffect
         }
-        catalogLoadEpoch = state.ventoyCacheEpoch
-        if (state.ventoyGlobalSettings == null) onIntent(UiIntent.LoadVentoyGlobalSettings)
-        if (state.ventoyFolders == null && !state.ventoyFoldersLoading) {
-            onIntent(UiIntent.LoadVentoyFolders)
+        if (needCatalogs) {
+            catalogLoadEpoch = state.ventoyCacheEpoch
+            catalogLoadPart1Start = dataPartStart
+            catalogLoadPart1Count = dataPartCount
         }
-        if (state.windowsIsoCandidates == null) onIntent(UiIntent.LoadWindowsIsoCandidates)
+        if (state.ventoyGlobalSettings == null || needSettingsRepin) {
+            onIntent(UiIntent.LoadVentoyGlobalSettings)
+        }
+        if (needCatalogs) {
+            if (state.ventoyFolders == null && !state.ventoyFoldersLoading) {
+                onIntent(UiIntent.LoadVentoyFolders)
+            }
+            if (state.windowsIsoCandidates == null) onIntent(UiIntent.LoadWindowsIsoCandidates)
+        }
     }
 
     LaunchedEffect(

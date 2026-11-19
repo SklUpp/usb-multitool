@@ -3,6 +3,7 @@ package usb.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -53,6 +54,9 @@ internal fun SettingsScreen(
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.background,
             ),
+            // Scaffold already applied safeDrawing; a second status-bar inset would gap
+            // the title below the main DeviceHeader.
+            windowInsets = WindowInsets(0, 0, 0, 0),
         )
         Column(
             modifier = Modifier

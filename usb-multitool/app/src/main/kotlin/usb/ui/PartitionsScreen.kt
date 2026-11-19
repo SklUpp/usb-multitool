@@ -52,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -1205,28 +1206,46 @@ fun PartitionsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                             )
-                            FormatCatalog.supportedFormatIds().forEach { formatId ->
-                                ListItem(
-                                    headlineContent = { Text(FormatCatalog.label(formatId)) },
-                                    supportingContent = { Text(formatDescription(formatId)) },
-                                    leadingContent = {
-                                        Icon(
-                                            painter = painterResource(R.drawable.ic_file),
-                                            contentDescription = null,
-                                        )
-                                    },
-                                    modifier = Modifier.clickable {
-                                        filesystemMenuTarget = null
-                                        if (formatTarget.matches(latestState)) {
-                                            onIntent(UiIntent.SelectFormatFilesystem(formatId))
-                                            onIntent(
-                                                UiIntent.RequestDestructive(
-                                                    DestructiveAction.FORMAT_PARTITION,
-                                                ),
+                            Column(modifier = Modifier.selectableGroup()) {
+                                FormatCatalog.supportedFormatIds().forEach { formatId ->
+                                    val formatSelected = state.selectedFormatId == formatId
+                                    ListItem(
+                                        headlineContent = {
+                                            Text(FormatCatalog.label(formatId))
+                                        },
+                                        supportingContent = {
+                                            Text(formatDescription(formatId))
+                                        },
+                                        leadingContent = {
+                                            RadioButton(
+                                                selected = formatSelected,
+                                                onClick = null,
                                             )
-                                        }
-                                    },
-                                )
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .selectable(
+                                                selected = formatSelected,
+                                                role = Role.RadioButton,
+                                                onClick = {
+                                                    filesystemMenuTarget = null
+                                                    if (formatTarget.matches(latestState)) {
+                                                        onIntent(
+                                                            UiIntent.SelectFormatFilesystem(
+                                                                formatId,
+                                                            ),
+                                                        )
+                                                        onIntent(
+                                                            UiIntent.RequestDestructive(
+                                                                DestructiveAction.FORMAT_PARTITION,
+                                                            ),
+                                                        )
+                                                    }
+                                                },
+                                            ),
+                                    )
+                                }
                             }
                         }
                     }

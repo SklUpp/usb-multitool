@@ -1504,6 +1504,10 @@ object UiReducer {
                 ReduceResult(
                     state.copy(
                         operation = state.operation?.takeIf { sameStick },
+                        // A different stick must not inherit the previous operation's
+                        // scoped log in the status dialog.
+                        operationLogLines =
+                            if (sameStick) state.operationLogLines else emptyList(),
                         presence = intent.presence,
                         device = device,
                         pendingEfiWriteBinding = retainedPendingEfi,
@@ -1809,7 +1813,7 @@ object UiReducer {
             is UiIntent.OperationUpdated -> OperationTransitions.progress(state, intent.progress, begin = false)
             is UiIntent.OperationCleared ->
                 if (state.operation?.token == intent.token) {
-                    ReduceResult(state.copy(operation = null))
+                    ReduceResult(state.copy(operation = null, operationLogLines = emptyList()))
                 } else {
                     ReduceResult(state)
                 }
@@ -4426,13 +4430,18 @@ object UiReducer {
 
             is UiIntent.AppendLog -> {
                 val trimmed = intent.line.take(500) // guard runaway lines
-                val updated =
-                    if (state.logLines.size >= AppUiState.LOG_MAX_LINES) {
-                        state.logLines.drop(state.logLines.size - AppUiState.LOG_MAX_LINES + 1) + trimmed
+                fun appendRing(lines: List<String>): List<String> =
+                    if (lines.size >= AppUiState.LOG_MAX_LINES) {
+                        lines.drop(lines.size - AppUiState.LOG_MAX_LINES + 1) + trimmed
                     } else {
-                        state.logLines + trimmed
+                        lines + trimmed
                     }
-                ReduceResult(state.copy(logLines = updated))
+                ReduceResult(
+                    state.copy(
+                        logLines = appendRing(state.logLines),
+                        operationLogLines = appendRing(state.operationLogLines),
+                    ),
+                )
             }
 
             // No confirmation, no operation gate: the user asked for an empty log now.

@@ -206,7 +206,7 @@ class MainViewModel(
         const val BACKUP_FOLDER_NAME_KEY = "backup_folder_name"
         const val PROGRESS_TICK_MS = 120L
         /** Log-append interval: coarser than the UI progress tick to keep the ring buffer readable. */
-        const val LOG_TICK_MS = 3_000L
+        const val LOG_TICK_MS = 1_000L
     }
 
     var state by mutableStateOf(AppUiState())
@@ -703,11 +703,14 @@ class MainViewModel(
                 (intent.presence == DevicePresence.Absent || intent.presence == DevicePresence.Disconnected) &&
                 state.operation?.let { operationGenerations[it.token] == attachGeneration } == true
         val result = UiReducer.reduce(state, intent)
-        val adjustedResult =
+        var adjustedResult =
             if (preserveNoDeviceOperation && result.state.operation == null) {
                 result.copy(
                     state = result.state.copy(
                         operation = state.operation,
+                        // The same attachment blipped: keep the scoped log with the
+                        // carried operation, not only the journal.
+                        operationLogLines = state.operationLogLines,
                         // Carried forward, not a new emission: no sequence bump.
                         statusMessage = state.statusMessage,
                         statusSequence = state.statusSequence,
@@ -770,14 +773,22 @@ class MainViewModel(
                         "gen" to liveAttachmentGeneration,
                         "detail" to detail,
                     )
-                    state = UiReducer.reduce(state, UiIntent.AppendLog(logLine(message))).state
+                    // Apply to the reduced state so a new operation's cleared
+                    // operationLogLines receive this first line instead of being
+                    // overwritten by the pre-begin lists in the merge below.
+                    adjustedResult = adjustedResult.copy(
+                        state = UiReducer.reduce(
+                            adjustedResult.state,
+                            UiIntent.AppendLog(logLine(message)),
+                        ).state,
+                    )
                 }
             }
         }
         if (acceptedOperationIntent &&
             (intent is UiIntent.OperationBegan || intent is UiIntent.OperationUpdated)
         ) {
-            state = adjustedResult.state.copy(logLines = state.logLines)
+            state = adjustedResult.state
         } else if (intent !is UiIntent.OperationBegan && intent !is UiIntent.OperationUpdated) {
             state = adjustedResult.state
         }

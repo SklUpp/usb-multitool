@@ -572,7 +572,7 @@ class VentoySettingsUiTest {
     }
 
     @Test
-    fun stalePartitionGeometryBlocksReadAndUpdate() {
+    fun stalePartitionGeometryBlocksApplyButLoadRepinsAndRereads() {
         val base =
             ready(pending = controls).copy(
                 ventoySettingsSource = VentoySettingsSource.UsbFile("/custom/config.json"),
@@ -599,12 +599,122 @@ class VentoySettingsUiTest {
             apply.state.statusMessage,
         )
 
+        // Automatic reload after install must re-pin to the live part1, not stick on Stale.
         val load = UiReducer.reduce(repartitioned, UiIntent.LoadVentoyGlobalSettings)
-        assertTrue(load.effects.isEmpty())
         assertEquals(
-            UiMessage.Key(UiMessageKey.SettingsSourceStale),
-            load.state.statusMessage,
+            listOf(
+                UiEffect.LoadVentoyGlobalSettings(
+                    requestToken = load.state.ventoyGlobalSettingsRequest,
+                    source = VentoySettingsSource.UsbFile("/custom/config.json"),
+                ),
+            ),
+            load.effects,
         )
+        assertEquals(8192uL, load.state.ventoySettingsSourceStartLba)
+        assertEquals(4096uL, load.state.ventoySettingsSourceSectorCount)
+        assertTrue(load.state.ventoySettingsSourceLoading)
+    }
+
+    @Test
+    fun installCompletionThenLoadWithStaleDefaultPinsRepinsToNewPart1() {
+        val before =
+            ready(pending = controls).copy(
+                ventoyGlobalSettings = VentoyGlobalSettings.Empty,
+                ventoySettingsSource = VentoySettingsSource.Default,
+                ventoySettingsSourcePartitionId = "1",
+                ventoySettingsSourceStartLba = 2048uL,
+                ventoySettingsSourceSectorCount = 4096uL,
+                ventoyCacheEpoch = 3L,
+            )
+        val afterInstall =
+            reduceTerminalOperation(
+                before,
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = OperationTokenGenerator.next(),
+                    title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                ),
+            ).state
+        assertNull(afterInstall.ventoyGlobalSettings)
+        assertEquals(4L, afterInstall.ventoyCacheEpoch)
+        // dropVentoyStickCaches keeps pins; partition list still shows pre-install geometry
+        // until refreshPartitions. Simulate the refreshed table with a moved part1.
+        val refreshed =
+            afterInstall.copy(
+                partitions =
+                    listOf(
+                        afterInstall.partitions.single().copy(
+                            startLba = 2048uL,
+                            sectorCount = 2_000_000uL,
+                        ),
+                    ),
+            )
+        val load = UiReducer.reduce(refreshed, UiIntent.LoadVentoyGlobalSettings)
+        assertTrue(
+            "post-install load must emit a settings read, not SettingsSourceStale",
+            load.effects.any { it is UiEffect.LoadVentoyGlobalSettings },
+        )
+        assertEquals(2048uL, load.state.ventoySettingsSourceStartLba)
+        assertEquals(2_000_000uL, load.state.ventoySettingsSourceSectorCount)
+        assertEquals(VentoySettingsSource.Default, load.state.ventoySettingsSource)
+    }
+
+    @Test
+    fun defaultLoadWithoutDataPartitionStillEmitsUnpinnedRead() {
+        // Right after install, partitions may still be empty while refreshPartitions runs.
+        // Default path must not require UI part1 — host probes the live Ventoy layout.
+        val bare =
+            ready().copy(
+                partitions = emptyList(),
+                selectedPartitionId = null,
+                ventoyGlobalSettings = null,
+                ventoySettingsSource = VentoySettingsSource.Default,
+                ventoySettingsSourcePartitionId = null,
+                ventoySettingsSourceStartLba = null,
+                ventoySettingsSourceSectorCount = null,
+            )
+        val load = UiReducer.reduce(bare, UiIntent.LoadVentoyGlobalSettings)
+        assertEquals(
+            listOf(
+                UiEffect.LoadVentoyGlobalSettings(
+                    requestToken = load.state.ventoyGlobalSettingsRequest,
+                    source = VentoySettingsSource.Default,
+                ),
+            ),
+            load.effects,
+        )
+        assertNull(load.state.ventoySettingsSourceStartLba)
+        assertTrue(load.state.ventoySettingsSourceLoading)
+    }
+
+    @Test
+    fun updateCompletionClearsSettingsSoLoadRereadsPreservedFile() {
+        val loaded =
+            ready().copy(
+                ventoyGlobalSettings = VentoyGlobalSettings.Present(emptyList()),
+                ventoySettingsSource = VentoySettingsSource.Default,
+                ventoySettingsSourcePartitionId = "1",
+                ventoySettingsSourceStartLba = 2048uL,
+                ventoySettingsSourceSectorCount = 4096uL,
+                ventoyCacheEpoch = 1L,
+            )
+        val afterUpdate =
+            reduceTerminalOperation(
+                loaded,
+                OperationProgress(
+                    state = OperationState.Completed,
+                    token = OperationTokenGenerator.next(),
+                    title = OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
+                ),
+            ).state
+        assertNull(
+            "update must drop the cached settings so the preserved ventoy.json is re-read",
+            afterUpdate.ventoyGlobalSettings,
+        )
+        assertEquals(2L, afterUpdate.ventoyCacheEpoch)
+        val load = UiReducer.reduce(afterUpdate, UiIntent.LoadVentoyGlobalSettings)
+        assertTrue(load.effects.any { it is UiEffect.LoadVentoyGlobalSettings })
+        assertTrue(load.state.ventoySettingsSourceLoading)
     }
 
     @Test

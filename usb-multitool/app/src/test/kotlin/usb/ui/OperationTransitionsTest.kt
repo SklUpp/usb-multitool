@@ -119,4 +119,21 @@ class OperationTransitionsTest {
         assertEquals(listOf(UiEffect.CancelOperation(token)), cancelled.effects)
         assertTrue(stale.effects.isEmpty())
     }
+
+    @Test
+    fun operationScopedLogResetsOnNewOperationAndKeepsJournalHistory() {
+        val first = UiReducer.reduce(ready(), UiIntent.AppendLog("device ready")).state
+        val oldOp = UiReducer.reduce(first, UiIntent.AppendLog("old operation line")).state
+        val token = OperationTokenGenerator.next()
+        val begun = UiReducer.reduce(
+            oldOp,
+            UiIntent.OperationBegan(OperationProgress(OperationState.Running, OperationTitle.Upload, token)),
+        ).state
+        val running = UiReducer.reduce(begun, UiIntent.AppendLog("new operation line")).state
+
+        assertEquals(listOf("device ready", "old operation line"), begun.logLines)
+        assertEquals(emptyList<String>(), begun.operationLogLines)
+        assertEquals(listOf("device ready", "old operation line", "new operation line"), running.logLines)
+        assertEquals(listOf("new operation line"), running.operationLogLines)
+    }
 }
