@@ -78,7 +78,7 @@
     <string name="partitions_strip_scale_note">Relative to disk LBA; each partition and free region keeps a 48 dp minimum and scrolls horizontally when needed. Exact LBA and size are in the list.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Partition information</string>
-    <string name="partitions_info_help_text">Name is the table entry name; the volume label comes from the filesystem and can be unknown. RO means guaranteed EFI write protection; the write state is shown only when measured and otherwise stays explicitly unknown. Free space is measured inside the filesystem, not the table free region.</string>
+    <string name="partitions_info_help_text">**Name** is the table entry name; the volume label comes from the filesystem and can be unknown.\n\n**RO** means guaranteed EFI write protection.\n\n**Write state** is shown only when measured and otherwise stays explicitly unknown.\n\n**Free space** is measured inside the filesystem, not in the table free region.</string>
     <string name="partitions_info_name_label">Name</string>
     <string name="partitions_write_state_label">Write state</string>
     <string name="partitions_write_ro">EFI write protection is active</string>
@@ -92,6 +92,9 @@
     <string name="partitions_write_driver_ro_label">RO · driver</string>
     <string name="partitions_write_driver_rw_label">RW · driver</string>
     <string name="partitions_write_unknown">Write state not verified</string>
+    <string name="partitions_write_state_unknown">Unknown</string>
+    <string name="partitions_write_state_read_only">Read only</string>
+    <string name="partitions_write_state_read_write">Read and write</string>
     <string name="efi_write_policy_allowed">Write permission allowed</string>
     <string name="efi_write_policy_protected">Write-protected</string>
     <string name="partitions_efi_blocked">%1$s is write-protected. Allow EFI writes in Device partitions.</string>
@@ -165,8 +168,8 @@
     <string name="diagnostics_backup_folder_none">Not selected</string>
     <string name="diagnostics_pick_folder">Choose folder…</string>
     <string name="diagnostics_change_folder">Change…</string>
-    <string name="diagnostics_create_image">Create image</string>
-    <string name="diagnostics_create_gpt_copy">Create GPT copy</string>
+    <string name="diagnostics_create_image">Create</string>
+    <string name="diagnostics_create_gpt_copy">Save</string>
     <string name="diagnostics_backup_file_named">File: %1$s</string>
     <string name="diagnostics_gpt_restore_title">Restore GPT from file</string>
     <string name="diagnostics_gpt_restore_subtitle">Writes a saved primary+backup GPT blob onto this medium.</string>
@@ -203,7 +206,13 @@
     <string name="op_cancelled">cancelled</string>
     <string name="op_failed">failed</string>
     <string name="op_partial">partial</string>
-    <string name="confirm_base">Confirm %1$s on %2$s (%3$s).</string>
+    <string name="confirm_base">Confirm %1$s on %2$s.</string>
+    <string name="confirm_device_serial">Serial: %1$s</string>
+    <string name="confirm_title_gpt_repair">Repair backup GPT?</string>
+    <string name="confirm_title_format">Format partition?</string>
+    <string name="confirm_title_wipe">Erase the device?</string>
+    <string name="confirm_title_partition_role">Change partition type?</string>
+    <string name="confirm_title_gpt_restore">Restore backup GPT?</string>
     <string name="confirm_irreversible">This cannot be undone.</string>
     <string name="confirm_repair_keeps">No partition is erased: only the backup GPT is relocated and its checksums are recalculated.</string>
     <string name="confirm_repair_kept_partition">Partition kept: %1$s</string>
@@ -363,7 +372,7 @@
     <string name="ventoy_update">Update</string>
     <string name="ventoy_update_from_to">Update · %1$s → %2$s</string>
     <string name="ventoy_update_to">Update · %1$s</string>
-    <string name="ventoy_update_current">Update · %1$s (current)</string>
+    <string name="ventoy_reinstall">Reinstall</string>
     <string name="ventoy_download_warning_title">Download this Ventoy release?</string>
     <string name="ventoy_download_unpinned_warning_title">Download without an independent trusted SHA?</string>
     <string name="ventoy_download_already_latest_title">Ventoy is already latest</string>
@@ -378,7 +387,7 @@
     <string name="ventoy_promotion_unconfirmed">%1$s was not saved; recovered %2$s is readable but its directory is not confirmed durable.</string>
     <string name="ventoy_download_unknown">Store state after %1$s is unknown; re-check before installing.</string>
     <string name="diagnostics_self_test">Self-test</string>
-    <string name="diagnostics_self_test_hint">SCSI, GPT, filesystems</string>
+    <string name="diagnostics_self_test_hint">SCSI, GPT, FS</string>
     <string name="diagnostics_read_scan">Read scan</string>
     <string name="diagnostics_read_scan_hint">Bad sectors</string>
     <string name="diagnostics_rescue_backup">Image + map</string>
@@ -392,7 +401,6 @@
     <string name="diagnostics_pick_image">Pick image…</string>
     <string name="diagnostics_map_named">Map: %1$s</string>
     <string name="diagnostics_pick_map">Pick map…</string>
-    <string name="diagnostics_gpt_restore_info_title">Restore GPT from file</string>
     <string name="diagnostics_gpt_restore_info_text">Restore GPT from file writes a saved primary+backup critical-sector blob onto this medium after validation. It is not the same as Fix backup GPT on the Partitions tab, which only relocates the live backup structures to the current disk end. A file name alone does not prove the blob matches this disk.</string>
     <string name="diagnostics_inspection_unavailable">Details unavailable — the file will be validated again at restore.</string>
     <string name="diagnostics_inspection_failed">Selected file rejected: %1$s</string>
@@ -414,9 +422,9 @@
     <string name="diagnostics_gpt_geometry">Captured disk: %1$s sectors; usable LBA %2$s–%3$s</string>
     <string name="diagnostics_gpt_partitions">Partitions in backup: %1$s</string>
     <string name="diagnostics_gpt_valid">Headers, entry CRCs and partition bounds validate.</string>
-    <string name="diagnostics_restore_image">Restore image</string>
+    <string name="diagnostics_restore_image">Restore</string>
     <string name="diagnostics_no_gpt_file">No GPT file selected</string>
-    <string name="diagnostics_restore_gpt">Restore GPT from file</string>
+    <string name="diagnostics_restore_gpt">Restore</string>
     <string name="diagnostics_danger_title">Danger zone: wipe device</string>
     <string name="diagnostics_danger_body">Wiping overwrites every sector with zeros and cannot be undone.</string>
     <string name="diagnostics_wipe">Wipe device (zeros)</string>
@@ -779,7 +787,7 @@
     <string name="unattend_bindings_title">Image bindings</string>
     <string name="unattend_bound">Bound</string>
     <string name="unattend_bound_images">Images already bound</string>
-    <string name="unattend_choose_template">Choose answer file (.xml)…</string>
+    <string name="unattend_choose_template">Choose XML…</string>
     <string name="unattend_clear_selection">Clear selection</string>
     <string name="unattend_clear_template">Clear template</string>
     <string name="unattend_destructive_note">This file contains destructive sections:</string>

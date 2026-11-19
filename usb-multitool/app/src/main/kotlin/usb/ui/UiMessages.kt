@@ -2,6 +2,11 @@ package usb.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import usb.formatBinaryBytesPerSecond
 import usb.fs.FormatCatalog
 import usb.multitool.R
@@ -351,11 +356,63 @@ fun operationStateLabel(state: OperationState): String =
     }
 
 /**
- * Text lines for the destructive confirmation. All authored text comes from resources;
- * system/engine details are not part of this dialog.
+ * One dialog line. [monospace] marks machine facts (a serial) that must not be reflowed
+ * like prose; the renderer keeps them in a small monospace style.
+ */
+data class ConfirmationLine(val text: String, val monospace: Boolean = false)
+
+/**
+ * Action-specific dialog title. The generic [R.string.confirm_title] stays only for
+ * actions that genuinely have no specific wording.
  */
 @Composable
-fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
+fun confirmationTitle(confirmation: DestructiveConfirmation): String =
+    when (confirmation.action) {
+        DestructiveAction.GPT_REPAIR -> stringResource(R.string.confirm_title_gpt_repair)
+        DestructiveAction.FORMAT_PARTITION -> stringResource(R.string.confirm_title_format)
+        DestructiveAction.WIPE -> stringResource(R.string.confirm_title_wipe)
+        DestructiveAction.SET_PARTITION_ROLE ->
+            stringResource(R.string.confirm_title_partition_role)
+        DestructiveAction.GPT_RESTORE -> stringResource(R.string.confirm_title_gpt_restore)
+        else -> stringResource(R.string.confirm_title)
+    }
+
+/** Data-losing confirmations: the enabled confirm button reads as an error, not primary. */
+internal fun isDataLosingConfirmation(confirmation: DestructiveConfirmation): Boolean =
+    confirmation.action == DestructiveAction.FORMAT_PARTITION ||
+        confirmation.action == DestructiveAction.WIPE ||
+        confirmation.action == DestructiveAction.INITIALIZE_PARTITION_TABLE ||
+        (confirmation.action == DestructiveAction.SET_PARTITION_ROLE &&
+            confirmation.partitionRole == PartitionRole.Efi)
+
+/**
+ * Help-sheet body blocks: blank lines separate blocks, `**term**` renders bold.
+ * PROSE: `**Name** is the entry name.` → bold "Name", plain remainder.
+ */
+internal fun helpBlocks(text: String): List<AnnotatedString> =
+    text.split(Regex("\\n\\s*\\n")).mapNotNull { block ->
+        block.takeIf { it.isNotBlank() }?.let {
+            buildAnnotatedString {
+                var index = 0
+                Regex("\\*\\*(.+?)\\*\\*").findAll(it).forEach { match ->
+                    append(it.substring(index, match.range.first))
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(match.groupValues[1])
+                    }
+                    index = match.range.last + 1
+                }
+                append(it.substring(index))
+            }
+        }
+    }
+
+/**
+ * Text lines for the destructive confirmation. All authored text comes from resources;
+ * system/engine details are not part of this dialog. The device is shown by its display
+ * form (label + capacity) with the serial on its own line — never the matching identity.
+ */
+@Composable
+fun confirmationLines(confirmation: DestructiveConfirmation): List<ConfirmationLine> {
     val actionLabel =
         if (confirmation.action == DestructiveAction.FORMAT_PARTITION &&
             confirmation.formatId != null
@@ -368,12 +425,12 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
         } else {
             confirmation.action.label()
         }
+    val serial = confirmation.identity.serialNumber?.trim()?.takeIf { it.isNotEmpty() }
     val lines = mutableListOf(
         stringResource(
             R.string.confirm_base,
             actionLabel,
-            confirmation.identity.identity,
-            confirmation.identity.capacityLabel,
+            confirmation.identity.displayName,
         ),
     )
     // Backup-GPT repair preserves every partition; saying "cannot be undone" would be false.
@@ -505,7 +562,7 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
         lines += gptBackupInspectionLines(confirmation.gptBackupInspection)
     }
     if (confirmation.action == DestructiveAction.RESCUE_RESTORE) {
-        lines += stringResource(R.string.confirm_rescue_restore, confirmation.identity.identity)
+        lines += stringResource(R.string.confirm_rescue_restore, confirmation.identity.displayName)
         DestructiveConfirmation.displayLabel(
             confirmation.rescueImageName ?: confirmation.rescueImageUri,
         )?.let { name ->
@@ -517,11 +574,12 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             lines += stringResource(R.string.confirm_rescue_map_source, name)
         }
         confirmation.rescueMapInspection?.summary?.identity?.let { source ->
+            // Compare the matching identity; render the human display form.
             if (source != confirmation.identity.identity) {
                 lines += stringResource(
                     R.string.confirm_rescue_source_identity,
                     source,
-                    confirmation.identity.identity,
+                    confirmation.identity.displayName,
                 )
             }
         }
@@ -553,7 +611,11 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<String> {
             },
         )
     }
-    return lines
+    return buildList {
+        add(ConfirmationLine(lines.first()))
+        serial?.let { add(ConfirmationLine(stringResource(R.string.confirm_device_serial, it), monospace = true)) }
+        lines.drop(1).forEach { add(ConfirmationLine(it)) }
+    }
 }
 
 private const val INSPECTION_RANGE_PREVIEW = 3

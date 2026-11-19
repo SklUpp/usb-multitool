@@ -920,10 +920,9 @@ fun PartitionsScreen(
                                 )
                                 if (rowSpace != null) {
                                     Text(
-                                        text = stringResource(
-                                            R.string.filesystem_usage_known,
-                                            DeviceIdentity.formatCapacity(rowSpace.freeBytes),
-                                            DeviceIdentity.formatCapacity(rowSpace.totalBytes),
+                                        text = DeviceIdentity.formatCapacityPair(
+                                            rowSpace.freeBytes,
+                                            rowSpace.totalBytes,
                                         ),
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontFamily = FontFamily.Monospace,
@@ -1145,10 +1144,14 @@ fun PartitionsScreen(
                 InteractiveInfoRow(
                     label = stringResource(R.string.partitions_write_state_label),
                     value = when (access) {
-                        PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
-                        PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
-                        PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
-                        PartitionWriteAccess.Unknown -> stringResource(R.string.partitions_write_unknown)
+                        // Short value in the facts column; the row badges keep RO/RW labels.
+                        PartitionWriteAccess.ReadOnly,
+                        PartitionWriteAccess.DriverReadOnly,
+                        -> stringResource(R.string.partitions_write_state_read_only)
+                        PartitionWriteAccess.ReadWrite ->
+                            stringResource(R.string.partitions_write_state_read_write)
+                        PartitionWriteAccess.Unknown ->
+                            stringResource(R.string.partitions_write_state_unknown)
                     },
                     enabled = false,
                 )
@@ -1221,15 +1224,12 @@ fun PartitionsScreen(
                 InteractiveInfoRow(
                     label = stringResource(R.string.filesystem_usage_label),
                     value = if (space != null) {
-                        stringResource(
-                            R.string.filesystem_usage_known,
-                            DeviceIdentity.formatCapacity(space.freeBytes),
-                            DeviceIdentity.formatCapacity(space.totalBytes),
-                        )
+                        DeviceIdentity.formatCapacityPair(space.freeBytes, space.totalBytes)
                     } else {
                         stringResource(R.string.filesystem_usage_unavailable)
                     },
                     enabled = false,
+                    monoValue = true,
                 )
             }
         }
@@ -2037,6 +2037,8 @@ private fun InteractiveInfoRow(
     onClick: (() -> Unit)? = null,
     trailingGlyph: Glyph? = null,
     trailingContent: (@Composable () -> Unit)? = null,
+    /** Measured numeric facts (sizes) align better in monospace with tabular figures. */
+    monoValue: Boolean = false,
 ) {
     Row(
         modifier = Modifier
@@ -2071,7 +2073,14 @@ private fun InteractiveInfoRow(
             ) {
                 Text(
                     text = value,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = if (monoValue) {
+                        MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        )
+                    } else {
+                        MaterialTheme.typography.bodySmall
+                    },
                     fontWeight = FontWeight.SemiBold,
                     color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                     maxLines = 1,

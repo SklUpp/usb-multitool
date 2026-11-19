@@ -50,6 +50,12 @@ data class DeviceIdentity(
 
     val capacityLabel: String get() = formatCapacity(capacityBytes)
 
+    /**
+     * Human-facing identity for dialogs: `label (capacity)`. Display only — [identity]
+     * stays the matching/revalidation format and must never be replaced by this.
+     */
+    val displayName: String get() = "$label ($capacityLabel)"
+
     companion object {
         /** Fallback when USB product and device names are both absent. */
         const val DEFAULT_LABEL = "USB Storage"
@@ -86,15 +92,33 @@ data class DeviceIdentity(
 
         fun formatCapacity(bytes: ULong): String {
             if (bytes < 1024uL) return "$bytes B"
-            val kib = bytes.toDouble() / 1024.0
-            if (kib < 1024.0) return String.format("%.1f KiB", kib)
-            val mib = kib / 1024.0
-            if (mib < 1024.0) return String.format("%.1f MiB", mib)
-            val gib = mib / 1024.0
-            if (gib < 1024.0) return String.format("%.2f GiB", gib)
-            val tib = gib / 1024.0
-            return String.format("%.2f TiB", tib)
+            val unit = capacityUnit(bytes)
+            return String.format(unit.pattern, bytes.toDouble() / unit.divisor) + " " + unit.suffix
         }
+
+        /**
+         * Free/total pair in ONE unit so the numbers are comparable at a glance, e.g.
+         * `3.70 / 3.70 GiB`. Precision follows [formatCapacity]; the larger value picks
+         * the unit, so a nearly full disk never splits into MiB vs GiB.
+         */
+        fun formatCapacityPair(freeBytes: ULong, totalBytes: ULong): String {
+            if (maxOf(freeBytes, totalBytes) < 1024uL) return "$freeBytes / $totalBytes B"
+            val unit = capacityUnit(maxOf(freeBytes, totalBytes))
+            val free = String.format(unit.pattern, freeBytes.toDouble() / unit.divisor)
+            val total = String.format(unit.pattern, totalBytes.toDouble() / unit.divisor)
+            return "$free / $total ${unit.suffix}"
+        }
+
+        private class CapacityUnit(val pattern: String, val divisor: Double, val suffix: String)
+
+        private fun capacityUnit(bytes: ULong): CapacityUnit =
+            when {
+                bytes < 1024uL * 1024uL -> CapacityUnit("%.1f", 1024.0, "KiB")
+                bytes < 1024uL * 1024uL * 1024uL -> CapacityUnit("%.1f", 1024.0 * 1024.0, "MiB")
+                bytes < 1024uL * 1024uL * 1024uL * 1024uL ->
+                    CapacityUnit("%.2f", 1024.0 * 1024.0 * 1024.0, "GiB")
+                else -> CapacityUnit("%.2f", 1024.0 * 1024.0 * 1024.0 * 1024.0, "TiB")
+            }
     }
 }
 

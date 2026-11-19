@@ -120,4 +120,32 @@ class DeviceIdentityTest {
         assertTrue(DeviceIdentity.formatCapacity(5uL * 1024uL * 1024uL).endsWith("MiB"))
         assertTrue(DeviceIdentity.formatCapacity(3uL * 1024uL * 1024uL * 1024uL).endsWith("GiB"))
     }
+
+    @Test
+    fun displayNameShowsLabelAndCapacityAndIdentityStaysMatchingFormat() {
+        val id = DeviceIdentity.of(
+            label = "Cruzer Blade",
+            capacityBytes = 4_000_000_000uL,
+            serialNumber = "S1",
+        )
+        // Matching/revalidation keeps the hash form; display never replaces it.
+        assertEquals("Cruzer Blade#S1", id.identity)
+        assertEquals("Cruzer Blade (${id.capacityLabel})", id.displayName)
+    }
+
+    @Test
+    fun formatCapacityPairKeepsBothNumbersInOneUnit() {
+        // Two numbers, one unit, same precision rules as formatCapacity.
+        assertEquals("256 / 512 B", DeviceIdentity.formatCapacityPair(256uL, 512uL))
+        val mixed = DeviceIdentity.formatCapacityPair(
+            freeBytes = 512uL * 1024uL * 1024uL,
+            totalBytes = 2uL * 1024uL * 1024uL * 1024uL,
+        )
+        assertTrue("mixed pair stays in one unit: $mixed", Regex("^\\d+[.,]\\d{2} / \\d+[.,]\\d{2} GiB$").matches(mixed))
+        val full = DeviceIdentity.formatCapacityPair(
+            freeBytes = 3uL * 1024uL * 1024uL * 1024uL,
+            totalBytes = 3uL * 1024uL * 1024uL * 1024uL,
+        )
+        assertTrue(Regex("^\\d+[.,]\\d{2} / \\d+[.,]\\d{2} GiB$").matches(full))
+    }
 }

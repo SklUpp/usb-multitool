@@ -15,6 +15,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -44,6 +45,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -278,7 +280,7 @@ fun AppShell(
         var restoreLogFocus by remember { mutableStateOf(false) }
         val haptic = LocalHapticFeedback.current
         val reducedMotion = reducedMotionEnabled(baseContext)
-        var completedHapticToken by rememberSaveable { mutableStateOf<Long?>(null) }
+        var terminalHapticToken by rememberSaveable { mutableStateOf<Long?>(null) }
         var previousPresence by remember { mutableStateOf(state.presence) }
         LaunchedEffect(state.presence) {
             val previous = previousPresence
@@ -292,12 +294,23 @@ fun AppShell(
             previousPresence = state.presence
         }
         LaunchedEffect(state.operation?.token, state.operation?.state) {
-            val token = state.operation?.token?.value
-            if (state.operation?.state == OperationState.Completed && token != null &&
-                token != completedHapticToken
-            ) {
+            val operation = state.operation ?: return@LaunchedEffect
+            val token = operation.token.value
+            val terminal = when (operation.state) {
+                OperationState.Completed,
+                OperationState.Failed,
+                OperationState.Partial,
+                OperationState.Cancelled,
+                -> true
+                OperationState.Queued,
+                OperationState.Running,
+                -> false
+            }
+            // Exactly one haptic per terminal result; Queued/Running never buzz, and the
+            // token guard keeps ticks within the same state from repeating it.
+            if (terminal && token != terminalHapticToken) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                completedHapticToken = token
+                terminalHapticToken = token
             }
         }
         LaunchedEffect(panels.journalScreenOpen, pickOpen) {
@@ -649,7 +662,7 @@ fun AppShell(
                 shape = RoundedCornerShape(28.dp),
                 title = {
                     Text(
-                        text = stringResource(R.string.confirm_title),
+                        text = confirmationTitle(confirmation),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Normal,
                     )
@@ -673,8 +686,14 @@ fun AppShell(
                         ) {
                             confirmationLines(confirmation).forEach { line ->
                                 Text(
-                                    text = line,
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    text = line.text,
+                                    style = if (line.monospace) {
+                                        MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                        )
+                                    } else {
+                                        MaterialTheme.typography.bodyMedium
+                                    },
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -682,12 +701,14 @@ fun AppShell(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                 .toggleable(
                                     value = acknowledged,
                                     role = Role.Checkbox,
                                     onValueChange = { acknowledged = it },
                                 )
-                                .padding(vertical = 4.dp),
+                                .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
@@ -708,17 +729,27 @@ fun AppShell(
                 },
                 confirmButton = {
                     val confirmEnabled = acknowledged && wipeDelayReady
+                    val risk = isDataLosingConfirmation(confirmation)
+                    val confirmColors = when {
+                        !confirmEnabled -> ButtonDefaults.textButtonColors(
+                            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                        )
+                        // Data loss reads as an error surface; GPT repair stays primary.
+                        risk -> ButtonDefaults.textButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        else -> ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     TextButton(
                         onClick = { onIntent(UiIntent.ConfirmDestructive) },
                         enabled = confirmEnabled,
+                        colors = confirmColors,
                     ) {
                         Text(
                             text = stringResource(R.string.action_confirm),
-                            color = if (confirmEnabled) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                            },
                             fontWeight = FontWeight.Bold,
                         )
                     }
@@ -1838,7 +1869,14 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.semantics { heading() },
                 )
-                Text(text = infoText)
+                // Body is authored as blocks (blank-line separated, **term** bold); the
+                // same renderer serves every help sheet, so plain prose is one block.
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val blocks = remember(infoText) { helpBlocks(infoText) }
+                    blocks.forEach { block ->
+                        Text(text = block)
+                    }
+                }
                 TextButton(
                     onClick = { showInfo = false },
                     modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp),
@@ -1920,6 +1958,8 @@ internal enum class Glyph {
     Package,
     /** Release reported by the upstream server. */
     Cloud,
+    /** Filled triangle: run the action now. */
+    Play,
 }
 
 @Composable
@@ -2236,6 +2276,13 @@ internal fun GlyphIcon(
                         cubicTo(17f, 6f, 9f, 6f, 8f, 11f)
                         cubicTo(4f, 11f, 3f, 18f, 7f, 18f)
                         close()
+                    },
+                    tint,
+                    style = stroke,
+                )
+                Glyph.Play -> drawPath(
+                    Path().apply {
+                        moveTo(8f, 5f); lineTo(19f, 12f); lineTo(8f, 19f); close()
                     },
                     tint,
                     style = stroke,

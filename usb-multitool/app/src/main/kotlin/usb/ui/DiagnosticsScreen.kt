@@ -3,6 +3,7 @@ package usb.ui
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -112,10 +114,12 @@ fun DiagnosticsScreen(
         SectionCard(
             title = stringResource(R.string.diagnostics_backups_title),
             trailing = {
-                // The full restore policy is one tap away; the blocks stay compact.
+                // One help per card: the image and GPT restore policies share this sheet,
+                // so the block-level rows keep no icons of their own.
                 InfoHelpButton(
                     infoTitle = stringResource(R.string.diagnostics_rescue_title),
-                    infoText = stringResource(R.string.diagnostics_rescue_note),
+                    infoText = stringResource(R.string.diagnostics_rescue_note) +
+                        "\n\n" + stringResource(R.string.diagnostics_gpt_restore_info_text),
                 )
             },
         ) {
@@ -145,28 +149,36 @@ fun DiagnosticsScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                OutlinedButton(
-                    onClick = onPickBackupFolder,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        stringResource(
-                            if (state.backupFolderUri == null) {
-                                R.string.diagnostics_pick_folder
-                            } else {
-                                R.string.diagnostics_change_folder
-                            },
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                val pickFolderLabel = stringResource(
+                    if (state.backupFolderUri == null) {
+                        R.string.diagnostics_pick_folder
+                    } else {
+                        R.string.diagnostics_change_folder
+                    },
+                )
+                val folderContentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                // Nothing chosen yet is the primary next step; changing an existing folder
+                // stays a secondary, outlined action.
+                if (state.backupFolderUri == null) {
+                    FilledTonalButton(
+                        onClick = onPickBackupFolder,
+                        contentPadding = folderContentPadding,
+                    ) {
+                        Text(pickFolderLabel, style = MaterialTheme.typography.labelMedium)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onPickBackupFolder,
+                        contentPadding = folderContentPadding,
+                    ) {
+                        Text(pickFolderLabel, style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
 
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_rescue_backup),
                 hint = stringResource(R.string.diagnostics_rescue_backup_hint),
-                infoTitle = stringResource(R.string.diagnostics_rescue_title),
-                infoText = stringResource(R.string.diagnostics_rescue_note),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -183,7 +195,7 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_create_image),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -197,7 +209,7 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_restore_image),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -242,8 +254,6 @@ fun DiagnosticsScreen(
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_gpt_copy),
                 hint = stringResource(R.string.diagnostics_gpt_copy_hint),
-                infoTitle = stringResource(R.string.diagnostics_gpt_restore_info_title),
-                infoText = stringResource(R.string.diagnostics_gpt_restore_info_text),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -260,7 +270,7 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_create_gpt_copy),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -274,7 +284,7 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_restore_gpt),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -378,13 +388,11 @@ fun DiagnosticsScreen(
     }
 }
 
-/** Sub-block heading with its policy help next to it, not as body text. */
+/** Sub-block heading; policy help lives on the card, not on every row. */
 @Composable
 private fun SubsectionHeader(
     title: String,
     hint: String? = null,
-    infoTitle: String,
-    infoText: String,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -404,7 +412,6 @@ private fun SubsectionHeader(
                 )
             }
         }
-        InfoHelpButton(infoTitle = infoTitle, infoText = infoText)
     }
 }
 
@@ -445,40 +452,52 @@ private fun DiagTile(
                 onClick = onClick,
             ),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp)
-                .alpha(contentAlpha),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp)
+                    .alpha(contentAlpha),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                GlyphIcon(
+                    glyph = glyph,
+                    size = 24.dp,
+                    tint = if (highlighted) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = content,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (highlighted) {
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // Decorative "start now" hint; the whole tile stays the only click target.
             GlyphIcon(
-                glyph = glyph,
-                size = 24.dp,
-                tint = if (highlighted) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = content,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (highlighted) {
-                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                glyph = Glyph.Play,
+                size = 20.dp,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .alpha(contentAlpha),
             )
         }
     }

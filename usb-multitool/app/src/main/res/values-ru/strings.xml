@@ -78,7 +78,7 @@
     <string name="partitions_strip_scale_note">Относительно LBA диска: для каждого раздела и свободной области сохраняется минимум 48 dp; при нехватке места полоса прокручивается по горизонтали. Точные LBA и размер — в списке.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Информация о разделе</string>
-    <string name="partitions_info_help_text">Имя — это имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна. RO означает гарантированную защиту EFI от записи; состояние записи показывается только когда измерено, иначе явно остаётся неизвестным. Свободное место измеряется внутри файловой системы, а не в свободной области таблицы.</string>
+    <string name="partitions_info_help_text">**Имя** — имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна.\n\n**RO** означает гарантированную защиту EFI от записи.\n\n**Состояние записи** показывается только когда измерено, иначе явно остаётся неизвестным.\n\n**Свободное место** измеряется внутри файловой системы, а не в свободной области таблицы.</string>
     <string name="partitions_info_name_label">Имя</string>
     <string name="partitions_write_state_label">Состояние записи</string>
     <string name="partitions_write_ro">Защита EFI от записи активна</string>
@@ -92,6 +92,9 @@
     <string name="partitions_write_driver_ro_label">RO · драйвер</string>
     <string name="partitions_write_driver_rw_label">RW · драйвер</string>
     <string name="partitions_write_unknown">Состояние записи не проверено</string>
+    <string name="partitions_write_state_unknown">Неизвестно</string>
+    <string name="partitions_write_state_read_only">Только чтение</string>
+    <string name="partitions_write_state_read_write">Чтение и запись</string>
     <string name="efi_write_policy_allowed">Запись разрешена</string>
     <string name="efi_write_policy_protected">Защищён от записи</string>
     <string name="partitions_efi_blocked">Раздел %1$s защищён от записи. Разрешите запись EFI в разделе «Разделы устройства».</string>
@@ -165,8 +168,8 @@
     <string name="diagnostics_backup_folder_none">Не выбрана</string>
     <string name="diagnostics_pick_folder">Выбрать папку…</string>
     <string name="diagnostics_change_folder">Изменить…</string>
-    <string name="diagnostics_create_image">Создать образ</string>
-    <string name="diagnostics_create_gpt_copy">Создать копию GPT</string>
+    <string name="diagnostics_create_image">Создать</string>
+    <string name="diagnostics_create_gpt_copy">Сохранить</string>
     <string name="diagnostics_backup_file_named">Файл: %1$s</string>
     <string name="diagnostics_gpt_restore_title">Восстановить GPT из файла</string>
     <string name="diagnostics_gpt_restore_subtitle">Записывает сохранённую пару основная+резервная GPT на этот носитель.</string>
@@ -203,7 +206,13 @@
     <string name="op_cancelled">отменено</string>
     <string name="op_failed">ошибка</string>
     <string name="op_partial">частично</string>
-    <string name="confirm_base">Подтвердите %1$s для %2$s (%3$s).</string>
+    <string name="confirm_base">Подтвердите %1$s для %2$s.</string>
+    <string name="confirm_device_serial">Серийный номер: %1$s</string>
+    <string name="confirm_title_gpt_repair">Исправить резервную GPT?</string>
+    <string name="confirm_title_format">Форматировать раздел?</string>
+    <string name="confirm_title_wipe">Стереть устройство?</string>
+    <string name="confirm_title_partition_role">Изменить тип раздела?</string>
+    <string name="confirm_title_gpt_restore">Восстановить резервную GPT?</string>
     <string name="confirm_irreversible">Отменить это действие нельзя.</string>
     <string name="confirm_repair_keeps">Ни один раздел не стирается: переносится только резервная GPT и пересчитываются её контрольные суммы.</string>
     <string name="confirm_repair_kept_partition">Раздел сохраняется: %1$s</string>
@@ -362,7 +371,7 @@
     <string name="ventoy_download_unpinned_warning_title">Скачать без независимой доверенной SHA?</string>
     <string name="ventoy_download_unpinned_warning_body">Для upstream %1$s нет независимой доверенной SHA. Структурная проверка неполная. Непривязанный hash вычисляется из тех же загруженных файлов и не является независимым якорем доверия; повреждённый или подменённый релиз может сделать флешку незагрузочной. При штатном обновлении обычный раздел данных сохраняется, но операция не атомарна; чистая установка стирает данные. Загружайте только если принимаете риск; запись начнётся только после отдельного подтверждения установки/обновления.</string>
     <string name="ventoy_update_from_to">Обновить · %1$s → %2$s</string>
-    <string name="ventoy_update_current">Обновить · %1$s (актуально)</string>
+    <string name="ventoy_reinstall">Переустановить</string>
     <string name="ventoy_update_to">Обновить · %1$s</string>
     <string name="ventoy_download">Загрузить проверенный релиз</string>
     <string name="ventoy_download_warning_title">Скачать новый релиз Ventoy?</string>
@@ -379,7 +388,7 @@
     <string name="ventoy_promotion_unconfirmed">%1$s не сохранён; восстановленный %2$s читается, но каталог не подтверждён как устойчивый.</string>
     <string name="ventoy_update">Обновить</string>
     <string name="diagnostics_self_test">Самотест</string>
-    <string name="diagnostics_self_test_hint">SCSI, GPT, файловые системы</string>
+    <string name="diagnostics_self_test_hint">SCSI, GPT, ФС</string>
     <string name="diagnostics_read_scan">Скан чтения</string>
     <string name="diagnostics_read_scan_hint">Битые сектора</string>
     <string name="diagnostics_rescue_backup">Образ + карта</string>
@@ -393,7 +402,6 @@
     <string name="diagnostics_pick_image">Выбрать образ…</string>
     <string name="diagnostics_map_named">Карта: %1$s</string>
     <string name="diagnostics_pick_map">Выбрать карту…</string>
-    <string name="diagnostics_gpt_restore_info_title">Восстановить GPT из файла</string>
     <string name="diagnostics_gpt_restore_info_text">«Восстановить GPT из файла» записывает сохранённый blob критических секторов основной+резервной GPT на этот носитель после проверки. Это не то же самое, что «Исправить резервную GPT» на вкладке «Разделы», которое только переносит живые резервные структуры в конец текущего диска. Имя файла само по себе не доказывает совпадение blob с этим диском.</string>
     <string name="diagnostics_inspection_unavailable">Данные недоступны — файл будет проверен ещё раз при восстановлении.</string>
     <string name="diagnostics_inspection_failed">Выбранный файл отклонён: %1$s</string>
@@ -415,9 +423,9 @@
     <string name="diagnostics_gpt_geometry">Снятый диск: %1$s секторов; используемые LBA %2$s–%3$s</string>
     <string name="diagnostics_gpt_partitions">Разделов в копии: %1$s</string>
     <string name="diagnostics_gpt_valid">Заголовки, CRC таблиц и границы разделов проверены.</string>
-    <string name="diagnostics_restore_image">Восстановить образ</string>
+    <string name="diagnostics_restore_image">Восстановить</string>
     <string name="diagnostics_no_gpt_file">Файл GPT не выбран</string>
-    <string name="diagnostics_restore_gpt">Восстановить GPT из файла</string>
+    <string name="diagnostics_restore_gpt">Восстановить</string>
     <string name="diagnostics_danger_title">Опасная зона: стирание устройства</string>
     <string name="diagnostics_danger_body">Стирание затирает все сектора нулями без возможности отмены.</string>
     <string name="diagnostics_wipe">Стереть устройство (нули)</string>
@@ -780,7 +788,7 @@
     <string name="unattend_bindings_title">Привязка образов</string>
     <string name="unattend_bound">Привязан</string>
     <string name="unattend_bound_images">Образов уже привязано</string>
-    <string name="unattend_choose_template">Выбрать файл ответов (.xml)…</string>
+    <string name="unattend_choose_template">Выбрать XML…</string>
     <string name="unattend_clear_selection">Сбросить выбор</string>
     <string name="unattend_clear_template">Сбросить шаблон</string>
     <string name="unattend_destructive_note">Этот файл содержит разрушительные разделы:</string>

@@ -269,7 +269,11 @@ internal fun AutounattendSection(
                             .weight(1f)
                             .fillMaxHeight(),
                     ) {
-                        Text(stringResource(R.string.unattend_choose_template))
+                        Text(
+                            stringResource(R.string.unattend_choose_template),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     Button(
                         onClick = { generateOpen = true },
@@ -369,7 +373,11 @@ internal fun AutounattendSection(
                             .weight(1f)
                             .fillMaxHeight(),
                     ) {
-                        Text(stringResource(R.string.unattend_choose_template))
+                        Text(
+                            stringResource(R.string.unattend_choose_template),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     Button(
                         onClick = { generateOpen = true },

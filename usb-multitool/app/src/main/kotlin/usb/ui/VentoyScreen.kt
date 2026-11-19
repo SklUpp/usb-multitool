@@ -541,7 +541,7 @@ private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
         comparison.installed != null &&
             comparison.target != null &&
             comparison.same ->
-            stringResource(R.string.ventoy_update_current, comparison.target)
+            stringResource(R.string.ventoy_reinstall)
         comparison.installed != null && comparison.target != null ->
             stringResource(
                 R.string.ventoy_update_from_to,

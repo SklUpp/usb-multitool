@@ -1419,6 +1419,8 @@ private fun PartitionChoiceRow(
     var expanded by remember { mutableStateOf(false) }
     val selected = partitions.firstOrNull { it.id == selectedId }
     val label = stringResource(R.string.files_current_partition)
+    // Exactly one partition leaves nothing to choose: no chevron, no menu, no tap.
+    val selectable = partitions.size > 1
     Box(modifier = Modifier.fillMaxWidth()) {
         Surface(
             shape = RoundedCornerShape(12.dp),
@@ -1430,7 +1432,7 @@ private fun PartitionChoiceRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(
-                        enabled = enabled,
+                        enabled = enabled && selectable,
                         onClickLabel = label,
                         role = Role.Button,
                     ) { expanded = true }
@@ -1468,11 +1470,13 @@ private fun PartitionChoiceRow(
                     )
                 }
                 WriteAccessBadge(writeAccess)
-                GlyphIcon(
-                    glyph = Glyph.ChevronDown,
-                    size = 20.dp,
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
+                if (selectable) {
+                    GlyphIcon(
+                        glyph = Glyph.ChevronDown,
+                        size = 20.dp,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
         }
         DropdownMenu(
@@ -1507,9 +1511,9 @@ private fun PartitionChoiceRow(
 }
 
 /**
- * Factual write badge matching Partitions semantics: neutral container shared by every
- * known state, error tone only for guaranteed EFI policy. Driver-mounted states use
- * measured mount facts; unknown renders no badge at all — never a red RO.
+ * Factual write badge matching Partitions semantics: one neutral tertiary container for
+ * every known state. Red stays reserved for errors and the danger zone; unknown renders
+ * no badge at all — never a red RO.
  */
 @Composable
 private fun WriteAccessBadge(access: PartitionWriteAccess) {

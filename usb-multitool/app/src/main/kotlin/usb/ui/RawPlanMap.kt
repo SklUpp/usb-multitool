@@ -27,7 +27,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -35,7 +34,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.foundation.clickable
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -296,7 +294,7 @@ private fun RawUnifiedMap(
         }
         val mapScroll = rememberScrollState()
         Box(Modifier.fillMaxWidth().horizontalScroll(mapScroll)) {
-            Box(Modifier.width(contentWidth).height(104.dp)) {
+            Box(Modifier.width(contentWidth).height(56.dp)) {
                 Canvas(
                     Modifier.fillMaxWidth().height(56.dp).semantics {
                         contentDescription = spoken
@@ -336,31 +334,6 @@ private fun RawUnifiedMap(
                     geometry.snapPoints.forEach { point ->
                         val x = xForLba(point)
                         drawLine(snapTickColor, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
-                    }
-                }
-                Row(
-                    Modifier.fillMaxWidth().height(48.dp).align(Alignment.BottomStart),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    segments.forEachIndexed { index, segment ->
-                        val partitionText = stringResource(R.string.raw_map_legend_partition)
-                        val bootText = stringResource(R.string.raw_map_legend_boot)
-                        val tableText = stringResource(R.string.raw_map_legend_table)
-                        val freeText = stringResource(R.string.partitions_strip_free)
-                        val label = segment.rawObjects.joinToString(" / ") { objectInSegment ->
-                            objectInSegment.name ?: when (objectInSegment.kind) {
-                                RawObjectKind.Partition -> partitionText
-                                RawObjectKind.BootArea -> bootText
-                                RawObjectKind.TableArea -> tableText
-                            }
-                        }.ifEmpty { freeText }
-                        Box(
-                            Modifier.width(with(density) { widthsPx[index].toDp() }).height(48.dp)
-                                .clickable { onStartChange(segment.startLba) }
-                                .semantics {
-                                    contentDescription = "$label, LBA ${segment.startLba}, ${segment.sectorCount} sectors"
-                                },
-                        ) { Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 2) }
                     }
                 }
             }
