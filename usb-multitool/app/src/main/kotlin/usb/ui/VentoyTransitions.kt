@@ -272,12 +272,17 @@ internal object VentoyTransitions {
         partitionStartLba: ULong? = null,
         partitionSectorCount: ULong? = null,
     ): ReduceResult {
+        // A phone document is read from SAF, not from the stick, so a partition table that is
+        // not probed yet (a re-probe right after the picker returns) must not discard the
+        // picked file. The write path resolves the data partition when it actually runs.
         val dataPartition = state.ventoyDataPartition()
-            ?: return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.VentoyDataPartitionMissing)))
+        if (dataPartition == null && source !is VentoySettingsSource.Document) {
+            return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.VentoyDataPartitionMissing)))
+        }
         val token = state.ventoyGlobalSettingsRequest + 1L
-        val pinnedPartitionId = partitionId ?: dataPartition.id
-        val pinnedStart = partitionStartLba ?: dataPartition.startLba
-        val pinnedCount = partitionSectorCount ?: dataPartition.sectorCount
+        val pinnedPartitionId = partitionId ?: dataPartition?.id
+        val pinnedStart = partitionStartLba ?: dataPartition?.startLba
+        val pinnedCount = partitionSectorCount ?: dataPartition?.sectorCount
         return ReduceResult(
             state.copy(
                 ventoyGlobalSettingsRequest = token,

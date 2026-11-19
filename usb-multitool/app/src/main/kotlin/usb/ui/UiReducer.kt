@@ -1927,6 +1927,14 @@ object UiReducer {
                                     targetPart,
                                     formatId = formatId,
                                     target = state.selectedPartition(),
+                                    diskSectorSize =
+                                        if (intent.action == DestructiveAction.DELETE_PARTITION &&
+                                            state.diskSectorSize > 0
+                                        ) {
+                                            state.diskSectorSize
+                                        } else {
+                                            null
+                                        },
                                     gptBackupUri =
                                         if (intent.action == DestructiveAction.GPT_RESTORE) {
                                             state.backupUri

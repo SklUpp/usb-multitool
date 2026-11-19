@@ -5,10 +5,10 @@
 
 | Документ | Блок | Файлы кода |
 |---|---|---|
-| [ventoy.md](ventoy.md) | Ventoy: «Обновить», кнопка-иконка, SAF настроек | `usb/ui/VentoyScreen.kt`, `usb/ui/AutounattendSection.kt`, SAF-ветка в `usb/multitool/MainActivity.kt`, Ventoy-ключи строк |
-| [files.md](files.md) | Файлы: иконки, строка пути, RO/RW, меню, отступ снизу | `usb/ui/FilesScreen.kt`, новые строки в отдельном файле ресурсов |
-| [shell-status.md](shell-status.md) | Постоянная строка статуса, центральные детали, формат логов | `usb/ui/AppShell.kt`, `usb/ui/UiMessages.kt`, отдельный файл строк |
-| [partitions.md](partitions.md) | Разделы: счётчик, «Используется», формат строки, RO-политика | `usb/ui/PartitionsScreen.kt`, отдельный файл строк |
+| [ventoy.md](2026-11-19-wave3-ventoy.md) | Ventoy: «Обновить», кнопка-иконка, SAF настроек | `usb/ui/VentoyScreen.kt`, `usb/ui/AutounattendSection.kt`, SAF-ветка в `usb/multitool/MainActivity.kt`, Ventoy-ключи строк |
+| [files.md](2026-11-19-wave3-files.md) | Файлы: иконки, строка пути, RO/RW, меню, отступ снизу | `usb/ui/FilesScreen.kt`, новые строки в отдельном файле ресурсов |
+| [shell-status.md](2026-11-19-wave3-shell-status.md) | Постоянная строка статуса, центральные детали, формат логов | `usb/ui/AppShell.kt`, `usb/ui/UiMessages.kt`, отдельный файл строк |
+| [partitions.md](2026-11-19-wave3-partitions.md) | Разделы: счётчик, «Используется», формат строки, RO-политика | `usb/ui/PartitionsScreen.kt`, отдельный файл строк |
 
 Общие правила: агент не правит чужие файлы, не запускает Gradle (сборка одна,
 после всех лейнов), проверяет `git diff --check`. Строки каждого блока — в

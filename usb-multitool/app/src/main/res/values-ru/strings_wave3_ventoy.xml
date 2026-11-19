@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="confirm_ventoy_install_erases">Установка стирает все разделы и файлы на этой флешке и форматирует раздел данных.</string>
+    <string name="confirm_ventoy_update_preserves">Раздел данных и все ISO-файлы на нём сохраняются. Загрузочные файлы перезаписываются на месте, операция не атомарна: при сбое посередине флешка может перестать загружаться, пока обновление не будет выполнено повторно.</string>
+    <string name="settings_import_apply">Записать этот файл на флешку</string>
+    <string name="settings_import_copy_to_default">Скопировать в /ventoy/ventoy.json</string>
+</resources>

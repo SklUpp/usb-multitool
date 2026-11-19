@@ -290,6 +290,40 @@ fun DestructiveAction.label(): String =
     }
 
 /**
+ * Nominative noun phrase for the permanent status line and details dialog.
+ * Confirmation dialogs keep [label] (accusative / gerund wording).
+ */
+@Composable
+fun DestructiveAction.statusTitle(): String =
+    when (this) {
+        DestructiveAction.WIPE -> stringResource(R.string.status_title_wipe)
+        DestructiveAction.VENTOY_INSTALL -> stringResource(R.string.status_title_ventoy_install)
+        DestructiveAction.VENTOY_UPDATE -> stringResource(R.string.status_title_ventoy_update)
+        DestructiveAction.RAW_WRITE -> stringResource(R.string.status_title_raw_write)
+        DestructiveAction.FORMAT_PARTITION -> stringResource(R.string.status_title_format_partition)
+        DestructiveAction.DELETE_PARTITION -> stringResource(R.string.status_title_delete_partition)
+        DestructiveAction.CREATE_PARTITION -> stringResource(R.string.status_title_create_partition)
+        DestructiveAction.GPT_REPAIR -> stringResource(R.string.status_title_gpt_repair)
+        DestructiveAction.GPT_RESTORE -> stringResource(R.string.status_title_gpt_restore)
+        DestructiveAction.RESCUE_RESTORE -> stringResource(R.string.status_title_rescue_restore)
+        DestructiveAction.VENTOY_LINK_XML -> stringResource(R.string.status_title_ventoy_link_xml)
+        DestructiveAction.SET_PARTITION_ROLE ->
+            stringResource(R.string.status_title_set_partition_role)
+        DestructiveAction.SET_PARTITION_BOOTABLE ->
+            stringResource(R.string.status_title_set_partition_bootable)
+        DestructiveAction.RENAME_PARTITION -> stringResource(R.string.status_title_rename_partition)
+        DestructiveAction.RENAME_VOLUME_LABEL ->
+            stringResource(R.string.status_title_rename_volume_label)
+        DestructiveAction.INITIALIZE_PARTITION_TABLE ->
+            stringResource(R.string.status_title_initialize_table)
+        DestructiveAction.VENTOY_UNATTEND_XML_WRITE ->
+            stringResource(R.string.status_title_ventoy_unattend_write)
+        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT ->
+            stringResource(R.string.status_title_ventoy_unattend_layout)
+    }
+
+
+/**
  * Localized title for a user-facing operation. Technical log lines keep
  * [OperationProgress.label] / [OperationTitle.logLabel] unchanged.
  */
@@ -299,7 +333,7 @@ fun operationLabel(progress: OperationProgress): String = progress.title.localiz
 @Composable
 fun OperationTitle.localized(): String =
     when (this) {
-        is OperationTitle.Destructive -> action.label()
+        is OperationTitle.Destructive -> action.statusTitle()
         OperationTitle.ProbeDevice -> stringResource(R.string.op_probe)
         OperationTitle.ReadScan -> stringResource(R.string.op_read_scan)
         OperationTitle.RescueBackup -> stringResource(R.string.op_rescue_backup)
@@ -433,19 +467,31 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<ConfirmationL
             confirmation.identity.displayName,
         ),
     )
-    // Backup-GPT repair preserves every partition; saying "cannot be undone" would be false.
-    if (confirmation.action != DestructiveAction.GPT_REPAIR) {
+    // Backup-GPT repair preserves every partition and a Ventoy update keeps the data
+    // partition: saying "cannot be undone" for either would misstate what is at risk.
+    if (confirmation.action != DestructiveAction.GPT_REPAIR &&
+        confirmation.action != DestructiveAction.VENTOY_UPDATE
+    ) {
         lines += stringResource(R.string.confirm_irreversible)
         if (confirmation.action == DestructiveAction.FORMAT_PARTITION) {
             lines += stringResource(R.string.confirm_format_not_cancelable)
         }
-    } else {
+    } else if (confirmation.action == DestructiveAction.GPT_REPAIR) {
         lines += stringResource(R.string.confirm_repair_keeps)
         if (confirmation.initialPartitionNames.size == confirmation.initialPartitions.size) {
             confirmation.initialPartitionNames.forEach { name ->
                 lines += stringResource(R.string.confirm_repair_kept_partition, name)
             }
         }
+    }
+    // One dialog serves both Ventoy actions, so each states its own data effect: only
+    // install erases data, and update promises preservation without claiming atomicity.
+    when (confirmation.action) {
+        DestructiveAction.VENTOY_INSTALL ->
+            lines += stringResource(R.string.confirm_ventoy_install_erases)
+        DestructiveAction.VENTOY_UPDATE ->
+            lines += stringResource(R.string.confirm_ventoy_update_preserves)
+        else -> Unit
     }
     confirmation.ventoyRelease?.let { release ->
         lines += stringResource(R.string.confirm_ventoy_release, release.release)
@@ -464,8 +510,17 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<ConfirmationL
             }
         }
     }
-    confirmation.targetPartitionName?.let {
-        lines += stringResource(R.string.confirm_target_partition, it)
+    confirmation.targetPartitionName?.let { name ->
+        if (confirmation.action == DestructiveAction.DELETE_PARTITION) {
+            val sizeLabel = deletePartitionSizeLabel(confirmation)
+            lines += if (sizeLabel != null) {
+                stringResource(R.string.confirm_target_partition_with_size, name, sizeLabel)
+            } else {
+                stringResource(R.string.confirm_target_partition, name)
+            }
+        } else {
+            lines += stringResource(R.string.confirm_target_partition, name)
+        }
     }
     val createCount = confirmation.createSectorCount
     confirmation.createStartLba?.let { start ->
@@ -616,6 +671,14 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<ConfirmationL
         serial?.let { add(ConfirmationLine(stringResource(R.string.confirm_device_serial, it), monospace = true)) }
         lines.drop(1).forEach { add(ConfirmationLine(it)) }
     }
+}
+
+/** Same capacity string the partitions delete button uses (sectors × pinned disk sector size). */
+private fun deletePartitionSizeLabel(confirmation: DestructiveConfirmation): String? {
+    val sectors = confirmation.partitionSectorCount ?: return null
+    val sectorSize = confirmation.diskSectorSize ?: return null
+    if (sectorSize <= 0 || sectors > ULong.MAX_VALUE / sectorSize.toULong()) return null
+    return DeviceIdentity.formatCapacity(sectors * sectorSize.toULong())
 }
 
 private const val INSPECTION_RANGE_PREVIEW = 3

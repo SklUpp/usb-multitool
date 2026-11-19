@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        VENTOY_INSTALL and VENTOY_UPDATE share one confirmation dialog, so each action
+        states its own data effect: only install erases data, and update must promise
+        preservation without pretending the boot-file rewrite is atomic.
+    -->
+    <string name="confirm_ventoy_install_erases">Install erases every partition and file on this stick and formats the data partition.</string>
+    <string name="confirm_ventoy_update_preserves">The data partition and every ISO file on it are preserved. Boot files are rewritten in place and the update is not atomic: if it fails midway, the stick can be left unable to boot until the update is run again.</string>
+    <!-- An imported file (picked on the phone or elsewhere on the stick) is not on the
+         stick's standard path yet, so the write action is offered without staged edits. -->
+    <string name="settings_import_apply">Write this file to the stick</string>
+    <!-- The same action for a file that is already on the stick: it is only copied to the
+         standard path, not carried over from outside. -->
+    <string name="settings_import_copy_to_default">Copy to /ventoy/ventoy.json</string>
+</resources>

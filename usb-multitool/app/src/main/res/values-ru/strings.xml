@@ -14,7 +14,7 @@
     <string name="log_collapse">Свернуть журнал</string>
     <string name="log_screen_title">Журнал</string>
     <string name="log_back">Назад к вкладкам</string>
-    <string name="log_empty">Записей пока нет. Подробности операций появятся здесь по ходу работы.</string>
+    <string name="log_empty">Записей пока нет.</string>
     <string name="log_copy_all">Копировать всё</string>
     <string name="log_copy_warning">В журнале могут быть пути к файлам и серийные номера USB. При копировании всё это попадёт в буфер обмена, откуда его сможет прочитать следующее приложение. Копируйте, только если допускаете такое раскрытие.</string>
     <string name="log_copy_confirm">Копировать</string>
@@ -32,7 +32,7 @@
     <string name="efi_partition_label">Раздел</string>
     <string name="efi_allow_writes">Разрешить запись в EFI</string>
     <string name="efi_allow_hint">Только на это подключение; сбросится при смене или переподключении</string>
-    <string name="efi_policy_info_title">Политика записи EFI</string>
+    <string name="efi_policy_info_title">Защита EFI от записи</string>
     <string name="efi_policy_info_text">Это защита записи, а не режим монтирования: способ монтирования разделов не меняется. Разрешение действует только для указанного EFI-раздела и текущего подключения. Оно снимается при смене, переподключении или отключении накопителя, а все остальные EFI-разделы остаются защищёнными.</string>
     <string name="efi_confirm_title">Разрешить запись в EFI?</string>
     <string name="efi_confirm_body">Защита записи приложения будет снята для %1$s на диске %2$s, LBA %3$s, секторов: %4$s. Переподключение или изменение геометрии сбросит разрешение. Включайте только при намеренном изменении EFI.</string>
@@ -72,25 +72,17 @@
     <string name="partitions_region_label">Регион</string>
     <string name="partitions_create_action">Создать раздел…</string>
     <string name="partitions_capacity_unknown">Ёмкость неизвестна</string>
-    <string name="partitions_disk_usage">Занято %1$s из %2$s (%3$.1f%%)</string>
-    <string name="partitions_disk_sectors">Занято %1$d из %2$d секторов</string>
+    <string name="partitions_disk_usage">Используется %1$s из %2$s (%3$.1f%%)</string>
+    <string name="partitions_disk_sectors">Используется %1$d из %2$d секторов</string>
     <string name="partitions_strip_item_a11y">Раздел %1$d: %2$s, %3$s</string>
     <string name="partitions_strip_scale_note">Относительно LBA диска: для каждого раздела и свободной области сохраняется минимум 48 dp; при нехватке места полоса прокручивается по горизонтали. Точные LBA и размер — в списке.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Информация о разделе</string>
-    <string name="partitions_info_help_text">**Имя** — имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна.\n\n**RO** означает гарантированную защиту EFI от записи.\n\n**Состояние записи** показывается только когда измерено, иначе явно остаётся неизвестным.\n\n**Свободное место** измеряется внутри файловой системы, а не в свободной области таблицы.</string>
+    <string name="partitions_info_help_text">**Имя** — имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна.\n\n**RO** означает, что носитель защищён от записи или файловая система смонтирована только для чтения; **RW** означает измеренный доступ на запись.\n\n**Состояние записи** показывается только когда измерено, иначе явно остаётся неизвестным.\n\n**Свободное место** измеряется внутри файловой системы, а не в свободной области таблицы.</string>
     <string name="partitions_info_name_label">Имя</string>
     <string name="partitions_write_state_label">Состояние записи</string>
-    <string name="partitions_write_ro">Защита EFI от записи активна</string>
-    <string name="partitions_write_policy_ro">Запись запрещена политикой приложения</string>
-    <string name="partitions_write_driver_ro">Файловый драйвер смонтирован только для чтения; состояние носителя неизвестно</string>
-    <string name="partitions_write_driver_rw">Файловый драйвер смонтирован для чтения и записи; состояние носителя неизвестно</string>
     <string name="files_write_short_ro">RO</string>
     <string name="files_write_short_rw">RW</string>
-    <string name="partitions_write_policy_label">RO · политика</string>
-    <string name="partitions_write_driver_ro_label">RO · драйвер</string>
-    <string name="partitions_write_driver_rw_label">RW · драйвер</string>
-    <string name="partitions_write_unknown">Состояние записи не проверено</string>
     <string name="partitions_write_state_unknown">Неизвестно</string>
     <string name="partitions_write_state_read_only">Только чтение</string>
     <string name="partitions_write_state_read_write">Чтение и запись</string>
@@ -253,7 +245,6 @@
     <string name="files_clear_selection">Снять</string>
     <string name="files_copy_from_phone">Копировать с телефона</string>
     <string name="files_save_to_phone">Сохранить на телефон</string>
-    <string name="files_write_ro">Защита EFI от записи активна</string>
     <string name="files_write_policy_ro">Запись запрещена политикой приложения</string>
     <string name="files_write_driver_ro">Файловый драйвер смонтирован только для чтения; состояние носителя неизвестно</string>
     <string name="files_write_driver_rw">Файловый драйвер смонтирован для чтения и записи; состояние носителя неизвестно</string>
@@ -372,7 +363,6 @@
     <string name="ventoy_download_unpinned_warning_title">Скачать без независимой доверенной SHA?</string>
     <string name="ventoy_download_unpinned_warning_body">Для upstream %1$s нет независимой доверенной SHA. Структурная проверка неполная. Непривязанный hash вычисляется из тех же загруженных файлов и не является независимым якорем доверия; повреждённый или подменённый релиз может сделать флешку незагрузочной. При штатном обновлении обычный раздел данных сохраняется, но операция не атомарна; чистая установка стирает данные. Загружайте только если принимаете риск; запись начнётся только после отдельного подтверждения установки/обновления.</string>
     <string name="ventoy_update_from_to">Обновить · %1$s → %2$s</string>
-    <string name="ventoy_reinstall">Переустановить</string>
     <string name="ventoy_update_to">Обновить · %1$s</string>
     <string name="ventoy_download">Загрузить проверенный релиз</string>
     <string name="ventoy_download_warning_title">Скачать новый релиз Ventoy?</string>
@@ -540,18 +530,6 @@
     <string name="msg_partial">Выполнено частично.</string>
     <string name="msg_running">Выполняется.</string>
     <string name="msg_queued">В очереди.</string>
-    <plurals name="partitions_count">
-        <item quantity="one">%d раздел</item>
-        <item quantity="few">%d раздела</item>
-        <item quantity="many">%d разделов</item>
-        <item quantity="other">%d разделов</item>
-    </plurals>
-    <plurals name="free_regions_count">
-        <item quantity="one">%d регион</item>
-        <item quantity="few">%d региона</item>
-        <item quantity="many">%d регионов</item>
-        <item quantity="other">%d регионов</item>
-    </plurals>
     <plurals name="files_delete_files_confirm">
         <item quantity="one">Удалить %d файл? Это действие нельзя отменить.</item>
         <item quantity="few">Удалить %d файла? Это действие нельзя отменить.</item>

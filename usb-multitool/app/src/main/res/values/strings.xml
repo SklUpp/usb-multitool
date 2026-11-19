@@ -14,7 +14,7 @@
     <string name="log_collapse">Collapse log</string>
     <string name="log_screen_title">Log</string>
     <string name="log_back">Back to tabs</string>
-    <string name="log_empty">No entries yet. Operation details appear here while they run.</string>
+    <string name="log_empty">No entries yet.</string>
     <string name="log_copy_all">Copy all</string>
     <string name="log_copy_warning">The log may contain file paths and USB serial numbers. Copying puts them on the clipboard, where another app may read them. Copy only if you accept this disclosure.</string>
     <string name="log_copy_confirm">Copy</string>
@@ -32,7 +32,7 @@
     <string name="efi_partition_label">Partition</string>
     <string name="efi_allow_writes">Allow writes to EFI</string>
     <string name="efi_allow_hint">This setting applies to the current connection. A disk change or reconnect clears it.</string>
-    <string name="efi_policy_info_title">EFI write policy</string>
+    <string name="efi_policy_info_title">EFI write protection</string>
     <string name="efi_policy_info_text">This is write protection, not a mount mode. How volumes are mounted does not change. The permission applies only to the named EFI partition and the current connection. It is cleared when the disk changes, reconnects or detaches. Every other EFI partition stays protected.</string>
     <string name="efi_confirm_title">Allow EFI writes?</string>
     <string name="efi_confirm_body">This lifts application write protection for %1$s on disk %2$s at LBA %3$s for %4$s sectors. Reconnect or geometry changes clear permission. Enable only when you intend to modify EFI contents.</string>
@@ -72,25 +72,17 @@
     <string name="partitions_region_label">Region</string>
     <string name="partitions_create_action">Create partition…</string>
     <string name="partitions_capacity_unknown">Capacity unknown</string>
-    <string name="partitions_disk_usage">Used %1$s of %2$s (%3$.1f%%)</string>
-    <string name="partitions_disk_sectors">Used %1$d of %2$d sectors</string>
+    <string name="partitions_disk_usage">In use %1$s of %2$s (%3$.1f%%)</string>
+    <string name="partitions_disk_sectors">In use %1$d of %2$d sectors</string>
     <string name="partitions_strip_item_a11y">Partition %1$d: %2$s, %3$s</string>
     <string name="partitions_strip_scale_note">Relative to disk LBA; each partition and free region keeps a 48 dp minimum and scrolls horizontally when needed. Exact LBA and size are in the list.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Partition information</string>
-    <string name="partitions_info_help_text">**Name** is the table entry name; the volume label comes from the filesystem and can be unknown.\n\n**RO** means guaranteed EFI write protection.\n\n**Write state** is shown only when measured and otherwise stays explicitly unknown.\n\n**Free space** is measured inside the filesystem, not in the table free region.</string>
+    <string name="partitions_info_help_text">**Name** is the table entry name; the volume label comes from the filesystem and can be unknown.\n\n**RO** means the medium is write-protected or the filesystem is mounted read-only; **RW** means write access was measured.\n\n**Write state** is shown only when measured and otherwise stays explicitly unknown.\n\n**Free space** is measured inside the filesystem, not in the table free region.</string>
     <string name="partitions_info_name_label">Name</string>
     <string name="partitions_write_state_label">Write state</string>
-    <string name="partitions_write_ro">EFI write protection is active</string>
-    <string name="partitions_write_policy_ro">Application write policy blocks writes</string>
-    <string name="partitions_write_driver_ro">Filesystem driver mounted read-only; medium write state unknown</string>
-    <string name="partitions_write_driver_rw">Filesystem driver mounted read-write; medium write state unknown</string>
     <string name="files_write_short_ro">RO</string>
     <string name="files_write_short_rw">RW</string>
-    <string name="partitions_write_policy_label">RO · policy</string>
-    <string name="partitions_write_driver_ro_label">RO · driver</string>
-    <string name="partitions_write_driver_rw_label">RW · driver</string>
-    <string name="partitions_write_unknown">Write state not verified</string>
     <string name="partitions_write_state_unknown">Unknown</string>
     <string name="partitions_write_state_read_only">Read only</string>
     <string name="partitions_write_state_read_write">Read and write</string>
@@ -253,7 +245,6 @@
     <string name="files_clear_selection">Clear</string>
     <string name="files_copy_from_phone">Copy from phone</string>
     <string name="files_save_to_phone">Save to phone</string>
-    <string name="files_write_ro">EFI write protection is active</string>
     <string name="files_write_policy_ro">Application write policy blocks writes</string>
     <string name="files_write_driver_ro">Filesystem driver mounted read-only; medium write state unknown</string>
     <string name="files_write_driver_rw">Filesystem driver mounted read-write; medium write state unknown</string>
@@ -373,7 +364,6 @@
     <string name="ventoy_update">Update</string>
     <string name="ventoy_update_from_to">Update · %1$s → %2$s</string>
     <string name="ventoy_update_to">Update · %1$s</string>
-    <string name="ventoy_reinstall">Reinstall</string>
     <string name="ventoy_download_warning_title">Download this Ventoy release?</string>
     <string name="ventoy_download_unpinned_warning_title">Download without an independent trusted SHA?</string>
     <string name="ventoy_download_already_latest_title">Ventoy is already latest</string>
@@ -539,18 +529,6 @@
     <string name="msg_partial">Partially completed.</string>
     <string name="msg_running">Running.</string>
     <string name="msg_queued">Queued.</string>
-    <plurals name="partitions_count">
-        <item quantity="one">%d partition</item>
-        <item quantity="few">%d partitions</item>
-        <item quantity="many">%d partitions</item>
-        <item quantity="other">%d partitions</item>
-    </plurals>
-    <plurals name="free_regions_count">
-        <item quantity="one">%d region</item>
-        <item quantity="few">%d regions</item>
-        <item quantity="many">%d regions</item>
-        <item quantity="other">%d regions</item>
-    </plurals>
     <plurals name="files_delete_files_confirm">
         <item quantity="one">Delete %d file? This cannot be undone.</item>
         <item quantity="few">Delete %d files? This cannot be undone.</item>

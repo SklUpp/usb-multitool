@@ -6862,41 +6862,31 @@ class MainActivity : ComponentActivity() {
         viewModel.onGptBackupPicked(uri)
     }
 
-    private var ventoySettingsPickerIdentity: String? = null
-    private var ventoySettingsPickerGeneration: Long? = null
-
     /**
      * SAF document chosen as read-only Ventoy settings import input; Apply writes USB target.
+     *
+     * No attachment pin is kept here. The reducer pins the picked file to the live
+     * attachment when it accepts the selection and drops it when that stick is replaced, so
+     * a result that arrives after an Activity re-creation (or after a re-attach bumps the
+     * attach generation) is still delivered instead of being discarded on the way in.
      */
     private val ventoySettingsPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
-        val expectedIdentity = ventoySettingsPickerIdentity
-        val expectedGeneration = ventoySettingsPickerGeneration
-        ventoySettingsPickerIdentity = null
-        ventoySettingsPickerGeneration = null
+        // Picker cancel is silent by contract; nothing was chosen, so nothing is claimed.
         if (uri == null) return@registerForActivityResult
-        val live = viewModel.state.device
-        if (live == null ||
-            live.identity != expectedIdentity ||
-            live.attachGeneration != expectedGeneration
-        ) {
-            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
-            return@registerForActivityResult
-        }
+        // The document is only ever read. Asking for WRITE too makes the whole call throw
+        // when a provider granted READ alone, which drops the persistable grant entirely.
         runCatching {
             contentResolver.takePersistableUriPermission(
                 uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
         viewModel.onIntent(
             UiIntent.SelectVentoySettingsDocument(
                 uri = uri.toString(),
                 displayName = documentDisplayName(uri),
-                identity = expectedIdentity,
-                attachGeneration = expectedGeneration,
             ),
         )
     }
@@ -7540,9 +7530,6 @@ class MainActivity : ComponentActivity() {
         usb.diagnostics.PerformancePreferences.load(applicationContext)
         // A re-delivered CreateDocument result arrives after the activity is recreated
         // (rotation/process death); without this it would find no pending name and drop it.
-        ventoySettingsPickerIdentity = savedInstanceState?.getString(STATE_VENTOY_SETTINGS_IDENTITY)
-        ventoySettingsPickerGeneration = savedInstanceState?.getLong(STATE_VENTOY_SETTINGS_ATTACH, Long.MIN_VALUE)
-            ?.takeIf { it != Long.MIN_VALUE }
         if (viewModel.pendingDownloadBinding == null) {
             val savedPickerRequest = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD_NAME)
             val restoredPath = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD_STAGED)
@@ -7683,9 +7670,7 @@ class MainActivity : ComponentActivity() {
                     )
                 },
                 onPickVentoySettingsFile = {
-                    val live = viewModel.state.device
-                    ventoySettingsPickerIdentity = live?.identity
-                    ventoySettingsPickerGeneration = live?.attachGeneration
+                    // Any name and MIME type: the engine validates the JSON, not the label.
                     ventoySettingsPickerLauncher.launch(arrayOf("*/*"))
                 },
                 onPickBackup = {
@@ -7756,10 +7741,6 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         windowsImportCoordinator.saveState(outState)
-        outState.putString(STATE_VENTOY_SETTINGS_IDENTITY, ventoySettingsPickerIdentity)
-        ventoySettingsPickerGeneration?.let {
-            outState.putLong(STATE_VENTOY_SETTINGS_ATTACH, it)
-        }
         viewModel.pendingDownloadBinding?.let { binding ->
             outState.putString(STATE_PENDING_DOWNLOAD_DIRECTORY, binding.directory)
             outState.putString(STATE_PENDING_DOWNLOAD_NAME, binding.name)
@@ -7932,10 +7913,6 @@ class MainActivity : ComponentActivity() {
         private const val STATE_PENDING_BATCH_UPLOAD_PARTITION = "usb.multitool.PENDING_BATCH_UPLOAD_PARTITION"
         private const val STATE_PENDING_BATCH_UPLOAD_START = "usb.multitool.PENDING_BATCH_UPLOAD_START"
         private const val STATE_PENDING_BATCH_UPLOAD_COUNT = "usb.multitool.PENDING_BATCH_UPLOAD_COUNT"
-        private const val STATE_VENTOY_SETTINGS_IDENTITY =
-            "usb.multitool.VENTOY_SETTINGS_IDENTITY"
-        private const val STATE_VENTOY_SETTINGS_ATTACH =
-            "usb.multitool.VENTOY_SETTINGS_ATTACH"
 
         @Volatile
         private var sharedImportCodes: WindowsImportRequestCodes? = null

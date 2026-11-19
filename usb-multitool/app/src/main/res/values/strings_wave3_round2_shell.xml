@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nominative status titles for DestructiveAction (status line / details). Confirmation bodies keep action_* accusative wording. -->
+    <string name="status_title_wipe">Wipe</string>
+    <string name="status_title_ventoy_install">Ventoy install from scratch</string>
+    <string name="status_title_ventoy_update">Ventoy update</string>
+    <string name="status_title_raw_write">USB image write</string>
+    <string name="status_title_format_partition">Partition format</string>
+    <string name="status_title_delete_partition">Partition delete</string>
+    <string name="status_title_create_partition">Partition create</string>
+    <string name="status_title_gpt_repair">Backup GPT repair</string>
+    <string name="status_title_gpt_restore">GPT restore from file</string>
+    <string name="status_title_rescue_restore">Image restore</string>
+    <string name="status_title_ventoy_link_xml">XML file link</string>
+    <string name="status_title_set_partition_role">Partition type change</string>
+    <string name="status_title_set_partition_bootable">Bootable flag change</string>
+    <string name="status_title_rename_partition">Partition rename</string>
+    <string name="status_title_rename_volume_label">Volume label rename</string>
+    <string name="status_title_initialize_table">Partition table initialization</string>
+    <string name="status_title_ventoy_unattend_write">Generated unattend XML write</string>
+    <string name="status_title_ventoy_unattend_layout">Target PC disk wipe and partition via unattend</string>
+</resources>

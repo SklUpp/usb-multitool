@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -62,7 +63,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -1172,6 +1172,9 @@ private fun FolderCard(
                 LazyColumn(
                     state = fileListState,
                     modifier = Modifier.fillMaxSize(),
+                    // Shell safeDrawing already lifts this card above the navigation bar; this
+                    // 80 dp keeps the last row clear of the floating action button too, so the
+                    // list never ends on the bar itself.
                     contentPadding = PaddingValues(bottom = 80.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     userScrollEnabled = !locked,
@@ -1291,7 +1294,10 @@ private fun FolderSubblock(
                 text = pathLabel,
                 modifier = Modifier
                     .weight(1f)
+                    // 48 dp target, text centred inside it: a bare `heightIn` would leave the
+                    // one-line path hanging at the top of the box, above the icon centre line.
                     .heightIn(min = 48.dp)
+                    .wrapContentHeight(Alignment.CenterVertically)
                     .clickable(
                         enabled = canNavigateUp,
                         onClickLabel = upDescription,
@@ -1442,6 +1448,10 @@ private fun PartitionChoiceRow(
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
+            // M3 default menu container is surfaceContainer, one step below the card it
+            // opens from; surfaceContainerHigh keeps the menu above the screen plane.
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 3.dp,
         ) {
             options.forEach { (value, text) ->
                 val isSelected = value == selectedId
@@ -1471,10 +1481,9 @@ private fun PartitionChoiceRow(
 }
 
 /**
- * Compact write chip: only `RO` or `RW`, both on one neutral container so the tones stay
- * distinct in every palette (the container roles collapse to the same colour here). Text
- * colour carries the meaning: RW primary, RO onSurfaceVariant. Red stays reserved for
- * errors and the danger zone; unknown renders no chip. The long factual description
+ * Compact write chip: only `RO` or `RW` on one neutral container with a hairline border.
+ * Tone from [writeAccessTone]: RW primary, RO theme-aware amber. Error stays reserved for
+ * failures and destructive actions. Unknown renders no chip; the long factual description
  * remains the a11y label.
  */
 @Composable
@@ -1491,12 +1500,7 @@ private fun WriteAccessBadge(access: PartitionWriteAccess) {
         PartitionWriteAccess.ReadWrite -> stringResource(R.string.files_write_driver_rw)
         PartitionWriteAccess.Unknown -> return
     }
-    val content =
-        if (access == PartitionWriteAccess.ReadWrite) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
+    val content = writeAccessTone(readWrite = access == PartitionWriteAccess.ReadWrite)
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -1823,7 +1827,12 @@ private fun FileActionSheet(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        // Same plane as the screen's dialogs and menu; the default surfaceContainerLow
+        // sank the sheet below the card it was opened from.
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
         ListItem(
             headlineContent = { Text(entry.name) },
             supportingContent = {
@@ -1835,6 +1844,7 @@ private fun FileActionSheet(
                     ),
                 )
             },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         )
         if (!entry.isDirectory) {
             sheetActionRow(
@@ -1859,6 +1869,7 @@ private fun FileActionSheet(
         ListItem(
             headlineContent = { Text(stringResource(R.string.action_cancel)) },
             leadingContent = { GlyphIcon(Glyph.Close, size = 22.dp) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(role = Role.Button, onClick = onDismiss),
@@ -1873,12 +1884,20 @@ private fun sheetActionRow(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
+    // Disabled dims only this row's text and icon (onSurface 0.38); the row itself stays
+    // transparent so the sheet keeps one continuous surface with no grey plate.
+    val contentColor =
+        if (enabled) {
+            LocalContentColor.current
+        } else {
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        }
     ListItem(
-        headlineContent = { Text(label) },
-        leadingContent = { GlyphIcon(glyph, size = 22.dp) },
+        headlineContent = { Text(label, color = contentColor) },
+        leadingContent = { GlyphIcon(glyph, size = 22.dp, tint = contentColor) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (enabled) 1f else 0.38f)
             .clickable(role = Role.Button, enabled = enabled, onClick = onClick)
             .semantics { if (!enabled) disabled() },
     )

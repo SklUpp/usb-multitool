@@ -555,7 +555,13 @@ data class DestructiveConfirmation(
                 diskSectorCount =
                     if (action == DestructiveAction.RAW_WRITE) diskSectorCount else null,
                 diskSectorSize =
-                    if (action == DestructiveAction.RAW_WRITE) diskSectorSize else null,
+                    if (action == DestructiveAction.RAW_WRITE ||
+                        action == DestructiveAction.DELETE_PARTITION
+                    ) {
+                        diskSectorSize
+                    } else {
+                        null
+                    },
                 rawSourceName =
                     if (action == DestructiveAction.RAW_WRITE) rawSourceName else null,
                 gptBackupUri =
@@ -786,6 +792,22 @@ data class PartitionTab(
     /** Legacy BIOS bootable flag as stored on disk (MBR 0x80 / GPT attribute bit 2). */
     val bootable: Boolean = false,
 ) {
+    /**
+     * Display-only: Ventoy's VTOYEFI role/name is the boot ESP even when the on-disk type
+     * GUID is not the ESP GUID and the legacy bootable bit is clear. Does not change
+     * [isEfiType], [bootable], write-protection, or mutation policy.
+     */
+    val isVtoyEfiRole: Boolean
+        get() = name.contains("VTOYEFI", ignoreCase = true)
+
+    /** EFI fact shown in the info card / list badge; real type stays [isEfiType]. */
+    val displayEfi: Boolean
+        get() = isEfiType || isVtoyEfiRole
+
+    /** Bootable fact shown in the info card; real flag stays [bootable]. */
+    val displayBootable: Boolean
+        get() = bootable || isVtoyEfiRole
+
     val filesystemLabel: String
         get() = when (filesystemId) {
             FilesystemId.FAT -> "FAT"

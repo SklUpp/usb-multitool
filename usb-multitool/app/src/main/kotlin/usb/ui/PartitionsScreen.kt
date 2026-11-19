@@ -1,6 +1,7 @@
 package usb.ui
 
 import usb.fs.FilesystemId
+import usb.fs.FilesystemSpace
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
@@ -67,10 +68,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
@@ -783,20 +784,6 @@ fun PartitionsScreen(
                     }
                 }
             }
-            if (state.partitions.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    Badge(
-                        text = pluralStringResource(
-                            R.plurals.partitions_count,
-                            state.partitions.size,
-                            state.partitions.size,
-                        ),
-                    )
-                }
-            }
             if (!state.tableValid) {
                 Text(
                     text = state.statusMessage?.localized()
@@ -851,11 +838,16 @@ fun PartitionsScreen(
                 orderedPartitions.forEachIndexed { index, partition ->
                     val isSelected = partition.id == state.selectedPartitionId
                     val access = state.partitionWriteAccess(partition)
-                    val accessLabel = when (access) {
-                        PartitionWriteAccess.ReadOnly -> stringResource(R.string.partitions_write_policy_label)
-                        PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.partitions_write_driver_ro_label)
-                        PartitionWriteAccess.ReadWrite -> stringResource(R.string.partitions_write_driver_rw_label)
-                        PartitionWriteAccess.Unknown -> stringResource(R.string.partitions_write_unknown)
+                    val readOnly = access == PartitionWriteAccess.ReadOnly ||
+                        access == PartitionWriteAccess.DriverReadOnly
+                    // Only the measured state reaches the screen; an unknown state renders no chip.
+                    val accessDescription = when (access) {
+                        PartitionWriteAccess.ReadOnly,
+                        PartitionWriteAccess.DriverReadOnly,
+                        -> stringResource(R.string.partitions_write_state_read_only)
+                        PartitionWriteAccess.ReadWrite ->
+                            stringResource(R.string.partitions_write_state_read_write)
+                        PartitionWriteAccess.Unknown -> null
                     }
                     val displayName = partition.name.ifBlank { partition.id }
                     val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
@@ -904,48 +896,52 @@ fun PartitionsScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                val rowFacts = listOfNotNull(
-                                    partitionSizeLabel(state, partition),
-                                    lbaRangeLabel(partition.startLba, partition.sectorCount),
+                                val rowMono = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
                                 )
                                 Text(
-                                    text = rowFacts.joinToString(" · "),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
+                                    text = partitionUsageLabel(state, partition, rowSpace),
+                                    style = rowMono,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
+                                    maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                if (rowSpace != null) {
-                                    Text(
-                                        text = DeviceIdentity.formatCapacityPair(
-                                            rowSpace.freeBytes,
-                                            rowSpace.totalBytes,
-                                        ),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                            fontFeatureSettings = "tnum",
-                                        ),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                                Text(
+                                    text = lbaRangeLabel(
+                                        partition.startLba,
+                                        partition.sectorCount,
+                                        R.string.partitions_row_sectors,
+                                    ) ?: "—",
+                                    style = rowMono,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                             if (partition.filesystemLabel.isNotEmpty()) {
                                 Badge(text = partition.filesystemLabel)
                             }
-                            if (partition.isEfiType) {
+                            if (partition.displayEfi) {
                                 Badge(text = "EFI")
                             }
-                            if (access != PartitionWriteAccess.Unknown) {
-                                Badge(
-                                    text = accessLabel,
-                                    container = MaterialTheme.colorScheme.tertiaryContainer,
-                                    content = MaterialTheme.colorScheme.onTertiaryContainer,
-                                )
+                            if (accessDescription != null) {
+                                // Same chip as Files: one neutral container, the tone alone
+                                // separates RO from RW, and the description carries the words.
+                                Box(
+                                    modifier = Modifier.clearAndSetSemantics {
+                                        contentDescription = accessDescription
+                                    },
+                                ) {
+                                    Badge(
+                                        text = stringResource(
+                                            if (readOnly) R.string.partitions_access_ro
+                                            else R.string.partitions_access_rw,
+                                        ),
+                                        container = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        content = writeAccessTone(readWrite = !readOnly),
+                                    )
+                                }
                             }
                         }
                     }
@@ -971,25 +967,10 @@ fun PartitionsScreen(
                 title = stringResource(R.string.partitions_selected_title),
                 titleColor = MaterialTheme.colorScheme.onSurface,
                 trailing = {
-                    val deleteDescription = stringResource(R.string.partitions_delete_action)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        InfoHelpButton(
-                            infoTitle = stringResource(R.string.partitions_info_help_title),
-                            infoText = stringResource(R.string.partitions_info_help_text),
-                        )
-                        androidx.compose.material3.IconButton(
-                            onClick = {
-                                onIntent(UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
-                            },
-                            enabled = state.actionsEnabled && blockedHint == null &&
-                                !state.partitionTableDamaged,
-                            modifier = Modifier.semantics {
-                                contentDescription = deleteDescription
-                            },
-                        ) {
-                            GlyphIcon(Glyph.Trash, size = 20.dp, tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
+                    InfoHelpButton(
+                        infoTitle = stringResource(R.string.partitions_info_help_title),
+                        infoText = stringResource(R.string.partitions_info_help_text),
+                    )
                 },
             ) {
                 // The write-block reason used to be computed and then only used to disable
@@ -1053,28 +1034,42 @@ fun PartitionsScreen(
                 val editRoleEnabled = state.actionsEnabled && state.tableValid &&
                     !state.partitionTableDamaged && geometryKnown &&
                     state.isEfiWriteAllowed(selected)
+                // Display "Yes" from the VTOYEFI name must not hide a real GUID/bootable write.
+                val vtoyRoleDerived = selected.isVtoyEfiRole
+                val vtoyRoleHint = stringResource(R.string.partitions_vtoyefi_role_derived)
+                val efiToggleEnabled = editRoleEnabled && !vtoyRoleDerived
                 val efiToggleLabel = stringResource(R.string.partitions_efi_toggle_action)
                 val efiToggleState =
-                    stringResource(if (selected.isEfiType) R.string.answer_yes else R.string.answer_no)
+                    stringResource(if (selected.displayEfi) R.string.answer_yes else R.string.answer_no)
                 InteractiveInfoRow(
                     label = stringResource(R.string.partitions_efi_label),
                     value = efiToggleState,
-                    enabled = editRoleEnabled,
+                    enabled = efiToggleEnabled,
                     trailingContent = {
                         TextButton(
                             onClick = {
                                 state.device?.let { device ->
                                     onIntent(
                                         UiIntent.RequestSetPartitionRole(
-                                            role = if (selected.isEfiType) PartitionRole.Data else PartitionRole.Efi,
-                                            target = PartitionBinding(device, selected.id, selected.startLba, selected.sectorCount),
+                                            role = if (selected.isEfiType) {
+                                                PartitionRole.Data
+                                            } else {
+                                                PartitionRole.Efi
+                                            },
+                                            target = PartitionBinding(
+                                                device,
+                                                selected.id,
+                                                selected.startLba,
+                                                selected.sectorCount,
+                                            ),
                                         ),
                                     )
                                 }
                             },
-                            enabled = editRoleEnabled,
+                            enabled = efiToggleEnabled,
                             modifier = Modifier.semantics {
-                                contentDescription = efiToggleLabel
+                                contentDescription =
+                                    if (vtoyRoleDerived) vtoyRoleHint else efiToggleLabel
                                 stateDescription = efiToggleState
                             },
                         ) {
@@ -1112,13 +1107,14 @@ fun PartitionsScreen(
                         infoText = stringResource(R.string.efi_policy_info_text),
                     )
                 }
+                val bootableToggleEnabled = editRoleEnabled && !vtoyRoleDerived
                 val bootableToggleLabel = stringResource(R.string.partitions_bootable_toggle_action)
                 val bootableToggleState =
-                    stringResource(if (selected.bootable) R.string.answer_yes else R.string.answer_no)
+                    stringResource(if (selected.displayBootable) R.string.answer_yes else R.string.answer_no)
                 InteractiveInfoRow(
                     label = stringResource(R.string.bootable_label),
                     value = bootableToggleState,
-                    enabled = editRoleEnabled,
+                    enabled = bootableToggleEnabled,
                     trailingContent = {
                         TextButton(
                             onClick = {
@@ -1126,14 +1122,20 @@ fun PartitionsScreen(
                                     onIntent(
                                         UiIntent.RequestSetPartitionBootable(
                                             bootable = !selected.bootable,
-                                            target = PartitionBinding(device, selected.id, selected.startLba, selected.sectorCount),
+                                            target = PartitionBinding(
+                                                device,
+                                                selected.id,
+                                                selected.startLba,
+                                                selected.sectorCount,
+                                            ),
                                         ),
                                     )
                                 }
                             },
-                            enabled = editRoleEnabled,
+                            enabled = bootableToggleEnabled,
                             modifier = Modifier.semantics {
-                                contentDescription = bootableToggleLabel
+                                contentDescription =
+                                    if (vtoyRoleDerived) vtoyRoleHint else bootableToggleLabel
                                 stateDescription = bootableToggleState
                             },
                         ) {
@@ -1231,6 +1233,29 @@ fun PartitionsScreen(
                     enabled = false,
                     monoValue = true,
                 )
+                // Full-width delete at card foot — not beside the help control.
+                val deleteLabel = selected.name.ifBlank { selected.id }
+                val deleteSize = partitionSizeLabel(state, selected) ?: "—"
+                Button(
+                    onClick = {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
+                    },
+                    enabled = state.actionsEnabled && blockedHint == null &&
+                        !state.partitionTableDamaged,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                    ),
+                ) {
+                    Text(
+                        stringResource(R.string.partitions_delete_named, deleteLabel, deleteSize),
+                    )
+                }
             }
         }
 
@@ -1518,24 +1543,18 @@ fun PartitionsScreen(
             val rawName = state.stagedRawImageLabel ?: rawSourceName(state.imageUri)
             val rawStaged = state.stagedRawImagePath != null
 
+            // Path is the staged/SAF label; pickers are the only mutators. Exact text stays
+            // visible — never hidden behind the map.
+            OutlinedTextField(
+                value = rawName.orEmpty(),
+                onValueChange = { },
+                readOnly = true,
+                label = { Text(stringResource(R.string.partitions_raw_image_path_label)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             if (rawName == null) {
                 EmptyHint(stringResource(R.string.partitions_no_image))
-                // Without a source the range editor is pointless, but choosing one must stay
-                // possible; the same two pickers are the only entry points.
-                PickerButtons(
-                    state = state,
-                    onPickImage = onPickImage,
-                    onOpenStick = {
-                        onIntent(
-                            UiIntent.BeginFilesPick(
-                                purpose = FilesPickPurpose.RawSource,
-                                returnTab = ShellTab.Partitions,
-                                target = FilesPickTarget.File,
-                                partitionId = state.selectedPartitionId,
-                            ),
-                        )
-                    },
-                )
             } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1555,15 +1574,6 @@ fun PartitionsScreen(
                     )
                 }
                 Text(
-                    text = rawName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.StartEllipsis,
-                    softWrap = false,
-                )
-                Text(
                     text = stringResource(
                         if (rawStaged) {
                             R.string.partitions_raw_source_staged
@@ -1574,21 +1584,23 @@ fun PartitionsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                PickerButtons(
-                    state = state,
-                    onPickImage = onPickImage,
-                    onOpenStick = {
-                        onIntent(
-                            UiIntent.BeginFilesPick(
-                                purpose = FilesPickPurpose.RawSource,
-                                returnTab = ShellTab.Partitions,
-                                target = FilesPickTarget.File,
-                                partitionId = state.selectedPartitionId,
-                            ),
-                        )
-                    },
-                )
             }
+            // Without a source the range editor is pointless, but choosing one must stay
+            // possible; the same two pickers are the only entry points.
+            PickerButtons(
+                state = state,
+                onPickImage = onPickImage,
+                onOpenStick = {
+                    onIntent(
+                        UiIntent.BeginFilesPick(
+                            purpose = FilesPickPurpose.RawSource,
+                            returnTab = ShellTab.Partitions,
+                            target = FilesPickTarget.File,
+                            partitionId = state.selectedPartitionId,
+                        ),
+                    )
+                },
+            )
 
             val geometry = state.rawGeometry
             if (geometry == null) {
@@ -2197,23 +2209,52 @@ private fun MibBoundaryTicks(
     }
 }
 
-private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? {
+/** Size in bytes from the live table, or null when the geometry cannot express it. */
+private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULong? {
     val sectors = partition.sectorCount ?: return null
     val sectorSize = state.diskSectorSize
     if (sectorSize <= 0 || sectors > ULong.MAX_VALUE / sectorSize.toULong()) return null
-    return DeviceIdentity.formatCapacity(sectors * sectorSize.toULong())
+    return sectors * sectorSize.toULong()
+}
+
+private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? =
+    partitionSizeBytes(state, partition)?.let { DeviceIdentity.formatCapacity(it) }
+
+/**
+ * `used / max` for one row, in units picked from the larger number. Both sides come from the
+ * measured filesystem of this exact attachment when it is known, so `used <= max` always
+ * holds; `max` falls back to the table geometry, and a side nothing measured prints `—`.
+ */
+private fun partitionUsageLabel(
+    state: AppUiState,
+    partition: PartitionTab,
+    space: FilesystemSpace?,
+): String {
+    val used = space?.usedBytes
+    val max = space?.totalBytes ?: partitionSizeBytes(state, partition)
+    return when {
+        used != null && max != null -> DeviceIdentity.formatCapacityPair(used, max)
+        used == null && max == null -> "—"
+        else -> (used?.let { DeviceIdentity.formatCapacity(it) } ?: "—") + " / " +
+            (max?.let { DeviceIdentity.formatCapacity(it) } ?: "—")
+    }
 }
 
 /**
- * "LBA start–end · count sectors" for one exact range, or null when the geometry is
- * unknown or the end LBA would overflow. The end is start + count - 1, never a guess.
+ * "LBA start–end · count sectors" (or another [templateId] shape) for one exact range, or
+ * null when the geometry is unknown or the end LBA would overflow. The end is
+ * start + count - 1, never a guess. [templateId] is a string resource id.
  */
 @Composable
-private fun lbaRangeLabel(start: ULong?, count: ULong?): String? {
+private fun lbaRangeLabel(
+    start: ULong?,
+    count: ULong?,
+    templateId: Int = R.string.partitions_lba_range,
+): String? {
     if (start == null || count == null || count == 0UL) return null
     if (start > ULong.MAX_VALUE - (count - 1UL)) return null
     return stringResource(
-        R.string.partitions_lba_range,
+        templateId,
         start.toLong(),
         (start + count - 1UL).toLong(),
         count.toLong(),
@@ -2271,7 +2312,7 @@ private fun writeBlockHint(state: AppUiState): String? {
         partition.readOnly &&
         !state.isEfiWriteAllowed(partition)
     ) {
-        stringResource(R.string.partitions_efi_blocked, partition.name)
+        stringResource(R.string.partitions_efi_blocked_switch, partition.name)
     } else {
         message.localized()
     }

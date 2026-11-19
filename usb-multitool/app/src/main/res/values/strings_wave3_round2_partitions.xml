@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same-screen EFI write switch; replaces the old "Device partitions" pointer. -->
+    <string name="partitions_efi_blocked_switch">%1$s is write-protected. Use the switch below to temporarily allow writes.</string>
+    <!-- Persistent label on the raw-write source path field. -->
+    <string name="partitions_raw_image_path_label">Image / file path</string>
+    <!-- Full-width delete control; name and size match the confirmation target. -->
+    <string name="partitions_delete_named">Delete %1$s (%2$s)…</string>
+    <!-- DELETE_PARTITION confirmation target: same name + capacity as the card button. -->
+    <string name="confirm_target_partition_with_size">Partition: %1$s (%2$s)</string>
+    <!-- EFI/bootable toggles disabled: displayed Yes is derived from the VTOYEFI role/name. -->
+    <string name="partitions_vtoyefi_role_derived">Ventoy system partition — EFI and bootable are derived from the VTOYEFI role and cannot be toggled here</string>
+</resources>

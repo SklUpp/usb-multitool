@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -81,7 +82,7 @@ internal fun PerformanceSettingsSection() {
     ) {
         PerfSlider(
             title = stringResource(R.string.diagnostics_perf_scsi_title),
-            hint = stringResource(R.string.diagnostics_perf_scsi_hint),
+            hint = stringResource(R.string.diagnostics_perf_scsi_help_body),
             value = scsiChunkKib,
             range = TransferTuning.MIN_SCSI_CHUNK_KIB..TransferTuning.MAX_SCSI_CHUNK_KIB,
             step = TransferTuning.SCSI_CHUNK_STEP_KIB,
@@ -99,7 +100,7 @@ internal fun PerformanceSettingsSection() {
         )
         PerfSlider(
             title = stringResource(R.string.diagnostics_perf_jni_title),
-            hint = stringResource(R.string.diagnostics_perf_jni_hint),
+            hint = stringResource(R.string.diagnostics_perf_jni_help_body),
             value = jniCapKib,
             range = TransferTuning.MIN_JNI_CAP_KIB..TransferTuning.MAX_JNI_CAP_KIB,
             step = TransferTuning.JNI_CAP_STEP_KIB,
@@ -117,7 +118,7 @@ internal fun PerformanceSettingsSection() {
         )
         PerfSlider(
             title = stringResource(R.string.diagnostics_perf_rescue_title),
-            hint = stringResource(R.string.diagnostics_perf_rescue_hint),
+            hint = stringResource(R.string.diagnostics_perf_rescue_help_body),
             value = rescueCheckpointMib,
             range =
                 TransferTuning.MIN_RESCUE_CHECKPOINT_MIB..TransferTuning.MAX_RESCUE_CHECKPOINT_MIB,
@@ -164,13 +165,27 @@ private fun PerfSlider(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             InfoHelpButton(infoTitle = title, infoText = hint)
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
+                // Value Text carries "$title: $valueLabel"; title stays visual-only.
+                modifier = Modifier
+                    .weight(1f)
+                    .clearAndSetSemantics { },
+            )
+            // Current value stays on the label row so the slider never floats alone.
+            Text(
+                text = valueLabel,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.semantics {
+                    contentDescription = "$title: $valueLabel"
+                },
             )
             IconButton(
                 onClick = onReset,
@@ -181,11 +196,6 @@ private fun PerfSlider(
                 GlyphIcon(Glyph.Refresh, size = 20.dp)
             }
         }
-        Text(
-            text = valueLabel,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
         Slider(
             value = value.toFloat(),
             onValueChange = {
@@ -199,6 +209,7 @@ private fun PerfSlider(
             onValueChangeFinished = onValueChangeFinished,
             valueRange = range.first.toFloat()..range.last.toFloat(),
             steps = ((range.last - range.first) / step) - 1,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

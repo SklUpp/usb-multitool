@@ -187,7 +187,7 @@ internal fun AutounattendSection(
         trailing = {
             InfoHelpButton(
                 infoTitle = stringResource(R.string.unattend_help_title),
-                infoText = stringResource(R.string.unattend_help_text),
+                infoText = stringResource(R.string.unattend_help_body),
             )
         },
     ) {
@@ -765,7 +765,7 @@ internal fun GlobalSettingsCard(
         trailing = {
             InfoHelpButton(
                 infoTitle = stringResource(R.string.settings_help_title),
-                infoText = stringResource(R.string.settings_help_text),
+                infoText = stringResource(R.string.settings_help_body),
             )
         },
     ) {
@@ -835,10 +835,12 @@ internal fun GlobalSettingsCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = { sourceMenuOpen = true },
                     enabled = state.actionsEnabled,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
                 ) {
                     Text(stringResource(R.string.settings_source_choose))
                 }
@@ -945,6 +947,9 @@ internal fun GlobalSettingsCard(
                 },
             )
         }
+        // Loaded catalog: this is where an imported file is written to the stick and where
+        // staged edits from the editor become one confirmed write.
+        StagedControls(state = state, onIntent = onIntent)
         Text(
             text = stringResource(R.string.settings_applies_note),
             style = MaterialTheme.typography.labelSmall,
@@ -1644,7 +1649,15 @@ private fun AddControlRow(actionsEnabled: Boolean, onIntent: (UiIntent) -> Unit)
 @Composable
 private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     val pending = state.pendingVentoyControls
-    if (pending.isEmpty()) return
+    // A file outside the standard path (picked on the phone, or another file on the stick) is
+    // not the active config yet: it must be writable even when the user changes no row,
+    // otherwise the import can never reach the standard path. The standard path itself is
+    // already the target, so it never needs a copy action.
+    val importedFileReady =
+        !state.ventoySettingsSource.isDefaultPath() &&
+            (state.ventoyGlobalSettings is VentoyGlobalSettings.Present ||
+                state.ventoyGlobalSettings is VentoyGlobalSettings.Empty)
+    if (pending.isEmpty() && !importedFileReady) return
     val operation = state.operation
     val installPartial =
         operation?.state == OperationState.Partial &&
@@ -1657,36 +1670,38 @@ private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         operation?.state == OperationState.Partial &&
             operation.title == OperationTitle.SetVentoyGlobalSetting
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = stringResource(R.string.settings_staged),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        pending.forEach { setting ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(
-                        R.string.settings_staged_row,
-                        setting.key,
-                        setting.value ?: stringResource(R.string.settings_remove),
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    onClick = { onIntent(UiIntent.DiscardStagedVentoyControl(setting.key)) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                ) { Text(stringResource(R.string.settings_discard)) }
+        if (pending.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.settings_staged),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            pending.forEach { setting ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.settings_staged_row,
+                            setting.key,
+                            setting.value ?: stringResource(R.string.settings_remove),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { onIntent(UiIntent.DiscardStagedVentoyControl(setting.key)) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) { Text(stringResource(R.string.settings_discard)) }
+                }
             }
+            Text(
+                text = stringResource(R.string.settings_staged_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Text(
-            text = stringResource(R.string.settings_staged_hint),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         if (installPartial) {
             Text(
                 text = stringResource(R.string.settings_retry_pending),
@@ -1714,10 +1729,16 @@ private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
         ) {
             Text(
                 stringResource(
-                    if (installPartial) {
-                        R.string.settings_retry_pending_action
-                    } else {
-                        R.string.settings_apply_now
+                    when {
+                        installPartial -> R.string.settings_retry_pending_action
+                        // A phone document comes from outside the stick; a file already on
+                        // the stick is only copied to the standard path, so it must not say
+                        // "write this file to the stick".
+                        pending.isEmpty() &&
+                            state.ventoySettingsSource is VentoySettingsSource.Document ->
+                            R.string.settings_import_apply
+                        pending.isEmpty() -> R.string.settings_import_copy_to_default
+                        else -> R.string.settings_apply_now
                     },
                 ),
             )

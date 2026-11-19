@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Один фактический чип на измеренное состояние; слова — в описании для экранного диктора. -->
+    <string name="partitions_access_ro">RO</string>
+    <string name="partitions_access_rw">RW</string>
+    <!-- Вторая строка элемента списка: точный диапазон и число секторов, а не округлённый размер. -->
+    <string name="partitions_row_sectors">сектор %1$d–%2$d (%3$d секторов)</string>
+</resources>

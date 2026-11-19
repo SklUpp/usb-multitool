@@ -33,6 +33,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,8 +76,14 @@ fun VentoyScreen(
     val bundled = state.bundledVentoyRelease
     val target = ventoyTargetRelease(bundled, state.downloadedVentoyRelease?.release)
     val comparison = ventoyReleaseComparison(state.installedVentoyRelease, target)
+    // The update is always the same official operation whatever the version pair is; the
+    // versions explain what changes, they never rename the action.
+    val updateLabel = ventoyUpdateLabel(comparison)
     // Absent/Disconnected hides device-gated actions; Busy keeps them with enabled guards.
     val usbGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
+    val releaseActionEnabled = state.actionsEnabled && state.ventoyInstallAvailable &&
+        !state.ventoyDownloadInFlight &&
+        (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null)
     // Remember epoch we already asked catalogs for so actionsEnabled flicker mid-flight
     // does not triple-mount while caches are still null. Cleared when all three land or
     // epoch moves (invalidate).
@@ -187,11 +194,46 @@ fun VentoyScreen(
                 subtitle = stringResource(R.string.ventoy_version_subtitle),
                 titleColor = MaterialTheme.colorScheme.onSurface,
                 trailing = {
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.ventoy_help_title),
-                        infoText = stringResource(R.string.ventoy_help_text) +
-                            "\n\n" + stringResource(R.string.ventoy_help_details),
-                    )
+                    // Update sits on the heading line next to help: it is one secondary
+                    // action, and a 48 dp icon keeps the row height whatever the label is.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        // No stick: nothing to update, so the icon goes away with the
+                        // install button instead of sitting there as a dead control.
+                        if (!usbGone) {
+                            IconButton(
+                                onClick = {
+                                    onIntent(
+                                        UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE),
+                                    )
+                                },
+                                enabled = releaseActionEnabled,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .semantics { contentDescription = updateLabel },
+                            ) {
+                                // Enabled: primary action colour. Disabled: M3 disabled
+                                // content (onSurface 0.38), never a faded primary that
+                                // reads as enabled.
+                                GlyphIcon(
+                                    glyph = Glyph.Refresh,
+                                    size = 20.dp,
+                                    tint = if (releaseActionEnabled) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    },
+                                )
+                            }
+                        }
+                        InfoHelpButton(
+                            infoTitle = stringResource(R.string.ventoy_help_title),
+                            infoText = stringResource(R.string.ventoy_help_text) +
+                                "\n\n" + stringResource(R.string.ventoy_help_details),
+                        )
+                    }
                 },
             ) {
                 VentoyVersionRow(state = state, onIntent = onIntent)
@@ -208,35 +250,21 @@ fun VentoyScreen(
                     )
                 }
                 if (!usbGone) {
-                    Row(
+                    // Install stays the only full-width button here: it is the destructive
+                    // path that must be read before it is pressed. Update lives as an icon in
+                    // the heading row and calls the same confirmed intent.
+                    // Destructive action: filled error container, not an outlined warning.
+                    // Update above is the non-destructive path and never uses error colour.
+                    Button(
+                        onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
+                        enabled = releaseActionEnabled,
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
                     ) {
-                        OutlinedButton(
-                            onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL)) },
-                            enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
-                                !state.ventoyDownloadInFlight &&
-                                (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                        ) {
-                            Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
-                        }
-                        Button(
-                            onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE)) },
-                            enabled = state.actionsEnabled && state.ventoyInstallAvailable &&
-                                !state.ventoyDownloadInFlight &&
-                                (state.downloadedVentoyRelease != null || state.bundledVentoyRelease != null),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                text = ventoyUpdateLabel(comparison),
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                        Text(stringResource(R.string.ventoy_install), fontWeight = FontWeight.Bold)
                     }
                 }
                 state.ventoyDownloadError?.let { error ->
@@ -535,14 +563,18 @@ private fun VentoyVersionFact(
         )
     }
 }
+
+/**
+ * The action is always "Update"; only the version pair changes. The official operation
+ * keeps the data partition even when the installed release already equals the target, so
+ * there is no "reinstall" label: that word implied reformatting that never happens.
+ */
 @Composable
 private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
     when {
         comparison.installed != null &&
             comparison.target != null &&
-            comparison.same ->
-            stringResource(R.string.ventoy_reinstall)
-        comparison.installed != null && comparison.target != null ->
+            !comparison.same ->
             stringResource(
                 R.string.ventoy_update_from_to,
                 comparison.installed,
@@ -608,41 +640,40 @@ private fun WindowsImageBlock(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         if (showImagePicker) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.windows_selected_image),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (selectedImage != null || isImageImportTarget) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        fontFamily = if (selectedImage != null || isImageImportTarget) FontFamily.Monospace else FontFamily.Default,
-                        maxLines = 1,
-                        overflow = TextOverflow.StartEllipsis,
-                        softWrap = false,
-                    )
-                }
-                IconButton(
+                Text(
+                    text = stringResource(R.string.windows_selected_image),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (selectedImage != null || isImageImportTarget) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontFamily = if (selectedImage != null || isImageImportTarget) {
+                        FontFamily.Monospace
+                    } else {
+                        FontFamily.Default
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                FilledTonalButton(
                     onClick = { imageSourcePrompt = true },
                     enabled = state.actionsEnabled,
-                    modifier = Modifier.semantics { contentDescription = chooseDescription },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .semantics { contentDescription = chooseDescription },
                 ) {
-                    GlyphIcon(Glyph.Folder, size = 20.dp)
+                    Text(chooseDescription)
                 }
             }
         }

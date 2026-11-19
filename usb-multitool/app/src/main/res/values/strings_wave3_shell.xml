@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Permanent status line while no operation exists: neutral, not tappable. -->
+    <string name="shell_status_ready">Ready</string>
+    <!-- Accessibility action label of the tappable status line. -->
+    <string name="shell_status_open_details">Open operation details</string>
+    <!-- Dismisses the details dialog; it never cancels the operation. -->
+    <string name="shell_status_close">Close</string>
+</resources>

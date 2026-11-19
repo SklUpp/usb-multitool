@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Переключатель записи EFI на этом же экране; вместо отсылки к «Разделы устройства». -->
+    <string name="partitions_efi_blocked_switch">Раздел %1$s защищён от записи. Используйте переключатель ниже, чтобы временно разрешить запись.</string>
+    <!-- Постоянная метка поля пути источника посекторной записи. -->
+    <string name="partitions_raw_image_path_label">Образ/путь к файлу</string>
+    <!-- Полноширинное удаление; имя и размер совпадают с целью в подтверждении. -->
+    <string name="partitions_delete_named">Удалить %1$s (%2$s)…</string>
+    <!-- Подтверждение DELETE_PARTITION: те же имя и ёмкость, что на кнопке карточки. -->
+    <string name="confirm_target_partition_with_size">Раздел: %1$s (%2$s)</string>
+    <!-- Переключатели EFI/загрузочный отключены: «да» выведено из роли VTOYEFI. -->
+    <string name="partitions_vtoyefi_role_derived">Системный раздел Ventoy — EFI и загрузочный выводятся из роли VTOYEFI и здесь не переключаются</string>
+</resources>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nominative status titles for DestructiveAction (status line / details). Confirmation bodies keep action_* accusative wording. -->
+    <string name="status_title_wipe">Стирание</string>
+    <string name="status_title_ventoy_install">Установка Ventoy с нуля</string>
+    <string name="status_title_ventoy_update">Обновление Ventoy</string>
+    <string name="status_title_raw_write">Запись образа на USB</string>
+    <string name="status_title_format_partition">Форматирование раздела</string>
+    <string name="status_title_delete_partition">Удаление раздела</string>
+    <string name="status_title_create_partition">Создание раздела</string>
+    <string name="status_title_gpt_repair">Исправление резервной GPT</string>
+    <string name="status_title_gpt_restore">Восстановление GPT из файла</string>
+    <string name="status_title_rescue_restore">Восстановление образа</string>
+    <string name="status_title_ventoy_link_xml">Связывание XML-файла</string>
+    <string name="status_title_set_partition_role">Изменение типа раздела</string>
+    <string name="status_title_set_partition_bootable">Изменение флага загрузки</string>
+    <string name="status_title_rename_partition">Переименование раздела</string>
+    <string name="status_title_rename_volume_label">Переименование метки тома</string>
+    <string name="status_title_initialize_table">Инициализация таблицы разделов</string>
+    <string name="status_title_ventoy_unattend_write">Запись сгенерированного unattend XML</string>
+    <string name="status_title_ventoy_unattend_layout">Очистка и разметка диска целевого ПК через unattend</string>
+</resources>
