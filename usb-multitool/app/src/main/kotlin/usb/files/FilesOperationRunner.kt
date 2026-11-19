@@ -16,11 +16,13 @@ class FilesOperationRunner(
     fun create(
         name: String,
         bytesTotal: Long = -1L,
+        foregroundService: Boolean = true,
         body: (DiskOperation) -> Unit,
     ): FilesOperation {
         val closeDiagnostic = AtomicReference<Throwable?>(null)
         val operation =
             object : DiskOperation(name = name, bytesTotal = bytesTotal) {
+                override val foregroundService: Boolean = foregroundService
                 override suspend fun run() {
                     session.withLock {
                         var acquireToken = 0L

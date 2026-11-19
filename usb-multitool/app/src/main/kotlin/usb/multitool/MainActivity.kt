@@ -3049,6 +3049,7 @@ class MainViewModel(
         val pin = currentAttachmentPin()
         submitFilesOperation(
             title = OperationTitle.ListPath(path),
+            foregroundService = false,
             listFailure = { message ->
                 UiIntent.FilesListFailed(
                     path = path,
@@ -3537,6 +3538,7 @@ class MainViewModel(
         rawSourceHandle = submitFilesOperation(
             title = OperationTitle.ListRawSources,
             quiet = true,
+            foregroundService = false,
             listFailure = { message ->
                 UiIntent.RawSourceCandidatesFailed(
                     generation = generation,
@@ -3582,6 +3584,8 @@ class MainViewModel(
         val identity = state.device?.identity
         windowsImageHandle?.cancel()
         val op = object : DiskOperation(OperationTitle.ListDataPartitionFiles.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
@@ -3658,6 +3662,8 @@ class MainViewModel(
         val expectedKey = deviceKey(expected.device)
         val identity = state.device?.identity
         val op = object : DiskOperation(OperationTitle.ReadXmlBindings.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
@@ -4437,6 +4443,8 @@ class MainViewModel(
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
         val op = object : DiskOperation(OperationTitle.ReadUnattendXml.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
@@ -4507,6 +4515,8 @@ class MainViewModel(
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
         val op = object : DiskOperation(OperationTitle.ListVentoyImages.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
@@ -5032,6 +5042,8 @@ class MainViewModel(
         val expectedKey = deviceKey(expected.device)
         val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
@@ -5111,6 +5123,8 @@ class MainViewModel(
         val expectedKey = deviceKey(attachedDevice)
         val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ReadVentoyGlobalSettings.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val bytes = readSettingsDocumentBytes(source)
                 val text = strictUtf8(bytes)
@@ -5300,6 +5314,8 @@ class MainViewModel(
         val expectedKey = deviceKey(expected.device)
         val expectedEpoch = state.ventoyCacheEpoch
         val op = object : DiskOperation(OperationTitle.ListVentoyFolders.logLabel) {
+            override val foregroundService: Boolean = false
+
             override suspend fun run() {
                 val raw = openRawDisk { live ->
                     require(live.generation == expectedAttach) { "USB attach generation changed" }
@@ -6358,12 +6374,14 @@ class MainViewModel(
         onSuccessWithToken: ((OperationToken) -> Unit)? = null,
         onTerminal: ((usb.operation.OperationState, OperationToken) -> Unit)? = null,
         quiet: Boolean = listFailure != null,
+        foregroundService: Boolean = true,
         body: (DiskOperation) -> Unit,
     ): OperationHandle {
         val label = title.logLabel
         val submission = filesOperationRunner.create(
             name = label,
             bytesTotal = bytesTotal,
+            foregroundService = foregroundService,
             body = body,
         )
         val operation = submission.operation
