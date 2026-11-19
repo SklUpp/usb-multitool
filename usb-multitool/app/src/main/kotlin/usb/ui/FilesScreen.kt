@@ -10,8 +10,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
@@ -67,7 +65,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -81,7 +78,6 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import usb.formatBinaryBytesPerSecond
 import usb.formatEtaDuration
@@ -89,34 +85,14 @@ import usb.fs.FilesystemSpace
 import usb.multitool.R
 import usb.remainingSeconds
 
-/** Direction of a real directory move: deeper = forward, shallower = back, else none. */
-internal enum class DirectoryMotion {
-    Forward,
-    Back,
-}
-
-internal fun directoryMotion(previous: String, current: String): DirectoryMotion? {
-    val before = normalizeFatPath(previous)
-    val after = normalizeFatPath(current)
-    if (before == after) return null
-    if (after.startsWith(if (before == "/") "/" else "$before/")) return DirectoryMotion.Forward
-    if (before.startsWith(if (after == "/") "/" else "$after/")) return DirectoryMotion.Back
-    return null
-}
-
+/** Fade-through only: no horizontal translation, so the list can never overflow its box. */
 internal fun AnimatedContentTransitionScope<DirectoryContentTarget>.directoryContentTransform(
-    motion: DirectoryMotion?,
     reducedMotion: Boolean,
-    rtl: Boolean,
-    durationMs: Int = 220,
 ): ContentTransform {
-    if (reducedMotion || motion == null) return EnterTransition.None togetherWith ExitTransition.None
-    // Shared Axis X: forward content exits left and enters from right; back mirrors.
-    // RTL mirrors physical direction so forward always follows reading order.
-    val forward = (motion == DirectoryMotion.Forward) != rtl
-    val enter = (fadeIn(tween(durationMs)) + slideInHorizontally(tween(durationMs)) { if (forward) it / 3 else -it / 3 })
-        .togetherWith(fadeOut(tween(durationMs / 2)) + slideOutHorizontally(tween(durationMs)) { if (forward) -it / 3 else it / 3 })
-    return enter.using(SizeTransform(clip = false))
+    if (reducedMotion) return EnterTransition.None togetherWith ExitTransition.None
+    return fadeIn(tween(180))
+        .togetherWith(fadeOut(tween(120)))
+        .using(SizeTransform(clip = true))
 }
 
 /** Stable AnimatedContent target: path drives motion, pins make stale content distinct. */
@@ -223,7 +199,6 @@ fun FilesScreen(
         state.device?.attachGeneration,
     ) { mutableStateOf<FileEntry?>(null) }
     val baseContext = LocalContext.current
-    val layoutDirection = LocalLayoutDirection.current
     val reducedMotion = runCatching {
         android.provider.Settings.Global.getFloat(
             baseContext.contentResolver,
@@ -321,7 +296,6 @@ fun FilesScreen(
                     partitions = state.partitions,
                     selectedId = selected?.id ?: state.partitions.first().id,
                     writeAccess = writeAccess,
-                    sizeLabel = selected?.let { partitionSizeLabel(state, it) },
                     space = space,
                     enabled = state.actionsEnabled,
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
@@ -352,7 +326,6 @@ fun FilesScreen(
                 selectedNames = selectedNames,
                 fileListState = fileListState,
                 reducedMotion = reducedMotion,
-                rtl = layoutDirection == LayoutDirection.Rtl,
                 onToggleSelect = { entry ->
                     selectedNames = toggleSelectedName(selectedNames, entry.name)
                 },
@@ -807,7 +780,6 @@ private fun FilesPickScreen(
     // Equality, not name: a replacement entry with the same name but new size is stale.
     val selectedPickEntry = selectedPickState?.value?.takeIf { selected -> selected in entries }
     val pickContext = LocalContext.current
-    val pickLayoutDirection = LocalLayoutDirection.current
     val pickReducedMotion = runCatching {
         android.provider.Settings.Global.getFloat(
             pickContext.contentResolver,
@@ -824,8 +796,8 @@ private fun FilesPickScreen(
         }
     }
 
-    // Simplified picker uses the same directional motion as the normal browser: forward
-    // content enters from the reading-start side, back mirrors it, reduced motion is flat.
+    // Same fade-through as the normal browser: no horizontal translation; reduced motion
+    // is flat.
     Column(modifier = modifier.fillMaxSize()) {
     FilesPickHeader(mode = mode, onCancel = { onIntent(UiIntent.CancelFilesPick) })
         AnimatedContent(
@@ -834,11 +806,7 @@ private fun FilesPickScreen(
                 if (mode.target == FilesPickTarget.Folder) state.files.filter { it.isDirectory } else state.files,
             ),
             transitionSpec = {
-                directoryContentTransform(
-                    directoryMotion(initialState.path, targetState.path),
-                    pickReducedMotion,
-                    pickLayoutDirection == LayoutDirection.Rtl,
-                )
+                directoryContentTransform(pickReducedMotion)
             },
             label = "pick-folder",
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -855,7 +823,6 @@ private fun FilesPickScreen(
                     partitions = state.partitions,
                     selectedId = mode.partitionId,
                     writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
-                    sizeLabel = partition?.let { partitionSizeLabel(state, it) },
                     space = partition?.let(state::filesystemSpace),
                     enabled = canAct && !transition.isRunning,
                     onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
@@ -1046,7 +1013,7 @@ private fun FilesPickScreen(
             }
 
             // Snapshot render: leaving content keeps its own listing state and rows, so the
-            // exit slide never swaps in the newly loaded directory. Header above stays on
+            // exit fade never swaps in the newly loaded directory. Header above stays on
             // live state so the path toolbar always names the current directory.
             val pickRows = target.visibleFiles
             val pickListingState = target.listingState
@@ -1130,7 +1097,6 @@ private fun FolderCard(
     selectedNames: Set<String>,
     fileListState: LazyListState,
     reducedMotion: Boolean,
-    rtl: Boolean,
     onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
     onClearSelection: () -> Unit,
@@ -1145,22 +1111,18 @@ private fun FolderCard(
     modifier: Modifier = Modifier,
 ) {
     val loadingDescription = stringResource(R.string.files_listing)
-    // Whole card (selection bar + list) slides as one snapshot: both read the same
-    // target so leaving content never mixes live state under the exit slide.
+    // Whole card (selection bar + list) fades as one snapshot: both read the same
+    // target so leaving content never mixes live state under the exit fade.
     AnimatedContent(
         targetState = directoryContentKey(state),
         transitionSpec = {
-            directoryContentTransform(
-                directoryMotion(initialState.path, targetState.path),
-                reducedMotion,
-                rtl,
-            )
+            directoryContentTransform(reducedMotion)
         },
         label = "folder",
         modifier = modifier.fillMaxWidth(),
     ) { target ->
         // Snapshot render: leaving content keeps the exact files it captured, so
-        // navigation never swaps rows under the exit slide.
+        // navigation never swaps rows under the exit fade.
         val rows = target.files
         val rowsState = target.listingState
         val rowsError = target.error.ifEmpty { null }
@@ -1272,7 +1234,6 @@ private fun FolderCard(
                         }
                         else -> items(rows, key = { it.name }) { entry ->
                             FileRow(
-                                modifier = Modifier.animateItem(),
                                 entry = entry,
                                 isSelected = entry.name in selectedNames,
                                 multiSelectActive = selectedNames.isNotEmpty(),
@@ -1313,69 +1274,64 @@ private fun FolderSubblock(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = onNavigateUp,
+                enabled = canNavigateUp,
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = upDescription },
             ) {
+                GlyphIcon(glyph = Glyph.ArrowUp, size = 22.dp)
+            }
+            Text(
+                text = pathLabel,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .clickable(
+                        enabled = canNavigateUp,
+                        onClickLabel = upDescription,
+                        role = Role.Button,
+                        onClick = onNavigateUp,
+                    )
+                    .padding(start = 4.dp)
+                    .semantics { contentDescription = pathA11y },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.StartEllipsis,
+                softWrap = false,
+            )
+            if (isLoading) {
                 IconButton(
-                    onClick = onNavigateUp,
-                    enabled = canNavigateUp,
+                    onClick = onRefresh,
+                    enabled = canAct,
                     modifier = Modifier
                         .size(48.dp)
-                        .semantics { contentDescription = upDescription },
+                        .semantics { contentDescription = refreshDescription },
                 ) {
-                    GlyphIcon(glyph = Glyph.ArrowUp, size = 22.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                 }
-                Text(
-                    text = pathLabel,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .clickable(
-                            enabled = canNavigateUp,
-                            onClickLabel = upDescription,
-                            role = Role.Button,
-                            onClick = onNavigateUp,
-                        )
-                        .padding(start = 4.dp)
-                        .semantics { contentDescription = pathA11y },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.StartEllipsis,
-                    softWrap = false,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (isLoading) {
-                    IconButton(
-                        onClick = onRefresh,
-                        enabled = canAct,
-                        modifier = Modifier.semantics { contentDescription = refreshDescription },
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                    }
-                } else {
-                    FolderActionButton(
-                        glyph = Glyph.Refresh,
-                        description = refreshDescription,
-                        enabled = canAct,
-                        onClick = onRefresh,
-                    )
-                }
+            } else {
                 FolderActionButton(
-                    glyph = Glyph.FolderPlus,
-                    description = newFolderDescription,
-                    enabled = canWrite,
-                    onClick = onNewFolder,
+                    glyph = Glyph.Refresh,
+                    description = refreshDescription,
+                    enabled = canAct,
+                    onClick = onRefresh,
                 )
             }
+            FolderActionButton(
+                glyph = Glyph.FolderPlus,
+                description = newFolderDescription,
+                enabled = canWrite,
+                onClick = onNewFolder,
+            )
         }
     }
 }
@@ -1393,7 +1349,9 @@ private fun FolderActionButton(
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.semantics { contentDescription = description },
+        modifier = Modifier
+            .size(48.dp)
+            .semantics { contentDescription = description },
     ) {
         // tint is captured outside IconButton's disabled color provider, so dim it here.
         GlyphIcon(
@@ -1404,14 +1362,13 @@ private fun FolderActionButton(
     }
 }
 
-/** Rectangular partition choice: label, real name/format/size and the truthful RO/RW badge. */
+/** Rectangular partition choice: label, real name/format/free space and the RO/RW chip. */
 @Composable
 private fun PartitionChoiceRow(
     options: List<Pair<String, String>>,
     partitions: List<PartitionTab>,
     selectedId: String,
     writeAccess: PartitionWriteAccess,
-    sizeLabel: String?,
     space: FilesystemSpace?,
     enabled: Boolean,
     onSelect: (String) -> Unit,
@@ -1441,7 +1398,10 @@ private fun PartitionChoiceRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             text = selected?.let(::partitionDisplayName) ?: "—",
                             style = MaterialTheme.typography.bodyLarge,
@@ -1453,13 +1413,13 @@ private fun PartitionChoiceRow(
                         )
                         Text(
                             text = selected?.filesystemLabel?.ifEmpty { "—" } ?: "—",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                         )
                     }
                     Text(
-                        text = listOfNotNull(sizeLabel, freeSpaceText(space)).joinToString(" · "),
+                        text = freeSpaceText(space),
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
                             fontFeatureSettings = "tnum",
@@ -1511,16 +1471,18 @@ private fun PartitionChoiceRow(
 }
 
 /**
- * Factual write badge matching Partitions semantics: one neutral tertiary container for
- * every known state. Red stays reserved for errors and the danger zone; unknown renders
- * no badge at all — never a red RO.
+ * Compact write chip: only `RO` or `RW`, both on one neutral container so the tones stay
+ * distinct in every palette (the container roles collapse to the same colour here). Text
+ * colour carries the meaning: RW primary, RO onSurfaceVariant. Red stays reserved for
+ * errors and the danger zone; unknown renders no chip. The long factual description
+ * remains the a11y label.
  */
 @Composable
 private fun WriteAccessBadge(access: PartitionWriteAccess) {
     val label = when (access) {
-        PartitionWriteAccess.ReadOnly -> stringResource(R.string.files_write_policy_label)
-        PartitionWriteAccess.DriverReadOnly -> stringResource(R.string.files_write_driver_ro_label)
-        PartitionWriteAccess.ReadWrite -> stringResource(R.string.files_write_driver_rw_label)
+        PartitionWriteAccess.ReadOnly, PartitionWriteAccess.DriverReadOnly ->
+            stringResource(R.string.files_write_short_ro)
+        PartitionWriteAccess.ReadWrite -> stringResource(R.string.files_write_short_rw)
         PartitionWriteAccess.Unknown -> return
     }
     val description = when (access) {
@@ -1529,10 +1491,15 @@ private fun WriteAccessBadge(access: PartitionWriteAccess) {
         PartitionWriteAccess.ReadWrite -> stringResource(R.string.files_write_driver_rw)
         PartitionWriteAccess.Unknown -> return
     }
-    val content = MaterialTheme.colorScheme.onTertiaryContainer
+    val content =
+        if (access == PartitionWriteAccess.ReadWrite) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.tertiaryContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)),
         modifier = Modifier.clearAndSetSemantics { contentDescription = description },
     ) {
@@ -1557,7 +1524,6 @@ private fun FileRow(
     onNavigate: () -> Unit,
     onAction: () -> Unit = {},
     showActions: Boolean = true,
-    modifier: Modifier = Modifier,
 ) {
     val moreActionsDescription = stringResource(R.string.files_more_actions)
     val clickLabel = when {
@@ -1577,7 +1543,7 @@ private fun FileRow(
         } else {
             null
         },
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .semantics { selected = isSelected }
             .combinedClickable(

@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -182,27 +184,30 @@ internal fun shellTabContentVisible(
  *
  * Layout contract:
  * - safe drawing insets bound the whole shell (targetSdk 36 draws edge to edge), so neither
- *   the header, the tabs, the progress row nor the log layer touches the system bars;
+ *   the header, the tabs, the status strip nor the log layer touches the system bars;
  * - top: one compact device header whose title/subtitle surface is separate from the
- *   language, theme and log controls (no max-height clipping);
+ *   language, theme and log controls (no max-height clipping). A thin operation strip
+ *   sits directly above it; tapping the strip opens the operation details sheet;
  * - middle: the active tab (weight 1, own scroll), always composed; a horizontal swipe
  *   selects the adjacent tab through the reducer and the content slides in the tab
  *   direction (RTL included). A child that consumes the drag keeps it; once the shell
  *   qualifies its own gesture it consumes the drag so a clickable row is not tapped, and
  *   a gesture starting in a system back edge is ignored. The full log screen is an opaque
- *   layer above it and the system bottom inset is guarded while it shows; the covered tab
- *   is marked invisible to accessibility but keeps its state;
- * While a Files pick session owns the screen the header, navigation bar, progress row and
+ *   layer that covers the header and tabs but not the operation strip above them, so a
+ *   running operation keeps its progress/cancel entry point while the journal is open; the
+ *   system bottom inset is guarded while it shows; the covered tab is marked invisible to
+ *   accessibility but keeps its state;
+ * While a Files pick session owns the screen the header, status strip, navigation bar and
  * log layer hide; the tab swipe stays off. The existing picker branch is still the tab
  * content with its own continue/back controls, and Back routes to the reducer cancel,
  * which refuses while a copy runs or a confirmation is open.
- * - bottom: the navigation bar. Progress is part of this bar, so it stays visible while
- *   the journal covers the tabs and never squeezes the content: a compact row with title,
- *   measured facts and cancel, plus the terminal outcome and a completed raw write's
- *   readback verdict (both persistent, up to three wrapped lines). Transient status
- *   messages surface as snackbars keyed by [AppUiState.statusSequence], never as a
- *   floating surface.
+ * - bottom: only the navigation bar. Operation details live in the sheet opened from the
+ *   status strip: title, measured facts and cancel, plus the terminal outcome and a
+ *   completed raw write's readback verdict (both persistent, up to three wrapped lines).
+ *   Transient status messages surface as snackbars keyed by [AppUiState.statusSequence],
+ *   never as a floating surface.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppShell(
     state: AppUiState,
@@ -258,6 +263,8 @@ fun AppShell(
         val pickOpen = state.filesPickMode != null
         val snackbarHostState = remember { SnackbarHostState() }
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
+        // The strip only opens the sheet; closing also follows the operation away or the picker in.
+        var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
         // Modal pick task owns Back: cancel routes through the reducer, and Back stays
         // inert while a copy runs or a confirmation is open (the reducer keeps the
         // picker and reports why). Journal/Settings handlers are disabled while pickOpen.
@@ -332,6 +339,9 @@ fun AppShell(
         // lower sequence means a fresh state and its first message still counts.
         var lastShownStatusSequence by rememberSaveable { mutableStateOf(0L) }
         val statusSnackbarText = state.statusMessage?.localized()
+        LaunchedEffect(state.operation?.token, pickOpen) {
+            if (state.operation == null || pickOpen) operationDetailsOpen = false
+        }
         LaunchedEffect(state.statusSequence) {
             val sequence = state.statusSequence
             if (sequence == 0L || sequence == lastShownStatusSequence) return@LaunchedEffect
@@ -358,15 +368,6 @@ fun AppShell(
                             },
                         ),
                 ) {
-                    // Progress lives in the bottom bar so it stays visible while the journal
-                    // covers the tabs, and overflows the content instead of squeezing it.
-                    if (!pickOpen) {
-                        OperationProgressRow(
-                            state = state,
-                            onIntent = onIntent,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        )
-                    }
                     if (!panels.journalScreenOpen && !pickOpen) {
                         NavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -409,32 +410,50 @@ fun AppShell(
                     .padding(padding)
                     .fillMaxSize(),
             ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .fillMaxSize()
-                        .focusProperties {
-                            // A focus group boundary is the supported subtree gate: keyboard
-                            // traversal calls onEnter before choosing any descendant. Cancel
-                            // entry while opaque journal layer owns focus.
-                            if (panels.journalScreenOpen) {
-                                onEnter = { cancelFocusChange() }
-                            }
-                        }
-                        .focusGroup()
-                        .then(
-                            if (panels.journalScreenOpen) {
-                                // Merging node: the whole covered tab is removed from the
-                                // accessibility tree in one step, including every child.
-                                Modifier.semantics(mergeDescendants = true) {
-                                    hideFromAccessibility()
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Thin operation strip sits above the header at full width; its details
+                    // sheet owns the full facts and cancel, and the picker owns the screen.
+                    // It stays outside the journal layer so progress/cancel remain reachable.
+                    if (!pickOpen) {
+                        OperationStatusStrip(
+                            state = state,
+                            detailsOpen = operationDetailsOpen,
+                            onOpenDetails = { operationDetailsOpen = true },
+                        )
+                    }
+                    // Tab content and the journal share this weight box: the journal covers
+                    // the header and tabs, but not the strip above.
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp)
+                                .focusProperties {
+                                    // A focus group boundary is the supported subtree gate: keyboard
+                                    // traversal calls onEnter before choosing any descendant. Cancel
+                                    // entry while opaque journal layer owns focus.
+                                    if (panels.journalScreenOpen) {
+                                        onEnter = { cancelFocusChange() }
+                                    }
                                 }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                                .focusGroup()
+                                .then(
+                                    if (panels.journalScreenOpen) {
+                                        // Merging node: the whole covered tab is removed from the
+                                        // accessibility tree in one step, including every child.
+                                        Modifier.semantics(mergeDescendants = true) {
+                                            hideFromAccessibility()
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
                     if (state.tab != ShellTab.Settings && !pickOpen) {
                         DeviceHeader(
                             state = state,
@@ -607,6 +626,19 @@ fun AppShell(
                         )
                     }
                 }
+                }
+            }
+        }
+        }
+
+        if (operationDetailsOpen && state.operation != null && !pickOpen) {
+            ModalBottomSheet(onDismissRequest = { operationDetailsOpen = false }) {
+                // Same row as before, so title/facts/outcome/readback/cancel stay identical.
+                OperationProgressRow(
+                    state = state,
+                    onIntent = onIntent,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
             }
         }
 
@@ -943,6 +975,9 @@ TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.background,
         ),
+        // Scaffold's safeDrawing inset already places the content below the status bar;
+        // the app bar's own status-bar inset would add a second gap above the title.
+        windowInsets = WindowInsets(0, 0, 0, 0),
     )
 }
 
@@ -1037,9 +1072,54 @@ internal fun operationProgressFacts(metric: String?, speed: String?, eta: String
     listOfNotNull(metric, speed, eta).filter { it.isNotEmpty() }.joinToString(" · ")
 
 /**
- * Inline operation row in the bottom bar: title, measured facts, the persistent readback
- * verdict of a raw write, the terminal outcome and the existing cancel action. Progress
- * never floats over the screen; transient messages are snackbars, but results stay.
+ * One-line operation strip above the header: no card, no shadow, only a subtle divider.
+ * Height is content-driven (min 28 dp) so large font scales keep the line and divider.
+ * The tap opens the details sheet; while that sheet is open the strip refuses another tap.
+ */
+@Composable
+private fun OperationStatusStrip(
+    state: AppUiState,
+    detailsOpen: Boolean,
+    onOpenDetails: () -> Unit,
+) {
+    val op = state.operation ?: return
+    val title = "${operationLabel(op)} · ${operationStateLabel(op.state)}"
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 28.dp)
+                .clickable(
+                    enabled = !detailsOpen,
+                    role = Role.Button,
+                    onClick = onOpenDetails,
+                )
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // Separate always-composed sibling: never measured inside the text box.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant),
+        )
+    }
+}
+
+/**
+ * Operation details inside the sheet opened from the status strip: title, measured facts,
+ * the persistent readback verdict of a raw write, the terminal outcome and the existing
+ * cancel action. Transient messages stay snackbars; results stay here.
  */
 @Composable
 internal fun OperationProgressRow(
@@ -1962,6 +2042,18 @@ internal enum class Glyph {
     Play,
 }
 
+/** Duotone [Glyph]s that have a real `res/drawable` counterpart; null keeps the Canvas path. */
+private fun Glyph.duotoneRes(): Int? = when (this) {
+    Glyph.File -> R.drawable.ic_file
+    Glyph.Iso -> R.drawable.ic_file_iso
+    Glyph.Copy -> R.drawable.ic_copy
+    Glyph.Refresh -> R.drawable.ic_refresh
+    Glyph.Stop -> R.drawable.ic_stop
+    Glyph.More -> R.drawable.ic_more
+    Glyph.Play -> R.drawable.ic_play
+    else -> null
+}
+
 @Composable
 internal fun GlyphIcon(
     glyph: Glyph,
@@ -1969,6 +2061,20 @@ internal fun GlyphIcon(
     tint: Color = LocalContentColor.current,
     size: Dp = 24.dp,
 ) {
+    // The packaged vectors keep their two tones because each path carries its own alpha and
+    // only the RGB is replaced by [tint]; the rest are drawn below.
+    val duotone = glyph.duotoneRes()
+    if (duotone != null) {
+        Icon(
+            painter = painterResource(duotone),
+            contentDescription = null,
+            tint = tint,
+            modifier = modifier
+                .size(size)
+                .clearAndSetSemantics { },
+        )
+        return
+    }
     Canvas(
         modifier = modifier
             .size(size)
@@ -1985,25 +2091,6 @@ internal fun GlyphIcon(
                     tint,
                     style = stroke,
                 )
-                Glyph.File -> {
-                    drawPath(
-                        Path().apply {
-                            moveTo(6f, 3f); lineTo(14f, 3f); lineTo(19f, 8f)
-                            lineTo(19f, 21f); lineTo(6f, 21f); close()
-                        },
-                        tint,
-                        style = stroke,
-                    )
-                    drawPath(
-                        Path().apply { moveTo(14f, 3f); lineTo(14f, 8f); lineTo(19f, 8f) },
-                        tint,
-                        style = stroke,
-                    )
-                }
-                Glyph.Iso -> {
-                    drawCircle(tint, radius = 8f, style = stroke)
-                    drawCircle(tint, radius = 2.5f)
-                }
                 Glyph.Usb -> {
                     drawPath(
                         Path().apply {
@@ -2054,21 +2141,6 @@ internal fun GlyphIcon(
                     )
                     drawLine(tint, androidx.compose.ui.geometry.Offset(7f, 12f), androidx.compose.ui.geometry.Offset(17f, 12f), 1.8f)
                 }
-                Glyph.Copy -> {
-                    drawPath(
-                        Path().apply { moveTo(8f, 8f); lineTo(20f, 8f); lineTo(20f, 20f); lineTo(8f, 20f); close() },
-                        tint,
-                        style = stroke,
-                    )
-                    drawPath(
-                        Path().apply {
-                            moveTo(16f, 8f); lineTo(16f, 4f); lineTo(4f, 4f)
-                            lineTo(4f, 16f); lineTo(8f, 16f)
-                        },
-                        tint,
-                        style = stroke,
-                    )
-                }
                 Glyph.Gpt -> {
                     drawRect(tint, topLeft = androidx.compose.ui.geometry.Offset(3f, 5f), size = androidx.compose.ui.geometry.Size(18f, 14f), style = stroke)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(10f, 5f), androidx.compose.ui.geometry.Offset(10f, 19f), 1.8f)
@@ -2090,22 +2162,6 @@ internal fun GlyphIcon(
                     drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 20f), androidx.compose.ui.geometry.Offset(12f, 5f), 1.8f)
                     drawPath(
                         Path().apply { moveTo(6f, 11f); lineTo(12f, 5f); lineTo(18f, 11f) },
-                        tint,
-                        style = stroke,
-                    )
-                }
-                Glyph.Refresh -> {
-                    drawArc(
-                        tint,
-                        startAngle = -55f,
-                        sweepAngle = 285f,
-                        useCenter = false,
-                        topLeft = androidx.compose.ui.geometry.Offset(4f, 4f),
-                        size = androidx.compose.ui.geometry.Size(16f, 16f),
-                        style = stroke,
-                    )
-                    drawPath(
-                        Path().apply { moveTo(13f, 3f); lineTo(19f, 5f); lineTo(17f, 11f) },
                         tint,
                         style = stroke,
                     )
@@ -2201,20 +2257,10 @@ internal fun GlyphIcon(
                     drawLine(tint, androidx.compose.ui.geometry.Offset(7f, 7f), androidx.compose.ui.geometry.Offset(17f, 17f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(17f, 7f), androidx.compose.ui.geometry.Offset(7f, 17f), 1.8f)
                 }
-                Glyph.Stop -> drawRect(
-                    tint,
-                    topLeft = androidx.compose.ui.geometry.Offset(7f, 7f),
-                    size = androidx.compose.ui.geometry.Size(10f, 10f),
-                )
                 Glyph.Log -> {
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 7f), androidx.compose.ui.geometry.Offset(19f, 7f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 12f), androidx.compose.ui.geometry.Offset(19f, 12f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(5f, 17f), androidx.compose.ui.geometry.Offset(13f, 17f), 1.8f)
-                }
-                Glyph.More -> {
-                    drawCircle(tint, radius = 1.7f, center = androidx.compose.ui.geometry.Offset(12f, 5.5f))
-                    drawCircle(tint, radius = 1.7f, center = androidx.compose.ui.geometry.Offset(12f, 12f))
-                    drawCircle(tint, radius = 1.7f, center = androidx.compose.ui.geometry.Offset(12f, 18.5f))
                 }
                 Glyph.Eye -> {
                     drawPath(
@@ -2280,13 +2326,8 @@ internal fun GlyphIcon(
                     tint,
                     style = stroke,
                 )
-                Glyph.Play -> drawPath(
-                    Path().apply {
-                        moveTo(8f, 5f); lineTo(19f, 12f); lineTo(8f, 19f); close()
-                    },
-                    tint,
-                    style = stroke,
-                )
+                // Every other glyph is painted by the painterResource branch above.
+                else -> Unit
             }
         }
     }

@@ -85,9 +85,8 @@
     <string name="partitions_write_policy_ro">Application write policy blocks writes</string>
     <string name="partitions_write_driver_ro">Filesystem driver mounted read-only; medium write state unknown</string>
     <string name="partitions_write_driver_rw">Filesystem driver mounted read-write; medium write state unknown</string>
-    <string name="files_write_policy_label">RO · policy</string>
-    <string name="files_write_driver_ro_label">RO · driver</string>
-    <string name="files_write_driver_rw_label">RW · driver</string>
+    <string name="files_write_short_ro">RO</string>
+    <string name="files_write_short_rw">RW</string>
     <string name="partitions_write_policy_label">RO · policy</string>
     <string name="partitions_write_driver_ro_label">RO · driver</string>
     <string name="partitions_write_driver_rw_label">RW · driver</string>
@@ -336,11 +335,13 @@
     <string name="raw_map_overlaps_title">Real overlaps (sectors actually covered)</string>
     <string name="raw_map_summary_start_only">Start LBA %1$d. The end is computed from the image size when it is known.</string>
     <string name="raw_map_snap_state_start">Start LBA %1$d. The end follows the image size when it is known.</string>
+    <string name="raw_map_pan_a11y">Strip scroll position</string>
+    <string name="raw_map_pan_state">Scrolled to %1$d%%</string>
     <string name="partitions_raw_info_title">Sector-by-sector write</string>
     <string name="raw_map_metadata_hybrid">Hybrid MBR hides part of the partition metadata; the overlap list may be incomplete.</string>
     <string name="raw_map_metadata_backup_unknown">The backup GPT metadata location could not be determined; the overlap list may be incomplete.</string>
     <string name="raw_map_snap_ticks_a11y">Partition edges and disk ends used for range snap</string>
-    <string name="raw_map_snap_hint">Only the start is dragged; the end is computed from the decoded image size. The start snaps to drawn partition edges and disk ends within 12 dp, then is clamped so the image fits. Partition-table and boot areas are shown but are not snap targets. The numeric start field stays exact.</string>
+    <string name="raw_map_snap_hint">Only the start is dragged; the end is computed from the decoded image size. The start snaps to drawn partition edges and disk ends within 16 dp, then is clamped so the image fits. Partition-table and boot areas are shown but are not snap targets. The numeric start field stays exact.</string>
     <string name="raw_map_snap_state">Start LBA %1$d, end LBA %2$d. %3$d snap edges are drawn.</string>
     <string name="partitions_raw_write_subtitle">Writes to the medium itself, not into a filesystem.</string>
     <string name="partitions_delete_staged">Delete staged file</string>

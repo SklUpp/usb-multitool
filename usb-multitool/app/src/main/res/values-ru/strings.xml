@@ -85,9 +85,8 @@
     <string name="partitions_write_policy_ro">Запись запрещена политикой приложения</string>
     <string name="partitions_write_driver_ro">Файловый драйвер смонтирован только для чтения; состояние носителя неизвестно</string>
     <string name="partitions_write_driver_rw">Файловый драйвер смонтирован для чтения и записи; состояние носителя неизвестно</string>
-    <string name="files_write_policy_label">RO · политика</string>
-    <string name="files_write_driver_ro_label">RO · драйвер</string>
-    <string name="files_write_driver_rw_label">RW · драйвер</string>
+    <string name="files_write_short_ro">RO</string>
+    <string name="files_write_short_rw">RW</string>
     <string name="partitions_write_policy_label">RO · политика</string>
     <string name="partitions_write_driver_ro_label">RO · драйвер</string>
     <string name="partitions_write_driver_rw_label">RW · драйвер</string>
@@ -336,11 +335,13 @@
     <string name="raw_map_overlaps_title">Реальные пересечения (охваченные секторы)</string>
     <string name="raw_map_summary_start_only">Начальный LBA %1$d. Конец рассчитывается по размеру образа, когда он известен.</string>
     <string name="raw_map_snap_state_start">Начальный LBA %1$d. Конец следует за размером образа, когда он известен.</string>
+    <string name="raw_map_pan_a11y">Положение прокрутки шкалы</string>
+    <string name="raw_map_pan_state">Прокручено на %1$d%%</string>
     <string name="partitions_raw_info_title">Посекторная запись</string>
     <string name="raw_map_metadata_hybrid">Гибридный MBR скрывает часть метаданных разделов; список пересечений может быть неполным.</string>
     <string name="raw_map_metadata_backup_unknown">Расположение резервной копии метаданных GPT определить не удалось; список пересечений может быть неполным.</string>
     <string name="raw_map_snap_ticks_a11y">Края разделов и концы диска для привязки диапазона</string>
-    <string name="raw_map_snap_hint">Перетаскивается только начало; конец рассчитывается по декодированному размеру образа. Начало притягивается к нарисованным краям разделов и концам диска в пределах 12 dp, затем ограничивается так, чтобы образ поместился. Области таблиц разделов и загрузочные области видны, но не являются целями привязки. Числовое поле начального LBA остаётся точным.</string>
+    <string name="raw_map_snap_hint">Перетаскивается только начало; конец рассчитывается по декодированному размеру образа. Начало притягивается к нарисованным краям разделов и концам диска в пределах 16 dp, затем ограничивается так, чтобы образ поместился. Области таблиц разделов и загрузочные области видны, но не являются целями привязки. Числовое поле начального LBA остаётся точным.</string>
     <string name="raw_map_snap_state">Начало LBA %1$d, конец LBA %2$d. Нарисовано границ привязки: %3$d.</string>
     <string name="partitions_raw_write_subtitle">Пишет на сам носитель, не в файловую систему.</string>
     <string name="partitions_delete_staged">Удалить подготовленный файл</string>
