@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Карточка разметки: схема · число разделов. -->
+    <string name="partitions_layout_heading">%1$s · %2$d разделов</string>
+    <!-- Краткая ёмкость used/total под заголовком. -->
+    <string name="partitions_layout_usage_pair">%1$s / %2$s</string>
+    <!-- Капсула смены схемы: current → target. -->
+    <string name="partitions_scheme_capsule_a11y">Сменить схему с %1$s на %2$s</string>
+    <!-- Заголовок листа выбора раздела. -->
+    <string name="partitions_select_sheet_title">Выберите раздел</string>
+    <!-- Вторая строка sticky: размер · ФС. -->
+    <string name="partitions_sticky_meta">%1$s · %2$s</string>
+    <!-- Первая строка sticky: порядковый номер + имя. -->
+    <string name="partitions_sticky_title">%1$d. %2$s</string>
+    <!-- Строки фактов выбранного раздела. -->
+    <string name="partitions_info_type_label">Тип раздела</string>
+    <string name="partitions_info_type_efi">EFI</string>
+    <string name="partitions_info_type_data">Данные</string>
+    <string name="partitions_info_lba_range_label">Диапазон LBA</string>
+    <string name="partitions_info_lba_range_value">%1$d – %2$d</string>
+    <string name="partitions_info_access_label">Доступ</string>
+    <!-- Двухфазная посекторная запись. -->
+    <string name="partitions_raw_pick_image">Выбрать образ…</string>
+    <!-- Лист выбора источника под «Выбрать образ». -->
+    <string name="partitions_raw_source_phone">На телефоне</string>
+    <string name="partitions_raw_source_stick">На накопителе</string>
+    <string name="partitions_raw_target_whole">Весь диск (LBA 0)</string>
+    <string name="partitions_raw_target_partition">Раздел %1$d</string>
+    <string name="partitions_raw_target_custom">Свой LBA</string>
+    <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>
+    <string name="partitions_raw_write_sectors">Записать по секторам…</string>
+    <string name="partitions_raw_source_sectors">%1$d секторов</string>
+    <string name="partitions_raw_clear_image_a11y">Сбросить выбранный образ</string>
+    <string name="partitions_raw_range_ok">Диапазон в свободном месте или в выбранном разделе</string>
+    <string name="partitions_raw_range_touches_protected">Диапазон затрагивает LBA 0, метаданные таблицы или другой раздел</string>
+    <string name="partitions_raw_range_out">Диапазон вне диска</string>
+    <string name="partitions_raw_range_ro_efi">Диапазон пересекает раздел только для чтения или EFI</string>
+</resources>

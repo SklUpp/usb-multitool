@@ -25,20 +25,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,9 +51,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -209,18 +205,6 @@ fun FilesScreen(
 
 
     val selected = state.selectedPartition()
-    val fileListState = rememberLazyListState()
-    var isScrollingDown by remember { mutableStateOf(false) }
-    LaunchedEffect(fileListState) {
-        var previousPosition = 0
-        snapshotFlow {
-            fileListState.firstVisibleItemIndex * 1_000_000 +
-                fileListState.firstVisibleItemScrollOffset to fileListState.isScrollInProgress
-        }.collect { (position, scrolling) ->
-            isScrollingDown = scrolling && position > previousPosition
-            previousPosition = position
-        }
-    }
     val canAct = state.actionsEnabled && selected != null
     // Only an EFI-protected selected partition loses write actions; a missing selection
     // must not be reported as EFI protection.
@@ -292,12 +276,12 @@ fun FilesScreen(
                     .verticalScroll(rememberScrollState()),
             ) {
                 PartitionChoiceRow(
-                    options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
                     partitions = state.partitions,
                     selectedId = selected?.id ?: state.partitions.first().id,
                     writeAccess = writeAccess,
                     space = space,
                     enabled = state.actionsEnabled,
+                    sizeOf = { partitionSizeLabel(state, it) },
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
                 // Matches the empty-partitions branch below: the same known blocked
@@ -324,7 +308,6 @@ fun FilesScreen(
                 canWrite = canWrite,
                 selection = selection,
                 selectedNames = selectedNames,
-                fileListState = fileListState,
                 reducedMotion = reducedMotion,
                 onToggleSelect = { entry ->
                     selectedNames = toggleSelectedName(selectedNames, entry.name)
@@ -404,32 +387,20 @@ fun FilesScreen(
                 modifier = Modifier.weight(1f),
             )
         }
-        ExtendedFloatingActionButton(
-            expanded = !isScrollingDown,
+        FilledIconButton(
             onClick = { if (canWrite) onRequestBatchUpload() },
-            icon = { GlyphIcon(Glyph.Plus, size = 24.dp) },
-            text = { Text(uploadDescription) },
-            // M3 disabled tokens; ExtendedFAB has no `enabled`, so the colors carry it.
-            containerColor =
-                if (canWrite) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                },
-            contentColor =
-                if (canWrite) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                },
+            enabled = canWrite,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
-                .semantics {
-                    contentDescription = uploadDescription
-                    if (!canWrite) disabled()
-                },
-        )
+                .size(48.dp)
+                .semantics { contentDescription = uploadDescription },
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = null,
+            )
+        }
     }
     actionEntry?.let { entry ->
         FileActionSheet(
@@ -819,12 +790,12 @@ private fun FilesPickScreen(
         ) {
             item(key = "pick-partition") {
                 PartitionChoiceRow(
-                    options = state.partitions.map { it.id to partitionOptionLabel(state, it) },
                     partitions = state.partitions,
                     selectedId = mode.partitionId,
                     writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
                     space = partition?.let(state::filesystemSpace),
                     enabled = canAct && !transition.isRunning,
+                    sizeOf = { partitionSizeLabel(state, it) },
                     onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
                 )
             }
@@ -1095,7 +1066,6 @@ private fun FolderCard(
     canWrite: Boolean,
     selection: ListingSelection,
     selectedNames: Set<String>,
-    fileListState: LazyListState,
     reducedMotion: Boolean,
     onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
@@ -1119,7 +1089,10 @@ private fun FolderCard(
             directoryContentTransform(reducedMotion)
         },
         label = "folder",
-        modifier = modifier.fillMaxWidth(),
+        // fillMaxSize: AnimatedContent gets weight(1f) height from the screen Column.
+        // Without it the inner weight/LazyColumn can measure unbounded, lay out every
+        // row, report canScroll=false, and look clipped with no gesture scroll.
+        modifier = modifier.fillMaxSize(),
     ) { target ->
         // Snapshot render: leaving content keeps the exact files it captured, so
         // navigation never swaps rows under the exit fade.
@@ -1127,7 +1100,9 @@ private fun FolderCard(
         val rowsState = target.listingState
         val rowsError = target.error.ifEmpty { null }
         val locked = transition.isRunning
-        Column(modifier = Modifier.fillMaxWidth()) {
+        // Own state per AnimatedContent slot: enter+exit must not share one LazyListState.
+        val listState = rememberLazyListState()
+        Column(modifier = Modifier.fillMaxSize()) {
             if (selection.entries.isNotEmpty()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1164,13 +1139,14 @@ private fun FolderCard(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.weight(1f, fill = false).fillMaxWidth(),
+                // fill=true so the list always receives a tight height from the card.
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
                 // One lazy area for the whole volume: the path/action sub-block is its
                 // first item, so a short window or a large font scrolls it away instead
                 // of squeezing the list to zero.
                 LazyColumn(
-                    state = fileListState,
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     // Shell safeDrawing already lifts this card above the navigation bar; this
                     // 80 dp keeps the last row clear of the floating action button too, so the
@@ -1369,112 +1345,145 @@ private fun FolderActionButton(
 }
 
 /** Rectangular partition choice: label, real name/format/free space and the RO/RW chip. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PartitionChoiceRow(
-    options: List<Pair<String, String>>,
     partitions: List<PartitionTab>,
     selectedId: String,
     writeAccess: PartitionWriteAccess,
     space: FilesystemSpace?,
     enabled: Boolean,
+    sizeOf: (PartitionTab) -> String?,
     onSelect: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var sheetOpen by remember { mutableStateOf(false) }
     val selected = partitions.firstOrNull { it.id == selectedId }
     val label = stringResource(R.string.files_current_partition)
-    // Exactly one partition leaves nothing to choose: no chevron, no menu, no tap.
+    val sheetTitle = stringResource(R.string.files_select_partition)
+    // Exactly one partition leaves nothing to choose: no chevron, no sheet, no tap.
     val selectable = partitions.size > 1
-    Box(modifier = Modifier.fillMaxWidth()) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth(),
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    enabled = enabled && selectable,
+                    onClickLabel = label,
+                    role = Role.Button,
+                ) { sheetOpen = true }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(
-                        enabled = enabled && selectable,
-                        onClickLabel = label,
-                        role = Role.Button,
-                    ) { expanded = true }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = selected?.let(::partitionDisplayName) ?: "—",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = selected?.filesystemLabel?.ifEmpty { "—" } ?: "—",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                        )
-                    }
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        text = freeSpaceText(space),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
+                        text = selected?.let(::partitionDisplayName) ?: "—",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = selected?.filesystemLabel?.ifEmpty { "—" } ?: "—",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
                     )
                 }
-                WriteAccessBadge(writeAccess)
-                if (selectable) {
-                    GlyphIcon(
-                        glyph = Glyph.ChevronDown,
-                        size = 20.dp,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
+                Text(
+                    text = freeSpaceText(space),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            WriteAccessBadge(writeAccess)
+            if (selectable) {
+                GlyphIcon(
+                    glyph = Glyph.ChevronDown,
+                    size = 20.dp,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
             }
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            // M3 default menu container is surfaceContainer, one step below the card it
-            // opens from; surfaceContainerHigh keeps the menu above the screen plane.
+    }
+    if (sheetOpen && selectable) {
+        ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 3.dp,
         ) {
-            options.forEach { (value, text) ->
-                val isSelected = value == selectedId
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        expanded = false
-                        onSelect(value)
-                    },
-                    modifier =
-                        if (isSelected) {
-                            Modifier.semantics { this.selected = true }
-                        } else {
-                            Modifier
+            Text(
+                text = sheetTitle,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 16.dp),
+            ) {
+                partitions.forEach { partition ->
+                    val isSelected = partition.id == selectedId
+                    val sizeLabel = sizeOf(partition)
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                text = partitionDisplayName(partition),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false,
+                            )
                         },
-                    trailingIcon = if (isSelected) {
-                        {
-                            GlyphIcon(Glyph.Check, size = 18.dp)
-                        }
-                    } else {
-                        null
-                    },
-                )
+                        supportingContent = sizeLabel?.let { labelText ->
+                            {
+                                Text(
+                                    text = labelText,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    softWrap = false,
+                                )
+                            }
+                        },
+                        trailingContent = if (isSelected) {
+                            {
+                                GlyphIcon(Glyph.Check, size = 18.dp)
+                            }
+                        } else {
+                            null
+                        },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .semantics { if (isSelected) this.selected = true }
+                            .clickable(role = Role.Button) {
+                                sheetOpen = false
+                                onSelect(partition.id)
+                            },
+                    )
+                }
             }
         }
     }
@@ -1565,82 +1574,66 @@ private fun FileRow(
                 onLongClick = onToggleSelect,
             ),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 52.dp)
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Icon(
-                painter = painterResource(
-                    if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
-                ),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp),
-            )
-            val shownName = entry.name
-            val parts = fileNameParts(entry.name, entry.isDirectory)
-            // The suffix is its own node so a long file name ellipsizes the base and keeps
-            // the extension start visible. Without a cap the suffix is measured with the
-            // whole row width: an unusually long "extension" then clips mid-glyph and
-            // collapses the base to zero.
-            // The row announces the real full name once, through semantics.
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clearAndSetSemantics { contentDescription = shownName },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val weight =
-                    if (entry.isDirectory || isSelected) FontWeight.Medium else FontWeight.Normal
+        ListItem(
+            headlineContent = {
                 Text(
-                    text = parts.base,
+                    text = entry.name,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = weight,
+                    fontWeight = if (entry.isDirectory || isSelected) {
+                        FontWeight.Medium
+                    } else {
+                        FontWeight.Normal
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    softWrap = false,
                 )
-                if (parts.suffix.isNotEmpty()) {
+            },
+            supportingContent = if (!entry.isDirectory) {
+                {
                     Text(
-                        text = parts.suffix,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = weight,
+                        text = DeviceIdentity.formatCapacity(entry.sizeBytes),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        softWrap = false,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .widthIn(max = 96.dp)
-                            .padding(start = 2.dp),
+                        softWrap = false,
                     )
                 }
-            }
-            if (!entry.isDirectory) {
-                Text(
-                    text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
+            } else {
+                null
+            },
+            leadingContent = {
+                Icon(
+                    painter = painterResource(
+                        if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
                     ),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
                 )
-            }
-            if (showActions) {
-                IconButton(
-                    onClick = onAction,
-                    enabled = actionsEnabled,
-                    modifier = Modifier.semantics {
-                        contentDescription = moreActionsDescription
-                    },
-                ) {
-                    GlyphIcon(Glyph.More, size = 24.dp)
+            },
+            trailingContent = if (showActions) {
+                {
+                    IconButton(
+                        onClick = onAction,
+                        enabled = actionsEnabled,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = moreActionsDescription },
+                    ) {
+                        GlyphIcon(Glyph.More, size = 24.dp)
+                    }
                 }
-            }
-        }
+            } else {
+                null
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.heightIn(min = 48.dp),
+        )
     }
 }
 
@@ -1756,19 +1749,6 @@ internal fun partitionDisplayName(partition: PartitionTab): String =
     partition.name.ifBlank { partition.id } +
         partition.volumeLabel.orEmpty().trim().takeIf { it.isNotEmpty() }?.let { " ($it)" }.orEmpty()
 
-private fun partitionOptionLabel(state: AppUiState, partition: PartitionTab): String =
-    buildString {
-        append(partitionDisplayName(partition))
-        partition.filesystemLabel.takeIf { it.isNotEmpty() }?.let {
-            append(" · ")
-            append(it)
-        }
-        partitionSizeLabel(state, partition)?.let {
-            append(" · ")
-            append(it)
-        }
-    }
-
 /** Live listing entries still present for the remembered selected names. */
 internal data class ListingSelection(
     val entries: List<FileEntry>,
@@ -1866,14 +1846,7 @@ private fun FileActionSheet(
             enabled = canWrite,
             onClick = onDelete,
         )
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.action_cancel)) },
-            leadingContent = { GlyphIcon(Glyph.Close, size = 22.dp) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(role = Role.Button, onClick = onDismiss),
-        )
+
     }
 }
 

@@ -68,6 +68,7 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.darkColorScheme
@@ -274,6 +275,22 @@ fun AppShell(
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         // Strip opens the status dialog; picker ownership still forces it closed.
         var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
+        // Terminal results get one short snackbar in addition to the permanent block;
+        // status spam while running stays out (the block is the only live surface).
+        val shellSnackbar = remember { SnackbarHostState() }
+        var snackbarToken by rememberSaveable { mutableStateOf<Long?>(null) }
+        val shellFacts = operationStatusFacts(state)
+        val snackbarText = shellFacts?.let { fact ->
+            listOfNotNull(fact.name, fact.result ?: fact.state).joinToString(" · ")
+        } ?: state.statusMessage?.localized()
+        LaunchedEffect(state.operation?.token, state.operation?.state) {
+            val operation = state.operation ?: return@LaunchedEffect
+            if (!operation.state.isTerminal() || snackbarToken == operation.token.value) {
+                return@LaunchedEffect
+            }
+            snackbarToken = operation.token.value
+            snackbarText?.let { shellSnackbar.showSnackbar(it, duration = SnackbarDuration.Short) }
+        }
         // Modal pick task owns Back: cancel routes through the reducer, and Back stays
         // inert while a copy runs or a confirmation is open (the reducer keeps the
         // picker and reports why). Journal/Settings handlers are disabled while pickOpen.
@@ -351,7 +368,7 @@ fun AppShell(
             // targetSdk 36 draws edge to edge: the header, the tab content and the log
             // layer must stay inside the status/navigation bars and any display cutout.
             contentWindowInsets = WindowInsets.safeDrawing,
-            // No shell-level snackbar host: status stays in the permanent block.
+            snackbarHost = { SnackbarHost(shellSnackbar) },
             bottomBar = {
                 Column(
                     modifier = Modifier
@@ -408,10 +425,10 @@ fun AppShell(
                     .fillMaxSize(),
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // Header and status block share the 12 dp side rhythm. Status hides on
-                    // Settings and while the journal covers the work tabs; header stays on
-                    // Settings so its bar sits under DeviceHeader. Picker owns whole screen.
-                    if (!pickOpen) {
+                    // Header and status block share the 12 dp side rhythm. Settings owns
+                    // a single standard TopAppBar (with back) and hides both; the journal
+                    // covers the work tabs; the picker owns the whole screen.
+                    if (!pickOpen && state.tab != ShellTab.Settings) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -434,7 +451,7 @@ fun AppShell(
                                 },
                             )
                         }
-                        if (!panels.journalScreenOpen && state.tab != ShellTab.Settings) {
+                        if (!panels.journalScreenOpen) {
                             OperationStatusLine(
                                 state = state,
                                 onOpenDetails = { operationDetailsOpen = true },

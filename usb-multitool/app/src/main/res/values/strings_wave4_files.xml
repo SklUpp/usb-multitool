@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Partition picker sheet title on the Files tab. -->
+    <string name="files_select_partition">Select partition</string>
+</resources>

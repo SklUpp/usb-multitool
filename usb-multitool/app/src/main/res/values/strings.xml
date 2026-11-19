@@ -68,7 +68,6 @@
     <string name="partitions_delete_action">Delete partition…</string>
     <string name="partitions_reveal_selected_action">Show selected partition</string>
     <string name="partitions_efi_toggle_action">Change EFI role</string>
-    <string name="partitions_bootable_toggle_action">Change bootable flag</string>
     <string name="partitions_region_label">Region</string>
     <string name="partitions_create_action">Create partition…</string>
     <string name="partitions_capacity_unknown">Capacity unknown</string>

@@ -14,11 +14,15 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,19 +54,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.multitool.R
@@ -96,8 +100,7 @@ import usb.ventoy.VentoyKnownControl
 import usb.ventoy.VentoySetting
 import usb.ventoy.VentoySettingsSource
 
-/** Orange marks a settings file that is not Ventoy's own `/ventoy/ventoy.json`. */
-private val NonDefaultSettingsPath = Color(0xFFE65100)
+
 
 /**
  * Autounattend subsection of the Ventoy tab: the answer file that already exists, the
@@ -187,7 +190,7 @@ internal fun AutounattendSection(
         trailing = {
             InfoHelpButton(
                 infoTitle = stringResource(R.string.unattend_help_title),
-                infoText = stringResource(R.string.unattend_help_body),
+                infoText = stringResource(R.string.wave4_unattend_help_body),
             )
         },
     ) {
@@ -224,195 +227,118 @@ internal fun AutounattendSection(
                 }
             }
         }
-        // The template row is always present: "not selected yet" is a real answer, and a
-        // selected path is shown as resolved even before the file has been read. The path
-        // wraps instead of using InfoRow, which would ellipsize it to one line.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.unattend_template_label),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = stringResource(
-                    if (template == null) R.string.unattend_status_not_selected
-                    else R.string.unattend_status_selected,
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        val resolvedPath = template?.let(VentoySetup::resolveXmlPath)
+        val xmlSizeLabel = document?.let { doc ->
+            val text = doc.sourceText ?: return@let null
+            val bytes = text.toByteArray(StandardCharsets.UTF_8).size.toLong() +
+                doc.sourceBom.size.toLong()
+            DeviceIdentity.formatCapacity(bytes.toULong())
         }
-        Text(
-            text = template?.let(VentoySetup::resolveXmlPath)
-                ?: stringResource(R.string.selection_not_selected),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
+        ConfigFileStatusRow(
+            pathLabel = resolvedPath,
+            sizeLabel = xmlSizeLabel,
+            dimmedPath = resolvedPath == null,
+            showChanged = false,
+            onReset = if (template != null) {
+                { onIntent(UiIntent.ClearWindowsTemplate) }
+            } else {
+                null
+            },
+            resetEnabled = state.actionsEnabled,
         )
-        if (template == null) {
-            if (!xmlGone) {
-                EmptyHint(stringResource(R.string.unattend_no_template))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Button(
-                        onClick = { templateSourcePrompt = true },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                    ) {
-                        Text(
-                            stringResource(R.string.unattend_choose_template),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Button(
-                        onClick = { generateOpen = true },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                    ) {
-                        Text(stringResource(R.string.unattend_generate))
-                    }
-                }
-            }
-        } else {
-            when (val file = state.autounattendState) {
-                AutounattendState.Missing ->
+        when (val file = state.autounattendState) {
+            AutounattendState.Missing ->
+                if (template != null) {
                     EmptyHint(stringResource(R.string.unattend_missing))
-
-                is AutounattendState.Unreadable -> Text(
-                    text = stringResource(unreadableText(file.problem)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-
-                is AutounattendState.Parsed -> {
-                    val doc = file.document
-                    InfoRow(
-                        stringResource(R.string.unattend_bound_images),
-                        doc.boundImages.size.toString(),
+                }
+            is AutounattendState.Unreadable -> Text(
+                text = stringResource(unreadableText(file.problem)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            is AutounattendState.Parsed -> {
+                val doc = file.document
+                if (doc.destructiveMarkers.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.unattend_destructive_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
                     )
-                    if (doc.unknownElements.isNotEmpty()) {
+                    doc.destructiveMarkers.forEach { marker ->
                         Text(
-                            text = stringResource(
-                                R.string.unattend_unknown_elements,
-                                doc.unknownElements.size,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        doc.unknownElements.take(6).forEach { element ->
-                            Text(
-                                text = element.path ?: element.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Text(
-                            text = stringResource(R.string.unattend_unknown_note),
+                            text = marker,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (doc.destructiveMarkers.isNotEmpty()) {
-                        Text(
-                            text = stringResource(R.string.unattend_destructive_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        doc.destructiveMarkers.forEach { marker ->
-                            Text(
-                                text = marker,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
                     }
-                    if (doc.layoutProblems.isNotEmpty()) {
+                }
+                if (doc.layoutProblems.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.unattend_layout_problems),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    doc.layoutProblems.forEach { problem ->
                         Text(
-                            text = stringResource(R.string.unattend_layout_problems),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
+                            text = autounattendProblemText(problem),
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        doc.layoutProblems.forEach { problem ->
-                            Text(
-                                text = autounattendProblemText(problem),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
                     }
                 }
             }
-            if (!xmlGone) {
-                Row(
+            else -> Unit
+        }
+        if (!xmlGone) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { templateSourcePrompt = true },
+                    enabled = state.actionsEnabled,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .heightIn(min = 48.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = { templateSourcePrompt = true },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                    ) {
-                        Text(
-                            stringResource(R.string.unattend_choose_template),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Button(
-                        onClick = { generateOpen = true },
-                        enabled = state.actionsEnabled &&
-                            state.autounattendState !is AutounattendState.Unreadable &&
-                            document?.layoutProblems.isNullOrEmpty(),
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                    ) {
-                        Text(stringResource(R.string.unattend_generate))
-                    }
+                    Text(
+                        stringResource(R.string.wave4_choose_ellipsis),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                FilledTonalButton(
+                    onClick = { generateOpen = true },
+                    enabled = state.actionsEnabled &&
+                        state.autounattendState !is AutounattendState.Unreadable &&
+                        document?.layoutProblems.isNullOrEmpty(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.unattend_generate),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            // Raw XML editor stays reachable when source bytes exist; not part of two-button row.
+            if (document?.sourceText != null) {
                 OutlinedButton(
                     onClick = { xmlEditorOpen = true },
-                    enabled = state.actionsEnabled &&
-                        document != null &&
-                        document.sourceText != null,
-                    modifier = Modifier.fillMaxWidth(),
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
                 ) {
                     Text(stringResource(R.string.unattend_open_editor))
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    TextButton(
-                        onClick = { onIntent(UiIntent.LoadAutounattend(template)) },
-                        enabled = state.actionsEnabled,
-                    ) {
-                        Text(stringResource(R.string.unattend_refresh))
-                    }
-                    TextButton(onClick = { onIntent(UiIntent.ClearWindowsTemplate) }) {
-                        Text(stringResource(R.string.unattend_clear_template))
-                    }
                 }
             }
         }
@@ -721,14 +647,14 @@ internal fun AutounattendSection(
  * keys stay editable as key/value, and every edit is staged until Update or the confirmed
  * install/update writes the default file.
  */
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun GlobalSettingsCard(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     onPickVentoySettingsFile: () -> Unit,
 ) {
-    // Detached stick hides USB-gated rows; help + staged discard stay mounted.
+    // Detached stick hides USB-gated rows; help stays mounted.
     val settingsGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
     var sourceMenuOpen by remember { mutableStateOf(false) }
     var editorOpen by remember { mutableStateOf(false) }
@@ -765,64 +691,51 @@ internal fun GlobalSettingsCard(
         trailing = {
             InfoHelpButton(
                 infoTitle = stringResource(R.string.settings_help_title),
-                infoText = stringResource(R.string.settings_help_body),
+                infoText = stringResource(R.string.wave4_settings_help_body),
             )
         },
     ) {
         val source = state.ventoySettingsSource
         val customPath = !source.isDefaultPath()
         val settings = state.ventoyGlobalSettings
-        val entries = (settings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = source.label(),
-                style = MaterialTheme.typography.bodySmall,
-                color =
-                    if (customPath) {
-                        NonDefaultSettingsPath
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = when {
-                    state.ventoySettingsSourceLoading ->
-                        stringResource(R.string.settings_source_status_reading)
-                    settings == null -> stringResource(R.string.settings_source_status_unread)
-                    settings == VentoyGlobalSettings.Missing ->
-                        stringResource(R.string.settings_source_status_missing)
-                    settings == VentoyGlobalSettings.Empty ->
-                        stringResource(R.string.settings_source_status_empty)
-                    settings is VentoyGlobalSettings.Present ->
-                        stringResource(
-                            R.string.settings_source_status_valid,
-                            settings.entries.size,
-                        )
-                    else -> stringResource(R.string.settings_source_status_error)
-                },
-                style = MaterialTheme.typography.labelSmall,
-                textAlign = TextAlign.End,
-                color =
-                    when (settings) {
-                        is VentoyGlobalSettings.ReadError,
-                        VentoyGlobalSettings.Missing
-                        -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-            )
+        val pending = state.pendingVentoyControls
+        val importedFileReady =
+            customPath &&
+                (settings is VentoyGlobalSettings.Present || settings is VentoyGlobalSettings.Empty)
+        val hasPendingWrite = pending.isNotEmpty() || importedFileReady
+        val sizeOrStatus = when {
+            state.ventoySettingsSourceLoading ->
+                stringResource(R.string.settings_source_status_reading)
+            settings == null -> stringResource(R.string.settings_source_status_unread)
+            settings == VentoyGlobalSettings.Missing ->
+                stringResource(R.string.settings_source_status_missing)
+            settings == VentoyGlobalSettings.Empty ->
+                stringResource(R.string.settings_source_status_empty)
+            settings is VentoyGlobalSettings.Present ->
+                stringResource(
+                    R.string.settings_source_status_valid,
+                    settings.entries.size,
+                )
+            else -> stringResource(R.string.settings_source_status_error)
         }
-        if (customPath) {
-            Text(
-                text = stringResource(R.string.settings_source_custom_path),
-                style = MaterialTheme.typography.labelSmall,
-                color = NonDefaultSettingsPath,
-            )
-        }
+        ConfigFileStatusRow(
+            pathLabel = source.label(),
+            sizeLabel = sizeOrStatus,
+            dimmedPath = !customPath,
+            showChanged = hasPendingWrite,
+            onReset = if (customPath) {
+                { onIntent(UiIntent.UseDefaultVentoySettingsFile) }
+            } else {
+                null
+            },
+            resetEnabled = state.actionsEnabled,
+            onPathClick = if (!settingsGone && state.actionsEnabled) {
+                { sourceMenuOpen = true }
+            } else {
+                null
+            },
+            pathClickLabel = stringResource(R.string.wave4_pick_settings_file),
+        )
         if (source is VentoySettingsSource.Document) {
             Text(
                 text = stringResource(R.string.settings_source_phone_note),
@@ -830,36 +743,8 @@ internal fun GlobalSettingsCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (!settingsGone) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = { sourceMenuOpen = true },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp),
-                ) {
-                    Text(stringResource(R.string.settings_source_choose))
-                }
-                if (customPath) {
-                    TextButton(
-                        onClick = { onIntent(UiIntent.UseDefaultVentoySettingsFile) },
-                        enabled = state.actionsEnabled,
-                    ) {
-                        Text(stringResource(R.string.settings_source_use_default))
-                    }
-                }
-            }
-        }
         when (settings) {
             null -> {
-                // null = not read yet, or nothing is attached to read from. No in-flight flag
-                // exists for this catalog, so never claim that a read is in progress. The
-                // detached card is normally hidden; if it stays mounted for live work, the
-                // centered empty state already names the missing device.
                 if (!settingsGone) {
                     EmptyHint(
                         if (state.presence == DevicePresence.Ready) {
@@ -868,14 +753,14 @@ internal fun GlobalSettingsCard(
                             UiReducer.presenceMessage(state.presence).localized()
                         },
                     )
-                }
-                if (!settingsGone) {
-                    TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
+                    TextButton(
+                        onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
                         Text(stringResource(R.string.settings_retry))
                     }
                 }
-                StagedControls(state = state, onIntent = onIntent)
-                return@SectionCard
             }
             VentoyGlobalSettings.Missing ->
                 EmptyHint(
@@ -887,7 +772,7 @@ internal fun GlobalSettingsCard(
                         },
                     ),
                 )
-            VentoyGlobalSettings.Empty -> EmptyHint(stringResource(R.string.settings_empty))
+            VentoyGlobalSettings.Empty -> Unit
             is VentoyGlobalSettings.ReadError -> {
                 Text(
                     text = stringResource(
@@ -908,32 +793,76 @@ internal fun GlobalSettingsCard(
                     )
                 }
                 if (!settingsGone) {
-                    TextButton(onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) }) {
+                    TextButton(
+                        onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
                         Text(stringResource(R.string.settings_retry))
                     }
                 }
-                // Staged choices stay actionable: an install can still write them, and a
-                // failed settings retry must remain reachable without re-reading.
-                StagedControls(state = state, onIntent = onIntent)
-                return@SectionCard
             }
             is VentoyGlobalSettings.Present -> Unit
         }
+        StagedControlsHints(state = state)
+        if (pending.isNotEmpty()) {
+            CompactStagedControls(
+                pending = pending,
+                onDiscard = { controlKey -> onIntent(UiIntent.DiscardStagedVentoyControl(controlKey)) },
+            )
+        }
         if (!settingsGone) {
-            OutlinedButton(
-                onClick = {
-                    editorBaseline = state.pendingVentoyControls
-                    editorOpen = true
-                },
-                enabled = state.actionsEnabled && settings != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(stringResource(R.string.settings_open_editor)) }
-            // Retry must be reachable from every loaded state, not just the unread one.
-            TextButton(
-                onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
-                enabled = state.actionsEnabled,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(stringResource(R.string.unattend_refresh))
+                OutlinedButton(
+                    onClick = {
+                        editorBaseline = state.pendingVentoyControls
+                        editorOpen = true
+                    },
+                    enabled = state.actionsEnabled && settings != null,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.wave4_editor),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Button(
+                    onClick = { onIntent(UiIntent.RequestApplyVentoyControls) },
+                    enabled = state.actionsEnabled && hasPendingWrite,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        stringResource(
+                            when {
+                                state.operation?.state == OperationState.Partial &&
+                                    state.operation?.title in setOf(
+                                        OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                                        OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
+                                    ) -> R.string.settings_retry_pending_action
+                                pending.isEmpty() &&
+                                    source is VentoySettingsSource.Document ->
+                                    R.string.settings_import_apply
+                                pending.isEmpty() && customPath ->
+                                    R.string.settings_import_copy_to_default
+                                else -> R.string.wave4_write
+                            },
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (editorOpen) {
@@ -947,14 +876,6 @@ internal fun GlobalSettingsCard(
                 },
             )
         }
-        // Loaded catalog: this is where an imported file is written to the stick and where
-        // staged edits from the editor become one confirmed write.
-        StagedControls(state = state, onIntent = onIntent)
-        Text(
-            text = stringResource(R.string.settings_applies_note),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
     if (sourceMenuOpen) {
         SettingsSourceDialog(
@@ -995,6 +916,7 @@ private fun GlobalSettingsEditorDialog(
 ) {
     val entries = (state.ventoyGlobalSettings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
     var applyProblem by remember { mutableStateOf<String?>(null) }
+    var addParamOpen by remember { mutableStateOf(false) }
     // Pending changes seed a new dialog session, but must not reset local rows while editing.
     val drafts = remember(entries) {
         mutableStateListOf<EditorPairDraft>().apply {
@@ -1080,6 +1002,7 @@ private fun GlobalSettingsEditorDialog(
         }
     }
     val closeLabel = stringResource(R.string.settings_cancel)
+    val applyLabel = stringResource(R.string.settings_apply)
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(modifier = Modifier.fillMaxSize()) {
             Scaffold(
@@ -1093,8 +1016,12 @@ private fun GlobalSettingsEditorDialog(
                             ) { GlyphIcon(Glyph.Close) }
                         },
                         actions = {
-                            TextButton(onClick = ::commitDrafts, enabled = state.actionsEnabled) {
-                                Text(stringResource(R.string.settings_save))
+                            TextButton(
+                                onClick = ::commitDrafts,
+                                enabled = state.actionsEnabled,
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                Text(applyLabel)
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
@@ -1107,40 +1034,77 @@ private fun GlobalSettingsEditorDialog(
                     modifier = Modifier.fillMaxSize().padding(inner).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.settings_editor_help), style = MaterialTheme.typography.bodySmall)
                     applyProblem?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
                     }
                     Column(
                         modifier = Modifier
                             .weight(1f, fill = true)
                             .verticalScroll(rememberScrollState())
                             .animateContentSize(),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
+                        Text(
+                            text = stringResource(R.string.wave4_win11_section),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         VentoyControlCatalog.known.forEach { known ->
-                            KnownControlRow(known, entries, state.pendingVentoyControls, state.actionsEnabled, onIntent)
-                        }
-                        drafts.forEachIndexed { index, draft ->
-                            EditablePairRow(
-                                draft = draft,
-                                actionsEnabled = state.actionsEnabled,
-                                onChange = { changed -> drafts[index] = changed },
-                                onDelete = { drafts.removeAt(index) },
+                            KnownControlRow(
+                                known,
+                                entries,
+                                state.pendingVentoyControls,
+                                state.actionsEnabled,
+                                onIntent,
                             )
                         }
+                        Text(
+                            text = stringResource(R.string.wave4_config_params_section),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        drafts.toList().forEach { draft ->
+                            key(draft.id) {
+                                EditablePairRow(
+                                    draft = draft,
+                                    actionsEnabled = state.actionsEnabled,
+                                    onChange = { changed ->
+                                        val i = drafts.indexOfFirst { it.id == draft.id }
+                                        if (i >= 0) drafts[i] = changed
+                                    },
+                                    onDelete = { drafts.removeAll { it.id == draft.id } },
+                                )
+                            }
+                        }
                         FilledTonalButton(
-                            onClick = { drafts.add(EditorPairDraft("new:${drafts.size}", null, "", "", "")) },
+                            onClick = { addParamOpen = true },
                             enabled = state.actionsEnabled,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp),
                         ) {
-                            GlyphIcon(Glyph.Plus)
-                            Text(stringResource(R.string.settings_add))
+                            Text(stringResource(R.string.wave4_add_param))
                         }
                     }
                 }
             }
         }
+    }
+    if (addParamOpen) {
+        AddParameterDialog(
+            actionsEnabled = state.actionsEnabled,
+            existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
+                VentoyControlCatalog.known.map { it.key }.toSet(),
+            onAdd = { key, value ->
+                drafts.add(EditorPairDraft("new:${drafts.size}:$key", null, key, "", value))
+                addParamOpen = false
+            },
+            onDismiss = { addParamOpen = false },
+        )
     }
 }
 
@@ -1299,6 +1263,7 @@ private fun AutounattendRawEditorDialog(
 }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditablePairRow(
     draft: EditorPairDraft,
@@ -1306,52 +1271,84 @@ private fun EditablePairRow(
     onChange: (EditorPairDraft) -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        val clearLabel = stringResource(R.string.settings_clear_field)
-        val deleteLabel = stringResource(R.string.settings_delete_row)
-        // X clears one field (row stays = staged empty/edit); trash removes the whole row:
-        // existing saved key becomes a removal intent, new pair vanishes with no intent.
-        OutlinedTextField(
-            value = draft.key,
-            onValueChange = { onChange(draft.copy(key = it)) },
-            label = { Text(stringResource(R.string.settings_key_label)) },
-            singleLine = true,
-            enabled = actionsEnabled,
-            modifier = Modifier.weight(1f),
-            trailingIcon = {
-                if (draft.key.isNotEmpty()) IconButton(
-                    onClick = { onChange(draft.copy(key = "")) },
+    val deleteLabel = stringResource(R.string.settings_delete_row)
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart && actionsEnabled) {
+                onDelete()
+                true
+            } else {
+                false
+            }
+        },
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = actionsEnabled,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                GlyphIcon(
+                    Glyph.Trash,
+                    size = 22.dp,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+    ) {
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                OutlinedTextField(
+                    value = draft.key,
+                    onValueChange = { onChange(draft.copy(key = it)) },
+                    placeholder = { Text(stringResource(R.string.settings_key_label)) },
+                    singleLine = true,
                     enabled = actionsEnabled,
-                    modifier = Modifier.semantics { contentDescription = clearLabel },
-                ) {
-                    GlyphIcon(Glyph.Close, size = 18.dp)
-                }
-            },
-        )
-        OutlinedTextField(
-            value = draft.value,
-            onValueChange = { onChange(draft.copy(value = it)) },
-            label = { Text(stringResource(R.string.settings_value_label)) },
-            singleLine = true,
-            enabled = actionsEnabled,
-            modifier = Modifier.weight(1f),
-            trailingIcon = {
-                if (draft.value.isNotEmpty()) IconButton(
-                    onClick = { onChange(draft.copy(value = "")) },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "=",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = draft.value,
+                    onValueChange = { onChange(draft.copy(value = it)) },
+                    placeholder = { Text(stringResource(R.string.settings_value_label)) },
+                    singleLine = true,
                     enabled = actionsEnabled,
-                    modifier = Modifier.semantics { contentDescription = clearLabel },
-                ) {
-                    GlyphIcon(Glyph.Close, size = 18.dp)
-                }
-            },
-        )
-        IconButton(
-            onClick = onDelete,
-            enabled = actionsEnabled && (draft.key.isNotBlank() || draft.value.isNotBlank()),
-            modifier = Modifier.semantics {
-                contentDescription = deleteLabel
-            },
-        ) { GlyphIcon(Glyph.Trash, size = 18.dp) }
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+                // Explicit delete affordance — swipe alone is not enough for a11y.
+                IconButton(
+                    onClick = onDelete,
+                    enabled = actionsEnabled,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = deleteLabel },
+                ) { GlyphIcon(Glyph.Trash, size = 18.dp) }
+            }
+        }
     }
 }
 
@@ -1414,42 +1411,47 @@ private fun KnownControlRow(
         }
     val booleanKey =
         known.allowed.size == 2 && known.allowed.containsAll(listOf("0", "1"))
+    val humanTitle = when (known.key) {
+        "VTOY_WIN11_BYPASS_CHECK" -> stringResource(R.string.wave4_win11_bypass_tpm)
+        "VTOY_WIN11_BYPASS_NRO" -> stringResource(R.string.wave4_win11_local_account)
+        else -> knownControlTitle(known.key)
+    }
+    val keyHint = when (known.key) {
+        "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_hint
+        "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
+        else -> null
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Only keys this app understands get an explanation; unknown keys stay raw.
-        val keyHint = when (known.key) {
-            "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_hint
-            "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
-            else -> null
-        }
-        val keyShort = when (known.key) {
-            "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_short
-            "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_short
-            else -> null
-        }
-        // Short function line stays visible; full 0/1/remove text lives in Info.
-        val shortLine = keyShort?.let { stringResource(it) }
         if (booleanKey) {
             Row(
-                modifier = Modifier.fillMaxWidth().toggleable(
-                    value = value == "1",
-                    enabled = actionsEnabled,
-                    role = Role.Switch,
-                    onValueChange = { enabled ->
-                        onIntent(UiIntent.StageVentoyControl(known.key, if (enabled) "1" else "0"))
-                    },
-                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .toggleable(
+                        value = value == "1",
+                        enabled = actionsEnabled,
+                        role = Role.Switch,
+                        onValueChange = { enabled ->
+                            onIntent(
+                                UiIntent.StageVentoyControl(
+                                    known.key,
+                                    if (enabled) "1" else "0",
+                                ),
+                            )
+                        },
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(text = knownControlTitle(known.key), style = MaterialTheme.typography.bodyMedium)
-                    keyShort?.let {
-                        Text(
-                            text = stringResource(it),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(text = humanTitle, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = known.key,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text(
                         text = stringResource(R.string.settings_current, current),
                         style = MaterialTheme.typography.labelSmall,
@@ -1457,23 +1459,25 @@ private fun KnownControlRow(
                     )
                 }
                 Switch(checked = value == "1", onCheckedChange = null, enabled = actionsEnabled)
-                keyHint?.let { InfoHelpButton(infoTitle = knownControlTitle(known.key), infoText = stringResource(it)) }
+                keyHint?.let {
+                    InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
+                }
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = knownControlTitle(known.key),
+                        text = humanTitle,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    shortLine?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        text = known.key,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text(
                         text = stringResource(R.string.settings_current, current),
                         style = MaterialTheme.typography.labelSmall,
@@ -1482,14 +1486,18 @@ private fun KnownControlRow(
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         known.allowed.forEach { option ->
                             TextButton(
-                                onClick = { onIntent(UiIntent.StageVentoyControl(known.key, option)) },
+                                onClick = {
+                                    onIntent(UiIntent.StageVentoyControl(known.key, option))
+                                },
                                 enabled = actionsEnabled,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             ) { Text(knownOptionLabel(known.key, option)) }
                         }
                     }
                 }
-                keyHint?.let { InfoHelpButton(infoTitle = knownControlTitle(known.key), infoText = stringResource(it)) }
+                keyHint?.let {
+                    InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
+                }
             }
         }
         val problem = (onDisk?.status as? SettingStatus.Known)?.takeIf { !it.valid }
@@ -1500,60 +1508,17 @@ private fun KnownControlRow(
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        // A toggle sets 0/1; removal is separate because Ventoy's own default is neither.
         if (staged != null || onDisk != null) {
             TextButton(
                 onClick = { onIntent(UiIntent.StageVentoyControl(known.key, null)) },
                 enabled = actionsEnabled,
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
             ) { Text(stringResource(R.string.settings_remove)) }
         }
     }
 }
 
-@Composable
-private fun ExtraControlRow(
-    entry: VentoySetting,
-    pending: VentoyControlSetting?,
-    actionsEnabled: Boolean,
-    onIntent: (UiIntent) -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = entry.key,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            text = stringResource(R.string.settings_raw, entry.rawValue),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (entry.status == SettingStatus.Unreadable) {
-            Text(
-                text = stringResource(R.string.settings_unreadable),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (pending != null) {
-            Text(
-                text = stringResource(
-                    R.string.settings_staged_row,
-                    pending.key,
-                    pending.value ?: stringResource(R.string.settings_remove),
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        TextButton(
-            onClick = { onIntent(UiIntent.StageVentoyControl(entry.key, null)) },
-            enabled = actionsEnabled,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-        ) { Text(stringResource(R.string.settings_remove)) }
-    }
-}
 
 /** Localized typed control problem; the key, limit and received value are preserved. */
 private fun Resources.controlIssueText(issue: VentoyControlCatalog.Issue): String =
@@ -1579,85 +1544,10 @@ private fun Resources.controlIssueText(issue: VentoyControlCatalog.Issue): Strin
             getString(R.string.settings_problem_duplicate_key, issue.key)
     }
 
-@Composable
-private fun AddControlRow(actionsEnabled: Boolean, onIntent: (UiIntent) -> Unit) {
-    var key by remember { mutableStateOf("") }
-    var value by remember { mutableStateOf("") }
-    var problem by remember { mutableStateOf<VentoyControlCatalog.Issue?>(null) }
-    val resources = LocalContext.current.resources
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = stringResource(R.string.settings_add_header),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedTextField(
-                value = key,
-                onValueChange = {
-                    key = it
-                    problem = null
-                },
-                label = { Text(stringResource(R.string.settings_key_label)) },
-                singleLine = true,
-                enabled = actionsEnabled,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = value,
-                onValueChange = {
-                    value = it
-                    problem = null
-                },
-                label = { Text(stringResource(R.string.settings_value_label)) },
-                singleLine = true,
-                enabled = actionsEnabled,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        problem?.let {
-            Text(
-                text = stringResource(
-                    R.string.settings_validation,
-                    resources.controlIssueText(it),
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        OutlinedButton(
-            onClick = {
-                val trimmed = key.trim()
-                val validation =
-                    VentoyControlCatalog.keyIssue(trimmed)
-                        ?: VentoyControlCatalog.valueIssue(trimmed, value)
-                if (validation != null) {
-                    problem = validation
-                } else {
-                    onIntent(UiIntent.StageVentoyControl(trimmed, value))
-                    key = ""
-                    value = ""
-                    problem = null
-                }
-            },
-            enabled = actionsEnabled && key.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.settings_add)) }
-    }
-}
 
+/** Partial-write errors only; apply lives on the compact Write button. */
 @Composable
-private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
-    val pending = state.pendingVentoyControls
-    // A file outside the standard path (picked on the phone, or another file on the stick) is
-    // not the active config yet: it must be writable even when the user changes no row,
-    // otherwise the import can never reach the standard path. The standard path itself is
-    // already the target, so it never needs a copy action.
-    val importedFileReady =
-        !state.ventoySettingsSource.isDefaultPath() &&
-            (state.ventoyGlobalSettings is VentoyGlobalSettings.Present ||
-                state.ventoyGlobalSettings is VentoyGlobalSettings.Empty)
-    if (pending.isEmpty() && !importedFileReady) return
+private fun StagedControlsHints(state: AppUiState) {
     val operation = state.operation
     val installPartial =
         operation?.state == OperationState.Partial &&
@@ -1669,39 +1559,11 @@ private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
     val writePartial =
         operation?.state == OperationState.Partial &&
             operation.title == OperationTitle.SetVentoyGlobalSetting
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (pending.isNotEmpty()) {
-            Text(
-                text = stringResource(R.string.settings_staged),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            pending.forEach { setting ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(
-                            R.string.settings_staged_row,
-                            setting.key,
-                            setting.value ?: stringResource(R.string.settings_remove),
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = { onIntent(UiIntent.DiscardStagedVentoyControl(setting.key)) },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    ) { Text(stringResource(R.string.settings_discard)) }
-                }
-            }
-            Text(
-                text = stringResource(R.string.settings_staged_hint),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    if (!installPartial && !writePartial) return
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         if (installPartial) {
             Text(
                 text = stringResource(R.string.settings_retry_pending),
@@ -1722,28 +1584,263 @@ private fun StagedControls(state: AppUiState, onIntent: (UiIntent) -> Unit) {
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        Button(
-            onClick = { onIntent(UiIntent.RequestApplyVentoyControls) },
-            enabled = state.actionsEnabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                stringResource(
-                    when {
-                        installPartial -> R.string.settings_retry_pending_action
-                        // A phone document comes from outside the stick; a file already on
-                        // the stick is only copied to the standard path, so it must not say
-                        // "write this file to the stick".
-                        pending.isEmpty() &&
-                            state.ventoySettingsSource is VentoySettingsSource.Document ->
-                            R.string.settings_import_apply
-                        pending.isEmpty() -> R.string.settings_import_copy_to_default
-                        else -> R.string.settings_apply_now
-                    },
-                ),
-            )
+    }
+}
+
+/** Compact pending-control rows with 48 dp discard. */
+@Composable
+private fun CompactStagedControls(
+    pending: List<VentoyControlSetting>,
+    onDiscard: (String) -> Unit,
+) {
+    if (pending.isEmpty()) return
+    val discardLabel = stringResource(R.string.settings_discard)
+    val removeLabel = stringResource(R.string.settings_remove)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.settings_staged),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        pending.forEach { setting ->
+            key(setting.key) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.settings_staged_row,
+                            setting.key,
+                            setting.value ?: removeLabel,
+                        ),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    IconButton(
+                        onClick = { onDiscard(setting.key) },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = discardLabel },
+                    ) {
+                        GlyphIcon(Glyph.Close, size = 18.dp)
+                    }
+                }
+            }
         }
     }
+}
+
+
+/**
+ * Shared compact status line for ventoy.json / unattend.xml cards:
+ * monospace path · size, optional Changed badge, optional ✕ reset.
+ */
+@Composable
+private fun ConfigFileStatusRow(
+    pathLabel: String?,
+    sizeLabel: String?,
+    dimmedPath: Boolean,
+    showChanged: Boolean,
+    onReset: (() -> Unit)?,
+    resetEnabled: Boolean,
+    onPathClick: (() -> Unit)? = null,
+    pathClickLabel: String? = null,
+) {
+    val resetLabel = stringResource(R.string.wave4_reset_file)
+    val statusText = when {
+        pathLabel == null -> stringResource(R.string.wave4_file_not_selected)
+        sizeLabel.isNullOrBlank() -> pathLabel
+        else -> stringResource(R.string.wave4_status_path_size, pathLabel, sizeLabel)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val pathModifier = Modifier
+            .weight(1f)
+            .then(
+                if (onPathClick != null) {
+                    Modifier
+                        .clickable(role = Role.Button, onClick = onPathClick)
+                        .semantics {
+                            if (pathClickLabel != null) contentDescription = pathClickLabel
+                        }
+                } else {
+                    Modifier
+                },
+            )
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace,
+            ),
+            color = if (dimmedPath || pathLabel == null) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = pathModifier,
+        )
+        if (showChanged) {
+            Badge(
+                text = stringResource(R.string.wave4_changed_badge),
+                container = MaterialTheme.colorScheme.primaryContainer,
+                content = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        if (onReset != null) {
+            IconButton(
+                onClick = onReset,
+                enabled = resetEnabled,
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = resetLabel },
+            ) {
+                GlyphIcon(Glyph.Close, size = 20.dp)
+            }
+        }
+    }
+}
+
+private data class PopularVentoyKey(val key: String, val labelRes: Int)
+
+private val POPULAR_VENTOY_KEYS = listOf(
+    PopularVentoyKey("VTOY_MENU_TIMEOUT", R.string.wave4_popular_menu_timeout),
+    PopularVentoyKey("theme", R.string.wave4_popular_theme),
+    PopularVentoyKey("VTOY_DEFAULT_MENU_MODE", R.string.wave4_popular_boot_mode),
+)
+
+@Composable
+private fun AddParameterDialog(
+    actionsEnabled: Boolean,
+    existingKeys: Set<String>,
+    onAdd: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var key by remember { mutableStateOf("") }
+    var value by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    val resources = LocalContext.current.resources
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.wave4_add_param_title)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.wave4_popular_keys),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                POPULAR_VENTOY_KEYS.forEach { popular ->
+                    val taken = popular.key in existingKeys
+                    FilledTonalButton(
+                        onClick = {
+                            key = popular.key
+                            if (value.isEmpty()) {
+                                value = when (popular.key) {
+                                    "VTOY_MENU_TIMEOUT" -> "10"
+                                    "VTOY_DEFAULT_MENU_MODE" -> "0"
+                                    else -> value
+                                }
+                            }
+                            problem = null
+                        },
+                        enabled = actionsEnabled && !taken,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                    ) {
+                        Text(
+                            text = stringResource(popular.labelRes),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = {
+                        key = it
+                        problem = null
+                    },
+                    label = { Text(stringResource(R.string.settings_key_label)) },
+                    singleLine = true,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = {
+                        value = it
+                        problem = null
+                    },
+                    label = { Text(stringResource(R.string.settings_value_label)) },
+                    singleLine = true,
+                    enabled = actionsEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                problem?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val trimmed = key.trim()
+                    val issue =
+                        VentoyControlCatalog.keyIssue(trimmed)
+                            ?: VentoyControlCatalog.valueIssue(trimmed, value)
+                    when {
+                        issue != null -> problem = resources.controlIssueText(issue)
+                        trimmed in existingKeys ->
+                            problem = resources.getString(
+                                R.string.settings_problem_duplicate_key,
+                                trimmed,
+                            )
+                        else -> onAdd(trimmed, value)
+                    }
+                },
+                enabled = actionsEnabled && key.isNotBlank(),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(R.string.wave4_add_param_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(R.string.settings_cancel))
+            }
+        },
+    )
 }
 
 @Composable

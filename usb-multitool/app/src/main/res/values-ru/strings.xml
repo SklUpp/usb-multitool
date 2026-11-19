@@ -68,7 +68,6 @@
     <string name="partitions_delete_action">Удалить раздел…</string>
     <string name="partitions_reveal_selected_action">Показать выбранный раздел</string>
     <string name="partitions_efi_toggle_action">Изменить роль EFI</string>
-    <string name="partitions_bootable_toggle_action">Изменить флаг загрузки</string>
     <string name="partitions_region_label">Регион</string>
     <string name="partitions_create_action">Создать раздел…</string>
     <string name="partitions_capacity_unknown">Ёмкость неизвестна</string>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- a11y for installed → bundled pair (no visible "Version" subtitle). -->
+    <string name="ventoy_version_pair_cd">На накопителе %1$s, в пакете %2$s</string>
+    <!-- a11y for the server fact next to refresh. -->
+    <string name="ventoy_version_server_cd">На сервере %1$s</string>
+</resources>

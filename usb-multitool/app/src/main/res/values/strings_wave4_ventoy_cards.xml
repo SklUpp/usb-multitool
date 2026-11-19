@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compact ventoy.json / unattend.xml config cards (wave 4). -->
+    <string name="wave4_file_not_selected">File not selected</string>
+    <string name="wave4_status_path_size">%1$s · %2$s</string>
+    <string name="wave4_changed_badge">Changed</string>
+    <string name="wave4_editor">Editor</string>
+    <string name="wave4_write">Write</string>
+    <string name="wave4_choose_ellipsis">Choose…</string>
+    <string name="wave4_reset_file">Clear selection</string>
+    <string name="wave4_pick_settings_file">Choose settings file</string>
+    <string name="wave4_win11_section">Windows 11 quick options</string>
+    <string name="wave4_win11_bypass_tpm">Skip TPM and Secure Boot check</string>
+    <string name="wave4_win11_local_account">Local account without internet</string>
+    <string name="wave4_config_params_section">Configuration parameters</string>
+    <string name="wave4_add_param">+ Add parameter</string>
+    <string name="wave4_add_param_title">Add parameter</string>
+    <string name="wave4_add_param_confirm">Add</string>
+    <string name="wave4_popular_keys">Popular keys</string>
+    <string name="wave4_popular_menu_timeout">Menu timeout (VTOY_MENU_TIMEOUT)</string>
+    <string name="wave4_popular_theme">Theme path (theme)</string>
+    <string name="wave4_popular_boot_mode">Boot menu mode (VTOY_DEFAULT_MENU_MODE)</string>
+    <string name="wave4_settings_help_body">**control** values come from ventoy.json exactly as written.\n\n**Known keys** offer explicit choices; other keys stay editable as key/value and are preserved.\n\n**Edits** are staged and written with Write, or after a confirmed Ventoy install/update. Update refreshes the selected file from the stick — open the editor or re-pick the file after an external change.\n\n**Default path** `/ventoy/ventoy.json` is dimmed; a custom path uses normal ink. The ✕ resets to the standard file.\n\n**Partial** means Ventoy is installed but the settings write failed; retry stays available via Write.</string>
+    <string name="wave4_unattend_help_body">**Answer file** lives on the Ventoy data partition; Windows Setup reads it during installation.\n\n**Enabled blocks** only are written; elements this app does not understand are preserved.\n\n**Template** is an existing .xml chosen on the stick or imported from the phone. ✕ clears the selection. Refresh the file by choosing it again after an external edit.\n\n**Create XML** opens the generator; Choose picks or replaces the template.</string>
+</resources>

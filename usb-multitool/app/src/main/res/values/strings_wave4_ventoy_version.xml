@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- a11y for installed → bundled pair (no visible "Version" subtitle). -->
+    <string name="ventoy_version_pair_cd">On USB %1$s, bundled %2$s</string>
+    <!-- a11y for the server fact next to refresh. -->
+    <string name="ventoy_version_server_cd">Server %1$s</string>
+</resources>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Компактные карточки ventoy.json / unattend.xml (wave 4). -->
+    <string name="wave4_file_not_selected">Файл не выбран</string>
+    <string name="wave4_status_path_size">%1$s · %2$s</string>
+    <string name="wave4_changed_badge">Изменено</string>
+    <string name="wave4_editor">Редактор</string>
+    <string name="wave4_write">Записать</string>
+    <string name="wave4_choose_ellipsis">Выбрать…</string>
+    <string name="wave4_reset_file">Сбросить выбор</string>
+    <string name="wave4_pick_settings_file">Выбрать файл настроек</string>
+    <string name="wave4_win11_section">Быстрые опции Windows 11</string>
+    <string name="wave4_win11_bypass_tpm">Пропуск проверки TPM и Secure Boot</string>
+    <string name="wave4_win11_local_account">Локальная учётная запись без интернета</string>
+    <string name="wave4_config_params_section">Параметры конфигурации</string>
+    <string name="wave4_add_param">+ Добавить параметр</string>
+    <string name="wave4_add_param_title">Добавить параметр</string>
+    <string name="wave4_add_param_confirm">Добавить</string>
+    <string name="wave4_popular_keys">Популярные ключи</string>
+    <string name="wave4_popular_menu_timeout">Таймаут меню (VTOY_MENU_TIMEOUT)</string>
+    <string name="wave4_popular_theme">Путь темы (theme)</string>
+    <string name="wave4_popular_boot_mode">Режим меню загрузки (VTOY_DEFAULT_MENU_MODE)</string>
+    <string name="wave4_settings_help_body">**control** — значения из ventoy.json как записаны.\n\n**Известные ключи** дают явные варианты; остальные редактируются как key/value и сохраняются.\n\n**Изменения** подготавливаются и пишутся кнопкой «Записать», либо после подтверждённой установки/обновления Ventoy. Обновление файла со стика — снова откройте редактор или выберите файл после внешнего изменения.\n\n**Стандартный путь** `/ventoy/ventoy.json` показан приглушённо; свой путь — обычным цветом. ✕ возвращает стандартный файл.\n\n**Partial** — Ventoy установлен, но запись настроек не удалась; повтор доступен через «Записать».</string>
+    <string name="wave4_unattend_help_body">**Файл ответов** лежит на разделе данных Ventoy; Windows Setup читает его при установке.\n\n**Включённые блоки** только записываются; непонятные приложению элементы сохраняются.\n\n**Шаблон** — существующий .xml на флешке или импортированный с телефона. ✕ сбрасывает выбор. Обновить файл после правки снаружи — выберите его снова.\n\n**Создать XML** открывает генератор; «Выбрать…» выбирает или заменяет шаблон.</string>
+</resources>

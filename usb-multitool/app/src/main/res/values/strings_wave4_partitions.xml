@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Layout card: scheme · partition count. -->
+    <string name="partitions_layout_heading">%1$s · %2$d partitions</string>
+    <!-- Short used/total capacity under the heading. -->
+    <string name="partitions_layout_usage_pair">%1$s / %2$s</string>
+    <!-- Scheme-change capsule: current → target labels stay mono scheme names. -->
+    <string name="partitions_scheme_capsule_a11y">Change scheme from %1$s to %2$s</string>
+    <!-- Sticky / sheet partition picker title. -->
+    <string name="partitions_select_sheet_title">Select partition</string>
+    <!-- Sticky second line: size · filesystem. -->
+    <string name="partitions_sticky_meta">%1$s · %2$s</string>
+    <!-- Sticky first line: ordinal + name. -->
+    <string name="partitions_sticky_title">%1$d. %2$s</string>
+    <!-- Selected-card fact rows. -->
+    <string name="partitions_info_type_label">Partition type</string>
+    <string name="partitions_info_type_efi">EFI</string>
+    <string name="partitions_info_type_data">Data</string>
+    <string name="partitions_info_lba_range_label">LBA range</string>
+    <string name="partitions_info_lba_range_value">%1$d – %2$d</string>
+    <string name="partitions_info_access_label">Access</string>
+    <!-- RAW write two-phase controls. -->
+    <string name="partitions_raw_pick_image">Choose image…</string>
+    <!-- RAW source sheet rows under Choose image. -->
+    <string name="partitions_raw_source_phone">On the phone</string>
+    <string name="partitions_raw_source_stick">On the drive</string>
+    <string name="partitions_raw_target_whole">Whole disk (LBA 0)</string>
+    <string name="partitions_raw_target_partition">Partition %1$d</string>
+    <string name="partitions_raw_target_custom">Custom LBA</string>
+    <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>
+    <string name="partitions_raw_write_sectors">Write by sectors…</string>
+    <string name="partitions_raw_source_sectors">%1$d sectors</string>
+    <string name="partitions_raw_clear_image_a11y">Clear selected image</string>
+    <string name="partitions_raw_range_ok">Range fits free space or the selected partition</string>
+    <string name="partitions_raw_range_touches_protected">Range touches LBA 0, table metadata, or another partition</string>
+    <string name="partitions_raw_range_out">Range is outside the disk</string>
+    <string name="partitions_raw_range_ro_efi">Range intersects a read-only or EFI partition</string>
+</resources>

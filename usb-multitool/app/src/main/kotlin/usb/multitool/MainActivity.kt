@@ -418,7 +418,6 @@ class MainViewModel(
             onIntent(UiIntent.SetVentoyBundledRelease(bundled))
             onIntent(UiIntent.SetVentoyStoreState(storeRevision, storeState))
         }
-        onIntent(UiIntent.CheckVentoyUpstream)
     }
     /**
      * Owns the mounted FAT volume of the selected partition via [FilesVolumeSession].
