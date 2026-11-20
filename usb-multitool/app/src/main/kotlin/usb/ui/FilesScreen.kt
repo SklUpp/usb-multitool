@@ -14,6 +14,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,6 +48,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -799,6 +802,7 @@ private fun FilesPickScreen(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            // Rhythm only; system/nav-bar inset stays in AppShell (pickOpen must mirror journal).
             contentPadding = PaddingValues(bottom = 16.dp),
             userScrollEnabled = !transition.isRunning,
         ) {
@@ -1178,9 +1182,9 @@ private fun FolderCard(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    // Shell safeDrawing already lifts this card above the navigation bar; this
-                    // 80 dp keeps the last row clear of the floating action button too, so the
-                    // list never ends on the bar itself.
+                    // AppShell Scaffold owns system/nav-bar insets (bottomBar + safeDrawing).
+                    // When pickOpen hides NavigationBar, AppShell must still apply navigationBars
+                    // bottom — do not add a second inset here. 80 dp clears only the upload FAB.
                     contentPadding = PaddingValues(bottom = 80.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     userScrollEnabled = !locked,
@@ -1391,6 +1395,7 @@ private fun PartitionChoiceRow(
     val label = stringResource(R.string.files_current_partition)
     val sheetTitle = stringResource(R.string.files_select_partition)
     val noneSelectedLabel = stringResource(R.string.files_select_partition)
+    val radioGroupLabel = stringResource(R.string.files_partition_radio_group)
     // No selection must stay choosable even with a single partition; otherwise the
     // false first() target is gone and the user cannot recover.
     val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
@@ -1467,11 +1472,14 @@ private fun PartitionChoiceRow(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .selectableGroup()
+                    .semantics { contentDescription = radioGroupLabel }
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = 16.dp),
             ) {
                 partitions.forEach { partition ->
-                    val isSelected = partition.id == selectedId
+                    // Nullable selectedId: no radio is active until a partition is chosen.
+                    val isSelected = selectedId != null && partition.id == selectedId
                     val sizeLabel = sizeOf(partition)
                     ListItem(
                         headlineContent = {
@@ -1498,22 +1506,25 @@ private fun PartitionChoiceRow(
                                 )
                             }
                         },
-                        trailingContent = if (isSelected) {
-                            {
-                                GlyphIcon(Glyph.Check, size = 18.dp)
-                            }
-                        } else {
-                            null
+                        leadingContent = {
+                            // Visual only: the row owns the single selectable Role.RadioButton.
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = null,
+                            )
                         },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
-                            .semantics { if (isSelected) this.selected = true }
-                            .clickable(role = Role.Button) {
-                                sheetOpen = false
-                                onSelect(partition.id)
-                            },
+                            .selectable(
+                                selected = isSelected,
+                                role = Role.RadioButton,
+                                onClick = {
+                                    sheetOpen = false
+                                    onSelect(partition.id)
+                                },
+                            ),
                     )
                 }
             }
