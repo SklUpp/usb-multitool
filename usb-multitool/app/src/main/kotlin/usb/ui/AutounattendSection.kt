@@ -149,7 +149,7 @@ internal fun AutounattendSection(
 
     LaunchedEffect(folderKind) {
         if (folderKind != null &&
-            state.ventoyFolders != null &&
+            state.ventoyFolders == null &&
             !state.ventoyFoldersLoading
         ) {
             onIntent(UiIntent.LoadVentoyFolders)
@@ -160,6 +160,13 @@ internal fun AutounattendSection(
             state.operation?.title == OperationTitle.WriteUnattendXml &&
             state.operation?.state == OperationState.Completed
         ) {
+            xmlEditorOpen = false
+        }
+    }
+    // Document/template can vanish while the editor is open (detach, reload miss).
+    // Close explicitly so a later reopen does not resurrect a discarded draft flag.
+    LaunchedEffect(xmlEditorOpen, template, document?.sourceText) {
+        if (xmlEditorOpen && (template == null || document?.sourceText == null)) {
             xmlEditorOpen = false
         }
     }

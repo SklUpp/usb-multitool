@@ -32,7 +32,7 @@ object PartitionWriter {
                 "partition at LBA ${partition.startLba} overflows the address space"
             }
         }
-        when (table.scheme) {
+        val written: CommitPayload = when (table.scheme) {
             TableScheme.GPT -> commitGpt(disk, table)
             TableScheme.MBR -> commitMbr(disk, table)
             TableScheme.HYBRID ->
@@ -41,7 +41,107 @@ object PartitionWriter {
                 )
         }
         disk.sync()
+        when (written) {
+            is CommitPayload.Gpt -> verifyGptCommit(disk, table, written)
+            is CommitPayload.Mbr -> verifyMbrCommit(disk, written)
+        }
         return PartitionTable.read(disk)
+    }
+
+    /** Bytes the writer just published; verification re-reads and demands an exact match. */
+    private sealed class CommitPayload {
+        class Gpt(val entries: ByteArray, val entriesCrc: Int) : CommitPayload()
+        /** Partition-table region only: LBA0 offsets 446..509 (4×16 + signature). */
+        class Mbr(val partitionArea: ByteArray) : CommitPayload()
+    }
+
+    /**
+     * Re-read both GPT copies after the durable write: primary must parse, match the
+     * backup entry array/CRC/geometry, and equal the entry payload that was written.
+     * A device that drops or reorders writes never reports success.
+     */
+    private fun verifyGptCommit(
+        disk: BlockDevice,
+        intended: PartitionTable,
+        written: CommitPayload.Gpt,
+    ) {
+        val reread = PartitionTable.read(disk)
+        require(reread.scheme == TableScheme.GPT && !reread.gptPrimaryDamaged && !reread.hybridAmbiguous) {
+            "GPT commit did not take effect: scheme=${reread.scheme} " +
+                "primaryDamaged=${reread.gptPrimaryDamaged} hybrid=${reread.hybridAmbiguous}"
+        }
+        val primary = try {
+            GptTable.read(disk)
+        } catch (failure: IllegalArgumentException) {
+            throw IllegalStateException(
+                "primary GPT copy is unreadable after commit: ${failure.message}",
+                failure,
+            )
+        }
+        val backup = try {
+            GptTable.read(disk, primary.header.backupLba)
+        } catch (failure: IllegalArgumentException) {
+            throw IllegalStateException(
+                "backup GPT copy is unreadable after commit: ${failure.message}",
+                failure,
+            )
+        }
+        require(
+            backup.header.entriesCrc == primary.header.entriesCrc &&
+                backup.entriesRaw.contentEquals(primary.entriesRaw) &&
+                backup.header.diskGuid.contentEquals(primary.header.diskGuid) &&
+                backup.header.entryLba != primary.header.entryLba &&
+                backup.header.firstUsable == primary.header.firstUsable &&
+                backup.header.lastUsable == primary.header.lastUsable,
+        ) {
+            "backup GPT copy does not match the primary after commit"
+        }
+        require(
+            primary.entriesRaw.contentEquals(written.entries) &&
+                backup.entriesRaw.contentEquals(written.entries) &&
+                primary.header.entriesCrc == written.entriesCrc &&
+                backup.header.entriesCrc == written.entriesCrc,
+        ) {
+            "GPT entry payload after commit does not match the bytes that were written"
+        }
+        val intendedHeader =
+            intended.gptHeader
+                ?: throw IllegalStateException("GPT commit verification missing intended header")
+        require(
+            primary.header.firstUsable == intendedHeader.firstUsable &&
+                primary.header.lastUsable == intendedHeader.lastUsable &&
+                primary.header.entryCount == intendedHeader.entryCount &&
+                primary.header.entrySize == intendedHeader.entrySize &&
+                primary.header.entryLba == intendedHeader.entryLba &&
+                primary.header.backupLba == intendedHeader.backupLba &&
+                primary.header.diskGuid.contentEquals(intendedHeader.diskGuid),
+        ) {
+            "primary GPT header does not match the intended table after commit"
+        }
+    }
+
+    private fun verifyMbrCommit(disk: BlockDevice, written: CommitPayload.Mbr) {
+        require(written.partitionArea.size == 64) {
+            "MBR partition area must be 64 bytes, got ${written.partitionArea.size}"
+        }
+        val sectorSize = disk.sectorSize
+        require(sectorSize >= 512) { "sector size $sectorSize too small for MBR verify" }
+        val sector = ByteArray(sectorSize)
+        val buffer = ByteBuffer.allocate(sectorSize).order(ByteOrder.LITTLE_ENDIAN)
+        disk.read(0UL, buffer)
+        buffer.flip()
+        buffer.get(sector)
+        val rereadArea = sector.copyOfRange(446, 510)
+        require(rereadArea.contentEquals(written.partitionArea)) {
+            "MBR commit verification failed: LBA0 partition area does not match the bytes written"
+        }
+        require(sector[510] == 0x55.toByte() && sector[511] == 0xAA.toByte()) {
+            "MBR commit verification failed: LBA0 signature was not persisted"
+        }
+        val reread = PartitionTable.read(disk)
+        require(reread.scheme == TableScheme.MBR && !reread.hybridAmbiguous) {
+            "MBR commit did not take effect: scheme=${reread.scheme} hybrid=${reread.hybridAmbiguous}"
+        }
     }
 
     private fun validateGptGeometry(disk: BlockDevice, header: GptHeader, entrySectors: ULong) {
@@ -80,7 +180,7 @@ object PartitionWriter {
         require(!overlaps(backupStart, backupEnd, header.firstUsable, header.lastUsable + 1UL)) { "GPT entries overlap usable range" }
     }
 
-    private fun commitGpt(disk: BlockDevice, table: PartitionTable) {
+    private fun commitGpt(disk: BlockDevice, table: PartitionTable): CommitPayload.Gpt {
         require(!table.gptPrimaryDamaged) {
             "primary GPT header or entries are damaged and the table was recovered from " +
                 "the backup copy; refusing an ambiguous primary rewrite — restore a " +
@@ -171,9 +271,10 @@ object PartitionWriter {
             entryCount = entryCount,
             entriesCrc = entriesCrc,
         )
+        return CommitPayload.Gpt(entries = entries, entriesCrc = entriesCrc)
     }
 
-    private fun commitMbr(disk: BlockDevice, table: PartitionTable) {
+    private fun commitMbr(disk: BlockDevice, table: PartitionTable): CommitPayload.Mbr {
         // The table was read (or built) for one geometry; a shrunken or resized live disk
         // would turn the same LBAs into writes past the end. Same contract as
         // [TableInitializer.initialize].
@@ -232,6 +333,7 @@ object PartitionWriter {
         sector[511] = 0xAA.toByte()
         val out = ByteBuffer.wrap(sector)
         disk.write(0UL, out)
+        return CommitPayload.Mbr(partitionArea = sector.copyOfRange(446, 510))
     }
 
     private fun writeHeader(

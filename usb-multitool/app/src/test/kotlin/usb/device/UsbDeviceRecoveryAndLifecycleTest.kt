@@ -519,10 +519,10 @@ class UsbDeviceRecoveryAndLifecycleTest {
             failOnOps = setOf(ScsiCommand.OP_READ_CAPACITY16),
             requestSenseError = DiskException.SenseError(0x70, 0x02, 0x3A, 0x00),
         )
-        val cap16FailEx = assertThrows(DiskException.IoFailure::class.java) {
+        val cap16FailEx = assertThrows(DiskException.SenseError::class.java) {
             UsbDisk.probeCapacity(cap16Fail)
         }
-        assertEquals("READ CAPACITY(16) failed", cap16FailEx.message)
+        assertEquals(DiskException.SenseError(0x70, 0x02, 0x3A, 0x00), cap16FailEx)
 
         assertThrows(IllegalArgumentException::class.java) {
             UsbDisk.probeCapacity(FakeBotSession(capacityBlockLength = 511))

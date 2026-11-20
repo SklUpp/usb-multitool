@@ -242,6 +242,64 @@ class GptCriticalBackupTest {
             require(operation.state == usb.operation.OperationState.Partial) { "fault must yield Partial" }
         }
     }
+
+    @Test
+    fun rejectsCallerGeometryThatDoesNotMatchHeaderEntries() {
+        val source = syntheticGpt(2048UL)
+        val blob = capture(source)
+        for ((p, b) in listOf(3 to 2, 34 to 1, 6 to 5, 0 to 0)) {
+            val failure = runCatching {
+                GptCriticalBackup.inspectBlob(blob, SECTOR_SIZE, p, b)
+            }.exceptionOrNull()
+            require(failure is IllegalArgumentException) {
+                "geometry $p+$b must fail: $failure"
+            }
+            require(
+                failure.message.orEmpty().contains("does not match GPT header") ||
+                    failure.message.orEmpty().contains("GPT critical backup is") ||
+                    failure.message.orEmpty().contains("need at least"),
+            ) {
+                "geometry $p+$b message: ${failure.message}"
+            }
+        }
+    }
+
+    @Test
+    fun smallEntryArrayGeometryMustBePassedExplicitly() {
+        val disk = syntheticGpt(2048UL, entryCount = 4)
+        val p = usb.partition.GptBackup.primarySectors(SECTOR_SIZE, entryCount = 4)
+        val b = usb.partition.GptBackup.backupSectors(SECTOR_SIZE, entryCount = 4)
+        require(p == 3 && b == 2) { "expected 3+2 for 4 entries, got $p+$b" }
+        val blob = capture(disk, p, b)
+        val ok = GptCriticalBackup.inspect(blob, disk, p, b)
+        require(ok.partitions == 2) { "small-entry restore inspect lost partitions" }
+        // 128×128 defaults must not silently accept a 4-entry blob.
+        val mismatch = runCatching {
+            GptCriticalBackup.inspect(blob, disk, PRIMARY_SECTORS, BACKUP_SECTORS)
+        }.exceptionOrNull()
+        require(mismatch is IllegalArgumentException) { "defaults must reject 4-entry blob" }
+        require(mismatch.message.orEmpty().contains("does not match GPT header") ||
+            mismatch.message.orEmpty().contains("GPT critical backup is")) {
+            "defaults mismatch message: ${mismatch.message}"
+        }
+    }
+
+    @Test
+    fun headerDerivedInspectAndRestoreOverloadsWork() {
+        val source = syntheticGpt(2048UL, entryCount = 4)
+        val blob = usb.partition.GptBackup.backupCriticalSectors(source)
+        val report = GptCriticalBackup.inspectBlob(blob, SECTOR_SIZE)
+        require(report.partitions == 2) { "header-derived inspect lost partitions" }
+        require(report.sectorsRestored == 5) {
+            "4-entry geometry is 3+2 sectors, got ${report.sectorsRestored}"
+        }
+        val live = GptCriticalBackup.inspect(blob, source)
+        require(live.partitions == 2)
+        val target = MemoryDisk(2048UL)
+        val restored = GptCriticalBackup.restore(target, blob)
+        require(restored.partitions == 2)
+        require(restored.sectorsRestored == 5)
+    }
     private fun expectFailure(blob: ByteArray, disk: BlockDevice, needle: String) {
         val failure =
             runCatching {
@@ -270,9 +328,10 @@ class GptCriticalBackupTest {
         sectorCount: ULong,
         sectorSize: Int = SECTOR_SIZE,
         lastUsableOffset: ULong = 1UL,
+        entryCount: Int = ENTRY_COUNT,
     ): MemoryDisk {
         val disk = MemoryDisk(sectorCount, sectorSize)
-        val entryBytes = ENTRY_COUNT * ENTRY_SIZE
+        val entryBytes = entryCount * ENTRY_SIZE
         val entrySectors = ((entryBytes + sectorSize - 1) / sectorSize).toULong()
         val primaryEntriesLba = 2UL
         val firstUsable = primaryEntriesLba + entrySectors
@@ -301,7 +360,7 @@ class GptCriticalBackupTest {
             putLeU64(sector, 40, firstUsable)
             putLeU64(sector, 48, lastUsable)
             putLeU64(sector, 72, entryLba)
-            putLeInt(sector, 80, ENTRY_COUNT)
+            putLeInt(sector, 80, entryCount)
             putLeInt(sector, 84, ENTRY_SIZE)
             putLeInt(sector, 88, entriesCrc)
             putLeInt(sector, 16, crc32(sector, 0, 92))

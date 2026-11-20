@@ -71,6 +71,34 @@ class FilesOperationPolicyTest {
     }
 
     @Test
+    fun requireVolumePathRejectsDotDotWhitespaceAndNul() {
+        assertEquals("/docs/a.bin", FilesOperationPolicy.requireVolumePath("/docs/a.bin"))
+        assertEquals("/", FilesOperationPolicy.requireVolumePath("/"))
+        for (raw in listOf(
+            "/docs/../secret",
+            "/docs/./a",
+            "/a/../../b",
+            "/docs//a",
+            "/.",
+            "/..",
+            " /docs",
+            "/docs ",
+            "\t/docs",
+            "/docs\u0000x",
+        )) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                FilesOperationPolicy.requireVolumePath(raw)
+            }
+            assertTrue(
+                raw,
+                error.message!!.contains("invalid file name") ||
+                    error.message!!.contains("outer whitespace") ||
+                    error.message!!.contains("NUL"),
+            )
+        }
+    }
+
+    @Test
     fun quietWorkNeverPublishesGlobalOperationSlot() {
         assertFalse(FilesOperationPolicy.publishOperationProgress(quiet = true))
         assertTrue(FilesOperationPolicy.publishOperationProgress(quiet = false))

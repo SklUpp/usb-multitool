@@ -479,10 +479,27 @@ class MainViewModel(
         pendingDownloadBinding = null
         pendingDownloadRequestId = 0L
         inspectionOwner.cancel(cancelUsb = true)
-        runCatching { closeFilesVolume(reportStatus = false) }
+        // Cancel usage/mount jobs first so async close cannot observe an empty session
+        // while a still-running measure mounts after the close.
+        val sessionToClose = filesSession
         _pickerEvents.close()
         super.onCleared()
         scope.cancel()
+        // Close off the main thread: umount/sync can block for seconds–minutes.
+        // Process-lifetime DiskController scope survives this ViewModel cancel.
+        DiskController.get().runProcessIo {
+            val error = try {
+                sessionToClose.close()
+            } catch (t: Throwable) {
+                t
+            }
+            if (error != null) {
+                trace.log(
+                    "volume.close.onCleared",
+                    "error" to (error.message ?: error.javaClass.simpleName),
+                )
+            }
+        }
     }
 
     private fun readLanguage(): AppLanguage =
@@ -1225,19 +1242,11 @@ class MainViewModel(
                                     require(uiState.backupUri == null || uiState.backupUri == uri) {
                                         "GPT backup URI changed after confirmation"
                                     }
-                                    val pSectors = GptBackup.primarySectors(disk.sectorSize)
-                                    val bSectors = GptBackup.backupSectors(disk.sectorSize)
-                                    val blob = readBackupBlob(uri, GptCriticalBackup.blobSize(
-                                        disk,
-                                        pSectors,
-                                        bSectors,
-                                    ))
+                                    val blob = readBackupBlob(uri, GptCriticalBackup.MAX_BLOB_BYTES)
                                     bytesTotal = blob.size.toLong()
                                     val restored = GptCriticalBackup.restore(
                                         disk = disk,
                                         blob = blob,
-                                        primarySectors = pSectors,
-                                        backupSectors = bSectors,
                                         operation = this,
                                     )
                                     report(blob.size.toLong())
@@ -1675,11 +1684,12 @@ class MainViewModel(
                 ) { disk, operation, _ ->
                     val folder = requireBackupFolder()
                     val blob = GptBackup.backupCriticalSectors(disk)
+                    val geo = GptBackup.criticalGeometry(disk)
                     val info = GptCriticalBackup.inspectCaptured(
                         blob = blob,
                         disk = disk,
-                        primarySectors = GptBackup.primarySectors(disk.sectorSize),
-                        backupSectors = GptBackup.backupSectors(disk.sectorSize),
+                        primarySectors = geo.primarySectors,
+                        backupSectors = geo.backupSectors,
                     )
                     val name = BackupArchive.gptFileName("${timestamp()}-${System.nanoTime()}")
                     val fileUri = folder.createRootFile(name, "application/octet-stream")
@@ -2411,7 +2421,8 @@ class MainViewModel(
                     val capacity = disk.geometry.capacityBytes
                     val tableResult = runCatching { PartitionTable.read(disk) }
                     val failure = tableResult.exceptionOrNull()
-                    val isTransport = failure is DiskException || failure?.cause is DiskException
+                    val failurePresence = ProbeFailureClassifier.presenceOf(failure)
+                    val isTransport = failurePresence == DevicePresence.Disconnected
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
                     val installedRelease =
                         if (isTransport) {
@@ -2443,7 +2454,7 @@ class MainViewModel(
                             )
                         onIntent(
                             UiIntent.DeviceChanged(
-                                presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
+                                presence = if (failure == null) DevicePresence.Ready else failurePresence,
                                 device = if (isTransport) identity else probedIdentity,
                                 partitions = partitions,
                                 freeRegions = tableResult.getOrNull()?.freeRegions?.map { usb.ui.FreeRegionUi(it.startLba, it.sectorCount) } ?: emptyList(),
@@ -2526,12 +2537,21 @@ class MainViewModel(
                     is usb.operation.OperationState.Failed -> {
                         withContext(Dispatchers.Main.immediate) {
                             if (attachmentIs(gen, device)) {
-                                val isTransport = outcome.cause is DiskException || outcome.cause.cause is DiskException
+                                val classified = ProbeFailureClassifier.presenceOf(outcome.cause)
                                 val closeFailed = probeCloseFailure != null
-                                if (state.presence != DevicePresence.Ready || isTransport || closeFailed) {
+                                val isTransport = classified == DevicePresence.Disconnected
+                                if (state.presence != DevicePresence.Ready ||
+                                    classified != DevicePresence.Ready ||
+                                    closeFailed
+                                ) {
                                     onIntent(UiIntent.DeviceChanged(
                                         presence = when {
-                                            isTransport -> DevicePresence.Disconnected
+                                            classified == DevicePresence.Disconnected ->
+                                                DevicePresence.Disconnected
+                                            classified == DevicePresence.Busy ->
+                                                DevicePresence.Busy
+                                            classified == DevicePresence.PermissionRequired ->
+                                                DevicePresence.PermissionRequired
                                             closeFailed -> DevicePresence.Busy
                                             else -> DevicePresence.Ready
                                         },
@@ -2545,6 +2565,9 @@ class MainViewModel(
                                 val key = when {
                                     closeFailed -> UiMessageKey.VolumeSyncUnconfirmed
                                     isTransport -> UiMessageKey.CannotOpenUsb
+                                    classified == DevicePresence.Busy -> UiMessageKey.DeviceBusy
+                                    classified == DevicePresence.PermissionRequired ->
+                                        UiMessageKey.PermissionRequired
                                     else -> UiMessageKey.CannotReadPartitionTable
                                 }
                                 val detail = buildString {
@@ -2601,9 +2624,10 @@ class MainViewModel(
         }
 
     fun refreshPartitions() {
-        val dev = attachedDevice ?: return
+        val snap = attachment.snapshot()
+        val dev = snap.device ?: return
         if (usbManager == null) return
-        val gen = attachGeneration
+        val gen = snap.generation
         val op = object : DiskOperation(name = OperationTitle.RefreshPartitions.logLabel) {
             override val foregroundService: Boolean = false
             override suspend fun run() {
@@ -2617,7 +2641,8 @@ class MainViewModel(
                     val capacity = disk.geometry.capacityBytes
                     val tableResult = runCatching { PartitionTable.read(disk) }
                     val failure = tableResult.exceptionOrNull()
-                    val isTransport = failure is DiskException || failure?.cause is DiskException
+                    val failurePresence = ProbeFailureClassifier.presenceOf(failure)
+                    val isTransport = failurePresence == DevicePresence.Disconnected
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
                     val installedRelease =
                         if (isTransport) {
@@ -2646,7 +2671,7 @@ class MainViewModel(
                             )
                         onIntent(
                             UiIntent.DeviceChanged(
-                                presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
+                                presence = if (failure == null) DevicePresence.Ready else failurePresence,
                                 device = identity,
                                 partitions = partitions,
                                 freeRegions = tableResult.getOrNull()?.freeRegions?.map { usb.ui.FreeRegionUi(it.startLba, it.sectorCount) } ?: emptyList(),
@@ -2724,12 +2749,10 @@ class MainViewModel(
                 if (outcome is usb.operation.OperationState.Failed) {
                     withContext(Dispatchers.Main.immediate) {
                         if (attachmentIs(gen, dev)) {
-                            val isTransport =
-                                outcome.cause is DiskException ||
-                                    outcome.cause.cause is DiskException
+                            val classified = ProbeFailureClassifier.presenceOf(outcome.cause)
                             onIntent(
                                 UiIntent.DeviceChanged(
-                                    presence = if (isTransport) DevicePresence.Disconnected else DevicePresence.Ready,
+                                    presence = classified,
                                     device = state.device
                                         ?: UsbDeviceIdentity.of(dev, attachGeneration = gen),
                                     partitions = emptyList(),
@@ -2737,10 +2760,11 @@ class MainViewModel(
                                     tableValid = false,
                                 ),
                             )
-                            val key = if (isTransport) {
-                                UiMessageKey.CannotReadUsb
-                            } else {
-                                UiMessageKey.CannotReadPartitionTable
+                            val key = when (classified) {
+                                DevicePresence.Disconnected -> UiMessageKey.CannotReadUsb
+                                DevicePresence.Busy -> UiMessageKey.DeviceBusy
+                                DevicePresence.PermissionRequired -> UiMessageKey.PermissionRequired
+                                else -> UiMessageKey.CannotReadPartitionTable
                             }
                             onIntent(UiIntent.Status(
                                 UiMessage.Key(
@@ -3026,27 +3050,73 @@ class MainViewModel(
         val expectedIdentity = state.device?.identity
         val pin = live.device?.let { AttachmentPin(live.generation, deviceKey(it)!!) }
         scope.launch(Dispatchers.IO) {
-            val snapshot =
-                filesSession.withLock {
-                    if (attachGeneration != expectedGeneration ||
-                        attachGeneration != key.attachGeneration ||
-                        expectedIdentity == null ||
-                        expectedIdentity != key.identity
-                    ) {
-                        null
-                    } else {
-                        try {
-                            filesSession.filesystemUsageForLocked(pin, partitionId, key)
-                        } catch (failure: Throwable) {
-                            FilesystemUsageSnapshot(
-                                key,
-                                FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
-                            )
+            // Epoch this job acquired; closed on cancel so onCleared cannot race past
+            // an empty session and leave the claim held.
+            var releaseEpoch: Long? = null
+            try {
+                val snapshot =
+                    filesSession.withLock {
+                        if (!isActive) {
+                            null
+                        } else if (attachGeneration != expectedGeneration ||
+                            attachGeneration != key.attachGeneration ||
+                            expectedIdentity == null ||
+                            expectedIdentity != key.identity
+                        ) {
+                            null
+                        } else {
+                            var acquired: Long? = null
+                            try {
+                                val measured =
+                                    filesSession.withAcquireRecorder({ epoch -> acquired = epoch }) {
+                                        filesSession.filesystemUsageForLocked(
+                                            pin,
+                                            partitionId,
+                                            key,
+                                        )
+                                    }
+                                if (!isActive) {
+                                    acquired?.let { filesSession.closeIfEpochLocked(it) }
+                                    null
+                                } else {
+                                    // Publish epoch before Main hop so cancel after mount closes it.
+                                    releaseEpoch = acquired
+                                    measured
+                                }
+                            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                                acquired?.let { filesSession.closeIfEpochLocked(it) }
+                                releaseEpoch = null
+                                throw cancel
+                            } catch (failure: Throwable) {
+                                // A mounted-but-unmeasured volume must not retain the claim.
+                                // Close it now, whether or not the scope is still active.
+                                acquired?.let { filesSession.closeIfEpochLocked(it) }
+                                releaseEpoch = null
+                                FilesystemUsageSnapshot(
+                                    key,
+                                    FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
+                                )
+                            }
                         }
-                    }
-                } ?: return@launch
-            withContext(Dispatchers.Main.immediate) {
-                onIntent(UiIntent.FilesystemUsageResulted(generation, snapshot.key, snapshot.usage, snapshot.access))
+                    } ?: return@launch
+                withContext(Dispatchers.Main.immediate) {
+                    onIntent(
+                        UiIntent.FilesystemUsageResulted(
+                            generation,
+                            snapshot.key,
+                            snapshot.usage,
+                            snapshot.access,
+                        ),
+                    )
+                }
+                // Success keeps the RO mount cached for the next browse.
+                releaseEpoch = null
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                val epoch = releaseEpoch
+                if (epoch != null) {
+                    filesSession.withLock { filesSession.closeIfEpochLocked(epoch) }
+                }
+                throw cancel
             }
         }
     }
@@ -6795,21 +6865,24 @@ class MainViewModel(
             throw VentoySettingsDocumentException("selected settings document is not valid UTF-8", failure)
         }
 
-private fun readBackupBlob(uri: String, expectedBytes: Int): ByteArray {
+    private fun readBackupBlob(uri: String, maxBytes: Int): ByteArray {
+        require(maxBytes > 0) { "invalid GPT backup max size $maxBytes" }
         val resolver = getApplication<Application>().contentResolver
         val input = resolver.openInputStream(Uri.parse(uri))
             ?: throw IllegalStateException("cannot open $uri for reading")
         return input.use { stream ->
-            val buffer = ByteArray(expectedBytes + 1)
+            val buffer = ByteArray(maxBytes + 1)
             var read = 0
             while (read < buffer.size) {
                 val n = stream.read(buffer, read, buffer.size - read)
                 if (n < 0) break
                 read += n
             }
-            require(read == expectedBytes) {
-                "selected file holds $read bytes; this device needs $expectedBytes " +
-                    "(${GptBackup.PRIMARY_SECTORS} + ${GptBackup.BACKUP_SECTORS} GPT sectors)"
+            require(read <= maxBytes) {
+                "selected file holds more than $maxBytes bytes (GPT critical backup cap)"
+            }
+            require(read > 0) {
+                "selected file is empty; expected a GPT critical backup"
             }
             buffer.copyOf(read)
         }
@@ -7388,6 +7461,8 @@ class MainActivity : ComponentActivity() {
     private var pendingUsbPermissionKey: String? = null
     private var pendingUsbPermissionToken: String? = null
     private var deniedUsbPermissionKey: String? = null
+    /** Key that already used its single post-denial retry while still attached. */
+    private var deniedUsbPermissionRetriedKey: String? = null
     private var selectedUsbDeviceKey: String? = null
     private var usbReceiverRegistered = false
 
@@ -7430,6 +7505,7 @@ class MainActivity : ComponentActivity() {
                         pendingUsbPermissionKey = null
                         pendingUsbPermissionToken = null
                         deniedUsbPermissionKey = null
+                        deniedUsbPermissionRetriedKey = null
                         pendingBatchDownload = null
                         pendingBatchUploadDirectory = null
                         pendingBatchUploadIdentity = null
@@ -7455,7 +7531,12 @@ class MainActivity : ComponentActivity() {
                     ) {
                         pendingUsbPermissionKey = null
                         pendingUsbPermissionToken = null
-                        if (!granted) deniedUsbPermissionKey = callbackKey
+                        if (granted) {
+                            deniedUsbPermissionKey = null
+                            deniedUsbPermissionRetriedKey = null
+                        } else {
+                            deniedUsbPermissionKey = callbackKey
+                        }
                         viewModel.onUsbDeviceAttached(liveDevice, granted, usbManager)
                     }
                 }
@@ -7848,6 +7929,7 @@ class MainActivity : ComponentActivity() {
             pendingUsbPermissionKey = null
             pendingUsbPermissionToken = null
             deniedUsbPermissionKey = null
+            deniedUsbPermissionRetriedKey = null
             viewModel.onUsbDeviceDetached()
             viewModel.onIntent(UiIntent.DeviceChanged(DevicePresence.Absent))
         }
@@ -7859,13 +7941,24 @@ class MainActivity : ComponentActivity() {
             pendingUsbPermissionKey = null
             pendingUsbPermissionToken = null
             deniedUsbPermissionKey = null
+            deniedUsbPermissionRetriedKey = null
         }
         selectedUsbDeviceKey = key
     }
 
     private fun requestUsbPermission(usbManager: UsbManager, device: UsbDevice) {
         val key = usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)
-        if (pendingUsbPermissionKey == key || deniedUsbPermissionKey == key) return
+        val decision = UsbPermissionRetryGate.prepareRequest(
+            key,
+            UsbPermissionRetryGate.State(
+                pendingKey = pendingUsbPermissionKey,
+                deniedKey = deniedUsbPermissionKey,
+                retriedKey = deniedUsbPermissionRetriedKey,
+            ),
+        )
+        deniedUsbPermissionKey = decision.state.deniedKey
+        deniedUsbPermissionRetriedKey = decision.state.retriedKey
+        if (!decision.shouldRequest) return
         val requestCode = usbPermissionRequestCounter.incrementAndGet().toInt()
         val token = java.util.UUID.randomUUID().toString()
         pendingUsbPermissionKey = key

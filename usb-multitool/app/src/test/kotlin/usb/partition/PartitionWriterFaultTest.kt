@@ -1,9 +1,11 @@
 package usb.partition
 
+import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import usb.device.BlockDevice
 import usb.device.DiskException
 
 class PartitionWriterFaultTest {
@@ -220,5 +222,122 @@ class PartitionWriterFaultTest {
             next.partitions.map { Triple(it.startLba, it.sectorCount, it.name) },
             recovered.partitions.map { Triple(it.startLba, it.sectorCount, it.name) },
         )
+    }
+
+    @Test
+    fun commitVerificationRejectsPrimaryWipedAfterFinalSync() {
+        for ((label, sabotage) in listOf(
+            "wipe-primary-header" to { disk: ImageBlockDevice ->
+                disk.write(1UL, ByteBuffer.wrap(ByteArray(disk.sectorSize)))
+            },
+            "wipe-primary-entries" to { disk: ImageBlockDevice ->
+                val table = PartitionTable.read(disk)
+                val entryLba = requireNotNull(table.gptPrimaryEntryLba)
+                disk.write(entryLba, ByteBuffer.wrap(ByteArray(disk.sectorSize)))
+            },
+        )) {
+            val disk = gptDisk()
+            val (_, next) = edited(disk)
+            val sabotaged = object : BlockDevice {
+                private var syncs = 0
+                override val sectorSize: Int get() = disk.sectorSize
+                override val sectorCount: ULong get() = disk.sectorCount
+                override fun read(lba: ULong, destination: ByteBuffer) = disk.read(lba, destination)
+                override fun write(lba: ULong, source: ByteBuffer) = disk.write(lba, source)
+                override fun sync() {
+                    disk.sync()
+                    syncs++
+                    // Outer commit sync is the second one (after the backup publish sync).
+                    if (syncs == 2) sabotage(disk)
+                }
+            }
+            val error = assertThrows(RuntimeException::class.java) {
+                PartitionWriter.commit(sabotaged, next)
+            }
+            assertTrue(
+                "$label: ${error.message}",
+                error is IllegalStateException || error is IllegalArgumentException,
+            )
+            assertTrue(
+                "$label message ${error.message}",
+                error.message.orEmpty().contains("commit") ||
+                    error.message.orEmpty().contains("unreadable") ||
+                    error.message.orEmpty().contains("did not take effect") ||
+                    error.message.orEmpty().contains("does not match"),
+            )
+        }
+    }
+
+    @Test
+    fun mbrCommitVerificationRejectsRereadMismatch() {
+        val image = ByteArray(512 * 4096)
+        image[446 + 4] = 0x83.toByte()
+        image[446 + 8] = 0 // start LBA low bytes set below
+        putLe32(image, 446 + 8, 2048)
+        putLe32(image, 446 + 12, 1024)
+        image[510] = 0x55.toByte()
+        image[511] = 0xAA.toByte()
+        val disk = ImageBlockDevice(image, 512, 4096UL)
+        val table = PartitionTable.read(disk)
+        val next = PartitionEditor.delete(table, 0)
+        val sabotaged = object : BlockDevice {
+            private var syncs = 0
+            override val sectorSize: Int get() = disk.sectorSize
+            override val sectorCount: ULong get() = disk.sectorCount
+            override fun read(lba: ULong, destination: ByteBuffer) = disk.read(lba, destination)
+            override fun write(lba: ULong, source: ByteBuffer) = disk.write(lba, source)
+            override fun sync() {
+                disk.sync()
+                syncs++
+                if (syncs == 1) {
+                    // Restore the pre-delete partition entry after the commit write+sync.
+                    putLe32(image, 446 + 8, 2048)
+                    putLe32(image, 446 + 12, 1024)
+                    image[446 + 4] = 0x83.toByte()
+                }
+            }
+        }
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            PartitionWriter.commit(sabotaged, next)
+        }
+        assertTrue(
+            error.message.orEmpty(),
+            error.message.orEmpty().contains("MBR commit verification failed") ||
+                error.message.orEmpty().contains("does not match the bytes written"),
+        )
+    }
+
+    @Test
+    fun mbrCommitRejectsMissingSignatureAfterSync() {
+        val image = ByteArray(512 * 4096)
+        image[446 + 4] = 0x83.toByte()
+        putLe32(image, 446 + 8, 2048)
+        putLe32(image, 446 + 12, 1024)
+        image[510] = 0x55.toByte()
+        image[511] = 0xAA.toByte()
+        val disk = ImageBlockDevice(image, 512, 4096UL)
+        val next = PartitionEditor.delete(PartitionTable.read(disk), 0)
+        val sabotaged = object : BlockDevice {
+            override val sectorSize: Int get() = disk.sectorSize
+            override val sectorCount: ULong get() = disk.sectorCount
+            override fun read(lba: ULong, destination: ByteBuffer) = disk.read(lba, destination)
+            override fun write(lba: ULong, source: ByteBuffer) = disk.write(lba, source)
+            override fun sync() {
+                disk.sync()
+                image[510] = 0
+                image[511] = 0
+            }
+        }
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            PartitionWriter.commit(sabotaged, next)
+        }
+        assertTrue(error.message.orEmpty().contains("signature"))
+    }
+
+    private fun putLe32(bytes: ByteArray, offset: Int, value: Int) {
+        for (i in 0 until 4) {
+            bytes[offset + i] = ((value shr (8 * i)) and 0xFF).toByte()
+        }
     }
 }

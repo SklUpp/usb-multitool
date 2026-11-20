@@ -63,6 +63,9 @@ class DiskService : Service() {
 
     override fun onDestroy() {
         wakeLock?.let { if (it.isHeld) it.release() }
+        // Capture binding under Companion only; never call lifecycle/controller while holding it
+        // (requestStart takes Companion; holding both locks is AB-BA with startForeground).
+        val controlToDrop: ServiceControl?
         synchronized(Companion) {
             if (activeWakeLock === wakeLock) {
                 activeWakeLock = null
@@ -71,10 +74,19 @@ class DiskService : Service() {
             if (serviceReady.isCompleted) {
                 serviceReady = kotlinx.coroutines.CompletableDeferred()
             }
+            controlToDrop = boundServiceControl
+            boundServiceControl = null
         }
+        if (controlToDrop is DiskServiceLifecycle) {
+            controlToDrop.onServiceDestroyed()
+        }
+        if (controlToDrop != null) {
+            DiskController.get().unbind(controlToDrop)
+        }
+        // Re-arm a fresh lifecycle so process-lifetime submits still work.
+        setupServiceControl(applicationContext)
         super.onDestroy()
     }
-
 
     private fun startForegroundInternal() {
         val notification = Notification.Builder(this, CHANNEL_ID)
@@ -113,6 +125,10 @@ class DiskService : Service() {
         private var serviceReady = kotlinx.coroutines.CompletableDeferred<Unit>()
         @Volatile
         private var activeWakeLock: PowerManager.WakeLock? = null
+        @Volatile
+        private var boundServiceControl: ServiceControl? = null
+        @Volatile
+        private var isForeground = false
 
         fun initialize(context: Context) {
             val app = context.applicationContext
@@ -149,10 +165,12 @@ class DiskService : Service() {
                 hasOutstandingWork = { controller.executor.hasOutstandingWork() },
                 isServiceForeground = { isForeground && activeWakeLock != null },
             )
+            // Assign under Companion without holding it across bind/blocking work.
+            synchronized(Companion) {
+                boundServiceControl = policy
+            }
             controller.bind(wakeLock = lock, serviceControl = policy)
         }
-        @Volatile
-        private var isForeground = false
 
         fun requestStart(context: Context) {
             val ready = synchronized(Companion) {

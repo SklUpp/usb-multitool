@@ -1709,7 +1709,7 @@ private fun FactRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 44.dp)
+            .heightIn(min = if (onClick != null) 48.dp else 44.dp)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(enabled = enabled, onClick = onClick)

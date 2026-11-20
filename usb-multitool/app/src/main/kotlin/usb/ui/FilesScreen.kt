@@ -206,14 +206,14 @@ fun FilesScreen(
 
     val selected = state.selectedPartition()
     val canAct = state.actionsEnabled && selected != null
-    // Only an EFI-protected selected partition loses write actions; a missing selection
-    // must not be reported as EFI protection.
-    val efiBlocked = selected != null && !state.isEfiWriteAllowed(selected)
-    val canWrite = canAct && !efiBlocked
+    // partitionWriteAccess already folds EFI policy before driver mount facts.
+    val writeAccess = selected?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown
+    val volumeWritable = writeAccess != PartitionWriteAccess.ReadOnly &&
+        writeAccess != PartitionWriteAccess.DriverReadOnly
+    val canWrite = canAct && volumeWritable
     val selection = resolveListingSelection(state.files, selectedNames)
     val selectedEntries = selection.entries
     val singleSelection = selection.single
-    val writeAccess = selected?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown
     val uploadDescription = stringResource(R.string.files_copy_from_phone)
     val space = selected?.let(state::filesystemSpace)
 
@@ -277,7 +277,7 @@ fun FilesScreen(
             ) {
                 PartitionChoiceRow(
                     partitions = state.partitions,
-                    selectedId = selected?.id ?: state.partitions.first().id,
+                    selectedId = selected?.id,
                     writeAccess = writeAccess,
                     space = space,
                     enabled = state.actionsEnabled,
@@ -780,9 +780,23 @@ private fun FilesPickScreen(
                 directoryContentTransform(pickReducedMotion)
             },
             label = "pick-folder",
+            // One slot per directory/partition/stick pin: refresh keeps scroll.
+            contentKey = {
+                listOf(it.partitionId, it.path, it.identity, it.attachGeneration)
+            },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) { target ->
+        val listState = rememberLazyListState()
+        LaunchedEffect(
+            target.partitionId,
+            target.path,
+            target.identity,
+            target.attachGeneration,
+        ) {
+            listState.scrollToItem(0)
+        }
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 16.dp),
@@ -1089,19 +1103,35 @@ private fun FolderCard(
             directoryContentTransform(reducedMotion)
         },
         label = "folder",
+        // One slot per directory/partition/stick pin: a listing refresh of the same
+        // directory reuses the slot (and its scroll state) instead of animating a new
+        // LazyColumn; navigation and attach changes create isolated exit/enter slots.
+        contentKey = {
+            listOf(it.partitionId, it.path, it.identity, it.attachGeneration)
+        },
         // fillMaxSize: AnimatedContent gets weight(1f) height from the screen Column.
         // Without it the inner weight/LazyColumn can measure unbounded, lay out every
         // row, report canScroll=false, and look clipped with no gesture scroll.
         modifier = modifier.fillMaxSize(),
     ) { target ->
+        // Owned by this content slot, never shared with the outgoing slot.
+        val listState = rememberLazyListState()
+        // Reset only on directory/partition/stick change. A listing refresh keeps the
+        // same keys, so it updates rows without scrolling the reader back to the top.
+        LaunchedEffect(
+            target.partitionId,
+            target.path,
+            target.identity,
+            target.attachGeneration,
+        ) {
+            listState.scrollToItem(0)
+        }
         // Snapshot render: leaving content keeps the exact files it captured, so
         // navigation never swaps rows under the exit fade.
         val rows = target.files
         val rowsState = target.listingState
         val rowsError = target.error.ifEmpty { null }
         val locked = transition.isRunning
-        // Own state per AnimatedContent slot: enter+exit must not share one LazyListState.
-        val listState = rememberLazyListState()
         Column(modifier = Modifier.fillMaxSize()) {
             if (selection.entries.isNotEmpty()) {
                 Row(
@@ -1349,7 +1379,7 @@ private fun FolderActionButton(
 @Composable
 private fun PartitionChoiceRow(
     partitions: List<PartitionTab>,
-    selectedId: String,
+    selectedId: String?,
     writeAccess: PartitionWriteAccess,
     space: FilesystemSpace?,
     enabled: Boolean,
@@ -1357,11 +1387,13 @@ private fun PartitionChoiceRow(
     onSelect: (String) -> Unit,
 ) {
     var sheetOpen by remember { mutableStateOf(false) }
-    val selected = partitions.firstOrNull { it.id == selectedId }
+    val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == id } }
     val label = stringResource(R.string.files_current_partition)
     val sheetTitle = stringResource(R.string.files_select_partition)
-    // Exactly one partition leaves nothing to choose: no chevron, no sheet, no tap.
-    val selectable = partitions.size > 1
+    val noneSelectedLabel = stringResource(R.string.files_select_partition)
+    // No selection must stay choosable even with a single partition; otherwise the
+    // false first() target is gone and the user cannot recover.
+    val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -1373,7 +1405,7 @@ private fun PartitionChoiceRow(
                 .fillMaxWidth()
                 .clickable(
                     enabled = enabled && selectable,
-                    onClickLabel = label,
+                    onClickLabel = if (selected == null) noneSelectedLabel else label,
                     role = Role.Button,
                 ) { sheetOpen = true }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1386,7 +1418,7 @@ private fun PartitionChoiceRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = selected?.let(::partitionDisplayName) ?: "—",
+                        text = selected?.let(::partitionDisplayName) ?: noneSelectedLabel,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,

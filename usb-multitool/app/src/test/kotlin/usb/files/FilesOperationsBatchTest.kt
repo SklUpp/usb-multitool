@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -73,6 +74,39 @@ class FilesOperationsBatchTest {
         assertEquals(OperationState.Queued, op.state)
         assertEquals(UsbFsDirEntry("a.bin", false, 1), volume.stat("/docs/a.bin"))
         assertTrue(volume.events.none { it.startsWith("delete:") })
+    }
+
+    @Test
+    fun deleteRecursivelyRejectsDotDotBeforeAnyStat() {
+        val volume = MemoryVolume()
+        volume.mkdir("/docs")
+        volume.write("/docs/a.bin", byteArrayOf(1), create = true)
+        volume.events.clear()
+        val op = DiskOperation("delete-dotdot")
+        for (target in listOf("/docs/../docs", "/docs/./a.bin", "/docs/..", "/a/../../b")) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                FilesOperations.deleteRecursively(volume, target, op)
+            }
+            assertTrue(error.message!!.contains("invalid file name") || error.message!!.contains("path"))
+        }
+        assertFalse(op.mutationAttempted)
+        assertTrue(volume.events.none { it.startsWith("delete:") || it == "sync" })
+        assertNotNull(volume.statOrNull("/docs/a.bin"))
+    }
+
+    @Test
+    fun deleteRecursivelyRefusesVolumeRoot() {
+        val volume = MemoryVolume()
+        volume.mkdir("/docs")
+        volume.events.clear()
+        val op = DiskOperation("delete-root")
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            FilesOperations.deleteRecursively(volume, "/", op)
+        }
+        assertTrue(error.message!!.contains("volume root"))
+        assertFalse(op.mutationAttempted)
+        assertTrue(volume.events.none { it.startsWith("delete:") })
+        assertNotNull(volume.statOrNull("/docs"))
     }
 
     @Test
@@ -188,7 +222,7 @@ class FilesOperationsBatchTest {
         volume.write("/a.bin", byteArrayOf(9), create = true)
         val (saf, resolver) = RecordingResolver.paired()
         val old = saf.createExclusiveFile(saf.root, "a.bin", "application/octet-stream")
-        resolver.written[old] = byteArrayOf(1, 2, 3)
+        resolver.seedOutput(old, byteArrayOf(1, 2, 3))
         val op = DiskOperation("dl-replace-closed")
         val thrown = assertThrows(IOException::class.java) {
             FilesOperations.downloadTree(
@@ -466,7 +500,7 @@ class FilesOperationsBatchTest {
         // Nonempty dest: naive root restart would refuse. Resume must continue inside.
         saf.createExclusiveFile(existingRoot, "keep.bin", "application/octet-stream")
         val existingA = saf.createExclusiveFile(existingRoot, "a.bin", "application/octet-stream")
-        resolver.written[existingA] = byteArrayOf(7, 7)
+        resolver.seedOutput(existingA, byteArrayOf(7, 7))
         val resume = FilesOperations.BatchDownloadCursor(
             remainingRoots = listOf("folder"),
             activeRoot = "folder",
@@ -513,7 +547,7 @@ class FilesOperationsBatchTest {
         volume.write("/folder/b.bin", byteArrayOf(2), create = true)
         // Plant conflicting x.bin only after empty a/ is created so folder/a stay reusable
         // containers; a nonempty folder pre-seed would refuse at /folder first.
-                lateinit var resolver: RecordingResolver
+        lateinit var resolver: RecordingResolver
         val saf = object : MemorySafFolder(onFileCreated = { uri -> resolver.trackOutput(uri) }) {
             override fun createExclusiveSubfolder(parent: Uri, name: String): Uri {
                 val created = super.createExclusiveSubfolder(parent, name)
@@ -557,7 +591,7 @@ class FilesOperationsBatchTest {
         volume.mkdir("/foo/foo")
         volume.write("/foo/foo/file.bin", byteArrayOf(1), create = true)
         volume.write("/foo/sib.bin", byteArrayOf(2), create = true)
-                lateinit var resolver: RecordingResolver
+        lateinit var resolver: RecordingResolver
         val saf = object : MemorySafFolder(onFileCreated = { uri -> resolver.trackOutput(uri) }) {
             override fun createExclusiveSubfolder(parent: Uri, name: String): Uri {
                 val created = super.createExclusiveSubfolder(parent, name)
@@ -993,7 +1027,7 @@ class FilesOperationsBatchTest {
     ) : BatchSafFolder {
         private data class Node(val name: String, val isDirectory: Boolean, val parent: Uri?)
 
-        val root: Uri = Uri.parse("content://memory/root-${nextId()}")
+        val root: Uri = Uri.parse("content://${RecordingResolver.DOC_AUTHORITY}/root-${nextId()}")
         private val nodes = linkedMapOf(root to Node("root", true, null))
         private val children = linkedMapOf<Uri, MutableList<Uri>>(root to mutableListOf())
 
@@ -1011,7 +1045,7 @@ class FilesOperationsBatchTest {
 
         override fun createExclusiveFile(parent: Uri, name: String, mimeType: String): Uri {
             require(listChildren(parent).none { it.name == name }) { "exists $name" }
-            val uri = Uri.parse("content://memory/file-${nextId()}")
+            val uri = Uri.parse("content://${RecordingResolver.DOC_AUTHORITY}/file-${nextId()}")
             nodes[uri] = Node(name, false, parent)
             children.getValue(parent) += uri
             children[uri] = mutableListOf()
@@ -1021,7 +1055,7 @@ class FilesOperationsBatchTest {
 
         open override fun createExclusiveSubfolder(parent: Uri, name: String): Uri {
             require(listChildren(parent).none { it.name == name }) { "exists $name" }
-            val uri = Uri.parse("content://memory/dir-${nextId()}")
+            val uri = Uri.parse("content://${RecordingResolver.DOC_AUTHORITY}/dir-${nextId()}")
             nodes[uri] = Node(name, true, parent)
             children.getValue(parent) += uri
             children[uri] = mutableListOf()
@@ -1054,12 +1088,14 @@ class FilesOperationsBatchTest {
         openFailures: Map<Uri, Throwable> = emptyMap(),
         private val onWrite: (() -> Unit)? = null,
     ) {
-        val written = linkedMapOf<Uri, ByteArray>()
+        val written: Map<Uri, ByteArray>
+            get() = outputFiles.mapValues { (_, file) -> file.readBytes() }
         val resolver: ContentResolver =
             RuntimeEnvironment.getApplication().contentResolver
         private val shadow: ShadowContentResolver = Shadow.extract(resolver)
         private val provider: BatchOpenableProvider =
             Robolectric.setupContentProvider(BatchOpenableProvider::class.java, DOC_AUTHORITY)
+        private val outputFiles = linkedMapOf<Uri, java.io.File>()
 
         init {
             for ((uri, bytes) in contents) {
@@ -1077,25 +1113,23 @@ class FilesOperationsBatchTest {
         }
 
 
+        fun seedOutput(uri: Uri, bytes: ByteArray) {
+            requireNotNull(outputFiles[uri]) { "no output registered for $uri" }.writeBytes(bytes)
+        }
+
         fun trackOutput(uri: Uri) {
+            val file = java.io.File.createTempFile("batch-out-", ".bin")
+            file.deleteOnExit()
+            // Truncate so mode "wt" starts empty even if the temp file had a previous length.
+            java.io.FileOutputStream(file).close()
+            outputFiles[uri] = file
+            provider.outputFiles[uri] = file
+            provider.onOpenWrite = onWrite
             shadow.registerOutputStreamSupplier(uri) {
                 onWrite?.invoke()
-                object : OutputStream() {
-                    private val buffer = ByteArrayOutputStream()
-                    override fun write(b: Int) {
-                        buffer.write(b)
-                    }
-
-                    override fun write(b: ByteArray, off: Int, len: Int) {
-                        buffer.write(b, off, len)
-                    }
-
+                object : java.io.FileOutputStream(file) {
                     override fun flush() {
-                        written[uri] = buffer.toByteArray()
-                    }
-
-                    override fun close() {
-                        flush()
+                        super.flush()
                     }
                 }
             }
@@ -1149,11 +1183,13 @@ class FilesOperationsBatchTest {
         }
     }
 
-    /** OpenableColumns provider for upload document URIs. */
+    /** OpenableColumns + openFile provider for upload/download document URIs. */
     class BatchOpenableProvider : ContentProvider() {
         data class Meta(val displayName: String?, val size: Long?)
 
         val meta = mutableMapOf<Uri, Meta>()
+        val outputFiles = mutableMapOf<Uri, java.io.File>()
+        var onOpenWrite: (() -> Unit)? = null
 
         override fun onCreate(): Boolean = true
 
@@ -1180,6 +1216,16 @@ class FilesOperationsBatchTest {
                 }.toTypedArray(),
             )
             return cursor
+        }
+
+        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+            val file = outputFiles[uri]
+                ?: error("no output file registered for $uri")
+            onOpenWrite?.invoke()
+            if (mode.contains('t') || (mode.contains('w') && !mode.contains('a'))) {
+                java.io.FileOutputStream(file).close()
+            }
+            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode))
         }
 
         override fun getType(uri: Uri): String = "application/octet-stream"

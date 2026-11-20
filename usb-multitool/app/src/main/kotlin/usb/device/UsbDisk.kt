@@ -430,7 +430,7 @@ open class UsbDisk(
                             uaRetried = true
                             continue
                         }
-                        throw DiskException.IoFailure("READ CAPACITY(16) failed")
+                        throw sense
                     }
                     CswStatus.PHASE_ERROR -> {
                         resetOrClose(session)

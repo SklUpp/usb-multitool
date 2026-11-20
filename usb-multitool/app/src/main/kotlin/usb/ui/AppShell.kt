@@ -899,7 +899,7 @@ private fun ProjectVersionButton(versionName: String?) {
         },
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
         modifier = Modifier
-            .heightIn(min = 36.dp)
+            .heightIn(min = 48.dp)
             .semantics { contentDescription = description },
     ) {
         Text(

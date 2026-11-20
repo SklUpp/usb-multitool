@@ -430,11 +430,11 @@ class SafPositionalImage(resolver: ContentResolver, document: Uri) : Closeable {
 
         override fun writeBatch(lba: ULong, bytes: ByteArray, length: Int, sectorSize: Int) {
             require(sectorSize > 0 && length > 0 && length <= bytes.size && length % sectorSize == 0)
-            val offset = lba * sectorSize.toULong()
-            check(offset <= Long.MAX_VALUE.toULong() && length.toULong() <= Long.MAX_VALUE.toULong() - offset) {
+            val offset = positionalByteOffset(lba, sectorSize)
+            check(length.toULong() <= Long.MAX_VALUE.toULong() - offset.toULong()) {
                 "rescue offset exceeds signed range"
             }
-            writeFully(bytes, 0, length, offset.toLong())
+            writeFully(bytes, 0, length, offset)
         }
 
         override fun ensureLength(bytes: Long) {
@@ -450,6 +450,22 @@ class SafPositionalImage(resolver: ContentResolver, document: Uri) : Closeable {
         closed = true
         descriptor.close()
     }
+}
+
+/**
+ * Byte offset of [lba] × [sectorSize] for a positional SAF image. Fails cleanly before the
+ * ULong multiply wraps or the result exceeds signed [Long] range used by pread/pwrite.
+ */
+internal fun positionalByteOffset(lba: ULong, sectorSize: Int): Long {
+    require(sectorSize > 0) { "invalid sector size $sectorSize" }
+    val sectorSizeU = sectorSize.toULong()
+    val maxLba = Long.MAX_VALUE.toULong() / sectorSizeU
+    require(lba <= maxLba) {
+        "rescue LBA $lba exceeds signed range for sector size $sectorSize"
+    }
+    val offset = lba * sectorSizeU
+    check(offset <= Long.MAX_VALUE.toULong()) { "rescue offset exceeds signed range" }
+    return offset.toLong()
 }
 
 /** SAF placement for [CheckpointPublisher]; all publication semantics stay in the pure class. */

@@ -97,6 +97,34 @@ class SafBackupFolderOwnershipTest {
         assertTrue(provider.deleted.isEmpty())
     }
 
+    @Test
+    fun positionalByteOffsetRejectsOverflowTable() {
+        assertEquals(0L, positionalByteOffset(0UL, 512))
+        assertEquals(512L, positionalByteOffset(1UL, 512))
+        assertEquals(4096L * 512L, positionalByteOffset(4096UL, 512))
+
+        for ((lba, sectorSize) in listOf(
+            (Long.MAX_VALUE.toULong() / 512UL + 1UL) to 512,
+            (Long.MAX_VALUE.toULong() / 4096UL + 1UL) to 4096,
+            ULong.MAX_VALUE to 512,
+            (1UL shl 63) to 2,
+        )) {
+            val error = try {
+                positionalByteOffset(lba, sectorSize)
+                null
+            } catch (failure: RuntimeException) {
+                failure
+            }
+            assertTrue(
+                "lba=$lba sectorSize=$sectorSize",
+                error is IllegalArgumentException || error is IllegalStateException,
+            )
+            assertTrue(
+                "lba=$lba msg=${error!!.message}",
+                error.message!!.contains("exceeds signed range"),
+            )
+        }
+    }
     private fun scoped(id: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(tree(), id)
 

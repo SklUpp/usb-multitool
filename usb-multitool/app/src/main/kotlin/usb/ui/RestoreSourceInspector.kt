@@ -19,8 +19,8 @@ import usb.partition.GptBackup
  * Nothing here writes to the selected file or to the disk.
  */
 object RestoreSourceInspector {
-    /** Hard cap before any GPT blob restore; a real backup is < 1 MiB even at 4Kn. */
-    const val MAX_BLOB_BYTES: Int = 2 * 1024 * 1024
+    /** Hard cap before any GPT blob restore; same value as the backup validator. */
+    const val MAX_BLOB_BYTES: Int = GptCriticalBackup.MAX_BLOB_BYTES
 
     /** Candidate sector sizes when the live device does not report one. */
     private val SECTOR_SIZE_CANDIDATES = intArrayOf(512, 1024, 2048, 4096)
@@ -61,8 +61,8 @@ object RestoreSourceInspector {
 
     /**
      * Validate an already bounded blob. [diskSectorSize] narrows the accepted geometry to
-     * the live device; when null, each sector-size candidate that matches the blob size
-     * is validated by its own headers, and the summary names the detected size.
+     * the live device; when null, each sector-size candidate is tried against the blob's
+     * own GPT header, and the summary names the detected size.
      */
     fun inspectGpt(
         uri: String,
@@ -77,23 +77,16 @@ object RestoreSourceInspector {
             } else {
                 SECTOR_SIZE_CANDIDATES.toList()
             }
-        val matching = candidates.filter { expectedBlobBytes(it) == blob.size }
-        if (matching.isEmpty()) {
-            val expected = candidates.joinToString(", ") { "$it-byte sectors: ${expectedBlobBytes(it)} bytes" }
-            return GptBackupInspection(
-                uri = uri,
-                name = name,
-                sizeBytes = sizeBytes,
-                error = "selected file has ${blob.size} bytes; a GPT critical backup needs $expected",
-            )
-        }
         var lastFailure: Exception? = null
-        for (sectorSize in matching) {
-            val primarySectors = GptBackup.primarySectors(sectorSize)
-            val backupSectors = GptBackup.backupSectors(sectorSize)
+        for (sectorSize in candidates) {
             try {
-                val report =
-                    GptCriticalBackup.inspectBlob(blob, sectorSize, primarySectors, backupSectors)
+                val report = GptCriticalBackup.inspectBlob(blob, sectorSize)
+                val geo =
+                    GptBackup.criticalGeometry(
+                        sectorSize,
+                        report.primary.entryCount,
+                        report.primary.entrySize,
+                    )
                 return GptBackupInspection(
                     uri = uri,
                     name = name,
@@ -101,8 +94,8 @@ object RestoreSourceInspector {
                     summary =
                         GptBackupSummary(
                             sectorSize = sectorSize,
-                            primarySectors = primarySectors,
-                            backupSectors = backupSectors,
+                            primarySectors = geo.primarySectors,
+                            backupSectors = geo.backupSectors,
                             blobBytes = blob.size,
                             partitions = report.partitions,
                             firstUsable = report.primary.firstUsable,
@@ -122,8 +115,12 @@ object RestoreSourceInspector {
         )
     }
 
+    /**
+     * Default 128×128 entry geometry size for [sectorSize]. Non-default entry arrays
+     * derive size from the GPT header via [GptCriticalBackup.inspectBlob].
+     */
     fun expectedBlobBytes(sectorSize: Int): Int =
-        (GptBackup.primarySectors(sectorSize) + GptBackup.backupSectors(sectorSize)) * sectorSize
+        GptBackup.criticalGeometry(sectorSize).blobBytes(sectorSize)
 
     /**
      * Read at most [limit] bytes; one extra byte is read only to prove the document is

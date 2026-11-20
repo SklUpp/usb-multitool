@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.util.zip.CRC32
 import usb.device.BlockDevice
 import usb.operation.DiskOperation
+import usb.partition.GptBackup
 
 /**
  * Restore half of [usb.partition.GptBackup.backupCriticalSectors]: validate a captured
@@ -15,6 +16,9 @@ import usb.operation.DiskOperation
 object GptCriticalBackup {
     private val SIGNATURE = "EFI PART".toByteArray(Charsets.US_ASCII)
     private const val HEADER_FIELDS_BYTES = 92
+
+    /** Hard cap shared with [usb.ui.RestoreSourceInspector]; refuse oversized blobs early. */
+    const val MAX_BLOB_BYTES: Int = 4 * 1024 * 1024
 
     data class Header(
         val currentLba: ULong,
@@ -35,8 +39,17 @@ object GptCriticalBackup {
     )
 
     /** Expected blob size for [disk]; used by the capture side before writing the file. */
-    fun blobSize(disk: BlockDevice, primarySectors: Int, backupSectors: Int): Int =
-        (primarySectors + backupSectors) * disk.sectorSize
+    fun blobSize(disk: BlockDevice, primarySectors: Int, backupSectors: Int): Int {
+        require(primarySectors > 0 && backupSectors > 0) {
+            "invalid GPT critical span $primarySectors+$backupSectors"
+        }
+        val total =
+            (primarySectors.toLong() + backupSectors.toLong()) * disk.sectorSize.toLong()
+        require(total in 1L..MAX_BLOB_BYTES.toLong()) {
+            "GPT critical backup size $total exceeds cap $MAX_BLOB_BYTES"
+        }
+        return total.toInt()
+    }
 
     private fun requireBlobSize(
         blob: ByteArray,
@@ -44,11 +57,56 @@ object GptCriticalBackup {
         primarySectors: Int,
         backupSectors: Int,
     ) {
-        val expectedBytes = (primarySectors + backupSectors) * sectorSize
-        require(blob.size == expectedBytes) {
+        val expectedBytes =
+            (primarySectors.toLong() + backupSectors.toLong()) * sectorSize.toLong()
+        require(expectedBytes in 1L..MAX_BLOB_BYTES.toLong()) {
+            "GPT critical backup expected size $expectedBytes exceeds cap $MAX_BLOB_BYTES"
+        }
+        require(blob.size.toLong() == expectedBytes) {
             "GPT critical backup is ${blob.size} bytes; this device needs $expectedBytes " +
                 "bytes ($primarySectors + $backupSectors sectors of $sectorSize bytes)"
         }
+    }
+
+
+    /**
+     * Head/tail sector counts stored in the GPT header's entryCount×entrySize. Caller-supplied
+     * [primarySectors]/[backupSectors] must match; defaults are never assumed from sector size alone.
+     */
+    private fun requireHeaderGeometry(
+        primary: Header,
+        sectorSize: Int,
+        sectorCount: ULong,
+        primarySectors: Int,
+        backupSectors: Int,
+    ): GptBackup.CriticalGeometry {
+        require(primary.entryLba == 2UL) {
+            "primary GPT entries at LBA ${primary.entryLba} cannot be represented in a " +
+                "contiguous critical-sector blob (expected LBA 2)"
+        }
+        val derived = GptBackup.criticalGeometry(sectorSize, primary.entryCount, primary.entrySize)
+        require(
+            primarySectors == derived.primarySectors &&
+                backupSectors == derived.backupSectors,
+        ) {
+            "backup geometry $primarySectors+$backupSectors does not match GPT header entry " +
+                "array ${primary.entryCount}x${primary.entrySize} " +
+                "(need ${derived.primarySectors}+${derived.backupSectors})"
+        }
+        require(sectorCount > (derived.primarySectors + derived.backupSectors).toULong()) {
+            "backup describes a $sectorCount-sector disk, too small for " +
+                "${derived.primarySectors} + ${derived.backupSectors} critical GPT sectors"
+        }
+        val entrySectors =
+            ((primary.entryCount.toLong() * primary.entrySize.toLong() + sectorSize - 1) /
+                sectorSize).toULong()
+        require(primary.firstUsable >= 2UL + entrySectors) {
+            "primary first usable LBA ${primary.firstUsable} overlaps the entry array"
+        }
+        require(primary.backupLba >= entrySectors && primary.lastUsable < primary.backupLba - entrySectors) {
+            "primary last usable LBA ${primary.lastUsable} overlaps backup entries"
+        }
+        return derived
     }
 
     /**
@@ -63,11 +121,28 @@ object GptCriticalBackup {
     ): RestoreReport =
         validate(blob, disk.sectorSize, disk.sectorCount, primarySectors, backupSectors)
 
+    /** Derive geometry from the GPT header inside [blob], then validate against [disk]. */
+    fun inspect(blob: ByteArray, disk: BlockDevice): RestoreReport {
+        require(blob.size >= 2 * disk.sectorSize) {
+            "GPT critical backup is ${blob.size} bytes; need at least ${2 * disk.sectorSize} " +
+                "to read the primary header"
+        }
+        val primary = readHeader(blob, disk.sectorSize, disk.sectorSize)
+        require(primary.backupLba != ULong.MAX_VALUE) {
+            "backup primary header claims an impossible disk end ${primary.backupLba}"
+        }
+        val geo = GptBackup.criticalGeometry(disk.sectorSize, primary.entryCount, primary.entrySize)
+        return inspect(blob, disk, geo.primarySectors, geo.backupSectors)
+    }
+
     /**
      * Validate a captured primary + backup blob without a live disk. The recorded disk
      * size comes from the primary header, so a selected file can be inspected before the
      * destructive confirmation. The restore path still calls [inspect] against the live
      * disk; this function never admits a write by itself.
+     *
+     * [primarySectors]/[backupSectors] must equal the geometry derived from the GPT header
+     * entry array inside [blob]; the 128×128 defaults are never assumed.
      */
     fun inspectBlob(
         blob: ByteArray,
@@ -76,7 +151,13 @@ object GptCriticalBackup {
         backupSectors: Int,
     ): RestoreReport {
         require(sectorSize > 0) { "invalid sector size $sectorSize" }
-        requireBlobSize(blob, sectorSize, primarySectors, backupSectors)
+        require(blob.size <= MAX_BLOB_BYTES) {
+            "GPT critical backup is ${blob.size} bytes; exceeds cap $MAX_BLOB_BYTES"
+        }
+        require(blob.size >= 2 * sectorSize) {
+            "GPT critical backup is ${blob.size} bytes; need at least ${2 * sectorSize} " +
+                "to read the primary header"
+        }
         val primary = readHeader(blob, sectorSize, sectorSize)
         require(primary.currentLba == 1UL) {
             "backup primary header claims current LBA ${primary.currentLba}, expected 1"
@@ -85,20 +166,29 @@ object GptCriticalBackup {
             "backup primary header claims an impossible disk end ${primary.backupLba}"
         }
         val sectorCount = primary.backupLba + 1UL
-        require(sectorCount > (primarySectors + backupSectors).toULong()) {
-            "backup describes a $sectorCount-sector disk, too small for $primarySectors + " +
-                "$backupSectors critical GPT sectors"
-        }
+        val geo = requireHeaderGeometry(
+            primary = primary,
+            sectorSize = sectorSize,
+            sectorCount = sectorCount,
+            primarySectors = primarySectors,
+            backupSectors = backupSectors,
+        )
+        requireBlobSize(blob, sectorSize, geo.primarySectors, geo.backupSectors)
         validateProtectiveMbr(blob, sectorSize, sectorCount)
 
-        val tailStart = sectorCount - backupSectors.toULong()
+        val tailStart = sectorCount - geo.backupSectors.toULong()
         val primaryEntries =
-            entryArray(blob, primary, sectorSize, primarySectors, backupSectors, tailStart)
+            entryArray(blob, primary, sectorSize, geo.primarySectors, geo.backupSectors, tailStart)
         require(crc32(primaryEntries, 0, primaryEntries.size) == primary.entriesCrc) {
             "primary GPT entry CRC mismatch inside the backup"
         }
 
-        val backup = readHeader(blob, sectorSize, (primarySectors + backupSectors - 1) * sectorSize)
+        val backupHeaderOffset =
+            (geo.primarySectors.toLong() + geo.backupSectors.toLong() - 1L) * sectorSize.toLong()
+        require(backupHeaderOffset in 0L..Int.MAX_VALUE.toLong()) {
+            "backup header offset $backupHeaderOffset exceeds Int range"
+        }
+        val backup = readHeader(blob, sectorSize, backupHeaderOffset.toInt())
         require(backup.currentLba == sectorCount - 1UL) {
             "backup header claims current LBA ${backup.currentLba}, expected ${sectorCount - 1UL}"
         }
@@ -109,12 +199,33 @@ object GptCriticalBackup {
             blob = blob,
             sectorSize = sectorSize,
             sectorCount = sectorCount,
-            primarySectors = primarySectors,
-            backupSectors = backupSectors,
+            primarySectors = geo.primarySectors,
+            backupSectors = geo.backupSectors,
             tailStart = tailStart,
             primary = primary,
             backup = backup,
         )
+    }
+
+    /**
+     * Derive head/tail sector counts from the GPT header inside [blob], then validate.
+     * Callers that do not already know the entry geometry must use this overload.
+     */
+    fun inspectBlob(blob: ByteArray, sectorSize: Int): RestoreReport {
+        require(sectorSize > 0) { "invalid sector size $sectorSize" }
+        require(blob.size <= MAX_BLOB_BYTES) {
+            "GPT critical backup is ${blob.size} bytes; exceeds cap $MAX_BLOB_BYTES"
+        }
+        require(blob.size >= 2 * sectorSize) {
+            "GPT critical backup is ${blob.size} bytes; need at least ${2 * sectorSize} " +
+                "to read the primary header"
+        }
+        val primary = readHeader(blob, sectorSize, sectorSize)
+        require(primary.backupLba != ULong.MAX_VALUE) {
+            "backup primary header claims an impossible disk end ${primary.backupLba}"
+        }
+        val geo = GptBackup.criticalGeometry(sectorSize, primary.entryCount, primary.entrySize)
+        return inspectBlob(blob, sectorSize, geo.primarySectors, geo.backupSectors)
     }
 
     /**
@@ -129,14 +240,51 @@ object GptCriticalBackup {
         backupSectors: Int,
     ): RestoreReport {
         val sectorSize = disk.sectorSize
-        requireBlobSize(blob, sectorSize, primarySectors, backupSectors)
-        val backup =
-            readHeader(blob, sectorSize, (primarySectors + backupSectors - 1) * sectorSize)
+        require(blob.size <= MAX_BLOB_BYTES) {
+            "GPT critical backup is ${blob.size} bytes; exceeds cap $MAX_BLOB_BYTES"
+        }
+        require(blob.size >= 2 * sectorSize) {
+            "GPT critical backup is ${blob.size} bytes; need at least ${2 * sectorSize} " +
+                "to read the primary header"
+        }
+        // Peek the backup header with caller geometry only after header-derived sizes match.
+        val primary = readHeader(blob, sectorSize, sectorSize)
+        require(primary.backupLba != ULong.MAX_VALUE) {
+            "backup primary header claims an impossible disk end ${primary.backupLba}"
+        }
+        val geo = requireHeaderGeometry(
+            primary = primary,
+            sectorSize = sectorSize,
+            sectorCount = primary.backupLba + 1UL,
+            primarySectors = primarySectors,
+            backupSectors = backupSectors,
+        )
+        requireBlobSize(blob, sectorSize, geo.primarySectors, geo.backupSectors)
+        val backupHeaderOffset =
+            (geo.primarySectors.toLong() + geo.backupSectors.toLong() - 1L) * sectorSize.toLong()
+        require(backupHeaderOffset in 0L..Int.MAX_VALUE.toLong()) {
+            "backup header offset $backupHeaderOffset exceeds Int range"
+        }
+        val backup = readHeader(blob, sectorSize, backupHeaderOffset.toInt())
         require(backup.currentLba + 1UL == disk.sectorCount) {
             "captured backup header claims LBA ${backup.currentLba} but the disk reports " +
                 "${disk.sectorCount} sectors; relocate the backup GPT first"
         }
-        return validate(blob, sectorSize, disk.sectorCount, primarySectors, backupSectors)
+        return validate(blob, sectorSize, disk.sectorCount, geo.primarySectors, geo.backupSectors)
+    }
+
+    /** Derive geometry from the blob header, then validate against [disk]. */
+    fun inspectCaptured(blob: ByteArray, disk: BlockDevice): RestoreReport {
+        require(blob.size >= 2 * disk.sectorSize) {
+            "GPT critical backup is ${blob.size} bytes; need at least ${2 * disk.sectorSize} " +
+                "to read the primary header"
+        }
+        val primary = readHeader(blob, disk.sectorSize, disk.sectorSize)
+        require(primary.backupLba != ULong.MAX_VALUE) {
+            "backup primary header claims an impossible disk end ${primary.backupLba}"
+        }
+        val geo = GptBackup.criticalGeometry(disk.sectorSize, primary.entryCount, primary.entrySize)
+        return inspectCaptured(blob, disk, geo.primarySectors, geo.backupSectors)
     }
 
     private fun validate(
@@ -173,7 +321,8 @@ object GptCriticalBackup {
             "primary and backup GPT entry geometry disagree"
         }
         val entrySectors =
-            ((primary.entryCount * primary.entrySize + sectorSize - 1) / sectorSize).toULong()
+            ((primary.entryCount.toLong() * primary.entrySize.toLong() + sectorSize.toLong() - 1L) /
+                sectorSize.toLong()).toULong()
         require(entrySectors <= primarySectors.toULong() &&
             primary.entryLba <= primarySectors.toULong() - entrySectors) {
             "primary entries at LBA ${primary.entryLba} do not fit the " +
@@ -230,7 +379,13 @@ object GptCriticalBackup {
         usb.partition.rejectOverlaps(partitions)
 
         return RestoreReport(
-            sectorsRestored = primarySectors + backupSectors,
+            sectorsRestored = run {
+                val total = primarySectors.toLong() + backupSectors.toLong()
+                require(total in 1L..Int.MAX_VALUE.toLong()) {
+                    "restored sector count $total exceeds Int range"
+                }
+                total.toInt()
+            },
             primary = primary,
             backup = backup,
             partitions = partitions.size,
@@ -250,8 +405,13 @@ object GptCriticalBackup {
     ): RestoreReport {
         val report = inspect(blob, disk, primarySectors, backupSectors)
         val sectorSize = disk.sectorSize
-        val headBytes = primarySectors * sectorSize
-        val tailBytes = backupSectors * sectorSize
+        val headBytesLong = primarySectors.toLong() * sectorSize.toLong()
+        val tailBytesLong = backupSectors.toLong() * sectorSize.toLong()
+        require(headBytesLong in 1L..Int.MAX_VALUE.toLong() && tailBytesLong in 1L..Int.MAX_VALUE.toLong()) {
+            "restore region size exceeds Int range"
+        }
+        val headBytes = headBytesLong.toInt()
+        val tailBytes = tailBytesLong.toInt()
         val tailStart = disk.sectorCount - backupSectors.toULong()
 
         operation?.let { it.state = usb.operation.OperationState.Running }
@@ -281,6 +441,27 @@ object GptCriticalBackup {
             throw failure
         }
         return report
+    }
+
+    /**
+     * Derive geometry from the GPT header inside [blob], then restore. Prefer this overload
+     * when the caller does not already know entryCount×entrySize.
+     */
+    fun restore(
+        disk: BlockDevice,
+        blob: ByteArray,
+        operation: DiskOperation? = null,
+    ): RestoreReport {
+        require(blob.size >= 2 * disk.sectorSize) {
+            "GPT critical backup is ${blob.size} bytes; need at least ${2 * disk.sectorSize} " +
+                "to read the primary header"
+        }
+        val primary = readHeader(blob, disk.sectorSize, disk.sectorSize)
+        require(primary.backupLba != ULong.MAX_VALUE) {
+            "backup primary header claims an impossible disk end ${primary.backupLba}"
+        }
+        val geo = GptBackup.criticalGeometry(disk.sectorSize, primary.entryCount, primary.entrySize)
+        return restore(disk, blob, geo.primarySectors, geo.backupSectors, operation)
     }
 
     /** Validate the LBA 0 Protective MBR required by UEFI 2.10A §5.2. */
@@ -369,8 +550,13 @@ object GptCriticalBackup {
         require(header.entrySize in 128..512 && header.entryCount in 1..1024) {
             "invalid GPT entry geometry ${header.entryCount} x ${header.entrySize}"
         }
-        val bytes = header.entryCount * header.entrySize
-        val sectors = ((bytes + sectorSize - 1) / sectorSize).toULong()
+        val bytesLong = header.entryCount.toLong() * header.entrySize.toLong()
+        require(bytesLong in 1L..Int.MAX_VALUE.toLong()) {
+            "GPT entry array size $bytesLong exceeds Int range"
+        }
+        val bytes = bytesLong.toInt()
+        val sectors =
+            ((bytesLong + sectorSize.toLong() - 1L) / sectorSize.toLong()).toULong()
         val lba = header.entryLba
         require(lba >= 2UL) { "GPT entries must not start in the protective MBR or header" }
         val offset =
@@ -391,6 +577,9 @@ object GptCriticalBackup {
                 }
                 primarySectors.toULong() * sectorSize.toULong() + index * sectorSize.toULong()
             }
+        require(offset <= Int.MAX_VALUE.toULong()) {
+            "GPT entry offset $offset exceeds Int range"
+        }
         val start = offset.toInt()
         require(start + bytes <= blob.size) { "GPT entries at LBA $lba overrun the backup" }
         return blob.copyOfRange(start, start + bytes)

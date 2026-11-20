@@ -69,6 +69,27 @@ object FilesOperationPolicy {
         return if (trimmed.isEmpty()) "/" else "/$trimmed"
     }
 
+    /**
+     * Normalize [path] then reject any `.` / `..` / empty / separator / NUL segment before
+     * the first filesystem call. [normalizeVolumePath] alone keeps literal `..` segments.
+     * Outer whitespace and embedded NUL are refused — never silently trimmed.
+     */
+    fun requireVolumePath(path: String): String {
+        require(path == path.trim()) {
+            "path has outer whitespace: \"$path\""
+        }
+        require('\u0000' !in path) {
+            "path contains NUL"
+        }
+        val normalized = normalizeVolumePath(path)
+        if (normalized != "/") {
+            for (segment in normalized.substring(1).split('/')) {
+                requireChildName(segment, "path $normalized")
+            }
+        }
+        return normalized
+    }
+
     /** True when [relative] has no empty/`.`/`..` segment and no backslash/NUL. */
     fun isSafeRelativePath(relative: String): Boolean {
         if (relative.isEmpty() || relative.startsWith('/') || '\\' in relative || '\u0000' in relative) {

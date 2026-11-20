@@ -5,6 +5,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+
 import usb.device.UsbExclusiveClaim
 import usb.operation.DiskOperation
 
@@ -43,6 +45,16 @@ class DiskController(
     /** Unbind only if [serviceControl] is still the active binding. */
     fun unbind(serviceControl: ServiceControl) {
         executor.unbind(serviceControl)
+    }
+
+    /**
+     * Process-lifetime IO that survives ViewModel [CoroutineScope] cancellation.
+     * Used for non-blocking files-volume teardown from onCleared.
+     */
+    fun runProcessIo(block: () -> Unit) {
+        scope.launch {
+            runCatching(block)
+        }
     }
 
 

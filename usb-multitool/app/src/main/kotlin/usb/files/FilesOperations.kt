@@ -2,11 +2,13 @@ package usb.files
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import kotlinx.coroutines.CancellationException
 import usb.fs.FilesystemSpace
 import usb.fs.UsbFsDirEntry
@@ -339,8 +341,7 @@ object FilesOperations {
         try {
             if (!operation.isActive()) throw CancellationException("Download cancelled")
             operation.mutationAttempted = true
-            val output = resolver.openOutputStream(destination, "wt") ?: error("cannot open $destination for writing")
-            output.use { stream ->
+            writeSyncedDownload(resolver, destination) { stream ->
                 FileInputStream(staged).use { input ->
                     val buffer = ByteArray(usb.device.TransferTuning.jniCapBytes)
                     while (true) {
@@ -351,7 +352,6 @@ object FilesOperations {
                         offset += count
                         operation.report(offset)
                     }
-                    stream.flush()
                 }
             }
             if (offset != size) error("staged size mismatch: got $offset, expected $size")
@@ -448,7 +448,10 @@ object FilesOperations {
         operation: DiskOperation,
         onProgress: ((String) -> Unit)? = null,
     ) {
-        val path = FilesOperationPolicy.normalizeVolumePath(target)
+        val path = FilesOperationPolicy.requireVolumePath(target)
+        require(path != "/") {
+            "refusing recursive delete of volume root"
+        }
         try {
             deleteRecursivelyBody(volume, path, operation, onProgress)
             volume.sync()
@@ -941,8 +944,7 @@ object FilesOperations {
         var offset = 0L
         try {
             if (!operation.isActive()) throw CancellationException("Download cancelled")
-            val output = resolver.openOutputStream(destination, "wt") ?: error("cannot open $destination for writing")
-            output.use { stream ->
+            writeSyncedDownload(resolver, destination) { stream ->
                 FileInputStream(staged).use { input ->
                     val buffer = ByteArray(usb.device.TransferTuning.jniCapBytes)
                     while (true) {
@@ -953,7 +955,6 @@ object FilesOperations {
                         offset += count
                         operation.report(offset)
                     }
-                    stream.flush()
                 }
             }
             if (offset != size) error("staged size mismatch: got $offset, expected $size")
@@ -970,6 +971,36 @@ object FilesOperations {
                     }
             }
         }
+    }
+
+    /**
+     * Truncating write + flush + fd.sync before close. Mirrors [usb.saf.SafSyncedOutput]
+     * but keeps mode `wt` so a replaced SAF document never retains a stale tail.
+     * [ParcelFileDescriptor.AutoCloseOutputStream] owns the descriptor after construction;
+     * never close the PFD twice.
+     */
+    private fun writeSyncedDownload(
+        resolver: ContentResolver,
+        destination: Uri,
+        write: (OutputStream) -> Unit,
+    ) {
+        val descriptor = resolver.openFileDescriptor(destination, "wt")
+            ?: error("cannot open $destination for writing")
+        val stream = try {
+            ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
+        } catch (failure: Throwable) {
+            runCatching { descriptor.close() }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+        try {
+            write(stream)
+            stream.flush()
+            descriptor.fileDescriptor.sync()
+        } catch (failure: Throwable) {
+            runCatching { stream.close() }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+        stream.close()
     }
     private fun resolveDownloadDirectory(
         childName: String,

@@ -118,6 +118,66 @@ class GptBackupTest {
         }
     }
 
+    @Test
+    fun backupDerivesGeometryFromHeaderEntryArray() {
+        for ((entryCount, wantPrimary, wantBackup) in listOf(
+            Triple(128, 34, 33),
+            Triple(4, 3, 2),
+            Triple(32, 10, 9),
+        )) {
+            val disk = SyntheticGpt.build(sectorCount = 2048UL, entryCount = entryCount)
+            val geo = GptBackup.criticalGeometry(disk)
+            assertEquals("entryCount=$entryCount primary", wantPrimary, geo.primarySectors)
+            assertEquals("entryCount=$entryCount backup", wantBackup, geo.backupSectors)
+            assertEquals(entryCount, geo.entryCount)
+            val blob = GptBackup.backupCriticalSectors(disk)
+            assertEquals(geo.blobBytes(disk.sectorSize), blob.size)
+            val firstUsable = PartitionTable.read(disk).gptHeader!!.firstUsable
+            assertTrue(
+                "capture must not reach usable LBA $firstUsable",
+                geo.primarySectors.toULong() <= firstUsable,
+            )
+        }
+    }
+
+    @Test
+    fun backupRejectsNonRepresentableBackupEntryPlacement() {
+        // Entries live far from the backup header: contiguous tail blob cannot cover them.
+        val disk = SyntheticGpt.build(
+            sectorCount = 2048UL,
+            backupEntriesLba = 100UL,
+        )
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            GptBackup.backupCriticalSectors(disk)
+        }
+        assertTrue(
+            error.message.orEmpty().contains("adjacent") ||
+                error.message.orEmpty().contains("overlaps") ||
+                error.message.orEmpty().contains("represent"),
+        )
+    }
+
+    @Test
+    fun criticalGeometryRejectsCallerDefaultsForSmallEntryArray() {
+        val derived = GptBackup.criticalGeometry(sectorSize = 512, entryCount = 4, entrySize = 128)
+        assertEquals(3, derived.primarySectors)
+        assertEquals(2, derived.backupSectors)
+        assertTrue(derived.primarySectors < GptBackup.PRIMARY_SECTORS)
+        assertTrue(derived.backupSectors < GptBackup.BACKUP_SECTORS)
+    }
+
+    @Test
+    fun criticalGeometryRejectsOversizedEntryArray() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            GptBackup.criticalGeometry(
+                sectorSize = 512,
+                entryCount = (1 * 1024 * 1024 / 128) + 1,
+                entrySize = 128,
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("too large"))
+    }
+
     private fun putLeInt(bytes: ByteArray, offset: Int, value: Int) {
         bytes[offset] = (value and 0xFF).toByte()
         bytes[offset + 1] = ((value shr 8) and 0xFF).toByte()
