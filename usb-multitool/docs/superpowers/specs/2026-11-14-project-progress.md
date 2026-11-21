@@ -291,6 +291,9 @@ unit/host-тесты, debug APK, проверка 16 KiB, lint и компиля
   `DeviceIdentityTest`, `SchemeInitUiTest`, `StringResourceParityTest`,
   `ConfirmationTest` — успех. CI [44949826206](https://github.com/SklUpp/usb-multitool/actions/runs/44949826206)
   — success: unit/host-тесты, debug APK, 16 KiB, lint и Kotlin. APK — артефакт
-  CI `app-debug-apk` (id `14725855254`), локальная сборка APK не выполнялась.
+  CI `app-debug-apk` (id `14725855254`); локально скачан и проверен:
+  `~/apk-1187a43/app-debug.apk`, 86 629 595 байт, SHA-256
+  `d0efd0ca79be677be609150481d5299cec2beac827f7837813742ec47904f4f7`,
+  `unzip -t` и `aapt2 dump badging` — без ошибок.
 - Не проверено: визуальный рендер, TalkBack, IME, fontScale 2.0, физический
   USB/SAF, загрузка Ventoy и фактическое отсутствие мигания на устройстве.
