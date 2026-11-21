@@ -33,9 +33,12 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -126,6 +129,11 @@ internal fun AutounattendSection(
     val document = (state.autounattendState as? AutounattendState.Parsed)?.document
     // Detached stick hides USB-gated rows below; help + live import status/cancel stay.
     val xmlGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
+    // Shared by the path row and GenerateDialog so display cannot disagree with the write target.
+    val prospectiveXmlPath =
+        state.windowsSelectedImages.firstOrNull()?.let {
+            runCatching { VentoySetup.suggestedXmlPath(it) }.getOrNull()
+        } ?: VentoySetup.resolveXmlPath("autounattend.xml")
     val templateSourceIdentity = state.device?.identity
     val templateSourceGeneration = state.device?.attachGeneration
     var templateSourcePrompt by remember(
@@ -236,7 +244,14 @@ internal fun AutounattendSection(
                 }
             }
         }
-        val resolvedPath = template?.let(VentoySetup::resolveXmlPath)
+        // Display and generateTarget share prospectiveXmlPath so the placeholder matches
+        // the path RequestGenerateAutounattend would create.
+        val resolvedPath = runCatching {
+            template?.let(VentoySetup::resolveXmlPath)
+        }.getOrNull()
+        val pathLabel = resolvedPath
+            ?: if (template == null) prospectiveXmlPath
+            else stringResource(R.string.wave4_file_not_selected)
         val xmlSizeLabel = document?.let { doc ->
             val text = doc.sourceText ?: return@let null
             val bytes = text.toByteArray(StandardCharsets.UTF_8).size.toLong() +
@@ -244,9 +259,16 @@ internal fun AutounattendSection(
             DeviceIdentity.formatCapacity(bytes.toULong())
         }
         ConfigFileStatusRow(
-            pathLabel = resolvedPath,
+            pathLabel = pathLabel,
             sizeLabel = xmlSizeLabel,
+            // Unset or failed resolve stays dimmed; a chosen path is normal weight.
             dimmedPath = resolvedPath == null,
+            // Prospect is only a suggestion: create-new may allocate Win11_1.xml etc.
+            pathHint = if (template == null && resolvedPath == null) {
+                stringResource(R.string.wave4_suggested_xml_path)
+            } else {
+                null
+            },
             showChanged = false,
             onReset = if (template != null) {
                 { onIntent(UiIntent.ClearWindowsTemplate) }
@@ -254,12 +276,10 @@ internal fun AutounattendSection(
                 null
             },
             resetEnabled = state.actionsEnabled,
-            onPick = if (!xmlGone && state.actionsEnabled) {
-                { templateSourcePrompt = true }
-            } else {
-                null
-            },
-            pickEnabled = state.actionsEnabled,
+            // Keep the picker mounted when the stick is gone; only disable it. Phone/stick
+            // sheets still refuse unsafe work through their own guards.
+            onPick = { templateSourcePrompt = true },
+            pickEnabled = !xmlGone && state.actionsEnabled,
             pickLabel = stringResource(R.string.ventoy_pick_windows_template_cd),
         )
         when (val file = state.autounattendState) {
@@ -399,8 +419,7 @@ internal fun AutounattendSection(
                             Text(
                                 text = image.imagePath,
                                 style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                                softWrap = true,
                             )
                             if (image.bound) {
                                 Text(
@@ -601,8 +620,7 @@ internal fun AutounattendSection(
     if (generateOpen) {
         val generateTarget =
             template
-                ?: state.windowsSelectedImages.firstOrNull()?.let { VentoySetup.suggestedXmlPath(it) }
-                ?: "autounattend.xml"
+                ?: prospectiveXmlPath
         GenerateDialog(
             template = generateTarget,
             document = document,
@@ -1706,9 +1724,17 @@ private fun ConfigFileStatusRow(
     onPick: (() -> Unit)? = null,
     pickEnabled: Boolean = true,
     pickLabel: String? = null,
+    pathHint: String? = null,
 ) {
     val resetLabel = stringResource(R.string.wave4_reset_file)
     val chooseLabel = pickLabel ?: stringResource(R.string.wave4_choose_ellipsis)
+    // Always reserve a truthful path/status slot. Callers pass a real or prospective
+    // path; this fallback only covers a missing label. Unset targets are dimmed by the caller.
+    val statusText = when {
+        pathLabel == null -> stringResource(R.string.wave4_file_not_selected)
+        sizeLabel.isNullOrBlank() -> pathLabel
+        else -> stringResource(R.string.wave4_status_path_size, pathLabel, sizeLabel)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1720,35 +1746,37 @@ private fun ConfigFileStatusRow(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            if (pathHint != null) {
+                Text(
+                    text = pathHint,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    softWrap = true,
+                )
+            }
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                ),
+                color = if (dimmedPath || pathLabel == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                softWrap = true,
+            )
+            // When no path is chosen but a non-path status exists (e.g. reading), keep it
+            // under the empty-state label instead of replacing the path slot.
             if (pathLabel == null) {
-                // Avoid repeating "file not selected"; Choose is the affordance.
                 sizeLabel?.takeIf { it.isNotBlank() }?.let { status ->
                     Text(
                         text = status,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        softWrap = true,
                     )
                 }
-            } else {
-                Text(
-                    text = if (sizeLabel.isNullOrBlank()) {
-                        pathLabel
-                    } else {
-                        stringResource(R.string.wave4_status_path_size, pathLabel, sizeLabel)
-                    },
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                    ),
-                    color = if (dimmedPath) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
             if (showChanged) {
                 Badge(
@@ -1759,25 +1787,28 @@ private fun ConfigFileStatusRow(
             }
         }
         if (onPick != null) {
-            OutlinedButton(
+            OutlinedIconButton(
                 onClick = onPick,
                 enabled = pickEnabled,
                 modifier = Modifier
-                    .heightIn(min = 48.dp)
+                    .size(48.dp)
                     .semantics { contentDescription = chooseLabel },
+                colors = IconButtonDefaults.outlinedIconButtonColors(),
+                border = IconButtonDefaults.outlinedIconButtonBorder(enabled = pickEnabled),
             ) {
-                Text(stringResource(R.string.wave4_choose_ellipsis))
+                GlyphIcon(Glyph.File, size = 20.dp)
             }
         }
         if (onReset != null) {
-            FilledTonalButton(
+            FilledTonalIconButton(
                 onClick = onReset,
                 enabled = resetEnabled,
                 modifier = Modifier
-                    .heightIn(min = 48.dp)
+                    .size(48.dp)
                     .semantics { contentDescription = resetLabel },
+                colors = IconButtonDefaults.filledTonalIconButtonColors(),
             ) {
-                GlyphIcon(Glyph.Close, size = 18.dp)
+                GlyphIcon(Glyph.Close, size = 20.dp)
             }
         }
     }

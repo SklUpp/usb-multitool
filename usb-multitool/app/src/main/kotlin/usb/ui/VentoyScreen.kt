@@ -42,7 +42,6 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -751,6 +750,18 @@ private fun WindowsImageBlock(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // Name first (short, readable), the validated stick path second. Phone
+                // picks become this post-copy path, so the label never guesses a source URI.
+                if (selectedImage != null && selectedImage.path != statusText) {
+                    Text(
+                        text = selectedImage.path,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        softWrap = true,
+                    )
+                }
             }
             IconButton(
                 onClick = { imageSourcePrompt = true },
@@ -863,57 +874,6 @@ private fun WindowsImageBlock(
             onReplace = { onIntent(UiIntent.ConfirmWindowsIsoImport(true)) },
             onCancel = { onIntent(UiIntent.CancelWindowsIsoImport) },
         )
-    }
-}
-
-/**
- * One copy target: what is copied, where the last pick landed (or that nothing is chosen
- * yet), and the action that opens the folder list. The destination is always shown, so the
- * copy is never implied to go somewhere unstated.
- */
-@Composable
-private fun ImportRow(
-    label: String,
-    destination: String?,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    hint: String? = null,
-) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        hint?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        // One wrapping line: a folder path is longer than an InfoRow value slot and must not
-        // be cut to "…/very/long/fol…".
-        Text(
-            text = stringResource(
-                R.string.import_destination_line,
-                destination ?: stringResource(R.string.selection_not_selected),
-            ),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (destination == null) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            fontFamily = if (destination == null) FontFamily.Default else FontFamily.Monospace,
-        )
-        OutlinedButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.import_choose))
-        }
     }
 }
 

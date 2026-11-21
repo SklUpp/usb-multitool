@@ -822,7 +822,6 @@
     <string name="import_image_label">Installation image</string>
     <string name="import_template_label">Windows setup answer file (autounattend.xml)</string>
     <string name="import_template_hint">Unknown elements inside the file are preserved.</string>
-    <string name="import_choose">Choose a file…</string>
     <string name="import_destination_line">Destination: %1$s</string>
     <string name="import_folder_title">Destination folder</string>
     <string name="import_folder_hint">The file is copied into an existing folder of the Ventoy data partition; no folder is created.</string>

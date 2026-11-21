@@ -823,7 +823,6 @@
     <string name="import_image_label">Образ для установки</string>
     <string name="import_template_label">Файл ответов Windows (autounattend.xml)</string>
     <string name="import_template_hint">Неизвестные элементы внутри файла сохраняются.</string>
-    <string name="import_choose">Выбрать файл…</string>
     <string name="import_destination_line">Назначение: %1$s</string>
     <string name="import_folder_title">Папка назначения</string>
     <string name="import_folder_hint">Файл копируется в существующую папку раздела данных Ventoy; папки не создаются.</string>

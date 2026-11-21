@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Qualifies a dimmed prospective XML target; create-new may allocate a numbered suffix. -->
+    <string name="wave4_suggested_xml_path">Suggested path (name may change on write)</string>
+</resources>
