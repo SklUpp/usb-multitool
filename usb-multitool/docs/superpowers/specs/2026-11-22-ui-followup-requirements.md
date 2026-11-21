@@ -45,6 +45,6 @@ Recorded from user feedback. Status is updated only after code and verification.
 
 ## Verification
 
-- [ ] Compile, unit tests, lint.
+- [x] Compile, unit tests, lint. CI run `44955094683` is green.
 - [ ] Visual check on device (pinning transition, strip taps, status dialog).
-- [ ] CI green after push; APK from CI only.
+- [x] CI green after push; APK is built only by CI.
