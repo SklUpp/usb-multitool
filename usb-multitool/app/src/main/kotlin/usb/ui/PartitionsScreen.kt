@@ -410,6 +410,7 @@ fun PartitionsScreen(
                             onValueChange = { input -> startLbaInput = input.filter { it.isDigit() } },
                             label = { Text(stringResource(R.string.partitions_start_lba)) },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             isError = startLbaInput.isNotBlank() && !(isAligned && inRegion),
                             supportingText = {
                                 Text(
@@ -440,7 +441,15 @@ fun PartitionsScreen(
                             onValueChange = { input -> sectorCount = input.filter { it.isDigit() } },
                             label = { Text(stringResource(R.string.partitions_size_sectors)) },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             isError = sectorCount.isNotBlank() && (parsedCount == null || parsedCount == 0UL || !fits),
+                            supportingText = {
+                                if (sectorCount.isNotBlank() &&
+                                    (parsedCount == null || parsedCount == 0UL || !fits)
+                                ) {
+                                    Text(stringResource(R.string.partitions_size_support))
+                                }
+                            },
                         )
                         if (fits && parsedStart != null && parsedCount != null) {
                             Text(
@@ -522,7 +531,7 @@ fun PartitionsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = valid,
+                    enabled = valid && state.actionsEnabled,
                     onClick = {
                         onIntent(
                             UiIntent.RequestCreatePartition(
