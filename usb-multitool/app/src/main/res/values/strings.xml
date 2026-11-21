@@ -352,11 +352,9 @@
     <string name="ventoy_section_title">Ventoy</string>
     <string name="ventoy_version_subtitle">Version</string>
     <string name="ventoy_help_title">Ventoy install and update</string>
-    <string name="ventoy_help_text">Bundled in app, downloaded, on USB (VTOYEFI), and server versions are shown separately; every label names its own source. Install erases all partitions and files and formats the data partition; confirmation is required. Update rewrites boot files and keeps data files; it does not promise atomicity.</string>
+    <string name="ventoy_help_text">Bundled in app, on USB (VTOYEFI), and server versions are shown separately; every label names its own source. Install erases all partitions and files and formats the data partition; confirmation is required. Update rewrites boot files and keeps data files; it does not promise atomicity.</string>
     <string name="ventoy_help_details">Check never writes the stick. Download keeps validated bytes app-private until app data is cleared. Pinned releases require independent archive and member SHA-256 pins. An unpinned latest release is downloaded only after a separate warning that no independent trusted SHA is available; structural validation does not prove authenticity.</string>
     <string name="ventoy_version_bundled">Bundled in app</string>
-    <string name="ventoy_version_downloaded">Downloaded</string>
-    <string name="ventoy_version_downloaded_pinned">Downloaded (pinned)</string>
     <string name="ventoy_version_installed">On USB</string>
     <string name="ventoy_version_upstream">Server</string>
     <string name="ventoy_version_na">n/a</string>

@@ -352,12 +352,10 @@
     <string name="ventoy_section_title">Ventoy</string>
     <string name="ventoy_version_subtitle">Версия</string>
     <string name="ventoy_help_title">Установка и обновление Ventoy</string>
-    <string name="ventoy_help_text">Версии в пакете, загруженная, на накопителе (VTOYEFI) и на сервере показаны отдельно; каждая подпись называет свой источник. Установка стирает все разделы и файлы и форматирует раздел данных; требуется подтверждение. Обновление перезаписывает загрузочные файлы, сохраняя данные, но атомарность не обещается.</string>
+    <string name="ventoy_help_text">Версии в пакете, на накопителе (VTOYEFI) и на сервере показаны отдельно; каждая подпись называет свой источник. Установка стирает все разделы и файлы и форматирует раздел данных; требуется подтверждение. Обновление перезаписывает загрузочные файлы, сохраняя данные, но атомарность не обещается.</string>
     <string name="ventoy_help_details">Проверка и загрузка не пишут на флешку; проверенный релиз хранится в приватном хранилище и используется для установки/обновления до очистки данных. Для закреплённых релизов требуются независимые SHA-256 архива и компонентов. Непривязанный upstream загружается только после отдельного предупреждения об отсутствии независимой доверенной SHA; структурная проверка не доказывает подлинность.</string>
 
     <string name="ventoy_version_bundled">В пакете</string>
-    <string name="ventoy_version_downloaded">Загружено</string>
-    <string name="ventoy_version_downloaded_pinned">Загружено (закреплено)</string>
     <string name="ventoy_version_installed">На накопителе</string>
     <string name="ventoy_version_upstream">На сервере</string>
     <string name="ventoy_version_na">n/a</string>

@@ -971,7 +971,12 @@ class VentoySettingsUiTest {
         assertTrue(reduced.state.ventoyControlKeyCatalogLoading)
         assertEquals(1L, reduced.state.ventoyControlKeyCatalogRequest)
         assertEquals(
-            listOf(UiEffect.FetchVentoyControlKeyCatalog(requestToken = 1L)),
+            listOf(
+                UiEffect.FetchVentoyControlKeyCatalog(
+                    requestToken = 1L,
+                    release = usb.ventoy.VentoyAssets.PINNED_RELEASE,
+                ),
+            ),
             reduced.effects,
         )
         val failed =
@@ -985,6 +990,23 @@ class VentoySettingsUiTest {
         assertEquals("offline", failed.ventoyControlKeyCatalogError)
         assertNull(failed.ventoyControlKeyCatalog)
         assertEquals(false, failed.ventoyControlKeyCatalogLoading)
+    }
+
+    @Test
+    fun refreshControlKeyCatalogUsesShownUpstreamRelease() {
+        val reduced = UiReducer.reduce(
+            ready().copy(upstreamVentoyRelease = "1.1.19"),
+            UiIntent.RefreshVentoyControlKeyCatalog,
+        )
+        assertEquals(
+            listOf(
+                UiEffect.FetchVentoyControlKeyCatalog(
+                    requestToken = 1L,
+                    release = "1.1.19",
+                ),
+            ),
+            reduced.effects,
+        )
     }
 
     @Test

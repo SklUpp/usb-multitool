@@ -1360,6 +1360,7 @@ private fun OperationStatusLine(
                 val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
                 val track = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
                     .height(2.dp)
                     .clip(RoundedCornerShape(1.dp))
                 if (total > 0L) {
@@ -1383,10 +1384,11 @@ private fun OperationStatusLine(
 }
 
 /**
- * Centred status dialog from the status block. Title is always Status; below it the
- * operation name and a compact status (≤2 lines), then the temporary operation journal in
- * the shared journal format. No device-summary padding. Two-step cancel when running; Close
- * only dismisses — cancel stays the destructive confirmButton.
+ * Centred status dialog from the status block. Title is always Status; below it one compact
+ * operation line (name + status, single line), then the temporary
+ * operation journal in the shared journal format. The journal stays until the next operation
+ * and auto-scrolls to its newest line. Two-step cancel when running; Close only dismisses —
+ * cancel stays the destructive confirmButton.
  */
 @Composable
 private fun StatusDialog(
@@ -1404,8 +1406,8 @@ private fun StatusDialog(
     var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
     val closeLabel = stringResource(R.string.shell_status_close)
     val techLines = state.operationLogLines
-    // Name + compact status/output share ≤2 lines. Prefer real progress while running;
-    // otherwise the localized readback / terminal result. Never invent a percent.
+    // One compact line: operation name + current status/output. Prefer real progress while
+    // running; otherwise the localized readback / terminal result. Never invent a percent.
     val compactStatus = facts?.let { fact ->
         val progressLine = listOfNotNull(fact.state, fact.progress)
             .joinToString(FACT_SEPARATOR)
@@ -1415,7 +1417,7 @@ private fun StatusDialog(
             running && progressLine != null -> progressLine
             output != null -> output
             progressLine != null -> progressLine
-            else -> null
+            else -> fact.state
         }
         val statusTone = when {
             running && progressLine != null -> fact.tone
@@ -1423,14 +1425,10 @@ private fun StatusDialog(
             fact.result != null -> fact.resultTone
             else -> fact.tone
         }
-        buildList {
-            add(fact.name to StatusTone.Neutral)
-            if (newerStatusText != null) {
-                add(newerStatusText to StatusTone.Neutral)
-            } else {
-                statusLine?.let { add(it to statusTone) }
-            }
-        }.take(2)
+        val detail = newerStatusText ?: statusLine
+        listOf(
+            listOfNotNull(fact.name, detail).joinToString(FACT_SEPARATOR) to statusTone,
+        )
     } ?: state.statusMessage?.let {
         listOf(it.localized() to StatusTone.Neutral)
     }.orEmpty()
@@ -1453,26 +1451,28 @@ private fun StatusDialog(
             )
         },
         text = {
+            val scrollState = rememberScrollState()
+            LaunchedEffect(techLines.lastOrNull(), scrollState.maxValue) {
+                if (scrollState.maxValue > 0) scrollState.scrollTo(scrollState.maxValue)
+            }
             Column(
                 modifier = Modifier
                     .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (compactStatus.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        compactStatus.forEachIndexed { index, (text, tone) ->
-                            Text(
-                                text = text,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (index == 0 && facts != null) {
-                                    dialogTitleColor
-                                } else {
-                                    tone.contentColor()
-                                },
-                            )
-                        }
-                    }
+                compactStatus.firstOrNull()?.let { (text, tone) ->
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (tone == StatusTone.Neutral) {
+                            dialogTitleColor
+                        } else {
+                            tone.contentColor()
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 // Temporary operation journal — same JournalLine renderer as the full log.
                 Surface(
@@ -1486,7 +1486,7 @@ private fun StatusDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         if (techLines.isEmpty()) {

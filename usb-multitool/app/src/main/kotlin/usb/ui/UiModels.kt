@@ -15,6 +15,7 @@ import usb.ventoy.AutounattendState
 import usb.ventoy.FolderReadProblem
 import usb.ventoy.LayoutPartition
 import usb.ventoy.UnreadableProblem
+import usb.ventoy.VentoyBundledControlKeyCatalog
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoyControlKeyCatalog
@@ -1677,11 +1678,13 @@ data class AppUiState(
     /** Last download failure, kept until the next attempt; never replaces the release fact. */
     val ventoyDownloadError: String? = null,
     /**
-     * Official Plugson control-key catalog from a manual refresh. Null until the user
-     * taps refresh; network failure keeps the previous value and sets
-     * [ventoyControlKeyCatalogError] instead of pretending the list is empty.
+     * Official Plugson control-key catalog. Starts with the bundled pinned-release keys so
+     * the picker works offline; a successful manual refresh replaces it. A network failure
+     * keeps the previous value and sets [ventoyControlKeyCatalogError] instead of pretending
+     * the list is empty.
      */
-    val ventoyControlKeyCatalog: VentoyControlKeyCatalog? = null,
+    val ventoyControlKeyCatalog: VentoyControlKeyCatalog? =
+        VentoyBundledControlKeyCatalog.catalog,
     val ventoyControlKeyCatalogError: String? = null,
     val ventoyControlKeyCatalogRequest: Long = 0L,
     val ventoyControlKeyCatalogLoading: Boolean = false,

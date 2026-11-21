@@ -34,6 +34,8 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/WindowsTemplate.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/AutounattendModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/Autounattend.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyControlKeyCatalog.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyBundledControlKeyCatalog.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/XmlPath.kt" \
   "$ROOT/app/src/main/kotlin/usb/ventoy/FolderPaths.kt" \

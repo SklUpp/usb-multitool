@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -67,6 +71,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,6 +101,7 @@ import usb.ventoy.XmlFieldIntent
 import usb.ventoy.SettingStatus
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlCatalog
+import usb.ventoy.VentoyControlKeyKind
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoyKnownControl
@@ -913,6 +919,11 @@ private fun GlobalSettingsEditorDialog(
     val entries = (state.ventoyGlobalSettings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
     var applyProblem by remember { mutableStateOf<String?>(null) }
     var addParamOpen by remember { mutableStateOf(false) }
+    var officialPickerOpen by remember { mutableStateOf(false) }
+    val applyProblemRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(applyProblem) {
+        if (applyProblem != null) applyProblemRequester.bringIntoView()
+    }
     // Pending changes seed a new dialog session, but must not reset local rows while editing.
     val drafts = remember(entries) {
         mutableStateListOf<EditorPairDraft>().apply {
@@ -1059,9 +1070,10 @@ private fun GlobalSettingsEditorDialog(
                 ) {
                     applyProblem?.let {
                         Text(
-                            it,
+                            text = it,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.bringIntoViewRequester(applyProblemRequester),
                         )
                     }
                     Column(
@@ -1085,12 +1097,57 @@ private fun GlobalSettingsEditorDialog(
                                 onIntent,
                             )
                         }
+                        val officialKeySet = remember(state.ventoyControlKeyCatalog) {
+                            state.ventoyControlKeyCatalog?.keys?.map { it.key }?.toSet().orEmpty()
+                        }
+                        val officialDrafts = drafts.filter { it.key in officialKeySet }
+                        val customDrafts = drafts.filter { it.key !in officialKeySet }
+
                         Text(
-                            text = stringResource(R.string.wave4_config_params_section),
+                            text = stringResource(R.string.wave4_official_section),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        drafts.toList().forEach { draft ->
+                        Text(
+                            text = stringResource(R.string.wave4_official_section_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        officialDrafts.forEach { draft ->
+                            key(draft.id) {
+                                EditablePairRow(
+                                    draft = draft,
+                                    actionsEnabled = state.actionsEnabled,
+                                    onChange = { changed ->
+                                        val i = drafts.indexOfFirst { it.id == draft.id }
+                                        if (i >= 0) drafts[i] = changed
+                                    },
+                                    onDelete = { drafts.removeAll { it.id == draft.id } },
+                                    keyReadOnly = true,
+                                )
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = { officialPickerOpen = true },
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp),
+                        ) {
+                            Text(stringResource(R.string.wave4_add_official))
+                        }
+
+                        Text(
+                            text = stringResource(R.string.wave4_custom_section),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = stringResource(R.string.wave4_custom_section_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        customDrafts.forEach { draft ->
                             key(draft.id) {
                                 EditablePairRow(
                                     draft = draft,
@@ -1110,7 +1167,7 @@ private fun GlobalSettingsEditorDialog(
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp),
                         ) {
-                            Text(stringResource(R.string.wave4_add_param))
+                            Text(stringResource(R.string.wave4_add_custom))
                         }
                     }
                 }
@@ -1118,17 +1175,31 @@ private fun GlobalSettingsEditorDialog(
         }
     }
     if (addParamOpen) {
-        AddParameterDialog(
-            state = state,
+        AddCustomParameterDialog(
             actionsEnabled = state.actionsEnabled,
             existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
-                VentoyControlCatalog.known.map { it.key }.toSet(),
-            onIntent = onIntent,
+                VentoyControlCatalog.known.map { it.key }.toSet() +
+                state.ventoyControlKeyCatalog?.keys?.map { it.key }.orEmpty().toSet(),
             onAdd = { key, value ->
                 drafts.add(EditorPairDraft("new:${drafts.size}:$key", null, key, "", value))
                 addParamOpen = false
             },
             onDismiss = { addParamOpen = false },
+        )
+    }
+    if (officialPickerOpen) {
+        OfficialControlKeyPickerDialog(
+            state = state,
+            existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
+                VentoyControlCatalog.known.map { it.key }.toSet(),
+            onIntent = onIntent,
+            onAdd = { key, value ->
+                drafts.add(
+                    EditorPairDraft("official:${drafts.size}:$key", null, key, "", value),
+                )
+                officialPickerOpen = false
+            },
+            onDismiss = { officialPickerOpen = false },
         )
     }
 }
@@ -1299,6 +1370,7 @@ private fun EditablePairRow(
     actionsEnabled: Boolean,
     onChange: (EditorPairDraft) -> Unit,
     onDelete: () -> Unit,
+    keyReadOnly: Boolean = false,
 ) {
     val deleteLabel = stringResource(R.string.settings_delete_row)
     val dismissState = rememberSwipeToDismissBoxState(
@@ -1345,6 +1417,7 @@ private fun EditablePairRow(
                     placeholder = { Text(stringResource(R.string.settings_key_label)) },
                     singleLine = true,
                     enabled = actionsEnabled,
+                    readOnly = keyReadOnly,
                     textStyle = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
                     ),
@@ -1761,76 +1834,62 @@ private fun ConfigFileStatusRow(
     }
 }
 
-private data class PopularVentoyKey(val key: String, val labelRes: Int)
-
-private val POPULAR_VENTOY_KEYS = listOf(
-    // Only control-section VTOY_* shortcuts. Top-level keys such as theme are not control.
-    PopularVentoyKey("VTOY_MENU_TIMEOUT", R.string.wave4_popular_menu_timeout),
-    PopularVentoyKey("VTOY_DEFAULT_MENU_MODE", R.string.wave4_popular_boot_mode),
-)
-
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun AddParameterDialog(
+private fun OfficialControlKeyPickerDialog(
     state: AppUiState,
-    actionsEnabled: Boolean,
     existingKeys: Set<String>,
     onIntent: (UiIntent) -> Unit,
     onAdd: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var key by remember { mutableStateOf("") }
+    val catalog = state.ventoyControlKeyCatalog
+    val defs = catalog?.keys.orEmpty()
+    var selectedKey by remember { mutableStateOf<String?>(null) }
     var value by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
     val resources = LocalContext.current.resources
-    val clearLabel = stringResource(R.string.settings_clear_field)
-    val catalog = state.ventoyControlKeyCatalog
-    val catalogKeys = catalog?.keys.orEmpty()
+    val problemRequester = remember { BringIntoViewRequester() }
+    val catalogWarningRequester = remember { BringIntoViewRequester() }
+    val valueRequester = remember { BringIntoViewRequester() }
+    val selected = defs.firstOrNull { it.key == selectedKey }
+    LaunchedEffect(problem) {
+        if (problem != null) problemRequester.bringIntoView()
+    }
+    LaunchedEffect(state.ventoyControlKeyCatalogError) {
+        if (state.ventoyControlKeyCatalogError != null) {
+            catalogWarningRequester.bringIntoView()
+        }
+    }
+    LaunchedEffect(selectedKey) {
+        if (selectedKey != null) valueRequester.bringIntoView()
+    }
+    LaunchedEffect(defs) {
+        if (selectedKey != null && defs.none { it.key == selectedKey }) {
+            selectedKey = null
+            value = ""
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 6.dp,
-        title = { Text(stringResource(R.string.wave4_add_param_title)) },
+        title = { Text(stringResource(R.string.wave4_catalog_keys_title)) },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
+                    .heightIn(max = 560.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = stringResource(R.string.wave4_popular_keys),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                POPULAR_VENTOY_KEYS.forEach { popular ->
-                    val taken = popular.key in existingKeys
-                    FilledTonalButton(
-                        onClick = {
-                            // Fill the key only; never invent default values (timeout/mode).
-                            key = popular.key
-                            problem = null
-                        },
-                        enabled = actionsEnabled && !taken,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp),
-                    ) {
-                        Text(
-                            text = stringResource(popular.labelRes),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                HorizontalDivider()
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = stringResource(R.string.wave4_catalog_keys_title),
+                        text = stringResource(R.string.wave4_catalog_source),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
@@ -1858,70 +1917,245 @@ private fun AddParameterDialog(
                             ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.bringIntoViewRequester(catalogWarningRequester),
                         )
-                        if (catalogKeys.isNotEmpty()) {
+                        if (defs.isNotEmpty()) {
                             Text(
                                 text = stringResource(
                                     R.string.wave4_catalog_kept_previous,
-                                    catalogKeys.size,
+                                    defs.size,
                                 ),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                    catalog == null -> {
-                        Text(
-                            text = stringResource(R.string.wave4_catalog_idle),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    catalogKeys.isEmpty() -> {
-                        Text(
-                            text = stringResource(R.string.wave4_catalog_empty),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    else -> {
-                        Text(
-                            text = stringResource(
-                                R.string.wave4_catalog_loaded,
-                                catalogKeys.size,
+                    catalog == null -> Text(
+                        text = stringResource(R.string.wave4_catalog_idle),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    defs.isEmpty() -> Text(
+                        text = stringResource(R.string.wave4_catalog_empty),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    else -> Text(
+                        text = if (catalog.fetchedAtEpochMs == 0L) {
+                            stringResource(
+                                R.string.wave4_catalog_bundled,
+                                defs.size,
                                 catalog.ventoyRelease,
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        catalogKeys.forEach { entry ->
-                            val taken = entry.key in existingKeys
-                            FilledTonalButton(
+                            )
+                        } else {
+                            stringResource(
+                                R.string.wave4_catalog_loaded,
+                                defs.size,
+                                catalog.ventoyRelease,
+                            )
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                defs.forEach { def ->
+                    val alreadySet = def.key in existingKeys
+                    Surface(
+                        color = if (selectedKey == def.key) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        contentColor = if (selectedKey == def.key) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clickable(
+                                enabled = state.actionsEnabled && !alreadySet,
+                                role = Role.Button,
                                 onClick = {
-                                    key = entry.key
+                                    selectedKey = def.key
+                                    value = ""
                                     problem = null
                                 },
-                                enabled = actionsEnabled && !taken,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 48.dp),
-                            ) {
+                            ),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = entry.key,
+                                    text = def.key,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                    ),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = kindLabel(def.kind),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (alreadySet) {
+                                Text(
+                                    text = stringResource(R.string.wave4_catalog_already_set),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
                     }
                 }
-                HorizontalDivider()
-                Text(
-                    text = stringResource(R.string.wave4_catalog_manual_hint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                selected?.let { def ->
+                    HorizontalDivider()
+                    Text(
+                        text = stringResource(R.string.wave4_catalog_value_title, def.key),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.bringIntoViewRequester(valueRequester),
+                    )
+                    if (def.allowed.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            def.allowed.forEach { option ->
+                                FilterChip(
+                                    selected = value == option,
+                                    onClick = {
+                                        value = option
+                                        problem = null
+                                    },
+                                    enabled = state.actionsEnabled,
+                                    label = { Text(option) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                )
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = {
+                                value = it
+                                problem = null
+                            },
+                            label = { Text(stringResource(R.string.settings_value_label)) },
+                            singleLine = true,
+                            enabled = state.actionsEnabled,
+                            keyboardOptions = if (def.kind == VentoyControlKeyKind.INTEGER) {
+                                KeyboardOptions(keyboardType = KeyboardType.Number)
+                            } else {
+                                KeyboardOptions.Default
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                problem?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.bringIntoViewRequester(problemRequester),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val def = selected
+                    val issue = when {
+                        def == null -> resources.getString(R.string.wave4_catalog_select_key)
+                        def.key in existingKeys -> resources.getString(
+                            R.string.settings_problem_duplicate_key,
+                            def.key,
+                        )
+                        value.isEmpty() -> resources.getString(R.string.wave4_catalog_enter_value)
+                        def.allowed.isNotEmpty() && value !in def.allowed ->
+                            resources.getString(
+                                R.string.settings_problem_value_not_allowed,
+                                def.key,
+                                def.allowed.joinToString(),
+                                value,
+                            )
+                        else -> VentoyControlCatalog.valueIssue(def.key, value)
+                            ?.let { resources.controlIssueText(it) }
+                    }
+                    if (issue != null) {
+                        problem = issue
+                    } else if (def != null) {
+                        problem = null
+                        onAdd(def.key, value)
+                    }
+                },
+                enabled = state.actionsEnabled && selected != null,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(R.string.wave4_add_param_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(R.string.settings_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun kindLabel(kind: VentoyControlKeyKind): String =
+    when (kind) {
+        VentoyControlKeyKind.FLAG -> stringResource(R.string.wave4_key_kind_flag)
+        VentoyControlKeyKind.CHOICE -> stringResource(R.string.wave4_key_kind_choice)
+        VentoyControlKeyKind.INTEGER -> stringResource(R.string.wave4_key_kind_integer)
+        VentoyControlKeyKind.TEXT -> stringResource(R.string.wave4_key_kind_text)
+        VentoyControlKeyKind.PATH -> stringResource(R.string.wave4_key_kind_path)
+    }
+
+@Composable
+private fun AddCustomParameterDialog(
+    actionsEnabled: Boolean,
+    existingKeys: Set<String>,
+    onAdd: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var key by remember { mutableStateOf("") }
+    var value by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
+    val resources = LocalContext.current.resources
+    val clearLabel = stringResource(R.string.settings_clear_field)
+    val problemRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(problem) {
+        if (problem != null) problemRequester.bringIntoView()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 6.dp,
+        title = { Text(stringResource(R.string.wave4_add_param_title)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 OutlinedTextField(
                     value = key,
                     onValueChange = {
@@ -1981,6 +2215,7 @@ private fun AddParameterDialog(
                         text = it,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.bringIntoViewRequester(problemRequester),
                     )
                 }
             }

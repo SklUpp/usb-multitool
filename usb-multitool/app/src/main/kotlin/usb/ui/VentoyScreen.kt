@@ -313,12 +313,6 @@ private fun VentoyVersionRow(
         else -> state.installedVentoyRelease ?: naText
     }
     val bundledText = state.bundledVentoyRelease ?: naText
-    val downloadedText = state.downloadedVentoyRelease?.release ?: naText
-    val downloadedLabel = if (state.downloadedVentoyRelease?.independentlyPinned == true) {
-        R.string.ventoy_version_downloaded_pinned
-    } else {
-        R.string.ventoy_version_downloaded
-    }
     val upstreamText = state.upstreamVentoyRelease ?: naText
     val checkLabel = stringResource(R.string.ventoy_check_version)
     val versionStyle = MaterialTheme.typography.bodyMedium.copy(
@@ -406,32 +400,6 @@ private fun VentoyVersionRow(
             )
             Text(
                 text = bundledText,
-                style = versionStyle,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.End,
-                maxLines = 1,
-                overflow = TextOverflow.StartEllipsis,
-                softWrap = false,
-            )
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics(mergeDescendants = true) { },
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(downloadedLabel),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = downloadedText,
                 style = versionStyle,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),

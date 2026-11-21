@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -126,6 +127,7 @@ fun PartitionsScreen(
     var createName by remember { mutableStateOf("") }
     var createLabel by remember { mutableStateOf("") }
     var createFormatId by remember { mutableStateOf<FilesystemId?>(state.selectedFormatId) }
+    var useAllFreeSpace by remember { mutableStateOf(true) }
     var renameTargetId by remember { mutableStateOf<String?>(null) }
     var renameBinding by remember { mutableStateOf<PartitionBinding?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -161,6 +163,7 @@ fun PartitionsScreen(
         createName = ""
         createLabel = ""
         createFormatId = state.selectedFormatId
+        useAllFreeSpace = true
     }
     createRegion?.let { region ->
         // Same precondition as UiReducer.RequestCreatePartition: whole MiB alignment.
@@ -259,29 +262,31 @@ fun PartitionsScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        text = if (alignSectors == null || firstAligned == null) {
-                            stringResource(
-                                R.string.partitions_create_free_sectors,
-                                region.sectorCount.toLong(),
-                                state.diskSectorSize,
-                            )
-                        } else if (firstAligned >= regionEnd) {
-                            stringResource(R.string.partitions_create_no_aligned_space)
-                        } else {
-                            stringResource(
-                                R.string.partitions_create_free_range,
-                                firstAligned.toLong(),
-                                (regionEnd - 1UL).toLong(),
-                                alignSectors.toLong(),
-                                state.diskSectorSize,
-                            )
-                        },
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                    )
+                    if (!(useAllFreeSpace && firstAligned != null && firstAligned < regionEnd)) {
+                        Text(
+                            text = if (alignSectors == null || firstAligned == null) {
+                                stringResource(
+                                    R.string.partitions_create_free_sectors,
+                                    region.sectorCount.toLong(),
+                                    state.diskSectorSize,
+                                )
+                            } else if (firstAligned >= regionEnd) {
+                                stringResource(R.string.partitions_create_no_aligned_space)
+                            } else {
+                                stringResource(
+                                    R.string.partitions_create_free_range,
+                                    firstAligned.toLong(),
+                                    (regionEnd - 1UL).toLong(),
+                                    alignSectors.toLong(),
+                                    state.diskSectorSize,
+                                )
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontFeatureSettings = "tnum",
+                            ),
+                        )
+                    }
                     if (creatableRegions.size > 1) {
                         CompactChoice(
                             options = creatableRegions.map { (candidate, candidateStart, candidateSectors) ->
@@ -297,9 +302,54 @@ fun PartitionsScreen(
                             enabled = state.actionsEnabled,
                         )
                     }
+                    if (firstAligned != null && firstAligned < regionEnd) {
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            SegmentedButton(
+                                selected = useAllFreeSpace,
+                                onClick = {
+                                    useAllFreeSpace = true
+                                    startLbaInput = firstAligned.toString()
+                                    sectorCount = (regionEnd - firstAligned).toString()
+                                },
+                                enabled = state.actionsEnabled,
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                Text(stringResource(R.string.partitions_create_mode_all))
+                            }
+                            SegmentedButton(
+                                selected = !useAllFreeSpace,
+                                onClick = { useAllFreeSpace = false },
+                                enabled = state.actionsEnabled,
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                Text(stringResource(R.string.partitions_create_mode_custom))
+                            }
+                        }
+                    }
+                    if (useAllFreeSpace &&
+                        firstAligned != null && firstAligned < regionEnd
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.partitions_create_all_summary,
+                                firstAligned.toLong(),
+                                (regionEnd - 1UL).toLong(),
+                                (regionEnd - firstAligned).toLong(),
+                            ),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     // Outside the scrolling block on purpose: dragging a thumb must not
                     // scroll the dialog, and the handles stay above the fold.
-                    if (sliderVisible && alignSectors != null && firstAligned != null) {
+                    if (!useAllFreeSpace &&
+                        sliderVisible && alignSectors != null && firstAligned != null
+                    ) {
                         val mibSectors = alignSectors
                         val regionBase = firstAligned
                         val maxMibFloat = availableMib.toFloat()
@@ -386,84 +436,97 @@ fun PartitionsScreen(
                     Column(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        InfoHint(
-                            text = stringResource(R.string.partitions_range_short),
-                            infoTitle = stringResource(R.string.partitions_range_info_title),
-                            infoText = stringResource(R.string.partitions_range_info_text),
-                        )
-                        OutlinedTextField(
-                            value = startLbaInput,
-                            onValueChange = { input -> startLbaInput = input.filter { it.isDigit() } },
-                            label = { Text(stringResource(R.string.partitions_start_lba)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            isError = startLbaInput.isNotBlank() && !(isAligned && inRegion),
-                            supportingText = {
-                                Text(
-                                    if (alignSectors != null) {
-                                        stringResource(
-                                            R.string.partitions_start_support,
-                                            alignSectors.toLong(),
-                                        )
-                                    } else {
-                                        stringResource(R.string.partitions_align_unavailable)
-                                    },
-                                )
-                            },
-                            trailingIcon = {
-                                TextButton(
-                                    onClick = { firstAligned?.let { startLbaInput = it.toString() } },
-                                    enabled = firstAligned != null,
-                                ) {
+                        if (!useAllFreeSpace) {
+                            InfoHint(
+                                text = stringResource(R.string.partitions_range_short),
+                                infoTitle = stringResource(R.string.partitions_range_info_title),
+                                infoText = stringResource(R.string.partitions_range_info_text),
+                            )
+                            OutlinedTextField(
+                                value = startLbaInput,
+                                onValueChange = { input ->
+                                    startLbaInput = input.filter { it.isDigit() }
+                                },
+                                label = { Text(stringResource(R.string.partitions_start_lba)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
+                                ),
+                                isError = startLbaInput.isNotBlank() && !(isAligned && inRegion),
+                                supportingText = {
                                     Text(
-                                        stringResource(R.string.partitions_align),
-                                        style = MaterialTheme.typography.labelSmall,
+                                        if (alignSectors != null) {
+                                            stringResource(
+                                                R.string.partitions_start_support,
+                                                alignSectors.toLong(),
+                                            )
+                                        } else {
+                                            stringResource(R.string.partitions_align_unavailable)
+                                        },
                                     )
-                                }
-                            },
-                        )
-                        OutlinedTextField(
-                            value = sectorCount,
-                            onValueChange = { input -> sectorCount = input.filter { it.isDigit() } },
-                            label = { Text(stringResource(R.string.partitions_size_sectors)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            isError = sectorCount.isNotBlank() && (parsedCount == null || parsedCount == 0UL || !fits),
-                            supportingText = {
-                                if (sectorCount.isNotBlank() &&
-                                    (parsedCount == null || parsedCount == 0UL || !fits)
-                                ) {
-                                    Text(stringResource(R.string.partitions_size_support))
-                                }
-                            },
-                        )
-                        if (fits && parsedStart != null && parsedCount != null) {
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_lba_range,
-                                    parsedStart.toLong(),
-                                    (parsedStart + parsedCount - 1UL).toLong(),
-                                    parsedCount.toLong(),
-                                ),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                },
+                                trailingIcon = {
+                                    TextButton(
+                                        onClick = {
+                                            firstAligned?.let { startLbaInput = it.toString() }
+                                        },
+                                        enabled = firstAligned != null,
+                                    ) {
+                                        Text(
+                                            stringResource(R.string.partitions_align),
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                },
                             )
-                        }
-                        if (tailSectors > 0UL) {
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_free_tail,
-                                    tailSectors.toLong(),
+                            OutlinedTextField(
+                                value = sectorCount,
+                                onValueChange = { input ->
+                                    sectorCount = input.filter { it.isDigit() }
+                                },
+                                label = { Text(stringResource(R.string.partitions_size_sectors)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
                                 ),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                isError = sectorCount.isNotBlank() &&
+                                    (parsedCount == null || parsedCount == 0UL || !fits),
+                                supportingText = {
+                                    if (sectorCount.isNotBlank() &&
+                                        (parsedCount == null || parsedCount == 0UL || !fits)
+                                    ) {
+                                        Text(stringResource(R.string.partitions_size_support))
+                                    }
+                                },
                             )
+                            if (fits && parsedStart != null && parsedCount != null) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.partitions_lba_range,
+                                        parsedStart.toLong(),
+                                        (parsedStart + parsedCount - 1UL).toLong(),
+                                        parsedCount.toLong(),
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (tailSectors > 0UL) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.partitions_free_tail,
+                                        tailSectors.toLong(),
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         when {
                             namesSupported -> OutlinedTextField(
@@ -1336,6 +1399,13 @@ private fun SelectedPartitionCard(
             interactive = labelSupported,
             onClick = if (labelSupported) {{ onLabel(selected) }} else null,
         )
+        if (labelFs == FilesystemId.EXT) {
+            Text(
+                text = stringResource(R.string.partitions_volume_label_ext_format_only),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         FactRow(
             label = stringResource(R.string.partitions_filesystem_label),
             value = selected.filesystemLabel.ifEmpty { "—" },
@@ -2254,6 +2324,7 @@ private fun segmentEnd(segment: StripSegment): ULong =
         if (start > ULong.MAX_VALUE - span) ULong.MAX_VALUE else start + span
     }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PartitionSelectStrip(
     state: AppUiState,
@@ -2324,15 +2395,19 @@ private fun PartitionSelectStrip(
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
         ) {
-        Row(
-            modifier = Modifier
-                .width(totalWidth)
-                .height(48.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
-                .selectableGroup(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+            Row(
+                modifier = Modifier
+                    .width(totalWidth)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(6.dp),
+                    )
+                    .selectableGroup(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             segments.forEachIndexed { index, segment ->
                 val partition = segment.partition
                 val isSelected = partition?.id == state.selectedPartitionId
@@ -2353,9 +2428,20 @@ private fun PartitionSelectStrip(
                     state.tableValid && !state.partitionTableDamaged && free.startLba in creatableStarts
                 } == true
                 val fill = when {
-                    partition != null && isSelected -> MaterialTheme.colorScheme.primary
-                    partition != null -> MaterialTheme.colorScheme.secondaryContainer
+                    partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
+                    partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
+                    segment.free != null -> MaterialTheme.colorScheme.surfaceContainerLow
                     else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                }
+                val labelColor = when {
+                    isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
+                    partition != null -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                val label = when {
+                    partition != null -> partition.name.ifBlank { partition.id }
+                    segment.free != null -> stringResource(R.string.partitions_strip_free)
+                    else -> ""
                 }
                 val interactive = widths[index] >= 48.dp && (
                     partition != null || (segment.free != null && freeSelectable)
@@ -2367,7 +2453,7 @@ private fun PartitionSelectStrip(
                         .background(fill)
                         .then(
                             when {
-                                isSelected -> Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface)
+                                isSelected -> Modifier.border(2.dp, MaterialTheme.colorScheme.primary)
                                 segment.free != null -> Modifier.border(
                                     1.dp,
                                     MaterialTheme.colorScheme.outlineVariant,
@@ -2399,10 +2485,70 @@ private fun PartitionSelectStrip(
                             },
                         ),
                     contentAlignment = Alignment.Center,
-                ) {}
+                ) {
+                    if (label.isNotEmpty() && widths[index] >= 48.dp) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = labelColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                    }
+                }
             }
         }
         }
+    }
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        StripLegend(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            label = stringResource(R.string.partitions_strip_legend_partition),
+        )
+        StripLegend(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            label = stringResource(R.string.partitions_strip_free),
+            outlined = true,
+        )
+        StripLegend(
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            label = stringResource(R.string.partitions_strip_unallocated),
+        )
+    }
+}
+
+@Composable
+private fun StripLegend(color: Color, label: String, outlined: Boolean = false) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .background(color, RoundedCornerShape(2.dp))
+                .then(
+                    if (outlined) {
+                        Modifier.border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant,
+                            RoundedCornerShape(2.dp),
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 // PAR/RAW matrix: layout title, sorted LBA rows, 48dp abstract selectable/free segments,

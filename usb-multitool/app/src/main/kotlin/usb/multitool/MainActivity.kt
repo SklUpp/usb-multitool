@@ -2009,7 +2009,7 @@ class MainViewModel(
             is UiEffect.WriteAutounattendRaw -> writeAutounattendRaw(effect)
             is UiEffect.CheckVentoyUpstream -> checkVentoyUpstream(effect.requestToken)
             is UiEffect.FetchVentoyControlKeyCatalog ->
-                fetchVentoyControlKeyCatalog(effect.requestToken)
+                fetchVentoyControlKeyCatalog(effect.requestToken, effect.release)
             is UiEffect.DownloadVentoyRelease ->
                 downloadVentoyRelease(effect.requestToken, effect.upstreamVersion)
             is UiEffect.LoadVentoyGlobalSettings ->
@@ -5131,11 +5131,11 @@ class MainViewModel(
      * or claims the USB device. Failure posts an error without clearing a previous catalog;
      * success never writes ventoy.json — the user still stages and taps Write.
      */
-    private fun fetchVentoyControlKeyCatalog(requestToken: Long) {
+    private fun fetchVentoyControlKeyCatalog(requestToken: Long, release: String) {
         scope.launch {
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
-                    usb.ventoy.VentoyControlKeyCatalogClient.fetch()
+                    usb.ventoy.VentoyControlKeyCatalogClient.fetch(release = release)
                 }
             }
             outcome.fold(

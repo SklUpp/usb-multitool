@@ -17,6 +17,44 @@ import org.junit.Test
  */
 class VentoyControlKeyCatalogTest {
     @Test
+    fun bundledCatalogCoversPinnedOfficialKeysOffline() {
+        val catalog = VentoyBundledControlKeyCatalog.catalog
+        assertEquals(VentoyAssets.PINNED_RELEASE, catalog.ventoyRelease)
+        assertEquals(
+            "ventoy/Ventoy@v1.1.18:Plugson/www/plugson_control.html",
+            catalog.upstreamRef,
+        )
+        assertEquals(
+            "bb5f1f9ce4a05983557de431024578cf854dfea141d6209f674fb76976c66920",
+            catalog.upstreamSha256,
+        )
+        assertEquals(0L, catalog.fetchedAtEpochMs)
+        assertEquals(24, catalog.keys.size)
+        assertEquals(catalog.keys.size, catalog.keys.map { it.key }.toSet().size)
+        assertEquals(
+            VentoyControlKeyDef(
+                key = "VTOY_DEFAULT_KBD_LAYOUT",
+                kind = VentoyControlKeyKind.CHOICE,
+                allowed = listOf(
+                    "QWERTY_USA", "AZERTY", "CZECH_QWERTY", "CZECH_QWERTZ", "DANISH",
+                    "DVORAK_USA", "FRENCH", "GERMAN", "ITALIANO", "JAPAN_106", "LATIN_USA",
+                    "PORTU_BRAZIL", "QWERTY_UK", "QWERTZ", "QWERTZ_HUN", "QWERTZ_SLOV_CROAT",
+                    "SPANISH", "SWEDISH", "TURKISH_Q", "VIETNAMESE",
+                ),
+            ),
+            catalog.key("VTOY_DEFAULT_KBD_LAYOUT"),
+        )
+        assertEquals(
+            VentoyControlKeyKind.INTEGER,
+            catalog.key("VTOY_SECONDARY_TIMEOUT")!!.kind,
+        )
+        val state = usb.ui.AppUiState()
+        assertEquals(catalog, state.ventoyControlKeyCatalog)
+        assertFalse(state.ventoyControlKeyCatalogLoading)
+        assertEquals(null, state.ventoyControlKeyCatalogError)
+    }
+
+    @Test
     fun reducedOfficialFixtureYieldsRealControlKeysOnly() {
         val html = resourceText("ventoy/plugson_control_reduced.html")
         val bytes = html.toByteArray(Charsets.UTF_8)

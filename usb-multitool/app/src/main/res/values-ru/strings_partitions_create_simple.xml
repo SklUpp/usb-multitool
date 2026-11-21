@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="partitions_create_mode_all">Всё свободное место</string>
+    <string name="partitions_create_mode_custom">Свой размер</string>
+    <string name="partitions_create_all_summary">LBA %1$d–%2$d · %3$d секторов</string>
+    <string name="partitions_strip_legend_partition">Разделы</string>
+    <string name="partitions_volume_label_ext_format_only">Метка EXT4 записывается только при форматировании; приложение не перезаписывает суперблок ext4 для переименования.</string>
+</resources>

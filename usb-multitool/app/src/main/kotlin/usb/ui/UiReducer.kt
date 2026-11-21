@@ -1112,7 +1112,10 @@ sealed interface UiEffect {
      * HTTPS fetch of the official Plugson control-key page. Host must run this on
      * Dispatchers.IO outside any USB claim/fencing; failure is not an empty catalog.
      */
-    data class FetchVentoyControlKeyCatalog(val requestToken: Long) : UiEffect
+    data class FetchVentoyControlKeyCatalog(
+        val requestToken: Long,
+        val release: String,
+    ) : UiEffect
 
     data class LoadVentoyGlobalSettings(
         val requestToken: Long,
@@ -4001,7 +4004,13 @@ object UiReducer {
                             // Keep prior catalog; failure must not look like empty keys.
                             ventoyControlKeyCatalogError = null,
                         ),
-                        effects = listOf(UiEffect.FetchVentoyControlKeyCatalog(requestToken = token)),
+                        effects = listOf(
+                            UiEffect.FetchVentoyControlKeyCatalog(
+                                requestToken = token,
+                                release = state.upstreamVentoyRelease
+                                    ?: usb.ventoy.VentoyAssets.PINNED_RELEASE,
+                            ),
+                        ),
                     )
                 }
             }
