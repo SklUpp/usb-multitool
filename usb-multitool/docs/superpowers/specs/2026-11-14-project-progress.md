@@ -287,9 +287,10 @@ unit/host-тесты, debug APK, проверка 16 KiB, lint и компиля
   выравниванием разделов; форматирование применяется к свободному месту,
   занятости, размеру раздела и размеру диска.
 - Файлы: блок списка получил нижний отступ 12 dp от навигационной панели.
-- Проверено локально: `:app:compileDebugKotlin` — успех;
+- Финальный код — `1187a43`. Локально: `:app:compileDebugKotlin` — успех;
   `DeviceIdentityTest`, `SchemeInitUiTest`, `StringResourceParityTest`,
-  `ConfirmationTest` — успех. APK локально не собирался; CI/APK для этих правок
-  ещё нет, push не выполнялся.
+  `ConfirmationTest` — успех. CI [44949826206](https://github.com/SklUpp/usb-multitool/actions/runs/44949826206)
+  — success: unit/host-тесты, debug APK, 16 KiB, lint и Kotlin. APK — артефакт
+  CI `app-debug-apk` (id `14725855254`), локальная сборка APK не выполнялась.
 - Не проверено: визуальный рендер, TalkBack, IME, fontScale 2.0, физический
   USB/SAF, загрузка Ventoy и фактическое отсутствие мигания на устройстве.
