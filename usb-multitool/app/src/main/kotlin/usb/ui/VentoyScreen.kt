@@ -949,8 +949,7 @@ internal fun ImportFolderDialog(
  * destructive sections needs a second explicit tick. Nothing here deletes the phone copy.
  *
  * Shared with Files/Autounattend. AlertDialog containerColor can equal background with no
- * visible edge; this uses an outlined Surface so light/dark both show a real MD3 border
- * (theme strengthens outline). Body scrolls at fontScale 2.0.
+ * visible edge; this uses a tonal MD3 container with no stroke. Body scrolls at fontScale 2.0.
  */
 @Composable
 internal fun ImportOverwriteDialog(

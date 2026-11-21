@@ -13,10 +13,8 @@ import androidx.compose.animation.togetherWith
 import android.provider.Settings
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -43,8 +41,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -130,7 +126,6 @@ import androidx.compose.ui.semantics.CollectionInfo
 import androidx.compose.ui.semantics.CollectionItemInfo
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.collectionInfo
@@ -781,7 +776,7 @@ fun AppShell(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(MaterialTheme.shapes.extraSmall)
                                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                 .toggleable(
                                     value = acknowledged,
@@ -1041,7 +1036,7 @@ TopAppBar(
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
         // Scaffold's safeDrawing inset already places the content below the status bar;
         // the app bar's own status-bar inset would add a second gap above the title.
@@ -1899,7 +1894,7 @@ private fun darkDesignColors() = darkColorScheme(
     surfaceContainer = Color(0xFF121216),
     surfaceContainerHigh = Color(0xFF1D1D22),
     surfaceContainerHighest = Color(0xFF292930),
-    // ~3.0:1 vs High so dialog/menu borders are visible on AMOLED (old #3A3A42 was 1.49:1).
+    // Focus/field outline; menus and dialogs use tonal containers, not strokes.
     outline = Color(0xFF686870), outlineVariant = Color(0xFF303038),
     scrim = Color.Black,
     error = Color(0xFFFFB4AB), onError = Color(0xFF690005),
@@ -1922,7 +1917,7 @@ private fun lightDesignColors() = lightColorScheme(
     surfaceContainer = Color(0xFFFFFFFF),
     surfaceContainerHigh = Color(0xFFE9E9EF),
     surfaceContainerHighest = Color(0xFFDCDCE4),
-    // ~3.7:1 vs High — visible border; outlineVariant stays soft for inner dividers.
+    // Focus/field outline; outlineVariant stays soft for inner dividers.
     outline = Color(0xFF767680), outlineVariant = Color(0xFFC6C6D0),
     scrim = Color.Black,
     error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
@@ -1973,7 +1968,6 @@ internal fun rawSourceName(uri: String?): String? = uri
 internal fun SectionCard(
     title: String,
     modifier: Modifier = Modifier,
-    danger: Boolean = false,
     subtitle: String? = null,
     trailing: (@Composable () -> Unit)? = null,
     /** Overrides the muted section label; the default keeps the existing section styling. */
@@ -1987,11 +1981,6 @@ internal fun SectionCard(
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = if (danger) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
-        } else {
-            null
-        },
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(
@@ -2009,10 +1998,7 @@ internal fun SectionCard(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.5.sp,
-                    color = when {
-                        danger -> MaterialTheme.colorScheme.error
-                        else -> titleColor
-                    },
+                    color = titleColor,
                     modifier = Modifier
                         .weight(1f)
                         .semantics { heading() },

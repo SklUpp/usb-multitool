@@ -12,12 +12,9 @@ import usb.partition.RawSchemeProblem
 import usb.partition.TableScheme
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -38,11 +35,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.clickable
@@ -51,9 +45,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,7 +62,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TextButton
@@ -90,7 +81,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -102,12 +92,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import kotlin.math.roundToInt
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.text.input.KeyboardType
 import usb.image.RangeProbeAttachment
@@ -149,7 +136,6 @@ fun PartitionsScreen(
     var schemeChangePrompt by remember(state.device, state.partitionScheme, partitionGeometryKey) {
         mutableStateOf<PartitionScheme?>(null)
     }
-    var partitionPickerOpen by remember { mutableStateOf(false) }
     // LBA 0 is always vetoed by the range guard, so the whole-disk chip can never
     // write; default to the selected partition instead of a permanently blocked mode.
     var rawTargetMode by remember(state.device?.identity) { mutableStateOf(RawTargetMode.Partition) }
@@ -672,9 +658,6 @@ fun PartitionsScreen(
     val schemeBlocked = state.partitionTableAmbiguous || state.partitionTableDamaged || !state.tableValid
     val blockedHint = writeBlockHint(state)
     val screenScroll = rememberScrollState()
-    var viewportTopPx by remember { mutableStateOf(0f) }
-    var layoutCardTopPx by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
-    val stickyVisible = false
     val revealRequester = remember { BringIntoViewRequester() }
     var revealToken by remember { mutableStateOf(0) }
     LaunchedEffect(revealToken) {
@@ -693,193 +676,7 @@ fun PartitionsScreen(
         filesystemMenuTarget = null
     }
 
-    if (partitionPickerOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { partitionPickerOpen = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 1.dp,
-            shape = MaterialTheme.shapes.extraLarge,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 16.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.partitions_select_sheet_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                )
-                orderedPartitions.forEachIndexed { index, partition ->
-                    val isActive = partition.id == state.selectedPartitionId
-                    val access = state.partitionWriteAccess(partition)
-                    val readOnly = access == PartitionWriteAccess.ReadOnly ||
-                        access == PartitionWriteAccess.DriverReadOnly
-                    ListItem(
-                        headlineContent = {
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_sticky_title,
-                                    index + 1,
-                                    partition.name.ifBlank { partition.id },
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        supportingContent = {
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_sticky_meta,
-                                    partitionSizeLabel(state, partition) ?: "—",
-                                    partition.filesystemLabel.ifEmpty { "—" },
-                                ),
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                            )
-                        },
-                        leadingContent = if (isActive) {
-                            {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        } else null,
-                        trailingContent = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                if (partition.displayEfi) Badge(text = stringResource(R.string.partitions_badge_efi))
-                                if (readOnly) {
-                                    Badge(
-                                        text = stringResource(R.string.partitions_access_ro),
-                                        container = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                        content = writeAccessTone(readWrite = false),
-                                    )
-                                }
-                            }
-                        },
-                        colors = ListItemDefaults.colors(
-                            containerColor = if (isActive) {
-                                MaterialTheme.colorScheme.secondaryContainer
-                            } else {
-                                Color.Transparent
-                            },
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .clickable {
-                                onIntent(UiIntent.SelectPartition(partition.id))
-                                partitionPickerOpen = false
-                            },
-                    )
-                }
-            }
-        }
-    }
-
     Column(modifier = modifier.fillMaxSize()) {
-        AnimatedVisibility(
-            visible = stickyVisible,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-            modifier = Modifier
-                .fillMaxWidth()
-                .zIndex(1f),
-        ) {
-            val stickyPartition = selected
-            if (stickyPartition != null) {
-                val stickyIndex = orderedPartitions.indexOfFirst { it.id == stickyPartition.id }
-                    .takeIf { it >= 0 }?.plus(1) ?: 1
-                val stickyAccess = state.partitionWriteAccess(stickyPartition)
-                val stickyRo = stickyAccess == PartitionWriteAccess.ReadOnly ||
-                    stickyAccess == PartitionWriteAccess.DriverReadOnly
-                val stickySpace = state.filesystemSpace(stickyPartition)
-                val stickyName = stickyPartition.name.ifBlank { stickyPartition.id }
-                val stickyLabel = stickyPartition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
-                val stickyTitle = stickyLabel?.let { "$stickyName ($it)" } ?: stickyName
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(
-                            role = Role.Button,
-                            onClick = { partitionPickerOpen = true },
-                        ),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 56.dp)
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.partitions_sticky_title,
-                                        stickyIndex,
-                                        stickyTitle,
-                                    ),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                if (stickyPartition.filesystemLabel.isNotEmpty()) {
-                                    Badge(text = stickyPartition.filesystemLabel)
-                                }
-                                if (stickyPartition.displayEfi) {
-                                    Badge(text = stringResource(R.string.partitions_badge_efi))
-                                }
-                                if (stickyRo) {
-                                    Badge(
-                                        text = stringResource(R.string.partitions_access_ro),
-                                        container = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                        content = writeAccessTone(readWrite = false),
-                                    )
-                                }
-                            }
-                            Text(
-                                text = partitionUsageLabel(state, stickyPartition, stickySpace),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.Rounded.UnfoldMore,
-                            contentDescription = stringResource(
-                                R.string.partitions_sticky_expand_a11y,
-                            ),
-                            modifier = Modifier.size(24.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -900,8 +697,6 @@ fun PartitionsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .zIndex(0f)
-                .onGloballyPositioned { viewportTopPx = it.positionInRoot().y }
                 .verticalScroll(screenScroll)
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -999,9 +794,6 @@ fun PartitionsScreen(
                             infoText = stringResource(R.string.partitions_scheme_help_text_next),
                         )
                     }
-                },
-                modifier = Modifier.onGloballyPositioned {
-                    layoutCardTopPx = it.positionInRoot().y
                 },
             ) {
                 val geometry = diskGeometry(state)
@@ -2728,9 +2520,6 @@ private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULon
     if (sectorSize <= 0 || sectors > ULong.MAX_VALUE / sectorSize.toULong()) return null
     return sectors * sectorSize.toULong()
 }
-
-private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? =
-    partitionSizeBytes(state, partition)?.let { DeviceIdentity.formatCapacity(it) }
 
 /** Display measured usage or the honest phase of the current per-partition probe. */
 @Composable

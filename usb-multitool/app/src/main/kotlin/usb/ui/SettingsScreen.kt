@@ -63,7 +63,7 @@ internal fun SettingsScreen(
                 ) { GlyphIcon(Glyph.ChevronLeft) }
             },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
+                containerColor = MaterialTheme.colorScheme.surface,
             ),
             // Scaffold already applied safeDrawing; a second status-bar inset would gap
             // the title below the main DeviceHeader.
@@ -145,7 +145,7 @@ private fun LanguageSettingRow(language: AppLanguage, onIntent: (UiIntent) -> Un
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.widthIn(min = 168.dp, max = 320.dp),
+            modifier = Modifier.widthIn(min = 112.dp, max = 280.dp),
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 3.dp,
         ) {
