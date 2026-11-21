@@ -80,12 +80,8 @@
     <string name="partitions_info_help_title">Информация о разделе</string>
     <string name="partitions_info_help_text">**Имя** — имя записи таблицы; метка тома берётся из файловой системы и может быть неизвестна.\n\n**RO** означает, что носитель защищён от записи или файловая система смонтирована только для чтения; **RW** означает измеренный доступ на запись.\n\n**Состояние записи** показывается только когда измерено, иначе явно остаётся неизвестным.\n\n**Свободное место** измеряется внутри файловой системы, а не в свободной области таблицы.</string>
     <string name="partitions_info_name_label">Имя</string>
-    <string name="partitions_write_state_label">Состояние записи</string>
     <string name="files_write_short_ro">RO</string>
     <string name="files_write_short_rw">RW</string>
-    <string name="partitions_write_state_unknown">Неизвестно</string>
-    <string name="partitions_write_state_read_only">Только чтение</string>
-    <string name="partitions_write_state_read_write">Чтение и запись</string>
     <string name="efi_write_policy_allowed">Запись разрешена</string>
     <string name="efi_write_policy_protected">Защищён от записи</string>
     <string name="partitions_efi_blocked">Раздел %1$s защищён от записи. Разрешите запись EFI в разделе «Разделы устройства».</string>
@@ -657,14 +653,14 @@
     <string name="layout_confirm_body">Разметка относится к диску устанавливаемого компьютера, а не к этой флешке. Заявленный размер диска и DiskID ниже введены вами; это приложение не может измерить или проверить целевой диск, а порядок дисков там может отличаться, поэтому DiskID может указывать на другой диск. Окончательное решение принимает Windows Setup; телефон никогда не пишет на этот диск.</string>
     <string name="layout_confirm_title">Разметка диска целевого ПК</string>
     <string name="layout_disk_id">DiskID: %1$d (введён вами, не проверен)</string>
-    <string name="layout_disk_size_declared">Заявленный размер диска: %1$d МБ (введён вами, не измерен)</string>
+    <string name="layout_disk_size_declared">Заявленный размер диска: %1$d МиБ (введён вами, не измерен)</string>
     <string name="layout_install_target">Цель установки: раздел %1$d (первый основной)</string>
     <string name="layout_no_install_target">Цель установки: нет</string>
     <string name="layout_no_wipe_rewrite">WillWipeDisk=false: Windows Setup не будет полностью очищать диск, но создаст и отформатирует перечисленные здесь разделы на целевом диске.</string>
-    <string name="layout_partition_line">%1$d. %2$s · %3$d МБ · %4$s</string>
+    <string name="layout_partition_line">%1$d. %2$s · %3$d МиБ · %4$s</string>
     <string name="layout_partitions">Разделов: %1$d</string>
-    <string name="layout_remaining">Остаток: %1$d МБ</string>
-    <string name="layout_total">Сумма разделов: %1$d МБ</string>
+    <string name="layout_remaining">Остаток: %1$d МиБ</string>
+    <string name="layout_total">Сумма разделов: %1$d МиБ</string>
     <string name="layout_wipe">WillWipeDisk=true: Windows Setup очистит этот диск.</string>
     <string name="params_account">Локальная учётная запись</string>
     <string name="params_account_admin">Добавить в Администраторы</string>
@@ -678,7 +674,7 @@
     <string name="params_images">Образов будет привязано: %1$d</string>
     <string name="params_language">Тег языка, например en-US</string>
     <string name="params_layout">Разметка диска ПК</string>
-    <string name="params_layout_disk_size">Заявленный размер целевого диска, МБ</string>
+    <string name="params_layout_disk_size">Заявленный размер целевого диска, МиБ</string>
     <string name="params_layout_disk_size_missing">Введите известный вам размер целевого диска. Приложение не может его измерить.</string>
     <string name="params_layout_hint">Записывается в файл ответов и применяется Windows Setup на другом компьютере; это приложение никогда не пишет на тот диск.</string>
     <string name="params_layout_install_target">Цель установки: раздел %1$d (первый основной)</string>
@@ -687,11 +683,11 @@
     <string name="params_layout_move_down">Вниз</string>
     <string name="params_layout_move_up">Вверх</string>
     <string name="params_layout_note">Заявленный размер диска и DiskID — это ваш ввод; заявленный размер не записывается в XML. Приложение не может измерить целевой диск и не проверяет схему Microsoft unattend.</string>
-    <string name="params_layout_over_by">Разделы превышают заявленный размер на %1$d МБ.</string>
+    <string name="params_layout_over_by">Разделы превышают заявленный размер на %1$d МиБ.</string>
     <string name="params_layout_overflow">Сумма размеров разделов переполняет поддерживаемый диапазон.</string>
     <string name="params_layout_partition">Раздел %1$d</string>
-    <string name="params_layout_size">Размер, МБ</string>
-    <string name="params_layout_usage">Сумма разделов %1$d МБ из %2$d МБ; остаток %3$d МБ</string>
+    <string name="params_layout_size">Размер, МиБ</string>
+    <string name="params_layout_usage">Сумма разделов %1$d МиБ из %2$d МиБ; остаток %3$d МиБ</string>
     <string name="params_layout_wipe">Очистить целевой диск</string>
     <string name="params_locale">Языковой стандарт</string>
     <string name="params_locale_value">Языковой стандарт, например ru-RU</string>

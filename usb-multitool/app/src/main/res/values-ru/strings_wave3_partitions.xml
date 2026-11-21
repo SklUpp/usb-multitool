@@ -1,8 +1,2 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Один фактический чип на измеренное состояние; слова — в описании для экранного диктора. -->
-    <string name="partitions_access_ro">RO</string>
-    <string name="partitions_access_rw">RW</string>
-    <!-- Строка диапазона: LBA начало–конец и число занятых; без слова «сектор». -->
-    <string name="partitions_row_sectors">LBA %1$d–%2$d (%3$d)</string>
-</resources>
+<resources />

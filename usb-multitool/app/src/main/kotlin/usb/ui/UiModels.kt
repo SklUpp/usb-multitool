@@ -99,19 +99,6 @@ data class DeviceIdentity(
             return String.format(unit.pattern, bytes.toDouble() / unit.divisor) + " " + unit.suffix
         }
 
-        /**
-         * Free/total pair in ONE unit so the numbers are comparable at a glance, e.g.
-         * `3.70 / 3.70 GiB`. Precision follows [formatCapacity]; the larger value picks
-         * the unit, so a nearly full disk never splits into MiB vs GiB.
-         */
-        fun formatCapacityPair(freeBytes: ULong, totalBytes: ULong): String {
-            if (maxOf(freeBytes, totalBytes) < 1024uL) return "$freeBytes / $totalBytes B"
-            val unit = capacityUnit(maxOf(freeBytes, totalBytes))
-            val free = String.format(unit.pattern, freeBytes.toDouble() / unit.divisor)
-            val total = String.format(unit.pattern, totalBytes.toDouble() / unit.divisor)
-            return "$free / $total ${unit.suffix}"
-        }
-
         private class CapacityUnit(val pattern: String, val divisor: Double, val suffix: String)
 
         private fun capacityUnit(bytes: ULong): CapacityUnit =

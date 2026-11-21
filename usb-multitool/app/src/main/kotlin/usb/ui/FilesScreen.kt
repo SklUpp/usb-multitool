@@ -1384,8 +1384,8 @@ private fun FolderActionButton(
 
 /**
  * One MD3 exposed dropdown for partition selection. The field shows only the current
- * partition; the menu repeats the same row format everywhere: radio, name, filesystem,
- * usage and RO/RW. No ordinal and no duplicated size.
+ * partition; the menu repeats the main-list row format: name, filesystem/EFI badges,
+ * free/size, LBA range and RO/RW. No ordinal.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1484,7 +1484,7 @@ private fun PartitionOptionRow(
             Text(
                 text = partitionDisplayName(partition),
                 style = MaterialTheme.typography.bodyLarge,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
                 softWrap = true,
             )
@@ -1495,14 +1495,34 @@ private fun PartitionOptionRow(
                 if (partition.filesystemLabel.isNotEmpty()) {
                     Badge(text = partition.filesystemLabel)
                 }
+                if (partition.displayEfi) {
+                    Badge(text = stringResource(R.string.partitions_badge_efi))
+                }
                 usage?.let {
                     Text(
                         text = it,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         softWrap = true,
                     )
                 }
+            }
+            lbaRangeLabel(
+                start = partition.startLba,
+                count = partition.sectorCount,
+                templateId = R.string.partitions_info_lba_range_value,
+            )?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         WriteAccessBadge(access)
@@ -1516,7 +1536,7 @@ private fun PartitionOptionRow(
  * remains the a11y label.
  */
 @Composable
-private fun WriteAccessBadge(access: PartitionWriteAccess) {
+internal fun WriteAccessBadge(access: PartitionWriteAccess) {
     val label = when (access) {
         PartitionWriteAccess.ReadOnly, PartitionWriteAccess.DriverReadOnly ->
             stringResource(R.string.files_write_short_ro)

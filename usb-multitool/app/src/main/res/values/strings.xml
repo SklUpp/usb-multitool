@@ -80,12 +80,8 @@
     <string name="partitions_info_help_title">Partition information</string>
     <string name="partitions_info_help_text">**Name** is the table entry name; the volume label comes from the filesystem and can be unknown.\n\n**RO** means the medium is write-protected or the filesystem is mounted read-only; **RW** means write access was measured.\n\n**Write state** is shown only when measured and otherwise stays explicitly unknown.\n\n**Free space** is measured inside the filesystem, not in the table free region.</string>
     <string name="partitions_info_name_label">Name</string>
-    <string name="partitions_write_state_label">Write state</string>
     <string name="files_write_short_ro">RO</string>
     <string name="files_write_short_rw">RW</string>
-    <string name="partitions_write_state_unknown">Unknown</string>
-    <string name="partitions_write_state_read_only">Read only</string>
-    <string name="partitions_write_state_read_write">Read and write</string>
     <string name="efi_write_policy_allowed">Write permission allowed</string>
     <string name="efi_write_policy_protected">Write-protected</string>
     <string name="partitions_efi_blocked">%1$s is write-protected. Allow EFI writes in Device partitions.</string>
@@ -656,14 +652,14 @@
     <string name="layout_confirm_body">This layout applies to the disk of the machine being installed, not to this stick. The declared disk size and DiskID below are values you entered; this app cannot measure or check the target PC disk, and disk order there may differ, so DiskID may point at another disk. Windows Setup makes the final decision; this phone never writes to that disk.</string>
     <string name="layout_confirm_title">Target PC disk layout</string>
     <string name="layout_disk_id">DiskID: %1$d (entered by you, not verified)</string>
-    <string name="layout_disk_size_declared">Declared disk size: %1$d MB (entered by you, not measured)</string>
+    <string name="layout_disk_size_declared">Declared disk size: %1$d MiB (entered by you, not measured)</string>
     <string name="layout_install_target">Install target: partition %1$d (first Primary)</string>
     <string name="layout_no_install_target">Install target: none</string>
     <string name="layout_no_wipe_rewrite">WillWipeDisk=false: Windows Setup will not perform a full-disk wipe, but it will create and format the partitions listed here on the target disk.</string>
-    <string name="layout_partition_line">%1$d. %2$s · %3$d MB · %4$s</string>
+    <string name="layout_partition_line">%1$d. %2$s · %3$d MiB · %4$s</string>
     <string name="layout_partitions">Partitions: %1$d</string>
-    <string name="layout_remaining">Remaining: %1$d MB</string>
-    <string name="layout_total">Partitions total: %1$d MB</string>
+    <string name="layout_remaining">Remaining: %1$d MiB</string>
+    <string name="layout_total">Partitions total: %1$d MiB</string>
     <string name="layout_wipe">WillWipeDisk=true: Windows Setup will wipe this disk.</string>
     <string name="params_account">Local account</string>
     <string name="params_account_admin">Add to Administrators</string>
@@ -677,7 +673,7 @@
     <string name="params_images">Images to bind after generation: %1$d</string>
     <string name="params_language">Language tag, for example en-US</string>
     <string name="params_layout">Target PC disk layout</string>
-    <string name="params_layout_disk_size">Declared target disk size, MB</string>
+    <string name="params_layout_disk_size">Declared target disk size, MiB</string>
     <string name="params_layout_disk_size_missing">Enter the target disk size you know. This app cannot measure it.</string>
     <string name="params_layout_hint">Written into the answer file and applied by Windows Setup on another machine; this app never writes to that disk.</string>
     <string name="params_layout_install_target">Install target: partition %1$d (first Primary)</string>
@@ -686,11 +682,11 @@
     <string name="params_layout_move_down">Move down</string>
     <string name="params_layout_move_up">Move up</string>
     <string name="params_layout_note">Declared disk size and DiskID are your input; the declared size is not written to the XML. The app cannot measure the target disk and does not validate the Microsoft unattend schema.</string>
-    <string name="params_layout_over_by">Partitions exceed the declared size by %1$d MB.</string>
+    <string name="params_layout_over_by">Partitions exceed the declared size by %1$d MiB.</string>
     <string name="params_layout_overflow">Partition sizes overflow the supported sum.</string>
     <string name="params_layout_partition">Partition %1$d</string>
-    <string name="params_layout_size">Size, MB</string>
-    <string name="params_layout_usage">Partitions total %1$d MB of %2$d MB; remaining %3$d MB</string>
+    <string name="params_layout_size">Size, MiB</string>
+    <string name="params_layout_usage">Partitions total %1$d MiB of %2$d MiB; remaining %3$d MiB</string>
     <string name="params_layout_wipe">Wipe the target disk</string>
     <string name="params_locale">Locale</string>
     <string name="params_locale_value">Locale, for example ru-RU</string>

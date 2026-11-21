@@ -1,16 +1,20 @@
 package usb.ui
 
 import usb.fs.FilesystemId
-import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsagePhase
-import usb.fs.FilesystemUsageReason
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
 import usb.partition.TableScheme
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -61,28 +65,34 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.offset
@@ -537,6 +547,16 @@ fun PartitionsScreen(
     val schemeBlocked = state.partitionTableAmbiguous || state.partitionTableDamaged || !state.tableValid
     val blockedHint = writeBlockHint(state)
     val screenScroll = rememberScrollState()
+    var viewportTop by remember { mutableIntStateOf(0) }
+    var selectedTop by remember { mutableIntStateOf(Int.MAX_VALUE) }
+    var selectedBottom by remember { mutableIntStateOf(0) }
+    val pinnedHeaderHeightPx = with(LocalDensity.current) { 64.dp.roundToPx() }
+    LaunchedEffect(state.selectedPartitionId) {
+        selectedTop = Int.MAX_VALUE
+        selectedBottom = 0
+    }
+    val selectedSectionPinned = selectedTop < viewportTop &&
+        selectedBottom > viewportTop + pinnedHeaderHeightPx
     val latestState by rememberUpdatedState(state)
     LaunchedEffect(
         state.device,
@@ -565,10 +585,17 @@ fun PartitionsScreen(
             )
         }
 
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .onGloballyPositioned { coordinates ->
+                    viewportTop = coordinates.positionInRoot().y.roundToInt()
+                },
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
                 .verticalScroll(screenScroll)
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -755,7 +782,18 @@ fun PartitionsScreen(
                     )
                 }
                 if (state.partitions.isNotEmpty() || state.freeRegions.any { it.sectorCount > 0UL }) {
-                    PartitionSelectStrip(state = state)
+                    PartitionSelectStrip(
+                        state = state,
+                        onSelectPartition = { id ->
+                            onIntent(UiIntent.SelectPartition(id))
+                        },
+                        onSelectFree = { region ->
+                            if (state.tableValid && !state.partitionTableDamaged) {
+                                creatableRegions.firstOrNull { it.first == region }
+                                    ?.let { openCreate(it.first, it.second, it.third) }
+                            }
+                        },
+                    )
                 }
 
                 Column(
@@ -767,20 +805,9 @@ fun PartitionsScreen(
                     orderedPartitions.forEach { partition ->
                         val isSelected = partition.id == state.selectedPartitionId
                         val access = state.partitionWriteAccess(partition)
-                        val readOnly = access == PartitionWriteAccess.ReadOnly ||
-                            access == PartitionWriteAccess.DriverReadOnly
-                        val accessDescription = when (access) {
-                            PartitionWriteAccess.ReadOnly,
-                            PartitionWriteAccess.DriverReadOnly,
-                            -> stringResource(R.string.partitions_write_state_read_only)
-                            PartitionWriteAccess.ReadWrite ->
-                                stringResource(R.string.partitions_write_state_read_write)
-                            PartitionWriteAccess.Unknown -> null
-                        }
                         val displayName = partition.name.ifBlank { partition.id }
                         val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
                         val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
-                        val rowSpace = state.filesystemSpace(partition)
                         val rowStart = partition.startLba
                         val rowCount = partition.sectorCount
                         val rowEnd = if (rowStart != null && rowCount != null &&
@@ -814,7 +841,7 @@ fun PartitionsScreen(
                                 ) {
                                     Text(
                                         text = rowTitle,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                        fontWeight = FontWeight.SemiBold,
                                         color = rowContent,
                                         modifier = Modifier.weight(1f),
                                     )
@@ -829,7 +856,7 @@ fun PartitionsScreen(
                             supportingContent = {
                                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(
-                                        text = partitionUsageLabel(state, partition, rowSpace),
+                                        text = partitionUsageLabel(state, partition),
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontFamily = FontFamily.Monospace,
                                             fontFeatureSettings = "tnum",
@@ -856,23 +883,7 @@ fun PartitionsScreen(
                                     }
                                 }
                             },
-                            trailingContent = if (accessDescription != null && readOnly) {
-                                {
-                                    Box(
-                                        modifier = Modifier.clearAndSetSemantics {
-                                            contentDescription = accessDescription
-                                        },
-                                    ) {
-                                        Badge(
-                                            text = stringResource(R.string.partitions_access_ro),
-                                            container = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                            content = writeAccessTone(readWrite = false),
-                                        )
-                                    }
-                                }
-                            } else {
-                                null
-                            },
+                            trailingContent = { WriteAccessBadge(access) },
                             colors = ListItemDefaults.colors(
                                 containerColor = if (isSelected) {
                                     MaterialTheme.colorScheme.secondaryContainer
@@ -950,6 +961,11 @@ fun PartitionsScreen(
                     filesystemMenuTarget = filesystemMenuTarget,
                     onFilesystemMenu = { filesystemMenuTarget = it },
                     latestState = latestState,
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        val top = coordinates.positionInRoot().y.roundToInt()
+                        selectedTop = top
+                        selectedBottom = top + coordinates.size.height
+                    },
                 )
             }
 
@@ -1004,6 +1020,15 @@ fun PartitionsScreen(
                 orderedPartitions = orderedPartitions,
             )
         }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = selectedSectionPinned,
+            modifier = Modifier.align(Alignment.TopStart),
+            enter = fadeIn(tween(140)) + expandVertically(tween(160)),
+            exit = fadeOut(tween(100)) + shrinkVertically(tween(120)),
+        ) {
+            selected?.let { PinnedSelectedHeader(selected = it) }
+        }
+        }
     }
 }
 
@@ -1011,6 +1036,37 @@ private enum class RawTargetMode {
     WholeDisk,
     Partition,
     Custom,
+}
+
+@Composable
+private fun PinnedSelectedHeader(selected: PartitionTab) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shadowElevation = 3.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 64.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .semantics { heading() },
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = stringResource(R.string.partitions_selected_title),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = selected.name.ifBlank { selected.id },
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1027,6 +1083,7 @@ private fun SelectedPartitionCard(
     filesystemMenuTarget: PartitionBinding?,
     onFilesystemMenu: (PartitionBinding?) -> Unit,
     latestState: AppUiState,
+    modifier: Modifier = Modifier,
 ) {
     SectionCard(
         title = stringResource(R.string.partitions_selected_title),
@@ -1037,6 +1094,7 @@ private fun SelectedPartitionCard(
                 infoText = stringResource(R.string.partitions_info_help_text),
             )
         },
+        modifier = modifier,
     ) {
         if (showBlockedHint) {
             blockedHint?.let { hint ->
@@ -1982,7 +2040,11 @@ private fun segmentEnd(segment: StripSegment): ULong =
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PartitionSelectStrip(state: AppUiState) {
+private fun PartitionSelectStrip(
+    state: AppUiState,
+    onSelectPartition: (String) -> Unit,
+    onSelectFree: (FreeRegionUi) -> Unit,
+) {
     val partitions = state.partitions
         .filter { (it.sectorCount ?: 0uL) > 0uL }
         .sortedWith(compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id })
@@ -2026,17 +2088,26 @@ private fun PartitionSelectStrip(state: AppUiState) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(32.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(8.dp)),
     ) {
         segments.forEach { segment ->
             val partition = segment.partition
+            val free = segment.free
             val isSelected = partition?.id == state.selectedPartitionId
             val fill = when {
                 partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
                 partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
-                segment.free != null -> MaterialTheme.colorScheme.surfaceContainerLow
+                free != null -> MaterialTheme.colorScheme.surfaceContainerLow
                 else -> MaterialTheme.colorScheme.surfaceContainerHighest
+            }
+            val description = when {
+                partition != null -> stringResource(
+                    R.string.partitions_strip_item_a11y_name,
+                    partition.name.ifBlank { partition.id },
+                )
+                free != null -> stringResource(R.string.partitions_strip_free)
+                else -> stringResource(R.string.partitions_strip_unallocated)
             }
             Box(
                 modifier = Modifier
@@ -2044,7 +2115,35 @@ private fun PartitionSelectStrip(state: AppUiState) {
                         (segmentSpan(segment).toDouble() / diskSectorCount.toDouble()).toFloat(),
                     )
                     .fillMaxHeight()
-                    .background(fill),
+                    .background(fill)
+                    .then(
+                        if (isSelected) {
+                            Modifier.border(
+                                width = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = RoundedCornerShape(2.dp),
+                            )
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .then(
+                        when {
+                            partition != null -> Modifier.selectable(
+                                selected = isSelected,
+                                enabled = state.actionsEnabled,
+                                role = Role.RadioButton,
+                                onClick = { onSelectPartition(partition.id) },
+                            )
+                            free != null -> Modifier.clickable(
+                                enabled = state.actionsEnabled,
+                                role = Role.Button,
+                                onClick = { onSelectFree(free) },
+                            )
+                            else -> Modifier.clearAndSetSemantics { }
+                        },
+                    )
+                    .semantics { contentDescription = description },
             )
         }
     }
@@ -2119,39 +2218,19 @@ private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULon
     return sectors * sectorSize.toULong()
 }
 
-/** Display measured usage or the honest phase of the current per-partition probe. */
+/** Free/size line shared with the fixed partition picker. */
 @Composable
-private fun partitionUsageLabel(
-    state: AppUiState,
-    partition: PartitionTab,
-    space: FilesystemSpace?,
-): String {
-    when (val usage = state.partitionUsageSnapshot(partition)?.usage) {
-        is FilesystemUsage.Known ->
-            return DeviceIdentity.formatCapacityPair(usage.space.usedBytes, usage.space.totalBytes)
-        is FilesystemUsage.Unavailable -> return stringResource(
-            when (usage.reason) {
-                FilesystemUsageReason.UnsupportedFilesystem ->
-                    R.string.filesystem_usage_unavailable_unsupported
-                FilesystemUsageReason.EngineMissing ->
-                    R.string.filesystem_usage_unavailable_engine
-                FilesystemUsageReason.Closed ->
-                    R.string.filesystem_usage_unavailable_closed
-                FilesystemUsageReason.IoFailure ->
-                    R.string.filesystem_usage_unavailable_io
-            },
-        )
-        null -> Unit
-    }
-    return when (state.partitionUsagePhase(partition)) {
-        FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
-        FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
-        FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
-        null -> {
-            val max = space?.totalBytes ?: partitionSizeBytes(state, partition)
-            if (max == null) "—" else "— / ${DeviceIdentity.formatCapacity(max)}"
-        }
-    }
+private fun partitionUsageLabel(state: AppUiState, partition: PartitionTab): String {
+    filesystemUsageText(
+        snapshot = state.partitionUsageSnapshot(partition),
+        phase = state.partitionUsagePhase(partition),
+    )?.let { return it }
+    val maximum = partitionSizeBytes(state, partition)
+    return stringResource(
+        R.string.filesystem_usage_known,
+        "—",
+        maximum?.let(DeviceIdentity::formatCapacity) ?: "—",
+    )
 }
 
 /**
@@ -2160,7 +2239,7 @@ private fun partitionUsageLabel(
  * start + count - 1, never a guess. [templateId] is a string resource id.
  */
 @Composable
-private fun lbaRangeLabel(
+internal fun lbaRangeLabel(
     start: ULong?,
     count: ULong?,
     templateId: Int = R.string.partitions_lba_range,

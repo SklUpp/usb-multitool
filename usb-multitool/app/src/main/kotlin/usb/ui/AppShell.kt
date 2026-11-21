@@ -1436,24 +1436,14 @@ private fun StatusDialog(
         textContentColor = dialogTextColor,
         shape = dialogShape,
         title = {
-            Text(
-                text = stringResource(R.string.status_dialog_title),
-                modifier = Modifier.semantics { heading() },
-                style = MaterialTheme.typography.titleMedium,
-                color = dialogTitleColor,
-            )
-        },
-        text = {
-            val scrollState = rememberScrollState()
-            LaunchedEffect(techLines.lastOrNull(), scrollState.maxValue) {
-                if (scrollState.maxValue > 0) scrollState.scrollTo(scrollState.maxValue)
-            }
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.status_dialog_title),
+                    modifier = Modifier.semantics { heading() },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = dialogTitleColor,
+                )
+                // Header/subheader stay fixed; only the journal below scrolls.
                 compactStatus.firstOrNull()?.let { (text, tone) ->
                     Text(
                         text = text,
@@ -1467,6 +1457,19 @@ private fun StatusDialog(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+        },
+        text = {
+            val scrollState = rememberScrollState()
+            LaunchedEffect(techLines.lastOrNull(), scrollState.maxValue) {
+                if (scrollState.maxValue > 0) scrollState.scrollTo(scrollState.maxValue)
+            }
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 // Temporary operation journal — same JournalLine renderer as the full log.
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHighest,
