@@ -970,8 +970,8 @@ internal fun ImportOverwriteDialog(
             shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 0.dp,
-            shadowElevation = 6.dp,
+            tonalElevation = 6.dp,
+            shadowElevation = 0.dp,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(

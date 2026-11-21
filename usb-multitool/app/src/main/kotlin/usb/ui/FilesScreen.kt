@@ -1609,11 +1609,12 @@ internal fun PartitionDropdown(
         modifier = Modifier.fillMaxWidth(),
     ) {
         TextField(
-            value = selected?.let(::partitionDisplayName) ?: placeholder,
+            value = selected?.let(::partitionDisplayName).orEmpty(),
             onValueChange = {},
             readOnly = true,
             enabled = rowEnabled,
             label = { Text(label) },
+            placeholder = { Text(placeholder) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
@@ -1653,7 +1654,7 @@ internal fun PartitionDropdown(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     modifier = Modifier
                         .heightIn(min = 48.dp)
-                        .semantics { selected = isSelected },
+                        .semantics { this.selected = isSelected },
                 )
             }
         }

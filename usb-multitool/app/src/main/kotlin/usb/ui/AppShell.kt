@@ -1838,10 +1838,10 @@ private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) 
                     },
                     trailingIcon = if (option == language) {
                         {
-                            Text(
-                                text = "✓",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                            GlyphIcon(
+                                glyph = Glyph.Check,
+                                size = 20.dp,
+                                tint = MaterialTheme.colorScheme.primary,
                             )
                         }
                     } else {
@@ -2145,8 +2145,7 @@ internal fun InfoRow(label: String, value: String, monospaceValue: Boolean = fal
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            softWrap = true,
         )
         Text(
             text = value,
@@ -2161,9 +2160,7 @@ internal fun InfoRow(label: String, value: String, monospaceValue: Boolean = fal
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
             textAlign = TextAlign.End,
-            maxLines = 1,
-            overflow = if (monospaceValue) TextOverflow.StartEllipsis else TextOverflow.Ellipsis,
-            softWrap = false,
+            softWrap = true,
         )
     }
 }
@@ -2179,6 +2176,7 @@ internal fun SwitchRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .toggleable(
                 value = checked,
                 enabled = enabled,
@@ -2190,12 +2188,24 @@ internal fun SwitchRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
+            )
             hint?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    },
                 )
             }
         }
