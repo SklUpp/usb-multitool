@@ -1,20 +1,29 @@
 package usb.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,13 +31,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.ui.res.stringResource
 import usb.multitool.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,7 +55,9 @@ internal fun SettingsScreen(
             navigationIcon = {
                 IconButton(
                     onClick = onBack,
-                    modifier = Modifier.semantics { contentDescription = backLabel },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = backLabel },
                 ) { GlyphIcon(Glyph.ChevronLeft) }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -118,20 +127,51 @@ private fun SettingsAppearance(state: AppUiState, onIntent: (UiIntent) -> Unit) 
 @Composable
 private fun LanguageSettingRow(language: AppLanguage, onIntent: (UiIntent) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    SettingRow(
-        label = stringResource(R.string.language_label),
-        value = languageName(language),
-        onClick = { expanded = true },
-    )
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        AppLanguage.entries.forEach { option ->
-            DropdownMenuItem(
-                text = { Text(languageName(option)) },
-                onClick = {
-                    expanded = false
-                    onIntent(UiIntent.SetLanguage(option))
-                },
-            )
+    // DropdownMenu positions against the nearest parent layout bounds; wrap the
+    // SettingRow so the popup anchors to the row, not the surrounding Column.
+    Box(modifier = Modifier.fillMaxWidth()) {
+        SettingRow(
+            label = stringResource(R.string.language_label),
+            value = languageName(language),
+            onClick = { expanded = true },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            // High (not default Container) + border: Container↔bg is ~1.07–1.12:1 and
+            // outline is still weak until AppShell retunes it, so ink-variant stroke
+            // keeps the edge readable on the current palette.
+            modifier = Modifier.widthIn(min = 168.dp, max = 320.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 3.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant),
+        ) {
+            AppLanguage.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = languageName(option),
+                            softWrap = true,
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        onIntent(UiIntent.SetLanguage(option))
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    trailingIcon = if (option == language) {
+                        {
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
         }
     }
 }
@@ -157,6 +197,7 @@ private fun SettingsBackups(state: AppUiState, onPickBackupFolder: () -> Unit) {
                 text = state.backupFolderName ?: state.backupFolderUri?.substringAfterLast('/')
                     ?: stringResource(R.string.diagnostics_backup_folder_none),
                 style = MaterialTheme.typography.bodyMedium,
+                softWrap = true,
                 color = if (state.backupFolderUri != null && !state.backupFolderUsable) {
                     MaterialTheme.colorScheme.error
                 } else {
@@ -177,19 +218,32 @@ private fun SettingsBackups(state: AppUiState, onPickBackupFolder: () -> Unit) {
 
 @Composable
 private fun SettingRow(label: String, value: String, onClick: () -> Unit) {
-    androidx.compose.material3.TextButton(
+    TextButton(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .semantics { contentDescription = if (value.isBlank()) label else "$label: $value" },
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(label, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
+            Text(
+                text = label,
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Start,
+                softWrap = true,
+            )
             if (value.isNotBlank()) {
-                Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = value,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    softWrap = true,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
             }
         }
     }
