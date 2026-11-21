@@ -550,7 +550,10 @@ fun PartitionsScreen(
     var viewportTop by remember { mutableIntStateOf(0) }
     var selectedTop by remember { mutableIntStateOf(Int.MAX_VALUE) }
     var selectedBottom by remember { mutableIntStateOf(0) }
-    val pinnedHeaderHeightPx = with(LocalDensity.current) { 64.dp.roundToPx() }
+    val initialPinnedHeaderHeightPx = with(LocalDensity.current) { 64.dp.roundToPx() }
+    var pinnedHeaderHeightPx by remember {
+        mutableIntStateOf(initialPinnedHeaderHeightPx)
+    }
     LaunchedEffect(state.selectedPartitionId) {
         selectedTop = Int.MAX_VALUE
         selectedBottom = 0
@@ -1027,7 +1030,14 @@ fun PartitionsScreen(
             enter = fadeIn(tween(140)) + expandVertically(tween(160)),
             exit = fadeOut(tween(100)) + shrinkVertically(tween(120)),
         ) {
-            selected?.let { PinnedSelectedHeader(selected = it) }
+            selected?.let {
+                PinnedSelectedHeader(
+                    selected = it,
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        pinnedHeaderHeightPx = coordinates.size.height
+                    },
+                )
+            }
         }
         }
     }
@@ -1040,12 +1050,12 @@ private enum class RawTargetMode {
 }
 
 @Composable
-private fun PinnedSelectedHeader(selected: PartitionTab) {
+private fun PinnedSelectedHeader(selected: PartitionTab, modifier: Modifier = Modifier) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shadowElevation = 3.dp,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         Column(
             modifier = Modifier
