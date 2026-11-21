@@ -1,3 +1,5 @@
 <resources>
     <string name="files_empty_subfolders">Нет вложенных папок</string>
+    <string name="files_partition_state_expanded">Открыт</string>
+    <string name="files_partition_state_collapsed">Закрыт</string>
 </resources>

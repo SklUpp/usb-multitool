@@ -73,8 +73,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.semantics.expanded
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.text.font.FontFamily
@@ -1379,9 +1379,12 @@ private fun PartitionChoiceRow(
     val expandDescription = stringResource(
         if (expanded) R.string.files_partition_collapse else R.string.files_partition_expand,
     )
+    val partitionState = stringResource(
+        if (expanded) R.string.files_partition_state_expanded
+        else R.string.files_partition_state_collapsed,
+    )
     val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
     val rowEnabled = enabled && selectable
-    val isExpanded = expanded
     LaunchedEffect(rowEnabled) {
         if (!rowEnabled) expanded = false
     }
@@ -1407,7 +1410,7 @@ private fun PartitionChoiceRow(
                         role = Role.Button,
                         onClick = { expanded = !expanded },
                     )
-                    .semantics { expanded = isExpanded }
+                    .semantics { stateDescription = partitionState }
                     .alpha(if (enabled) 1f else 0.38f)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

@@ -1,3 +1,5 @@
 <resources>
     <string name="files_empty_subfolders">No subfolders</string>
+    <string name="files_partition_state_expanded">Expanded</string>
+    <string name="files_partition_state_collapsed">Collapsed</string>
 </resources>
