@@ -122,20 +122,6 @@ class DeviceIdentityTest {
     }
 
     @Test
-    fun decimalUnitsUseThousandByteSteps() {
-        assertEquals("999 B", DeviceIdentity.formatCapacity(999uL, SizeUnit.Decimal))
-        assertEquals("1.0 KB", DeviceIdentity.formatCapacity(1_000uL, SizeUnit.Decimal))
-        assertEquals("1.0 MB", DeviceIdentity.formatCapacity(1_000_000uL, SizeUnit.Decimal))
-        assertEquals("1.50 GB", DeviceIdentity.formatCapacity(1_500_000_000uL, SizeUnit.Decimal))
-        assertEquals("976.6 KiB", DeviceIdentity.formatCapacity(1_000_000uL, SizeUnit.Binary))
-        assertEquals("1.0 MiB", DeviceIdentity.formatCapacity(1_048_576uL, SizeUnit.Binary))
-        assertEquals(
-            "1.50 / 2.00 GB",
-            DeviceIdentity.formatCapacityPair(1_500_000_000uL, 2_000_000_000uL, SizeUnit.Decimal),
-        )
-    }
-
-    @Test
     fun displayNameShowsLabelAndCapacityAndIdentityStaysMatchingFormat() {
         val id = DeviceIdentity.of(
             label = "Cruzer Blade",

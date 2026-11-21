@@ -115,7 +115,6 @@ fun PartitionsScreen(
     var createName by remember { mutableStateOf("") }
     var createLabel by remember { mutableStateOf("") }
     var createFormatId by remember { mutableStateOf<FilesystemId?>(state.selectedFormatId) }
-    var useAllFreeSpace by remember { mutableStateOf(true) }
     var renameTargetId by remember { mutableStateOf<String?>(null) }
     var renameBinding by remember { mutableStateOf<PartitionBinding?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -133,24 +132,26 @@ fun PartitionsScreen(
     val namesSupported = state.partitionScheme?.let { PartitionName.supported(it) } == true
     // Whole-MiB-aligned start of every free region; the create dialog picks among them.
     val creatableRegions = remember(state.freeRegions, state.diskSectorSize) {
-        val align = mibAlignSectors(state.diskSectorSize)
+        val align = mibAlignSectors(state.diskSectorSize) ?: return@remember emptyList()
         state.freeRegions.mapNotNull { region ->
-            val skip = align?.let { (it - region.startLba % it) % it } ?: 0UL
-            if (skip < region.sectorCount) {
-                Triple(region, region.startLba + skip, region.sectorCount - skip)
+            val skip = (align - region.startLba % align) % align
+            val remaining = region.sectorCount - skip
+            if (remaining >= align) {
+                Triple(region, region.startLba + skip, remaining)
             } else {
                 null
             }
         }
     }
     fun openCreate(region: FreeRegionUi, start: ULong, sectors: ULong) {
+        // The dialog works in whole MiB; a sub-MiB tail stays free.
+        val align = mibAlignSectors(state.diskSectorSize) ?: 1UL
         createRegion = region
         startLbaInput = start.toString()
-        sectorCount = sectors.toString()
+        sectorCount = ((sectors / align) * align).toString()
         createName = ""
         createLabel = ""
         createFormatId = state.selectedFormatId
-        useAllFreeSpace = true
     }
     createRegion?.let { region ->
         // Same precondition as UiReducer.RequestCreatePartition: whole MiB alignment.
@@ -273,60 +274,25 @@ fun PartitionsScreen(
                             ),
                             color = MaterialTheme.colorScheme.error,
                         )
-                    } else {
-                        SwitchRow(
-                            label = stringResource(R.string.partitions_create_mode_custom),
-                            checked = !useAllFreeSpace,
-                            enabled = state.actionsEnabled,
-                            onCheckedChange = { custom ->
-                                useAllFreeSpace = !custom
-                                if (!custom) {
-                                    startLbaInput = firstAligned.toString()
-                                    sectorCount = (regionEnd - firstAligned).toString()
-                                }
-                            },
-                        )
-                        if (useAllFreeSpace) {
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_create_all_summary,
-                                    firstAligned.toLong(),
-                                    (regionEnd - 1UL).toLong(),
-                                    (regionEnd - firstAligned).toLong(),
-                                ),
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                     }
-                    if (!useAllFreeSpace &&
-                        sliderVisible && alignSectors != null && firstAligned != null
-                    ) {
+                    if (sliderVisible && alignSectors != null && firstAligned != null) {
                         val mibSectors = alignSectors
                         val regionBase = firstAligned
                         val maxMibFloat = availableMib.toFloat()
                         val safeStart = sliderStart.toFloat()
                         val safeEnd = sliderEnd.toFloat()
                         val startLba = regionBase + sliderStart * mibSectors
-                        val endBoundaryLba = regionBase + sliderEnd * mibSectors
-                        val sectorBytes = state.diskSectorSize.toULong()
-                        val startBytes = startLba * sectorBytes
-                        val endBytes = endBoundaryLba * sectorBytes
-                        val lengthBytes = endBytes - startBytes
-                        val startLabel = DeviceIdentity.formatCapacity(startBytes, state.sizeUnit)
-                        val endLabel = DeviceIdentity.formatCapacity(endBytes, state.sizeUnit)
-                        val lengthLabel = DeviceIdentity.formatCapacity(lengthBytes, state.sizeUnit)
+                        val endLba = (regionBase + sliderEnd * mibSectors).let {
+                            if (it > regionBase) it - 1UL else it
+                        }
                         val rangeA11y = stringResource(R.string.partitions_range_a11y)
                         val rangeState = stringResource(
                             R.string.partitions_range_a11y_state,
-                            startLabel,
+                            sliderStart.toLong(),
                             startLba.toLong(),
-                            endLabel,
-                            endBoundaryLba.toLong(),
-                            lengthLabel,
+                            sliderEnd.toLong(),
+                            endLba.toLong(),
+                            (sliderEnd - sliderStart).toLong(),
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             RangeSlider(
@@ -364,9 +330,9 @@ fun PartitionsScreen(
                             Text(
                                 text = stringResource(
                                     R.string.partitions_range_caption,
-                                    startLabel,
-                                    endLabel,
-                                    lengthLabel,
+                                    sliderStart.toLong(),
+                                    sliderEnd.toLong(),
+                                    (sliderEnd - sliderStart).toLong(),
                                 ),
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontFamily = FontFamily.Monospace,
@@ -427,7 +393,7 @@ fun PartitionsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = valid && state.actionsEnabled && (useAllFreeSpace || sliderVisible),
+                    enabled = valid && state.actionsEnabled && sliderVisible,
                     onClick = {
                         onIntent(
                             UiIntent.RequestCreatePartition(
@@ -722,29 +688,6 @@ fun PartitionsScreen(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                }
-                Text(
-                    text = stringResource(R.string.partitions_size_unit_label),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    SegmentedButton(
-                        selected = state.sizeUnit == SizeUnit.Decimal,
-                        onClick = { onIntent(UiIntent.SetSizeUnit(SizeUnit.Decimal)) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text(stringResource(R.string.size_unit_mb))
-                    }
-                    SegmentedButton(
-                        selected = state.sizeUnit == SizeUnit.Binary,
-                        onClick = { onIntent(UiIntent.SetSizeUnit(SizeUnit.Binary)) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text(stringResource(R.string.size_unit_mib))
-                    }
                 }
                 if (!state.partitionTableRecognized &&
                     state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
@@ -1224,8 +1167,7 @@ private fun SelectedPartitionCard(
         )
         val usage = state.partitionUsageSnapshot(selected)?.usage
         val freeSpaceText = when (usage) {
-            is FilesystemUsage.Known ->
-                DeviceIdentity.formatCapacity(usage.space.freeBytes, state.sizeUnit)
+            is FilesystemUsage.Known -> DeviceIdentity.formatCapacity(usage.space.freeBytes)
             else -> when (state.partitionUsagePhase(selected)) {
                 FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
                 FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
@@ -2186,11 +2128,7 @@ private fun partitionUsageLabel(
 ): String {
     when (val usage = state.partitionUsageSnapshot(partition)?.usage) {
         is FilesystemUsage.Known ->
-            return DeviceIdentity.formatCapacityPair(
-                usage.space.usedBytes,
-                usage.space.totalBytes,
-                state.sizeUnit,
-            )
+            return DeviceIdentity.formatCapacityPair(usage.space.usedBytes, usage.space.totalBytes)
         is FilesystemUsage.Unavailable -> return stringResource(
             when (usage.reason) {
                 FilesystemUsageReason.UnsupportedFilesystem ->
@@ -2211,7 +2149,7 @@ private fun partitionUsageLabel(
         FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
         null -> {
             val max = space?.totalBytes ?: partitionSizeBytes(state, partition)
-            if (max == null) "—" else "— / ${DeviceIdentity.formatCapacity(max, state.sizeUnit)}"
+            if (max == null) "—" else "— / ${DeviceIdentity.formatCapacity(max)}"
         }
     }
 }
@@ -2261,7 +2199,7 @@ private fun diskGeometry(state: AppUiState): DiskGeometry? {
     val totalSectors = totalBytes / sectorSize
     if (totalSectors == 0UL) return null
     return DiskGeometry(
-        sizeLabel = DeviceIdentity.formatCapacity(totalBytes, state.sizeUnit),
+        sizeLabel = DeviceIdentity.formatCapacity(totalBytes),
         totalSectors = totalSectors,
     )
 }
