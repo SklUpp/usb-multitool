@@ -711,6 +711,7 @@ int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
     ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
     if (!ni) {
         int e = errno;
+        if (e == ENAMETOOLONG) return -EINVAL;
         if (!create) return (e == ENOENT) ? -ENOENT : -EIO;
         if (e != 0 && e != ENOENT) return -EIO;
 
@@ -825,6 +826,7 @@ int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
         ntfs_inode_close(existing);
         return -EEXIST;
     }
+    if (errno == ENAMETOOLONG) return -EINVAL;
     if (errno != 0 && errno != ENOENT) return -EIO;
 
     errno = 0;
