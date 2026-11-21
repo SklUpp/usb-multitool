@@ -18,7 +18,6 @@
     <string name="partitions_info_type_data">Данные</string>
     <string name="partitions_info_lba_range_label">Диапазон LBA</string>
     <string name="partitions_info_lba_range_value">%1$d – %2$d</string>
-    <string name="partitions_info_access_label">Доступ</string>
     <!-- Двухфазная посекторная запись. -->
     <string name="partitions_raw_pick_image">Выбрать образ…</string>
     <!-- Лист выбора источника под «Выбрать образ». -->

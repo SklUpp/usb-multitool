@@ -18,7 +18,6 @@
     <string name="partitions_info_type_data">Data</string>
     <string name="partitions_info_lba_range_label">LBA range</string>
     <string name="partitions_info_lba_range_value">%1$d – %2$d</string>
-    <string name="partitions_info_access_label">Access</string>
     <!-- RAW write two-phase controls. -->
     <string name="partitions_raw_pick_image">Choose image…</string>
     <!-- RAW source sheet rows under Choose image. -->

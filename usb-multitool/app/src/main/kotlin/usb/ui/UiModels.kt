@@ -93,9 +93,13 @@ data class DeviceIdentity(
                 attachGeneration = attachGeneration,
             )
 
-        fun formatCapacity(bytes: ULong): String {
-            if (bytes < 1024uL) return "$bytes B"
-            val unit = capacityUnit(bytes)
+        fun formatCapacity(bytes: ULong): String = formatCapacity(bytes, SizeUnit.Binary)
+
+        /** Size in the user's chosen decimal (MB/GB/TB) or binary (MiB/GiB/TiB) units. */
+        fun formatCapacity(bytes: ULong, sizeUnit: SizeUnit): String {
+            val step = sizeUnit.base.toULong()
+            if (bytes < step) return "$bytes B"
+            val unit = capacityUnit(bytes, sizeUnit)
             return String.format(unit.pattern, bytes.toDouble() / unit.divisor) + " " + unit.suffix
         }
 
@@ -104,9 +108,17 @@ data class DeviceIdentity(
          * `3.70 / 3.70 GiB`. Precision follows [formatCapacity]; the larger value picks
          * the unit, so a nearly full disk never splits into MiB vs GiB.
          */
-        fun formatCapacityPair(freeBytes: ULong, totalBytes: ULong): String {
-            if (maxOf(freeBytes, totalBytes) < 1024uL) return "$freeBytes / $totalBytes B"
-            val unit = capacityUnit(maxOf(freeBytes, totalBytes))
+        fun formatCapacityPair(freeBytes: ULong, totalBytes: ULong): String =
+            formatCapacityPair(freeBytes, totalBytes, SizeUnit.Binary)
+
+        fun formatCapacityPair(
+            freeBytes: ULong,
+            totalBytes: ULong,
+            sizeUnit: SizeUnit,
+        ): String {
+            val step = sizeUnit.base.toULong()
+            if (maxOf(freeBytes, totalBytes) < step) return "$freeBytes / $totalBytes B"
+            val unit = capacityUnit(maxOf(freeBytes, totalBytes), sizeUnit)
             val free = String.format(unit.pattern, freeBytes.toDouble() / unit.divisor)
             val total = String.format(unit.pattern, totalBytes.toDouble() / unit.divisor)
             return "$free / $total ${unit.suffix}"
@@ -114,14 +126,32 @@ data class DeviceIdentity(
 
         private class CapacityUnit(val pattern: String, val divisor: Double, val suffix: String)
 
-        private fun capacityUnit(bytes: ULong): CapacityUnit =
-            when {
-                bytes < 1024uL * 1024uL -> CapacityUnit("%.1f", 1024.0, "KiB")
-                bytes < 1024uL * 1024uL * 1024uL -> CapacityUnit("%.1f", 1024.0 * 1024.0, "MiB")
-                bytes < 1024uL * 1024uL * 1024uL * 1024uL ->
-                    CapacityUnit("%.2f", 1024.0 * 1024.0 * 1024.0, "GiB")
-                else -> CapacityUnit("%.2f", 1024.0 * 1024.0 * 1024.0 * 1024.0, "TiB")
+        private fun capacityUnit(bytes: ULong, sizeUnit: SizeUnit): CapacityUnit {
+            val step = sizeUnit.base.toULong()
+            val base = sizeUnit.base.toDouble()
+            val suffixes = if (sizeUnit == SizeUnit.Decimal) {
+                listOf("KB", "MB", "GB", "TB")
+            } else {
+                listOf("KiB", "MiB", "GiB", "TiB")
             }
+            val unitIndex = when {
+                bytes < step * step -> 0
+                bytes < step * step * step -> 1
+                bytes < step * step * step * step -> 2
+                else -> 3
+            }
+            val divisor = when (unitIndex) {
+                0 -> base
+                1 -> base * base
+                2 -> base * base * base
+                else -> base * base * base * base
+            }
+            return CapacityUnit(
+                pattern = if (unitIndex >= 2) "%.2f" else "%.1f",
+                divisor = divisor,
+                suffix = suffixes[unitIndex],
+            )
+        }
     }
 }
 
@@ -661,6 +691,12 @@ enum class AppLanguage {
     System,
     Russian,
     English,
+}
+
+/** User-facing size units: binary 1024-byte steps or decimal 1000-byte steps. */
+enum class SizeUnit(val base: Int) {
+    Binary(1024),
+    Decimal(1000),
 }
 
 enum class ShellTab {
@@ -1626,6 +1662,8 @@ data class AppUiState(
     val selectedFormatId: FilesystemId = FilesystemId.FAT,
     /** Theme preference: exactly two states, dark applied by default on first launch. */
     val darkTheme: Boolean = true,
+    /** Partition-size display units; binary is the existing default. */
+    val sizeUnit: SizeUnit = SizeUnit.Binary,
     /**
      * Bounded operation log. Ring-buffered to [LOG_MAX_LINES]; oldest lines dropped.
      * Appended by [UiIntent.AppendLog]; kept across operations until the user asks for

@@ -392,7 +392,9 @@ fun FilesScreen(
                     pendingDeleteSelection = pinned
                 },
                 isLoading = state.filesListingState == FilesListingState.Loading,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(bottom = 12.dp),
             )
         }
         if (canWrite) {

@@ -670,6 +670,9 @@ sealed class UiIntent {
     /** Switch the in-app language; persisted by the host. */
     data class SetLanguage(val language: AppLanguage) : UiIntent()
 
+    /** Switch partition-size display units; persisted by the host. */
+    data class SetSizeUnit(val sizeUnit: SizeUnit) : UiIntent()
+
     /** Run the automated self-test suite over all functional engines. */
     data object RunSelfTest : UiIntent()
 
@@ -4255,6 +4258,8 @@ object UiReducer {
             UiIntent.CaptureGptBackup -> RescueBackupTransitions.captureGptBackup(state)
 
             is UiIntent.SetLanguage -> ReduceResult(state.copy(language = intent.language))
+
+            is UiIntent.SetSizeUnit -> ReduceResult(state.copy(sizeUnit = intent.sizeUnit))
 
             UiIntent.ToggleTheme ->
                 ReduceResult(state.copy(darkTheme = !state.darkTheme))

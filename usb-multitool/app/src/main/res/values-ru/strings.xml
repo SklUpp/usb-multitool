@@ -50,8 +50,8 @@
     <string name="partitions_align">Выровнять</string>
     <string name="partitions_range_label">Границы, МиБ</string>
     <string name="partitions_range_a11y">Начало и конец нового раздела на сетке выравнивания целых МиБ</string>
-    <string name="partitions_range_a11y_state">Начало %1$d МиБ (LBA %2$d), конец %3$d МиБ (LBA %4$d), длина %5$d МиБ</string>
-    <string name="partitions_range_caption">Начало %1$d МиБ · конец %2$d МиБ · %3$d МиБ</string>
+    <string name="partitions_range_a11y_state">Начало %1$s (LBA %2$d), граница конца %3$s (LBA %4$d), длина %5$s</string>
+    <string name="partitions_range_caption">Начало %1$s · конец %2$s · длина %3$s</string>
     <string name="partitions_range_ticks_a11y">Метки выравнивания по МиБ свободного региона, на больших регионах разрежены; подписанные концы — первый пригодный выровненный сектор и последний выбираемый сектор</string>
     <string name="partitions_range_tick_edge_label">%1$d МиБ · LBA %2$d</string>
     <string name="partitions_size_sectors">Размер в секторах</string>
@@ -275,6 +275,9 @@
     <string name="partitions_create_blocked_corrupt">Создание невозможно: сначала восстановите или сотрите таблицу.</string>
     <string name="partitions_create_first">Разделов нет. Создайте первый раздел кнопкой «Создать раздел».</string>
     <string name="partitions_layout_title">Разметка</string>
+    <string name="partitions_size_unit_label">Единицы размеров</string>
+    <string name="size_unit_mb">МБ</string>
+    <string name="size_unit_mib">МиБ</string>
     <string name="partitions_strip_free">Свободное место</string>
     <string name="partitions_no_image">Образ не выбран</string>
     <string name="filesystem_usage_label">Свободно в ФС</string>

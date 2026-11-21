@@ -98,6 +98,7 @@ import usb.ui.UiReducer
 import usb.ui.WindowsImportRequestCodes
 import usb.ui.WindowsImportPickerCoordinator
 import usb.ui.AppLanguage
+import usb.ui.SizeUnit
 import usb.diagnostics.AppTraceLogger
 import usb.diagnostics.Diagnostics
 import usb.diagnostics.redactTrace
@@ -203,6 +204,8 @@ class MainViewModel(
         const val LANGUAGE_KEY = "language"
         /** Persisted two-state theme; absent means the dark default. */
         const val THEME_KEY = "dark_theme"
+        /** Persisted partition-size display unit. */
+        const val SIZE_UNIT_KEY = "size_unit"
         /** Persisted SAF tree shared by image+map folders and GPT copies. */
         const val BACKUP_FOLDER_URI_KEY = "backup_folder_uri"
         const val BACKUP_FOLDER_NAME_KEY = "backup_folder_name"
@@ -366,6 +369,7 @@ class MainViewModel(
             tab = restoredTab,
             language = readLanguage(),
             darkTheme = readDarkTheme(),
+            sizeUnit = readSizeUnit(),
             backupFolderUri = folder.uri,
             backupFolderName = folder.name,
             backupFolderUsable = folder.usable,
@@ -524,6 +528,14 @@ class MainViewModel(
 
     private fun readDarkTheme(): Boolean =
         runCatching { languagePrefs.getBoolean(THEME_KEY, true) }.getOrDefault(true)
+
+    private fun readSizeUnit(): SizeUnit =
+        runCatching {
+            SizeUnit.valueOf(
+                languagePrefs.getString(SIZE_UNIT_KEY, SizeUnit.Binary.name)
+                    ?: SizeUnit.Binary.name,
+            )
+        }.getOrDefault(SizeUnit.Binary)
 
     private data class StoredBackupFolder(
         val uri: String?,
@@ -711,6 +723,9 @@ class MainViewModel(
             // The reducer flips the same value; persisting the next state keeps a restart
             // on the theme the user just chose.
             languagePrefs.edit().putBoolean(THEME_KEY, !state.darkTheme).apply()
+        }
+        if (intent is UiIntent.SetSizeUnit) {
+            languagePrefs.edit().putString(SIZE_UNIT_KEY, intent.sizeUnit.name).apply()
         }
         val filesDir = getApplication<Application>().filesDir
         // Surviving UI staged path after process death is not session-owned — clear label only.

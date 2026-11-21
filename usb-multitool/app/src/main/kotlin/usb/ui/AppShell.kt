@@ -1,6 +1,5 @@
 package usb.ui
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -8,7 +7,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import android.provider.Settings
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -546,9 +544,7 @@ fun AppShell(
                                 if (reducedMotion) {
                                     EnterTransition.None togetherWith ExitTransition.None
                                 } else {
-                                    (fadeIn(tween(200)) +
-                                        scaleIn(initialScale = 0.96f, animationSpec = tween(200)))
-                                        .togetherWith(fadeOut(tween(100)))
+                                    fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
                                 }
                             },
                             label = "tab",
@@ -563,7 +559,7 @@ fun AppShell(
                                 Box(modifier = Modifier.fillMaxSize()) {
                                 }
                             } else {
-                            // Nested presence transition: tab switches fade/scale above;
+                            // Nested presence transition: tab switches fade above;
                             // USB attach/detach fades the empty state within the same tab.
                             val visible = shellTabContentVisible(target, state.presence, pickOpen)
                             AnimatedContent(
@@ -572,10 +568,7 @@ fun AppShell(
                                     if (reducedMotion) {
                                         EnterTransition.None togetherWith ExitTransition.None
                                     } else {
-                                        (fadeIn(tween(200)) + scaleIn(
-                                            initialScale = 0.96f,
-                                            animationSpec = tween(200),
-                                        )).togetherWith(fadeOut(tween(100)))
+                                        fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
                                     }
                                 },
                                 label = "presence",
@@ -2043,7 +2036,6 @@ internal fun SectionCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .animateContentSize()
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {

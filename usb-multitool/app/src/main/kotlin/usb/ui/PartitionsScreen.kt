@@ -8,20 +8,12 @@ import usb.fs.FilesystemUsageReason
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
-import usb.partition.RawSchemeProblem
 import usb.partition.TableScheme
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
@@ -62,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TextButton
@@ -72,14 +65,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -89,11 +80,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.text.KeyboardOptions
@@ -136,9 +124,6 @@ fun PartitionsScreen(
     var labelText by remember { mutableStateOf("") }
     var filesystemMenuTarget by remember { mutableStateOf<PartitionBinding?>(null) }
     val partitionGeometryKey = state.partitions.map { it.id to (it.startLba to it.sectorCount) }
-    var schemeChangePrompt by remember(state.device, state.partitionScheme, partitionGeometryKey) {
-        mutableStateOf<PartitionScheme?>(null)
-    }
     // LBA 0 is always vetoed by the range guard, so the whole-disk chip can never
     // write; default to the selected partition instead of a permanently blocked mode.
     var rawTargetMode by remember(state.device?.identity) { mutableStateOf(RawTargetMode.Partition) }
@@ -147,13 +132,15 @@ fun PartitionsScreen(
     }
     val namesSupported = state.partitionScheme?.let { PartitionName.supported(it) } == true
     // Whole-MiB-aligned start of every free region; the create dialog picks among them.
-    val align = mibAlignSectors(state.diskSectorSize)
-    val creatableRegions = state.freeRegions.mapNotNull { region ->
-        val skip = align?.let { (it - region.startLba % it) % it } ?: 0UL
-        if (skip < region.sectorCount) {
-            Triple(region, region.startLba + skip, region.sectorCount - skip)
-        } else {
-            null
+    val creatableRegions = remember(state.freeRegions, state.diskSectorSize) {
+        val align = mibAlignSectors(state.diskSectorSize)
+        state.freeRegions.mapNotNull { region ->
+            val skip = align?.let { (it - region.startLba % it) % it } ?: 0UL
+            if (skip < region.sectorCount) {
+                Triple(region, region.startLba + skip, region.sectorCount - skip)
+            } else {
+                null
+            }
         }
     }
     fun openCreate(region: FreeRegionUi, start: ULong, sectors: ULong) {
@@ -237,15 +224,7 @@ fun PartitionsScreen(
         // 0..max range would claim boundaries the fields do not hold.
         val sliderVisible =
             alignSectors != null && firstAligned != null && startOffsetSectors != null &&
-            availableMib >= 1UL && sliderStart < availableMib
-        val tailSectors =
-            if (alignSectors != null && firstAligned != null && availableMib > 0UL &&
-                firstAligned + availableMib * alignSectors < regionEnd
-            ) {
-                regionEnd - (firstAligned + availableMib * alignSectors)
-            } else {
-                0UL
-            }
+            availableMib >= 1UL && sliderStart <= availableMib
 
         AlertDialog(
             onDismissRequest = { createRegion = null },
@@ -262,31 +241,6 @@ fun PartitionsScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (!(useAllFreeSpace && firstAligned != null && firstAligned < regionEnd)) {
-                        Text(
-                            text = if (alignSectors == null || firstAligned == null) {
-                                stringResource(
-                                    R.string.partitions_create_free_sectors,
-                                    region.sectorCount.toLong(),
-                                    state.diskSectorSize,
-                                )
-                            } else if (firstAligned >= regionEnd) {
-                                stringResource(R.string.partitions_create_no_aligned_space)
-                            } else {
-                                stringResource(
-                                    R.string.partitions_create_free_range,
-                                    firstAligned.toLong(),
-                                    (regionEnd - 1UL).toLong(),
-                                    alignSectors.toLong(),
-                                    state.diskSectorSize,
-                                )
-                            },
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontFeatureSettings = "tnum",
-                            ),
-                        )
-                    }
                     if (creatableRegions.size > 1) {
                         CompactChoice(
                             options = creatableRegions.map { (candidate, candidateStart, candidateSectors) ->
@@ -302,51 +256,52 @@ fun PartitionsScreen(
                             enabled = state.actionsEnabled,
                         )
                     }
-                    if (firstAligned != null && firstAligned < regionEnd) {
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            SegmentedButton(
-                                selected = useAllFreeSpace,
-                                onClick = {
-                                    useAllFreeSpace = true
-                                    startLbaInput = firstAligned.toString()
-                                    sectorCount = (regionEnd - firstAligned).toString()
-                                },
-                                enabled = state.actionsEnabled,
-                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                Text(stringResource(R.string.partitions_create_mode_all))
-                            }
-                            SegmentedButton(
-                                selected = !useAllFreeSpace,
-                                onClick = { useAllFreeSpace = false },
-                                enabled = state.actionsEnabled,
-                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                Text(stringResource(R.string.partitions_create_mode_custom))
-                            }
-                        }
-                    }
-                    if (useAllFreeSpace &&
-                        firstAligned != null && firstAligned < regionEnd
-                    ) {
+                    if (alignSectors == null || firstAligned == null || firstAligned >= regionEnd) {
                         Text(
-                            text = stringResource(
-                                R.string.partitions_create_all_summary,
-                                firstAligned.toLong(),
-                                (regionEnd - 1UL).toLong(),
-                                (regionEnd - firstAligned).toLong(),
-                            ),
+                            text = if (alignSectors == null || firstAligned == null) {
+                                stringResource(
+                                    R.string.partitions_create_free_sectors,
+                                    region.sectorCount.toLong(),
+                                    state.diskSectorSize,
+                                )
+                            } else {
+                                stringResource(R.string.partitions_create_no_aligned_space)
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontFeatureSettings = "tnum",
                             ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.error,
                         )
+                    } else {
+                        SwitchRow(
+                            label = stringResource(R.string.partitions_create_mode_custom),
+                            checked = !useAllFreeSpace,
+                            enabled = state.actionsEnabled,
+                            onCheckedChange = { custom ->
+                                useAllFreeSpace = !custom
+                                if (!custom) {
+                                    startLbaInput = firstAligned.toString()
+                                    sectorCount = (regionEnd - firstAligned).toString()
+                                }
+                            },
+                        )
+                        if (useAllFreeSpace) {
+                            Text(
+                                text = stringResource(
+                                    R.string.partitions_create_all_summary,
+                                    firstAligned.toLong(),
+                                    (regionEnd - 1UL).toLong(),
+                                    (regionEnd - firstAligned).toLong(),
+                                ),
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
-                    // Outside the scrolling block on purpose: dragging a thumb must not
-                    // scroll the dialog, and the handles stay above the fold.
                     if (!useAllFreeSpace &&
                         sliderVisible && alignSectors != null && firstAligned != null
                     ) {
@@ -355,37 +310,25 @@ fun PartitionsScreen(
                         val maxMibFloat = availableMib.toFloat()
                         val safeStart = sliderStart.toFloat()
                         val safeEnd = sliderEnd.toFloat()
-                        val startLbaForA11y = regionBase + sliderStart * mibSectors
-                        // Inclusive last sector: matches the confirmation, which prints +count-1.
-                        // Compare against the region base, not absolute zero: sliderEnd = 0 means
-                        // an empty range, where subtracting would name the sector before it.
-                        val endLbaForA11y = (regionBase + sliderEnd * mibSectors).let {
-                            if (it > regionBase) it - 1UL else it
-                        }
+                        val startLba = regionBase + sliderStart * mibSectors
+                        val endBoundaryLba = regionBase + sliderEnd * mibSectors
+                        val sectorBytes = state.diskSectorSize.toULong()
+                        val startBytes = startLba * sectorBytes
+                        val endBytes = endBoundaryLba * sectorBytes
+                        val lengthBytes = endBytes - startBytes
+                        val startLabel = DeviceIdentity.formatCapacity(startBytes, state.sizeUnit)
+                        val endLabel = DeviceIdentity.formatCapacity(endBytes, state.sizeUnit)
+                        val lengthLabel = DeviceIdentity.formatCapacity(lengthBytes, state.sizeUnit)
                         val rangeA11y = stringResource(R.string.partitions_range_a11y)
                         val rangeState = stringResource(
                             R.string.partitions_range_a11y_state,
-                            sliderStart.toLong(),
-                            startLbaForA11y.toLong(),
-                            sliderEnd.toLong(),
-                            endLbaForA11y.toLong(),
-                            (sliderEnd - sliderStart).toLong(),
+                            startLabel,
+                            startLba.toLong(),
+                            endLabel,
+                            endBoundaryLba.toLong(),
+                            lengthLabel,
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = stringResource(R.string.partitions_range_label),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            // Uniform MiB axis of the free region only — not the partition strip's equal segments.
-                            MibBoundaryTicks(
-                                maxMib = availableMib,
-                                startMib = sliderStart,
-                                endMib = sliderEnd,
-                                regionStartLba = regionBase,
-                                // Last sector the right handle can select, not the region tail.
-                                rightEdgeLastLba = regionBase + availableMib * mibSectors - 1UL,
-                            )
                             RangeSlider(
                                 value = safeStart..safeEnd,
                                 onValueChange = { range ->
@@ -421,9 +364,9 @@ fun PartitionsScreen(
                             Text(
                                 text = stringResource(
                                     R.string.partitions_range_caption,
-                                    sliderStart.toLong(),
-                                    sliderEnd.toLong(),
-                                    (sliderEnd - sliderStart).toLong(),
+                                    startLabel,
+                                    endLabel,
+                                    lengthLabel,
                                 ),
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontFamily = FontFamily.Monospace,
@@ -436,100 +379,8 @@ fun PartitionsScreen(
                     Column(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (!useAllFreeSpace) {
-                            InfoHint(
-                                text = stringResource(R.string.partitions_range_short),
-                                infoTitle = stringResource(R.string.partitions_range_info_title),
-                                infoText = stringResource(R.string.partitions_range_info_text),
-                            )
+                        if (namesSupported) {
                             OutlinedTextField(
-                                value = startLbaInput,
-                                onValueChange = { input ->
-                                    startLbaInput = input.filter { it.isDigit() }
-                                },
-                                label = { Text(stringResource(R.string.partitions_start_lba)) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Number,
-                                ),
-                                isError = startLbaInput.isNotBlank() && !(isAligned && inRegion),
-                                supportingText = {
-                                    Text(
-                                        if (alignSectors != null) {
-                                            stringResource(
-                                                R.string.partitions_start_support,
-                                                alignSectors.toLong(),
-                                            )
-                                        } else {
-                                            stringResource(R.string.partitions_align_unavailable)
-                                        },
-                                    )
-                                },
-                                trailingIcon = {
-                                    TextButton(
-                                        onClick = {
-                                            firstAligned?.let { startLbaInput = it.toString() }
-                                        },
-                                        enabled = firstAligned != null,
-                                    ) {
-                                        Text(
-                                            stringResource(R.string.partitions_align),
-                                            style = MaterialTheme.typography.labelSmall,
-                                        )
-                                    }
-                                },
-                            )
-                            OutlinedTextField(
-                                value = sectorCount,
-                                onValueChange = { input ->
-                                    sectorCount = input.filter { it.isDigit() }
-                                },
-                                label = { Text(stringResource(R.string.partitions_size_sectors)) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Number,
-                                ),
-                                isError = sectorCount.isNotBlank() &&
-                                    (parsedCount == null || parsedCount == 0UL || !fits),
-                                supportingText = {
-                                    if (sectorCount.isNotBlank() &&
-                                        (parsedCount == null || parsedCount == 0UL || !fits)
-                                    ) {
-                                        Text(stringResource(R.string.partitions_size_support))
-                                    }
-                                },
-                            )
-                            if (fits && parsedStart != null && parsedCount != null) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.partitions_lba_range,
-                                        parsedStart.toLong(),
-                                        (parsedStart + parsedCount - 1UL).toLong(),
-                                        parsedCount.toLong(),
-                                    ),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (tailSectors > 0UL) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.partitions_free_tail,
-                                        tailSectors.toLong(),
-                                    ),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        when {
-                            namesSupported -> OutlinedTextField(
                                 value = createName,
                                 onValueChange = { createName = it.take(PartitionName.MAX_UTF16_UNITS * 2) },
                                 label = { Text(stringResource(R.string.partitions_name_label)) },
@@ -539,8 +390,6 @@ fun PartitionsScreen(
                                     Text(stringResource(R.string.partitions_name_support))
                                 },
                             )
-                            state.partitionScheme == TableScheme.MBR ->
-                                EmptyHint(stringResource(R.string.partitions_mbr_no_name))
                         }
                         CompactChoice<FilesystemId?>(
                             options = listOf<Pair<FilesystemId?, String>>(
@@ -560,8 +409,6 @@ fun PartitionsScreen(
                             OutlinedTextField(
                                 value = createLabel,
                                 onValueChange = {
-                                    // The engine limit only shapes the field; the reducer
-                                    // re-validates with VolumeLabel.problem before writing.
                                     createLabel = it.take(
                                         formatId?.let { id -> VolumeLabel.maxChars(id) }
                                             ?: VolumeLabel.MAX_CHARS,
@@ -580,7 +427,7 @@ fun PartitionsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = valid && state.actionsEnabled,
+                    enabled = valid && state.actionsEnabled && (useAllFreeSpace || sliderVisible),
                     onClick = {
                         onIntent(
                             UiIntent.RequestCreatePartition(
@@ -715,21 +562,15 @@ fun PartitionsScreen(
 
 
     val selected = state.selectedPartition()
-    val orderedPartitions = state.partitions.sortedWith(
-        compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id },
-    )
+    val orderedPartitions = remember(state.partitions) {
+        state.partitions.sortedWith(
+            compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id },
+        )
+    }
     val currentScheme = state.partitionScheme?.toPartitionScheme()
     val schemeBlocked = state.partitionTableAmbiguous || state.partitionTableDamaged || !state.tableValid
     val blockedHint = writeBlockHint(state)
     val screenScroll = rememberScrollState()
-    val revealRequester = remember { BringIntoViewRequester() }
-    var revealToken by remember { mutableStateOf(0) }
-    LaunchedEffect(revealToken) {
-        if (revealToken > 0 && state.selectedPartitionId != null) {
-            withFrameNanos { }
-            revealRequester.bringIntoView()
-        }
-    }
     val latestState by rememberUpdatedState(state)
     LaunchedEffect(
         state.device,
@@ -744,7 +585,8 @@ fun PartitionsScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(bottom = 8.dp),
         ) {
             PartitionDropdown(
                 partitions = state.partitions,
@@ -811,7 +653,11 @@ fun PartitionsScreen(
                                     .clickable(
                                         enabled = state.actionsEnabled && !schemeBlocked,
                                         role = Role.Button,
-                                        onClick = { schemeChangePrompt = capsuleTarget },
+                                        onClick = {
+                                            onIntent(
+                                                UiIntent.RequestInitializePartitionTable(capsuleTarget),
+                                            )
+                                        },
                                     )
                                     .alpha(if (state.actionsEnabled && !schemeBlocked) 1f else 0.38f),
                             ) {
@@ -876,6 +722,29 @@ fun PartitionsScreen(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                Text(
+                    text = stringResource(R.string.partitions_size_unit_label),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = state.sizeUnit == SizeUnit.Decimal,
+                        onClick = { onIntent(UiIntent.SetSizeUnit(SizeUnit.Decimal)) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(stringResource(R.string.size_unit_mb))
+                    }
+                    SegmentedButton(
+                        selected = state.sizeUnit == SizeUnit.Binary,
+                        onClick = { onIntent(UiIntent.SetSizeUnit(SizeUnit.Binary)) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(stringResource(R.string.size_unit_mib))
+                    }
                 }
                 if (!state.partitionTableRecognized &&
                     state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
@@ -943,19 +812,7 @@ fun PartitionsScreen(
                     )
                 }
                 if (state.partitions.isNotEmpty() || state.freeRegions.any { it.sectorCount > 0UL }) {
-                    PartitionSelectStrip(
-                        state = state,
-                        onIntent = { intent ->
-                            onIntent(intent)
-                            if (intent is UiIntent.SelectPartition) revealToken++
-                        },
-                        onSelectFree = { region ->
-                            if (state.tableValid && !state.partitionTableDamaged) {
-                                creatableRegions.firstOrNull { it.first == region }
-                                    ?.let { openCreate(it.first, it.second, it.third) }
-                            }
-                        },
-                    )
+                    PartitionSelectStrip(state = state)
                 }
 
                 Column(
@@ -981,41 +838,32 @@ fun PartitionsScreen(
                         val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
                         val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
                         val rowSpace = state.filesystemSpace(partition)
-                        Surface(
-                            shape = MaterialTheme.shapes.small,
-                            color = if (isSelected) {
-                                MaterialTheme.colorScheme.secondaryContainer
-                            } else {
-                                Color.Transparent
-                            },
-                            contentColor = if (isSelected) {
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            shadowElevation = 0.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .then(
-                                    if (isSelected) {
-                                        Modifier.bringIntoViewRequester(revealRequester)
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                                .selectable(
-                                    selected = isSelected,
-                                    enabled = state.actionsEnabled,
-                                    role = Role.RadioButton,
-                                    onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
-                                ),
+                        val rowStart = partition.startLba
+                        val rowCount = partition.sectorCount
+                        val rowEnd = if (rowStart != null && rowCount != null &&
+                            rowCount > 0UL &&
+                            rowStart <= ULong.MAX_VALUE - (rowCount - 1UL)
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
+                            rowStart + rowCount - 1UL
+                        } else {
+                            null
+                        }
+                        val rowRange = if (rowStart != null && rowEnd != null) {
+                            stringResource(
+                                R.string.partitions_info_lba_range_value,
+                                rowStart.toLong(),
+                                rowEnd.toLong(),
+                            )
+                        } else {
+                            null
+                        }
+                        val rowContent = if (isSelected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                        ListItem(
+                            headlineContent = {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1023,8 +871,8 @@ fun PartitionsScreen(
                                 ) {
                                     Text(
                                         text = rowTitle,
-                                        style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = rowContent,
                                         modifier = Modifier.weight(1f),
                                     )
                                     if (partition.filesystemLabel.isNotEmpty()) {
@@ -1033,54 +881,12 @@ fun PartitionsScreen(
                                     if (partition.displayEfi) {
                                         Badge(text = stringResource(R.string.partitions_badge_efi))
                                     }
-                                    if (accessDescription != null && readOnly) {
-                                        Box(
-                                            modifier = Modifier.clearAndSetSemantics {
-                                                contentDescription = accessDescription
-                                            },
-                                        ) {
-                                            Badge(
-                                                text = stringResource(R.string.partitions_access_ro),
-                                                container = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                                content = writeAccessTone(readWrite = false),
-                                            )
-                                        }
-                                    }
                                 }
-                                Text(
-                                    text = partitionUsageLabel(state, partition, rowSpace),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
-                                    color = if (isSelected) {
-                                        MaterialTheme.colorScheme.onSecondaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                )
-                                val rowStart = partition.startLba
-                                val rowCount = partition.sectorCount
-                                val rowEnd = if (rowStart != null && rowCount != null &&
-                                    rowCount > 0UL &&
-                                    rowStart <= ULong.MAX_VALUE - (rowCount - 1UL)
-                                ) {
-                                    rowStart + rowCount - 1UL
-                                } else {
-                                    null
-                                }
-                                val rowRange = if (rowStart != null && rowEnd != null) {
-                                    stringResource(
-                                        R.string.partitions_info_lba_range_value,
-                                        rowStart.toLong(),
-                                        rowEnd.toLong(),
-                                    )
-                                } else {
-                                    null
-                                }
-                                if (rowRange != null) {
+                            },
+                            supportingContent = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(
-                                        text = rowRange,
+                                        text = partitionUsageLabel(state, partition, rowSpace),
                                         style = MaterialTheme.typography.labelSmall.copy(
                                             fontFamily = FontFamily.Monospace,
                                             fontFeatureSettings = "tnum",
@@ -1091,9 +897,58 @@ fun PartitionsScreen(
                                             MaterialTheme.colorScheme.onSurfaceVariant
                                         },
                                     )
+                                    rowRange?.let {
+                                        Text(
+                                            text = it,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontFeatureSettings = "tnum",
+                                            ),
+                                            color = if (isSelected) {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                        )
+                                    }
                                 }
-                            }
-                        }
+                            },
+                            trailingContent = if (accessDescription != null && readOnly) {
+                                {
+                                    Box(
+                                        modifier = Modifier.clearAndSetSemantics {
+                                            contentDescription = accessDescription
+                                        },
+                                    ) {
+                                        Badge(
+                                            text = stringResource(R.string.partitions_access_ro),
+                                            container = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                            content = writeAccessTone(readWrite = false),
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            },
+                            colors = ListItemDefaults.colors(
+                                containerColor = if (isSelected) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    Color.Transparent
+                                },
+                                headlineColor = rowContent,
+                                supportingColor = rowContent,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .selectable(
+                                    selected = isSelected,
+                                    enabled = state.actionsEnabled,
+                                    role = Role.RadioButton,
+                                    onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
+                                ),
+                        )
                     }
                 }
                 FilledTonalButton(
@@ -1112,54 +967,47 @@ fun PartitionsScreen(
 
 
 
-            AnimatedContent(
-                targetState = selected?.id,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "selectedPartitionInfo",
-            ) { selectedId ->
-                val live = orderedPartitions.firstOrNull { it.id == selectedId }
-                if (live != null) {
-                    SelectedPartitionCard(
-                        state = state,
-                        selected = live,
-                        blockedHint = blockedHint,
-                        showBlockedHint = !(
-                            live.readOnly && live.displayEfi &&
-                                !state.partitionTableAmbiguous &&
-                                !state.partitionTableDamaged &&
-                                state.tableValid
-                        ),
-                        namesSupported = namesSupported,
-                        onIntent = onIntent,
-                        onRename = { part ->
-                            state.device?.let { device ->
-                                renameTargetId = part.id
-                                renameBinding = PartitionBinding(
-                                    device = device,
-                                    partitionId = part.id,
-                                    startLba = part.startLba,
-                                    sectorCount = part.sectorCount,
-                                )
-                                renameText = part.name
-                            }
-                        },
-                        onLabel = { part ->
-                            state.device?.let { device ->
-                                labelTargetId = part.id
-                                labelBinding = PartitionBinding(
-                                    device = device,
-                                    partitionId = part.id,
-                                    startLba = part.startLba,
-                                    sectorCount = part.sectorCount,
-                                )
-                                labelText = part.volumeLabel.orEmpty()
-                            }
-                        },
-                        filesystemMenuTarget = filesystemMenuTarget,
-                        onFilesystemMenu = { filesystemMenuTarget = it },
-                        latestState = latestState,
-                    )
-                }
+            selected?.let { live ->
+                SelectedPartitionCard(
+                    state = state,
+                    selected = live,
+                    blockedHint = blockedHint,
+                    showBlockedHint = !(
+                        live.readOnly && live.displayEfi &&
+                            !state.partitionTableAmbiguous &&
+                            !state.partitionTableDamaged &&
+                            state.tableValid
+                    ),
+                    namesSupported = namesSupported,
+                    onIntent = onIntent,
+                    onRename = { part ->
+                        state.device?.let { device ->
+                            renameTargetId = part.id
+                            renameBinding = PartitionBinding(
+                                device = device,
+                                partitionId = part.id,
+                                startLba = part.startLba,
+                                sectorCount = part.sectorCount,
+                            )
+                            renameText = part.name
+                        }
+                    },
+                    onLabel = { part ->
+                        state.device?.let { device ->
+                            labelTargetId = part.id
+                            labelBinding = PartitionBinding(
+                                device = device,
+                                partitionId = part.id,
+                                startLba = part.startLba,
+                                sectorCount = part.sectorCount,
+                            )
+                            labelText = part.volumeLabel.orEmpty()
+                        }
+                    },
+                    filesystemMenuTarget = filesystemMenuTarget,
+                    onFilesystemMenu = { filesystemMenuTarget = it },
+                    latestState = latestState,
+                )
             }
 
             state.pendingEfiWriteBinding?.let { binding ->
@@ -1497,7 +1345,8 @@ private fun SelectedPartitionCard(
         )
         val usage = state.partitionUsageSnapshot(selected)?.usage
         val freeSpaceText = when (usage) {
-            is FilesystemUsage.Known -> DeviceIdentity.formatCapacity(usage.space.freeBytes)
+            is FilesystemUsage.Known ->
+                DeviceIdentity.formatCapacity(usage.space.freeBytes, state.sizeUnit)
             else -> when (state.partitionUsagePhase(selected)) {
                 FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
                 FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
@@ -1508,21 +1357,6 @@ private fun SelectedPartitionCard(
         FactRow(
             label = stringResource(R.string.partitions_strip_free),
             value = freeSpaceText,
-            enabled = false,
-        )
-        val access = state.partitionWriteAccess(selected)
-        val accessText = when (access) {
-            PartitionWriteAccess.ReadOnly,
-            PartitionWriteAccess.DriverReadOnly,
-            -> stringResource(R.string.partitions_write_state_read_only)
-            PartitionWriteAccess.ReadWrite ->
-                stringResource(R.string.partitions_write_state_read_write)
-            PartitionWriteAccess.Unknown ->
-                stringResource(R.string.partitions_write_state_unknown)
-        }
-        FactRow(
-            label = stringResource(R.string.partitions_info_access_label),
-            value = accessText,
             enabled = false,
         )
         if (selected.readOnly) {
@@ -2303,9 +2137,10 @@ private fun assessRawRange(
 }
 
 /**
- * Exact LBA overview: widths follow diskSectorCount with leading/internal/trailing gaps.
- * Segments under 48dp stay noninteractive overview; partition list and Create button remain
- * the 48dp selection/create fallback. Invalid geometry shows a localized reason instead of a map.
+ * Exact LBA overview: proportional widths follow diskSectorCount with
+ * leading/internal/trailing gaps, fill the row, and carry no labels. Selection stays in
+ * the partition list and dropdown, so tiny segments need no fabricated touch target.
+ * Invalid geometry shows a localized reason instead of a map.
  */
 private data class StripSegment(
     val partition: PartitionTab? = null,
@@ -2326,20 +2161,10 @@ private fun segmentEnd(segment: StripSegment): ULong =
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PartitionSelectStrip(
-    state: AppUiState,
-    onIntent: (UiIntent) -> Unit,
-    onSelectFree: (FreeRegionUi) -> Unit,
-) {
+private fun PartitionSelectStrip(state: AppUiState) {
     val partitions = state.partitions
         .filter { (it.sectorCount ?: 0uL) > 0uL }
         .sortedWith(compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id })
-    val creatableStarts = mibAlignSectors(state.diskSectorSize)?.let { align ->
-        state.freeRegions.mapNotNull { region ->
-            val skip = (align - region.startLba % align) % align
-            region.startLba.takeIf { skip < region.sectorCount }
-        }.toSet()
-    }.orEmpty()
     val diskSectorCount = state.device?.capacityBytes
         ?.div(state.diskSectorSize.coerceAtLeast(1).toULong())
         ?.takeIf { it > 0UL }
@@ -2351,7 +2176,8 @@ private fun PartitionSelectStrip(
     val geometryValid = sourceSegments.zipWithNext().all { (a, b) ->
         segmentEnd(a) >= segmentStart(a) && segmentEnd(a) <= segmentStart(b)
     } && sourceSegments.all {
-        segmentStart(it) <= diskSectorCount && segmentEnd(it) >= segmentStart(it) && segmentEnd(it) <= diskSectorCount
+        segmentStart(it) <= diskSectorCount && segmentEnd(it) >= segmentStart(it) &&
+            segmentEnd(it) <= diskSectorCount
     }
     val segments = if (geometryValid) {
         buildList {
@@ -2376,129 +2202,29 @@ private fun PartitionSelectStrip(
         return
     }
     if (segments.isEmpty()) return
-    val density = LocalDensity.current
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val totalSectors = diskSectorCount
-        val availablePx = with(density) { maxWidth.toPx() }
-        val minimumPx = with(density) { 48.dp.toPx() }
-        // Keep the real LBA proportions for usable segments, but never shrink a segment
-        // below 48 dp. The resulting track may be wider than the viewport and scrolls
-        // horizontally; every partition/free segment keeps a real touch target.
-        val widthsPx = segments.map { segment ->
-            (segmentSpan(segment).toDouble() / totalSectors.toDouble() * availablePx)
-                .toFloat().coerceAtLeast(minimumPx)
-        }
-        val widths = widthsPx.map { with(density) { it.toDp() } }
-        val totalWidth = with(density) { widthsPx.sum().toDp() }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-        ) {
-            Row(
-                modifier = Modifier
-                    .width(totalWidth)
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant,
-                        RoundedCornerShape(6.dp),
-                    )
-                    .selectableGroup(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-            segments.forEachIndexed { index, segment ->
-                val partition = segment.partition
-                val isSelected = partition?.id == state.selectedPartitionId
-                val description = if (partition != null) {
-                    stringResource(
-                        R.string.partitions_strip_item_a11y_name,
-                        partition.name.ifBlank { partition.id },
-                    )
-                } else if (segment.free != null) {
-                    listOfNotNull(
-                        stringResource(R.string.partitions_strip_free),
-                        lbaRangeLabel(segment.free.startLba, segment.free.sectorCount),
-                    ).joinToString(" · ")
-                } else {
-                    stringResource(R.string.partitions_strip_unallocated)
-                }
-                val freeSelectable = segment.free?.let { free ->
-                    state.tableValid && !state.partitionTableDamaged && free.startLba in creatableStarts
-                } == true
-                val fill = when {
-                    partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
-                    partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
-                    segment.free != null -> MaterialTheme.colorScheme.surfaceContainerLow
-                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
-                }
-                val labelColor = when {
-                    isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
-                    partition != null -> MaterialTheme.colorScheme.onSurface
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                }
-                val label = when {
-                    partition != null -> partition.name.ifBlank { partition.id }
-                    segment.free != null -> stringResource(R.string.partitions_strip_free)
-                    else -> ""
-                }
-                val interactive = widths[index] >= 48.dp && (
-                    partition != null || (segment.free != null && freeSelectable)
-                )
-                Box(
-                    modifier = Modifier
-                        .width(widths[index])
-                        .fillMaxHeight()
-                        .background(fill)
-                        .then(
-                            when {
-                                isSelected -> Modifier.border(2.dp, MaterialTheme.colorScheme.primary)
-                                segment.free != null -> Modifier.border(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outlineVariant,
-                                )
-                                else -> Modifier
-                            },
-                        )
-                        .then(
-                            when {
-                                interactive && partition != null -> Modifier.selectable(
-                                    selected = isSelected,
-                                    enabled = state.actionsEnabled,
-                                    role = Role.RadioButton,
-                                    onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
-                                )
-                                interactive && segment.free != null -> Modifier.clickable(
-                                    enabled = state.actionsEnabled,
-                                    role = Role.Button,
-                                    onClick = { onSelectFree(segment.free) },
-                                )
-                                else -> Modifier.clearAndSetSemantics { }
-                            },
-                        )
-                        .then(
-                            if (interactive) {
-                                Modifier.semantics { contentDescription = description }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (label.isNotEmpty() && widths[index] >= 48.dp) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = labelColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 4.dp),
-                        )
-                    }
-                }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp)),
+    ) {
+        segments.forEach { segment ->
+            val partition = segment.partition
+            val isSelected = partition?.id == state.selectedPartitionId
+            val fill = when {
+                partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
+                partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
+                segment.free != null -> MaterialTheme.colorScheme.surfaceContainerLow
+                else -> MaterialTheme.colorScheme.surfaceContainerHighest
             }
-        }
+            Box(
+                modifier = Modifier
+                    .weight(
+                        (segmentSpan(segment).toDouble() / diskSectorCount.toDouble()).toFloat(),
+                    )
+                    .fillMaxHeight()
+                    .background(fill),
+            )
         }
     }
     FlowRow(
@@ -2506,6 +2232,10 @@ private fun PartitionSelectStrip(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        StripLegend(
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            label = stringResource(R.string.partitions_strip_legend_selected),
+        )
         StripLegend(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             label = stringResource(R.string.partitions_strip_legend_partition),
@@ -2551,114 +2281,14 @@ private fun StripLegend(color: Color, label: String, outlined: Boolean = false) 
         )
     }
 }
-// PAR/RAW matrix: layout title, sorted LBA rows, 48dp abstract selectable/free segments,
-// sticky selection, GPT/MBR warning actions, create-in-list, EFI policy, bound editors,
+// PAR/RAW matrix: layout title, sorted LBA rows, proportional unlabeled map segments,
+// pinned selection, GPT/MBR warning actions, create-in-list, EFI policy, bound editors,
 // derived raw end, overlap list, probe and dual source pickers are wired above.
 
 
 
 
 
-
-/**
- * Default Material3 range-slider thumb width. Verified in the resolved artifact
- * material3 1.4.0: `SliderTokens.HandleWidth = 4.dp` (HandleHeight = 44.dp), and
- * `RangeSliderState.updateMinMaxPx` maps values between `startThumbWidth / 2` and
- * `totalWidth - endThumbWidth / 2`. The tick inset is that same half width, so marks
- * line up with the handles instead of a guessed gap.
- */
-private val SliderThumbWidth = 4.dp
-
-/**
- * Visible MiB alignment marks for the create-partition slider, with the two ends of the
- * selectable MiB span labelled exactly: the first usable aligned LBA and the last sector
- * the right handle can select. The axis is uniform MiB of the free region (convenience
- * first), never proportional disk LBA widths; the disk map keeps LBA geometry separately.
- * These ends are not necessarily neighbouring block edges — an unaligned region start skips
- * a few sectors and an unaligned tail stays outside the MiB span. Marks are thinned on large
- * regions, so the labels name the selectable ends instead of promising a full 1 MiB grid.
- */
-@Composable
-private fun MibBoundaryTicks(
-    maxMib: ULong,
-    startMib: ULong,
-    endMib: ULong,
-    regionStartLba: ULong,
-    rightEdgeLastLba: ULong,
-) {
-    if (maxMib == 0UL) return
-    val marks = remember(maxMib) { PartitionRangeTicks.marks(maxMib) }
-    val tickColor = MaterialTheme.colorScheme.outline
-    val activeColor = MaterialTheme.colorScheme.primary
-    val a11y = stringResource(R.string.partitions_range_ticks_a11y)
-    val trackInset = SliderThumbWidth / 2
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { contentDescription = a11y },
-    ) {
-        Canvas(
-            Modifier
-                .fillMaxWidth()
-                .height(14.dp),
-        ) {
-            // Slider thumbs inset the usable track; ticks use the same span so marks line up.
-            val inset = trackInset.toPx()
-            val trackWidth = (size.width - 2f * inset).coerceAtLeast(1f)
-            val span = maxMib.toDouble()
-            marks.forEach { mark ->
-                val x = inset + (mark.toDouble() / span).toFloat() * trackWidth
-                val active = mark in startMib..endMib
-                // The two ends are the selectable span limits, not MiB steps: draw them heavier.
-                val spanEnd = mark == 0UL || mark == maxMib
-                drawLine(
-                    color = if (active || spanEnd) activeColor else tickColor,
-                    start = Offset(x, 0f),
-                    end = Offset(x, size.height),
-                    strokeWidth = when {
-                        spanEnd -> 3.dp.toPx()
-                        active -> 2.dp.toPx()
-                        else -> 1.dp.toPx()
-                    },
-                )
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = trackInset),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = stringResource(
-                    R.string.partitions_range_tick_edge_label,
-                    0L,
-                    regionStartLba.toLong(),
-                ),
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontFeatureSettings = "tnum",
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = stringResource(
-                    R.string.partitions_range_tick_edge_label,
-                    maxMib.toLong(),
-                    rightEdgeLastLba.toLong(),
-                ),
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontFeatureSettings = "tnum",
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
 
 /** Size in bytes from the live table, or null when the geometry cannot express it. */
 private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULong? {
@@ -2677,7 +2307,11 @@ private fun partitionUsageLabel(
 ): String {
     when (val usage = state.partitionUsageSnapshot(partition)?.usage) {
         is FilesystemUsage.Known ->
-            return DeviceIdentity.formatCapacityPair(usage.space.usedBytes, usage.space.totalBytes)
+            return DeviceIdentity.formatCapacityPair(
+                usage.space.usedBytes,
+                usage.space.totalBytes,
+                state.sizeUnit,
+            )
         is FilesystemUsage.Unavailable -> return stringResource(
             when (usage.reason) {
                 FilesystemUsageReason.UnsupportedFilesystem ->
@@ -2698,7 +2332,7 @@ private fun partitionUsageLabel(
         FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
         null -> {
             val max = space?.totalBytes ?: partitionSizeBytes(state, partition)
-            if (max == null) "—" else "— / ${DeviceIdentity.formatCapacity(max)}"
+            if (max == null) "—" else "— / ${DeviceIdentity.formatCapacity(max, state.sizeUnit)}"
         }
     }
 }
@@ -2748,7 +2382,7 @@ private fun diskGeometry(state: AppUiState): DiskGeometry? {
     val totalSectors = totalBytes / sectorSize
     if (totalSectors == 0UL) return null
     return DiskGeometry(
-        sizeLabel = DeviceIdentity.formatCapacity(totalBytes),
+        sizeLabel = DeviceIdentity.formatCapacity(totalBytes, state.sizeUnit),
         totalSectors = totalSectors,
     )
 }
