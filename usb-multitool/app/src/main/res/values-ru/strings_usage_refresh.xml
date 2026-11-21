@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Общие для Files и Partitions фазы измерения свободного места.
+      Родной запрос space() — один блокирующий вызов без прогресса,
+      поэтому строки называют только фазу и не подразумевают процент.
+    -->
+    <string name="usage_queued">В очереди на измерение</string>
+    <string name="usage_waiting">Ожидание доступа</string>
+    <string name="usage_calculating">Вычисление свободного места…</string>
+</resources>

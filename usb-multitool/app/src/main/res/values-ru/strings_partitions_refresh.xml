@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Таблетка числа разделов у заголовка «Разметка». -->
+    <string name="partitions_count_badge">%1$d</string>
+    <plurals name="partitions_count_a11y">
+        <item quantity="one">%1$d раздел</item>
+        <item quantity="few">%1$d раздела</item>
+        <item quantity="many">%1$d разделов</item>
+        <item quantity="other">%1$d раздела</item>
+    </plurals>
+    <!-- Геометрия под «Разметка»: только размер и блоки/LBA. -->
+    <string name="partitions_geometry_size_label">Размер</string>
+    <string name="partitions_geometry_blocks_label">Блоки / LBA</string>
+    <string name="partitions_geometry_blocks_value">%1$s</string>
+    <!-- Стрелка капсулы схемы (текст, не иконка). -->
+    <string name="partitions_scheme_arrow">→</string>
+    <!-- Текст бейджа EFI. -->
+    <string name="partitions_badge_efi">EFI</string>
+    <!-- Компактная подпись под переключателем записи. -->
+    <string name="partitions_efi_ro_caption">Разрешение действует только для этого раздела и подключения; при переподключении сбрасывается.</string>
+    <!-- a11y кнопки раскрытия sticky. -->
+    <string name="partitions_sticky_expand_a11y">Выбрать другой раздел</string>
+    <!-- Порядковый номер перед названием раздела в списке. -->
+    <string name="partitions_ordinal_title">%1$d. %2$s</string>
+</resources>

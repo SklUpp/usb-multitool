@@ -55,6 +55,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
@@ -64,6 +65,7 @@ import usb.device.DiskException
 import usb.device.TransferTuning
 import usb.device.MassStorageDiscovery
 import usb.device.UsbDisk
+import usb.device.UsbExclusiveClaim
 import usb.device.UsbPermissionPolicy
 import usb.device.withWriteTracking
 import usb.service.DiskController
@@ -120,8 +122,8 @@ import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.ui.filesystemUsageKey
 import usb.ui.withStatus
-import usb.ui.needsFilesystemUsageRequest
-import usb.ui.scheduleFilesystemUsageRequest
+import usb.ui.needsFilesystemUsageBatch
+import usb.ui.scheduleFilesystemUsageBatchRequest
 import usb.ui.fatChildPath
 import usb.ui.RawMeasureError
 import usb.ui.rawSourceKey
@@ -443,10 +445,19 @@ class MainViewModel(
             deviceKey = ::deviceKey,
         )
     }
-    /** Key of the newest free-space request; a different key asks again. */
-    @Volatile private var lastUsageKey: FilesystemUsageKey? = null
-    /** Key whose measurement has not reported back yet; prevents duplicate requests. */
-    @Volatile private var usageInFlightKey: FilesystemUsageKey? = null
+    /**
+     * Newest batch plan. An unchanged plan over a complete map is not measured again;
+     * a write terminal clears the map and forces one fresh pass.
+     */
+    @Volatile private var lastUsageBatchKeys: Set<FilesystemUsageKey>? = null
+    /**
+     * The single owner of free-space measurement. Batch steps and the legacy selected
+     * effect both run here, so two jobs can never race for the USB claim.
+     */
+    private var usageBatchJob: Job? = null
+    /** Token of the live batch job; a replaced job never clears the flag for its successor. */
+    @Volatile private var usageBatchToken = 0L
+    @Volatile private var usageBatchInFlight = false
     @Volatile private var stagedConsumedPath: String? = null
 
     /**
@@ -481,6 +492,7 @@ class MainViewModel(
         inspectionOwner.cancel(cancelUsb = true)
         // Cancel usage/mount jobs first so async close cannot observe an empty session
         // while a still-running measure mounts after the close.
+        cancelUsageBatch(markWaiting = false)
         val sessionToClose = filesSession
         _pickerEvents.close()
         super.onCleared()
@@ -860,6 +872,11 @@ class MainViewModel(
                     }
                 }
         if (completionResult != null && completionGenerationAccepted) state = completionResult.state
+        if (acceptedOperationIntent && intent is UiIntent.OperationBegan) {
+            // Fence background measurement before any effects can start user I/O.
+            cancelUsageBatch(markWaiting = true)
+            lastUsageBatchKeys = null
+        }
         if (acceptedOperationIntent) {
             adjustedResult.effects.forEach { effect ->
                 handleEffect(effect)
@@ -1761,11 +1778,11 @@ class MainViewModel(
                 listDirectory(effect.path)
             }
             is UiEffect.LoadFilesystemUsage -> {
-                measureFilesystemUsage(
-                    effect.partitionId,
-                    effect.usageKey,
-                    effect.usageGeneration,
-                )
+                // Legacy selected-only effect funnels into the one batch owner.
+                runFilesystemUsageBatch(listOf(effect.partitionId to effect.usageKey))
+            }
+            is UiEffect.LoadFilesystemUsageBatch -> {
+                runFilesystemUsageBatch(effect.steps)
             }
             is UiEffect.EjectDevice -> runEject(effect.ejectGeneration)
             is UiEffect.RescanAfterEject -> rescanAfterEject(effect.ejectGeneration)
@@ -2815,8 +2832,8 @@ class MainViewModel(
                 ),
             )
         }
-        lastUsageKey = null
-        usageInFlightKey = null
+        lastUsageBatchKeys = null
+        cancelUsageBatch(markWaiting = false)
         inspectionOwner.cancel(cancelUsb = true)
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         // Keep handles registered until their workers finish real close; cancellation is not close.
@@ -3016,130 +3033,272 @@ class MainViewModel(
         }
 
     /**
-     * Ask for a filesystem-space measurement when the key the space row would render
-     * changed, and again after any invalidation — a finished operation, a partition
-     * refresh or a resume can clear the snapshot while the key stays identical, and a
-     * key-only dedupe would leave the row "unavailable" for good. A request for the same
-     * key is not repeated while its answer is still in flight.
+     * Schedule one sequential free-space batch for every measurable partition. Selected
+     * rows read `partitionUsage`/`filesystemUsage`; no second selected-only job is
+     * opened, so batch and selected can never race for the USB claim.
+     *
+     * A user operation cancels the batch and leaves unfinished partitions `Waiting`
+     * (never `Unavailable`, never Busy-as-disconnect). A terminal write clears the map,
+     * so the next refresh measures it again; a paused batch resumes on a later
+     * operation terminal or device refresh, avoiding a Busy retry loop.
      */
     private fun refreshFilesystemUsage(intent: UiIntent) {
-        if (intent is UiIntent.FilesystemUsageResulted &&
-            intent.generation == state.filesystemUsageGeneration
-        ) {
-            // The newest request answered (published or dropped as stale): nothing is in
-            // flight any more. An older answer must not clear a newer request's marker,
-            // or the next intent would ask again for a measurement already on its way.
-            usageInFlightKey = null
+        if (intent is UiIntent.OperationBegan) return
+        if (intent is UiIntent.DeviceChanged && state.actionsEnabled) {
+            lastUsageBatchKeys = null
         }
-        val partition = state.selectedPartition()
-        val key = partition?.let { state.filesystemUsageKey(it) }
-        if (key == null) {
-            // No measurable selection: forget the last key so a re-attach asks again.
-            lastUsageKey = null
-            usageInFlightKey = null
-            return
+        // Events that drop parked phases must also forget the last plan, or resume is skipped.
+        if (intent is UiIntent.DismissConfirmation ||
+            intent is UiIntent.EjectResulted ||
+            intent is UiIntent.SelectPartition
+        ) {
+            lastUsageBatchKeys = null
         }
         val finished =
             intent is UiIntent.OperationUpdated &&
                 intent.progress.state != OperationState.Running &&
                 intent.progress.state != OperationState.Queued
-        val scheduled = scheduleFilesystemUsageRequest(
+        // Busy/confirmation/operation: no second claim. Phases stay Waiting.
+        if (!state.actionsEnabled) return
+        val scheduled = scheduleFilesystemUsageBatchRequest(
             state = state,
-            lastRequestedKey = lastUsageKey,
-            inFlightKey = usageInFlightKey,
+            lastBatchKeys = lastUsageBatchKeys,
+            batchInFlight = usageBatchInFlight,
             operationFinished = finished,
         ) ?: return
-        lastUsageKey = scheduled.key
-        usageInFlightKey = scheduled.key
+        lastUsageBatchKeys = scheduled.steps.map { it.second }.toSet()
         state = scheduled.state
         handleEffect(scheduled.effect)
     }
 
     /**
-     * Read free/total bytes of the mounted volume on an IO thread while holding the files session lock,
-     * so the read-only query cannot race a mount, a mutation or a close. A volume that will
-     * not open reports "unavailable" instead of an invented value, and the answer is dropped
-     * when the attachment changed since the request.
+     * Stop the one usage job. Cancellation does not interrupt a coroutine already inside
+     * the session monitor (synchronized is not interruptible); the step refuses to open
+     * a volume once it observes the cancellation, and the epoch is closed on the way out.
+     * [markWaiting] turns Queued/Calculating into Waiting for the next batch pass.
      */
-    private fun measureFilesystemUsage(
-        partitionId: String,
-        key: FilesystemUsageKey,
-        generation: Long,
-    ) {
+    private fun cancelUsageBatch(markWaiting: Boolean) {
+        usageBatchJob?.cancel()
+        usageBatchInFlight = false
+        usageBatchToken += 1L
+        if (markWaiting) {
+            state = UiReducer.reduce(state, UiIntent.CancelFilesystemUsageBatch).state
+        }
+    }
+
+    private sealed interface UsageStepOutcome {
+        data class Measured(val snapshot: FilesystemUsageSnapshot, val epoch: Long? = null) : UsageStepOutcome
+        /** Exclusive claim or a user operation owns the session: pause, do not fail. */
+        data object Deferred : UsageStepOutcome
+        /** Attachment/geometry/epoch changed: drop this step, publish nothing. */
+        data object Stale : UsageStepOutcome
+    }
+
+    /**
+     * Sequential batch owner. Steps run one at a time: never two mounts, never a second
+     * claim. Reading free space is one blocking engine call with no progress callback, so
+     * phases stay ordinal (Queued/Waiting/Calculating) and never fake a percentage.
+     *
+     * `Waiting` is published before contending for the shared session lock; `Calculating`
+     * only from inside the lock, immediately before the engine call. A step that observes
+     * a cancellation, an attachment change, a write fence or a Busy claim publishes
+     * nothing stale — the batch stops and unfinished partitions stay Waiting.
+     */
+    private fun runFilesystemUsageBatch(steps: List<Pair<String, FilesystemUsageKey>>) {
+        if (steps.isEmpty()) return
         val live = attachment.snapshot()
         val expectedGeneration = live.generation
         val expectedIdentity = state.device?.identity
         val pin = live.device?.let { AttachmentPin(live.generation, deviceKey(it)!!) }
-        scope.launch(Dispatchers.IO) {
-            // Epoch this job acquired; closed on cancel so onCleared cannot race past
-            // an empty session and leave the claim held.
-            var releaseEpoch: Long? = null
+        val generation = state.filesystemUsageBatchGeneration
+        // A cancelled synchronized call may still be running. Join it before opening
+        // another volume; cancellation alone does not release the session monitor.
+        val previousJob = usageBatchJob
+        previousJob?.cancel()
+        usageBatchToken += 1L
+        val token = usageBatchToken
+        usageBatchInFlight = true
+        usageBatchJob = scope.launch(Dispatchers.IO) {
             try {
-                val snapshot =
-                    filesSession.withLock {
-                        if (!isActive) {
-                            null
-                        } else if (attachGeneration != expectedGeneration ||
-                            attachGeneration != key.attachGeneration ||
-                            expectedIdentity == null ||
-                            expectedIdentity != key.identity
-                        ) {
-                            null
-                        } else {
-                            var acquired: Long? = null
-                            try {
-                                val measured =
-                                    filesSession.withAcquireRecorder({ epoch -> acquired = epoch }) {
-                                        filesSession.filesystemUsageForLocked(
-                                            pin,
-                                            partitionId,
-                                            key,
-                                        )
-                                    }
-                                if (!isActive) {
-                                    acquired?.let { filesSession.closeIfEpochLocked(it) }
-                                    null
-                                } else {
-                                    // Publish epoch before Main hop so cancel after mount closes it.
-                                    releaseEpoch = acquired
-                                    measured
-                                }
-                            } catch (cancel: kotlinx.coroutines.CancellationException) {
-                                acquired?.let { filesSession.closeIfEpochLocked(it) }
-                                releaseEpoch = null
-                                throw cancel
-                            } catch (failure: Throwable) {
-                                // A mounted-but-unmeasured volume must not retain the claim.
-                                // Close it now, whether or not the scope is still active.
-                                acquired?.let { filesSession.closeIfEpochLocked(it) }
-                                releaseEpoch = null
-                                FilesystemUsageSnapshot(
-                                    key,
-                                    FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
+                previousJob?.join()
+                for ((partitionId, key) in steps) {
+                    val proceed = withContext(Dispatchers.Main.immediate) {
+                        state.filesystemUsageBatchGeneration == generation &&
+                            state.actionsEnabled
+                    }
+                    if (!proceed) {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (state.filesystemUsageBatchGeneration == generation) {
+                                onIntent(
+                                    UiIntent.FilesystemUsageStepDeferred(generation, partitionId, key),
                                 )
                             }
                         }
-                    } ?: return@launch
-                withContext(Dispatchers.Main.immediate) {
-                    onIntent(
-                        UiIntent.FilesystemUsageResulted(
-                            generation,
-                            snapshot.key,
-                            snapshot.usage,
-                            snapshot.access,
-                        ),
+                        break
+                    }
+                    // Contending for the session monitor: Waiting, not Calculating.
+                    onIntentDeferred(
+                        UiIntent.FilesystemUsageStepWaiting(generation, partitionId, key),
                     )
+                    var retries = 0
+                    var outcome = measureUsageStep(
+                        generation = generation,
+                        partitionId = partitionId,
+                        key = key,
+                        expectedGeneration = expectedGeneration,
+                        expectedIdentity = expectedIdentity,
+                        pin = pin,
+                    )
+                    while (outcome == UsageStepOutcome.Deferred && retries < 3) {
+                        // No release notification exists. Bounded backoff avoids a retry
+                        // storm; cancellation interrupts the delay before another open.
+                        onIntentDeferred(UiIntent.FilesystemUsageStepWaiting(generation, partitionId, key))
+                        delay(1000L)
+                        val stillCurrent = withContext(Dispatchers.Main.immediate) {
+                            state.actionsEnabled && state.filesystemUsageBatchGeneration == generation &&
+                                state.partitions.firstOrNull { it.id == partitionId }
+                                    ?.let { state.filesystemUsageKey(it) } == key
+                        }
+                        if (!stillCurrent) break
+                        retries++
+                        outcome = measureUsageStep(
+                            generation, partitionId, key, expectedGeneration, expectedIdentity, pin,
+                        )
+                    }
+                    when (val result = outcome) {
+                        UsageStepOutcome.Deferred -> {
+                            withContext(Dispatchers.Main.immediate) {
+                                onIntent(UiIntent.FilesystemUsageStepDeferred(generation, partitionId, key))
+                            }
+                            break
+                        }
+                        UsageStepOutcome.Stale -> {
+                            // Attachment/geometry fence: park unfinished as Waiting.
+                            // Do not clear phases or bump generation here — that would let
+                            // finally reschedule immediately and thrash mount/close.
+                            // Resume only on terminal / DeviceChanged / dismiss / reselect.
+                            withContext(Dispatchers.Main.immediate) {
+                                onIntent(UiIntent.FilesystemUsageStepDeferred(generation, partitionId, key))
+                            }
+                            break
+                        }
+                        is UsageStepOutcome.Measured -> {
+                            try {
+                                withContext(Dispatchers.Main.immediate) {
+                                    onIntent(
+                                        UiIntent.FilesystemUsageStepResulted(
+                                            generation = generation,
+                                            partitionId = partitionId,
+                                            key = result.snapshot.key,
+                                            usage = result.snapshot.usage,
+                                            access = result.snapshot.access,
+                                        ),
+                                    )
+                                }
+                            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                                result.epoch?.let { epoch ->
+                                    filesSession.withLock { filesSession.closeIfEpochLocked(epoch) }
+                                }
+                                throw cancel
+                            }
+                        }
+                    }
                 }
-                // Success keeps the RO mount cached for the next browse.
-                releaseEpoch = null
-            } catch (cancel: kotlinx.coroutines.CancellationException) {
-                val epoch = releaseEpoch
-                if (epoch != null) {
-                    filesSession.withLock { filesSession.closeIfEpochLocked(epoch) }
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                    // A replacement job already raised the token; never clear its flag.
+                    if (usageBatchToken == token) {
+                        usageBatchInFlight = false
+                        usageBatchJob = null
+                        if (state.filesystemUsageBatchGeneration != generation && state.actionsEnabled) {
+                            lastUsageBatchKeys = null
+                            refreshFilesystemUsage(UiIntent.RequestFilesystemUsageBatch)
+                        }
+                    }
                 }
-                throw cancel
             }
         }
+    }
+
+    /**
+     * One step under the files session lock. A volume that will not open reports
+     * "unavailable" instead of an invented value; a Busy claim/user operation defers the
+     * step instead of failing it. The epoch is closed on cancel/failure so `onCleared`
+     * cannot race past an empty session and leave the claim held.
+     */
+    private suspend fun measureUsageStep(
+        generation: Long,
+        partitionId: String,
+        key: FilesystemUsageKey,
+        expectedGeneration: Long,
+        expectedIdentity: String?,
+        pin: AttachmentPin?,
+    ): UsageStepOutcome {
+        val jobContext = kotlinx.coroutines.currentCoroutineContext()
+        var releaseEpoch: Long? = null
+        val outcome = try {
+            filesSession.withLock {
+                when {
+                    !jobContext.isActive -> UsageStepOutcome.Stale
+                    attachGeneration != expectedGeneration ||
+                        attachGeneration != key.attachGeneration ||
+                        expectedIdentity == null ||
+                        expectedIdentity != key.identity -> UsageStepOutcome.Stale
+                    else -> {
+                        var acquired: Long? = null
+                        try {
+                            // Lock held: the real engine call starts now.
+                            onIntentDeferred(
+                                UiIntent.FilesystemUsageStepCalculating(generation, partitionId, key),
+                            )
+                            val measured =
+                                filesSession.withAcquireRecorder({ epoch -> acquired = epoch }) {
+                                    filesSession.filesystemUsageForLocked(pin, partitionId, key) {
+                                        jobContext.ensureActive()
+                                    }
+                                }
+                            if (!jobContext.isActive) {
+                                acquired?.let { filesSession.closeIfEpochLocked(it) }
+                                UsageStepOutcome.Stale
+                            } else {
+                                UsageStepOutcome.Measured(measured, acquired)
+                            }
+                        } catch (cancel: kotlinx.coroutines.CancellationException) {
+                            acquired?.let { filesSession.closeIfEpochLocked(it) }
+                            releaseEpoch = null
+                            throw cancel
+                        } catch (changed: AttachmentChangedException) {
+                            acquired?.let { filesSession.closeIfEpochLocked(it) }
+                            releaseEpoch = null
+                            UsageStepOutcome.Stale
+                        } catch (busy: UsbExclusiveClaim.BusyException) {
+                            // Another exclusive owner: pause, never report Unavailable.
+                            acquired?.let { filesSession.closeIfEpochLocked(it) }
+                            releaseEpoch = null
+                            UsageStepOutcome.Deferred
+                        } catch (failure: Throwable) {
+                            // A mounted-but-unmeasured volume must not retain the claim.
+                            acquired?.let { filesSession.closeIfEpochLocked(it) }
+                            releaseEpoch = null
+                            UsageStepOutcome.Measured(
+                                FilesystemUsageSnapshot(
+                                    key,
+                                    FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            val epoch = releaseEpoch
+            if (epoch != null) {
+                filesSession.withLock { filesSession.closeIfEpochLocked(epoch) }
+            }
+            throw cancel
+        }
+        // Success keeps the RO mount cached for the next browse.
+        return outcome
     }
 
     /** Re-list the displayed directory from the real volume. */

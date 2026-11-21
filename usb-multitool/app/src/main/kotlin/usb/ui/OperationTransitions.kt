@@ -22,6 +22,8 @@ internal object OperationTransitions {
             }
         }
         val terminal = progress.state.isTerminal()
+        // A write may change free space before its first progress update or fail partially.
+        val invalidatesSpace = (begin || terminal) && progress.title.invalidatesFilesListing()
         val base = state.copy(
             operation = progress,
             // New token/begin only: ticks must keep the scoped log intact.
@@ -32,7 +34,27 @@ internal object OperationTransitions {
                     (progress.title == OperationTitle.SetVentoyGlobalSetting ||
                         state.ventoySettingsSource.isDefaultPath())
                 ) emptyList() else state.pendingVentoyControls,
-            filesystemUsage = if (terminal) null else state.filesystemUsage,
+            filesystemUsage =
+                when {
+                    invalidatesSpace -> null
+                    terminal -> {
+                        // Read-only terminal keeps durable map facts; rebind the selected slot
+                        // so UI/helpers stay consistent while unfinished keys can resume.
+                        val selected = state.selectedPartition()
+                        val key = selected?.let { state.filesystemUsageKey(it) }
+                        key?.let { state.partitionUsage[it] }
+                    }
+                    else -> state.filesystemUsage
+                },
+            partitionUsage = if (invalidatesSpace) emptyMap() else state.partitionUsage,
+            partitionUsagePhases = if (terminal) emptyMap() else state.partitionUsagePhases,
+            filesystemUsageBatchGeneration =
+                if (terminal || invalidatesSpace) {
+                    // Fence late answers and allow unfinished work to resume after any operation.
+                    state.filesystemUsageBatchGeneration + 1L
+                } else {
+                    state.filesystemUsageBatchGeneration
+                },
             presence = when {
                 progress.state == OperationState.Running &&
                     (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy) ->
@@ -98,11 +120,26 @@ internal object OperationTransitions {
         }
         val invalidatesCaches = intent.title.invalidatesVentoyStickCaches()
         val invalidatesFiles = intent.title.invalidatesFilesListing()
+        val selectionCleared =
+            state.copy(
+                // Write ops already nulled selected usage in progress(); keep map rebind here.
+                filesystemUsage =
+                    if (invalidatesFiles) {
+                        null
+                    } else {
+                        val selected = state.selectedPartition()
+                        val key = selected?.let { state.filesystemUsageKey(it) }
+                        key?.let { state.partitionUsage[it] } ?: state.filesystemUsage
+                    },
+                partitionUsage = if (invalidatesFiles) emptyMap() else state.partitionUsage,
+                partitionUsagePhases = emptyMap(),
+                filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
+            )
         val invalidated =
             if (invalidatesCaches) {
-                dropVentoyStickCaches(state.copy(filesystemUsage = null), keepTemplatePath = true)
+                dropVentoyStickCaches(selectionCleared, keepTemplatePath = true)
             } else {
-                state.copy(filesystemUsage = null)
+                selectionCleared
             }
         return when {
             invalidatesFiles -> filesReload(invalidated)

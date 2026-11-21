@@ -252,6 +252,13 @@ internal fun AutounattendSection(
                 null
             },
             resetEnabled = state.actionsEnabled,
+            onPick = if (!xmlGone && state.actionsEnabled) {
+                { templateSourcePrompt = true }
+            } else {
+                null
+            },
+            pickEnabled = state.actionsEnabled,
+            pickLabel = stringResource(R.string.ventoy_pick_windows_template_cd),
         )
         when (val file = state.autounattendState) {
             AutounattendState.Missing ->
@@ -299,42 +306,21 @@ internal fun AutounattendSection(
             else -> Unit
         }
         if (!xmlGone) {
-            Row(
+            // Choosing or replacing the template is the icon next to the path row.
+            FilledTonalButton(
+                onClick = { generateOpen = true },
+                enabled = state.actionsEnabled &&
+                    state.autounattendState !is AutounattendState.Unreadable &&
+                    document?.layoutProblems.isNullOrEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .heightIn(min = 48.dp),
             ) {
-                OutlinedButton(
-                    onClick = { templateSourcePrompt = true },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .heightIn(min = 48.dp),
-                ) {
-                    Text(
-                        stringResource(R.string.wave4_choose_ellipsis),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                FilledTonalButton(
-                    onClick = { generateOpen = true },
-                    enabled = state.actionsEnabled &&
-                        state.autounattendState !is AutounattendState.Unreadable &&
-                        document?.layoutProblems.isNullOrEmpty(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .heightIn(min = 48.dp),
-                ) {
-                    Text(
-                        stringResource(R.string.unattend_generate),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                Text(
+                    stringResource(R.string.unattend_generate),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             // Raw XML editor stays reachable when source bytes exist; not part of two-button row.
             if (document?.sourceText != null) {
@@ -533,7 +519,10 @@ internal fun AutounattendSection(
         onIntent(UiIntent.SelectWindowsTemplate)
     }
     if (templateSourcePrompt) {
-        ModalBottomSheet(onDismissRequest = { templateSourcePrompt = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { templateSourcePrompt = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             Text(
                 text = stringResource(R.string.windows_template_choose_source),
                 style = MaterialTheme.typography.titleLarge,
@@ -736,12 +725,12 @@ internal fun GlobalSettingsCard(
                 null
             },
             resetEnabled = state.actionsEnabled,
-            onPathClick = if (!settingsGone && state.actionsEnabled) {
-                { sourceMenuOpen = true }
-            } else {
-                null
-            },
-            pathClickLabel = stringResource(R.string.wave4_pick_settings_file),
+            // The picker also offers a phone document, which is read via SAF and needs no
+            // stick; only USB writes need the attachment. A present but Busy stick keeps
+            // the reducer guard and the icon disabled.
+            onPick = { sourceMenuOpen = true },
+            pickEnabled = state.actionsEnabled || settingsGone,
+            pickLabel = stringResource(R.string.ventoy_pick_settings_file_cd),
         )
         if (source is VentoySettingsSource.Document) {
             Text(
@@ -902,6 +891,7 @@ internal fun GlobalSettingsCard(
                 onPickVentoySettingsFile()
             },
             onDismiss = { sourceMenuOpen = false },
+            stickEnabled = !settingsGone,
         )
     }
 }
@@ -1011,7 +1001,10 @@ private fun GlobalSettingsEditorDialog(
     val closeLabel = stringResource(R.string.settings_cancel)
     val applyLabel = stringResource(R.string.settings_apply)
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             Scaffold(
                 topBar = {
                     TopAppBar(
@@ -1032,7 +1025,7 @@ private fun GlobalSettingsEditorDialog(
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         ),
                     )
                 },
@@ -1186,7 +1179,10 @@ private fun AutounattendRawEditorDialog(
         onDismissRequest = onCancel,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Surface(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             Scaffold(
                 topBar = {
                     TopAppBar(
@@ -1203,7 +1199,7 @@ private fun AutounattendRawEditorDialog(
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         ),
                     )
                 },
@@ -1365,8 +1361,12 @@ private fun SettingsSourceDialog(
     onStick: () -> Unit,
     onPhone: () -> Unit,
     onDismiss: () -> Unit,
+    stickEnabled: Boolean = true,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
         Text(
             text = stringResource(R.string.settings_source_choose),
             style = MaterialTheme.typography.titleLarge,
@@ -1374,6 +1374,11 @@ private fun SettingsSourceDialog(
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_source_choose_stick)) },
+            supportingContent = if (stickEnabled) {
+                null
+            } else {
+                { Text(stringResource(R.string.ventoy_pick_stick_unavailable)) }
+            },
             leadingContent = {
                 Icon(
                     painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
@@ -1382,7 +1387,7 @@ private fun SettingsSourceDialog(
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(role = Role.Button, onClick = onStick),
+                .clickable(role = Role.Button, enabled = stickEnabled, onClick = onStick),
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_source_choose_phone)) },
@@ -1651,7 +1656,7 @@ private fun CompactStagedControls(
 
 /**
  * Shared compact status line for ventoy.json / unattend.xml cards:
- * monospace path · size, optional Changed badge, optional ✕ reset.
+ * monospace path · size, optional Changed badge, optional pick icon, optional ✕ reset.
  */
 @Composable
 private fun ConfigFileStatusRow(
@@ -1661,8 +1666,9 @@ private fun ConfigFileStatusRow(
     showChanged: Boolean,
     onReset: (() -> Unit)?,
     resetEnabled: Boolean,
-    onPathClick: (() -> Unit)? = null,
-    pathClickLabel: String? = null,
+    onPick: (() -> Unit)? = null,
+    pickEnabled: Boolean = true,
+    pickLabel: String? = null,
 ) {
     val resetLabel = stringResource(R.string.wave4_reset_file)
     val statusText = when {
@@ -1677,19 +1683,6 @@ private fun ConfigFileStatusRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        val pathModifier = Modifier
-            .weight(1f)
-            .then(
-                if (onPathClick != null) {
-                    Modifier
-                        .clickable(role = Role.Button, onClick = onPathClick)
-                        .semantics {
-                            if (pathClickLabel != null) contentDescription = pathClickLabel
-                        }
-                } else {
-                    Modifier
-                },
-            )
         Text(
             text = statusText,
             style = MaterialTheme.typography.bodySmall.copy(
@@ -1702,7 +1695,7 @@ private fun ConfigFileStatusRow(
             },
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = pathModifier,
+            modifier = Modifier.weight(1f),
         )
         if (showChanged) {
             Badge(
@@ -1710,6 +1703,19 @@ private fun ConfigFileStatusRow(
                 container = MaterialTheme.colorScheme.primaryContainer,
                 content = MaterialTheme.colorScheme.onPrimaryContainer,
             )
+        }
+        if (onPick != null) {
+            IconButton(
+                onClick = onPick,
+                enabled = pickEnabled,
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics {
+                        if (pickLabel != null) contentDescription = pickLabel
+                    },
+            ) {
+                GlyphIcon(Glyph.File, size = 20.dp)
+            }
         }
         if (onReset != null) {
             IconButton(

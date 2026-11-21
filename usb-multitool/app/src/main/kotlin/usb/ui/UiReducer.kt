@@ -4,6 +4,7 @@ import usb.fs.FR_NO_FILE
 import usb.fs.FR_NO_PATH
 import usb.fs.FilesystemId
 import usb.fs.FilesystemUsage
+import usb.fs.FilesystemUsagePhase
 import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsageKey
 import usb.fs.FilesystemUsageSnapshot
@@ -792,9 +793,16 @@ sealed class UiIntent {
     data object ClearLog : UiIntent()
 
     /**
-     * Ask for a read-only free-space measurement of the selected partition. The host
-     * answers with [FilesystemUsageResulted]; it runs under the files lock, off the main
-     * thread, and only when no operation or confirmation is pending.
+     * Ask for a sequential free-space batch of every measurable partition. The host
+     * answers with [FilesystemUsageStepResulted] / [FilesystemUsageStepDeferred] per
+     * step under the files lock. Selected rows read the map; this intent replaces a
+     * parallel selected-only measure.
+     */
+    data object RequestFilesystemUsageBatch : UiIntent()
+
+    /**
+     * Legacy selected-only request kept for tests and rebinding. Production host
+     * schedules [RequestFilesystemUsageBatch] instead so one claim owns measurement.
      */
     data object RequestFilesystemUsage : UiIntent()
 
@@ -810,6 +818,51 @@ sealed class UiIntent {
         /** Driver mount mode only; not physical USB write capability. */
         val access: FilesystemAccess = FilesystemAccess.Unknown,
     ) : UiIntent()
+
+    /**
+     * One sequential batch step. Accepted when [generation] matches and [key] still
+     * describes the live partition with [partitionId] (not only the selection).
+     */
+    data class FilesystemUsageStepResulted(
+        val generation: Long,
+        val partitionId: String,
+        val key: FilesystemUsageKey,
+        val usage: FilesystemUsage,
+        val access: FilesystemAccess = FilesystemAccess.Unknown,
+    ) : UiIntent()
+
+    /**
+     * Batch paused for this step: exclusive claim busy or a user operation owns the
+     * session. Marks [FilesystemUsagePhase.Waiting]; never stores Unavailable.
+     */
+    data class FilesystemUsageStepDeferred(
+        val generation: Long,
+        val partitionId: String,
+        val key: FilesystemUsageKey,
+    ) : UiIntent()
+
+    /**
+     * Host is about to contend for the files session lock for [partitionId]. Shown as
+     * Waiting: Calculating is published only after the lock is held and space() starts.
+     */
+    data class FilesystemUsageStepWaiting(
+        val generation: Long,
+        val partitionId: String,
+        val key: FilesystemUsageKey,
+    ) : UiIntent()
+
+    /**
+     * Host entered the session lock and is about to call space() for [partitionId].
+     * Calculating must not be shown while merely waiting on the lock.
+     */
+    data class FilesystemUsageStepCalculating(
+        val generation: Long,
+        val partitionId: String,
+        val key: FilesystemUsageKey,
+    ) : UiIntent()
+
+    /** Cancel in-flight batch phases; keep measured [AppUiState.partitionUsage]. */
+    data object CancelFilesystemUsageBatch : UiIntent()
 }
 
 sealed interface UiEffect {
@@ -907,6 +960,15 @@ sealed interface UiEffect {
         val partitionId: String,
         val usageKey: FilesystemUsageKey,
         val usageGeneration: Long,
+    ) : UiEffect
+
+    /**
+     * Sequential batch: host measures [steps] one at a time under the files lock.
+     * [usageGeneration] fences every step publish.
+     */
+    data class LoadFilesystemUsageBatch(
+        val usageGeneration: Long,
+        val steps: List<Pair<String, FilesystemUsageKey>>,
     ) : UiEffect
 
     data class RangeProbe(
@@ -1068,6 +1130,25 @@ internal data class FilesystemUsageSchedule(
     val effect: UiEffect.LoadFilesystemUsage,
 )
 
+/** Production scheduling seam for the sequential batch (selected first). */
+internal data class FilesystemUsageBatchSchedule(
+    val state: AppUiState,
+    val steps: List<Pair<String, FilesystemUsageKey>>,
+    val effect: UiEffect.LoadFilesystemUsageBatch,
+)
+
+internal fun scheduleFilesystemUsageBatchRequest(
+    state: AppUiState,
+    lastBatchKeys: Set<FilesystemUsageKey>?,
+    batchInFlight: Boolean,
+    operationFinished: Boolean,
+): FilesystemUsageBatchSchedule? {
+    if (!state.needsFilesystemUsageBatch(lastBatchKeys, batchInFlight, operationFinished)) return null
+    val result = UiReducer.reduce(state, UiIntent.RequestFilesystemUsageBatch)
+    val effect = result.effects.singleOrNull() as? UiEffect.LoadFilesystemUsageBatch ?: return null
+    return FilesystemUsageBatchSchedule(result.state, effect.steps, effect)
+}
+
 internal fun scheduleFilesystemUsageRequest(
     state: AppUiState,
     lastRequestedKey: FilesystemUsageKey?,
@@ -1198,6 +1279,8 @@ object UiReducer {
                     ReduceResult(state.withStatus(presenceMessage(state.presence)))
                 } else {
                     val clearConflict = state.pendingFilesBatchConflict != null
+                    // Batch map survives selection; legacy selected slot still clears so
+                    // existing refreshCycle / selected-only callers keep one request per select.
                     ReduceResult(
                         state.copy(
                             selectedPartitionId = intent.partitionId,
@@ -1206,8 +1289,10 @@ object UiReducer {
                             filesError = null,
                             filesListGeneration = state.filesListGeneration + 1L,
                             filesListingState = FilesListingState.Loading,
-                            // A value measured for the previous partition is not current.
                             filesystemUsage = null,
+                            // Drop parked phases so an explicit reselect can resume missing keys.
+                            partitionUsagePhases = emptyMap(),
+                            filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
                             rawSourceCandidates = null,
                             rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
                             rawSourceCandidatesIdentity = null,
@@ -1600,7 +1685,35 @@ object UiReducer {
                             else -> FilesListingState.Stale
                         },
                         // A refresh may describe another attachment or geometry.
-                        filesystemUsage = if (probingRetain && !ejectStillPinned) state.filesystemUsage else null,
+                        filesystemUsage = if (probingRetain && !ejectStillPinned) {
+                            state.filesystemUsage?.takeIf { snapshot ->
+                                partitions.any { state.filesystemUsageKey(it) == snapshot.key }
+                            }
+                        } else null,
+                        // Same attachment keeps only keys that still describe live geometry.
+                        partitionUsage =
+                            if (probingRetain && !ejectStillPinned) {
+                                val liveKeys = partitions
+                                    .mapNotNull { state.filesystemUsageKey(it) }
+                                    .toSet()
+                                state.partitionUsage.filterKeys { it in liveKeys }
+                            } else {
+                                emptyMap()
+                            },
+                        partitionUsagePhases =
+                            if (probingRetain && !ejectStillPinned) {
+                                val liveIds = partitions.map { it.id }.toSet()
+                                state.partitionUsagePhases.filterKeys { it in liveIds }
+                            } else {
+                                emptyMap()
+                            },
+                        filesystemUsageBatchGeneration =
+                            if (probingRetain && !ejectStillPinned) {
+                                state.filesystemUsageBatchGeneration
+                            } else {
+                                // Invalidate in-flight answers for the previous attachment.
+                                state.filesystemUsageBatchGeneration + 1L
+                            },
                         ejected = ejectStillPinned,
                         // Same-attachment re-probe must not drop a running eject verdict:
                         // the host completion (EjectResulted) clears the flight, not the probe.
@@ -2340,6 +2453,9 @@ object UiReducer {
                             if (clearXmlWrite) null else state.pendingAutounattendGeneration,
                         pendingAutounattendRawWrite =
                             if (clearXmlWrite) null else state.pendingAutounattendRawWrite,
+                        // Confirmation held the session; drop parked phases so refresh can resume.
+                        partitionUsagePhases = emptyMap(),
+                        filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
                     ),
                 )
             }
@@ -4448,6 +4564,98 @@ object UiReducer {
             // Appends keep working afterwards, and nothing outside logLines is touched.
             UiIntent.ClearLog -> ReduceResult(state.copy(logLines = emptyList()))
 
+            is UiIntent.RequestFilesystemUsageBatch -> {
+                // One batch owns measurement; the generation fences every step answer.
+                val generation = state.filesystemUsageBatchGeneration + 1L
+                val steps = state.measurableFilesystemUsageKeys().filter { (_, key) ->
+                    state.partitionUsage[key]?.matches(key) != true
+                }
+                val phases =
+                    steps.associate { (partitionId, _) ->
+                        partitionId to
+                            if (state.actionsEnabled) {
+                                FilesystemUsagePhase.Queued
+                            } else {
+                                // A claim/user operation owns the session: wait, never Unavailable.
+                                FilesystemUsagePhase.Waiting
+                            }
+                    }
+                val requested = state.copy(
+                    filesystemUsageBatchGeneration = generation,
+                    partitionUsagePhases = phases,
+                )
+                ReduceResult(
+                    requested,
+                    effects =
+                        if (state.actionsEnabled && steps.isNotEmpty()) {
+                            listOf(UiEffect.LoadFilesystemUsageBatch(generation, steps))
+                        } else {
+                            emptyList()
+                        },
+                )
+            }
+
+            is UiIntent.CancelFilesystemUsageBatch ->
+                ReduceResult(
+                    state.copy(
+                        filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
+                        partitionUsagePhases = state.partitionUsagePhases.mapValues {
+                            FilesystemUsagePhase.Waiting
+                        },
+                    ),
+                )
+
+            is UiIntent.FilesystemUsageStepCalculating ->
+                stepPhase(state, intent.generation, intent.partitionId, intent.key, FilesystemUsagePhase.Calculating)
+
+            // Waiting-before-lock and Waiting-after-defer are the same visible fact.
+            is UiIntent.FilesystemUsageStepWaiting ->
+                stepPhase(state, intent.generation, intent.partitionId, intent.key, FilesystemUsagePhase.Waiting)
+
+            // A deferred batch has stopped: every unfinished step is waiting, not failed.
+            is UiIntent.FilesystemUsageStepDeferred ->
+                if (intent.generation != state.filesystemUsageBatchGeneration ||
+                    state.partitions.firstOrNull { it.id == intent.partitionId }
+                        ?.let { state.filesystemUsageKey(it) } != intent.key
+                ) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(state.copy(partitionUsagePhases = state.partitionUsagePhases.mapValues {
+                        FilesystemUsagePhase.Waiting
+                    }))
+                }
+
+            is UiIntent.FilesystemUsageStepResulted ->
+                when {
+                    intent.generation != state.filesystemUsageBatchGeneration -> ReduceResult(state)
+                    // Live geometry/attachment/filesystem must still match this exact key.
+                    state.partitions
+                        .firstOrNull { it.id == intent.partitionId }
+                        ?.let { state.filesystemUsageKey(it) } != intent.key ->
+                        ReduceResult(state)
+                    else -> {
+                        val snapshot = FilesystemUsageSnapshot(
+                            intent.key,
+                            intent.usage,
+                            intent.access,
+                        )
+                        ReduceResult(
+                            state.copy(
+                                partitionUsage = state.partitionUsage + (intent.key to snapshot),
+                                // Selected row/write state reads the same fact from one place.
+                                filesystemUsage =
+                                    if (state.selectedPartitionId == intent.partitionId) {
+                                        snapshot
+                                    } else {
+                                        state.filesystemUsage
+                                    },
+                                partitionUsagePhases =
+                                    state.partitionUsagePhases - intent.partitionId,
+                            ),
+                        )
+                    }
+                }
+
             is UiIntent.RequestFilesystemUsage -> {
                 val generation = state.filesystemUsageGeneration + 1L
                 val requested = state.copy(filesystemUsageGeneration = generation)
@@ -4462,16 +4670,23 @@ object UiReducer {
                     // belongs to something else, so it is dropped rather than published.
                     state.selectedPartition()?.let { state.filesystemUsageKey(it) } != intent.key ->
                         ReduceResult(state)
-                    else ->
+                    else -> {
+                        val snapshot = FilesystemUsageSnapshot(
+                            intent.key,
+                            intent.usage,
+                            intent.access,
+                        )
                         ReduceResult(
                             state.copy(
-                                filesystemUsage = FilesystemUsageSnapshot(
-                                    intent.key,
-                                    intent.usage,
-                                    intent.access,
-                                ),
+                                filesystemUsage = snapshot,
+                                partitionUsage = state.partitionUsage + (intent.key to snapshot),
+                                partitionUsagePhases =
+                                    state.selectedPartitionId
+                                        ?.let { state.partitionUsagePhases - it }
+                                        ?: state.partitionUsagePhases,
                             ),
                         )
+                    }
                 }
         }.let { result ->
             val accepted = when (intent) {
@@ -4649,6 +4864,9 @@ object UiReducer {
                     filesError = null,
                     filesListingState = FilesListingState.Stale,
                     filesystemUsage = null,
+                    partitionUsage = emptyMap(),
+                    partitionUsagePhases = emptyMap(),
+                    filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
                 ).withStatus(UiMessage.Key(
                         UiMessageKey.EjectSucceeded,
                         listOf(live.label),
@@ -4658,12 +4876,17 @@ object UiReducer {
             return ReduceResult(
                 state.copy(
                     ejectInFlight = false,
+                    // Eject did not leave; release parked usage phases for a fresh batch.
+                    partitionUsagePhases = emptyMap(),
+                    filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
                 ).withStatus(UiMessage.Key(UiMessageKey.EjectBusy)),
             )
         } else {
             return ReduceResult(
                 state.copy(
                     ejectInFlight = false,
+                    partitionUsagePhases = emptyMap(),
+                    filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
                 ).withStatus(intent.message?.let(UiMessage::Raw)
                         ?: UiMessage.Key(UiMessageKey.VolumeSyncUnconfirmed, listOf("eject"))),
             )
@@ -4686,6 +4909,9 @@ object UiReducer {
                         ejectAttachGeneration = null,
                         filesListingState = FilesListingState.Stale,
                         filesystemUsage = null,
+                        partitionUsage = emptyMap(),
+                        partitionUsagePhases = emptyMap(),
+                        filesystemUsageBatchGeneration = state.filesystemUsageBatchGeneration + 1L,
                     ),
                     effects = listOf(UiEffect.RescanAfterEject(state.ejectGeneration)),
                 )
@@ -4860,6 +5086,30 @@ object UiReducer {
         )
     }
 
+
+    /**
+     * Phase-only batch update. Stale generation, changed live key, or a cancelled batch
+     * (phase entry already gone) leaves state untouched — a late Calculating/Deferred can
+     * never revive or mislabel a finished or cancelled pass.
+     */
+    private fun stepPhase(
+        state: AppUiState,
+        generation: Long,
+        partitionId: String,
+        key: FilesystemUsageKey,
+        phase: FilesystemUsagePhase,
+    ): ReduceResult {
+        val live = state.partitions.firstOrNull { it.id == partitionId }
+        return when {
+            generation != state.filesystemUsageBatchGeneration -> ReduceResult(state)
+            live == null || state.filesystemUsageKey(live) != key -> ReduceResult(state)
+            !state.partitionUsagePhases.containsKey(partitionId) -> ReduceResult(state)
+            state.partitionUsagePhases[partitionId] == phase -> ReduceResult(state)
+            else -> ReduceResult(
+                state.copy(partitionUsagePhases = state.partitionUsagePhases + (partitionId to phase)),
+            )
+        }
+    }
 
     /**
      * One measurement request for the live selection, or nothing when it cannot be bound:

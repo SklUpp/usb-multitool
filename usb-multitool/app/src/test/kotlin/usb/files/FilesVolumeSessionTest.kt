@@ -1293,6 +1293,33 @@ class FilesVolumeSessionTest {
     }
 
     @Test
+    fun cancelledUsageDoesNotOpenReplacementAfterGeometryMismatch() {
+        var opens = 0
+        var checks = 0
+        val session = FilesVolumeSession(
+            currentAttachment = { pinA },
+            openMounted = { partitionId, writable, _, lease ->
+                opens++
+                mounted(partitionId, writable, volumeClose = null, diskClose = null, lease = lease,
+                    sectorCount = 4096uL)
+            },
+        )
+        session.withLock { session.volumeForLocked(pinA, "1") }
+        val key = FilesystemUsageKey(1L, pinA.deviceKey, 2048uL, 1uL, 512, FilesystemId.FAT)
+        assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            session.withLock {
+                session.filesystemUsageForLocked(pinA, "1", key) {
+                    checks++
+                    if (checks == 2) throw kotlinx.coroutines.CancellationException("cancelled")
+                }
+            }
+        }
+        assertEquals(1, opens)
+        assertNull(session.mountEpochLocked())
+        assertFalse(session.claim.isHeld())
+    }
+
+    @Test
     fun geometryRemountCloseFailureLatchesAndBlocksFreshOpen() {
         var opens = 0
         val closeFailure = IOException("close failed")

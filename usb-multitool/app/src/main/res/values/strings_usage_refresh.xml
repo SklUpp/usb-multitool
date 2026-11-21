@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Shared by Files and Partitions: in-flight free-space measurement phases.
+      The native space() query is one blocking call without progress callbacks,
+      so these strings state the phase only and never imply a percentage.
+    -->
+    <string name="usage_queued">Queued for measurement</string>
+    <string name="usage_waiting">Waiting for access</string>
+    <string name="usage_calculating">Calculating free space…</string>
+</resources>

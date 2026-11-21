@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Кнопки выбора рядом со строками пути Ventoy / Windows. -->
+    <string name="ventoy_pick_settings_file_cd">Выбрать файл настроек Ventoy</string>
+    <string name="ventoy_pick_windows_template_cd">Выбрать файл ответов Windows</string>
+    <string name="ventoy_pick_windows_image_cd">Выбрать образ Windows</string>
+    <!-- Пункт флешки остаётся видимым без накопителя; отключается только действие. -->
+    <string name="ventoy_pick_stick_unavailable">Подключите USB-накопитель, чтобы выбрать файл на флешке</string>
+</resources>

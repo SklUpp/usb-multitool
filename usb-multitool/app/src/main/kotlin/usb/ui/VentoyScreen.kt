@@ -7,15 +7,13 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -27,11 +25,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -39,12 +35,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,7 +50,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -304,12 +297,10 @@ fun VentoyScreen(
 }
 
 /**
- * Compact Ventoy version card body: installed → bundled pair, primary Update (offers
- * download of a newer checked upstream before writing), install/format when a stick is
- * present, and manual server refresh. Refresh is check-only; no auto upstream check.
- * No uninstall action exists — do not invent one.
+ * Compact Ventoy version card body: installed / bundled / server key-value rows,
+ * server refresh, equal Update/Install when a stick is present. Refresh is check-only;
+ * no auto upstream check. No uninstall action exists — do not invent one.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun VentoyVersionRow(
     state: AppUiState,
@@ -326,8 +317,6 @@ private fun VentoyVersionRow(
     }
     val bundledText = state.bundledVentoyRelease ?: naText
     val upstreamText = state.upstreamVentoyRelease ?: naText
-    val pairCd = stringResource(R.string.ventoy_version_pair_cd, installedText, bundledText)
-    val serverCd = stringResource(R.string.ventoy_version_server_cd, upstreamText)
     val checkLabel = stringResource(R.string.ventoy_check_version)
     val versionStyle = MaterialTheme.typography.bodyMedium.copy(
         fontFamily = FontFamily.Monospace,
@@ -370,12 +359,18 @@ private fun VentoyVersionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .semantics(mergeDescendants = true) {
-                    contentDescription = pairCd
-                },
-            verticalAlignment = Alignment.CenterVertically,
+                .semantics(mergeDescendants = true) { },
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                text = stringResource(R.string.ventoy_version_installed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 text = installedText,
                 style = versionStyle,
@@ -384,33 +379,82 @@ private fun VentoyVersionRow(
                 } else {
                     MaterialTheme.colorScheme.onSurface
                 },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.StartEllipsis,
+                softWrap = false,
             )
-            Icon(
-                imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics(mergeDescendants = true) { },
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.ventoy_version_bundled),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = bundledText,
                 style = versionStyle,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.StartEllipsis,
+                softWrap = false,
             )
         }
-
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics(mergeDescendants = true) { },
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            itemVerticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (showDeviceActions) {
+            Text(
+                text = stringResource(R.string.ventoy_version_upstream),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = upstreamText,
+                style = versionStyle,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.StartEllipsis,
+                softWrap = false,
+            )
+            IconButton(
+                onClick = { onIntent(UiIntent.CheckVentoyUpstream) },
+                enabled = !serverBusy,
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = checkLabel },
+            ) {
+                RefreshingIcon(busy = serverBusy)
+            }
+        }
+
+        if (showDeviceActions) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Button(
                     onClick = {
                         val upstream = state.upstreamVentoyRelease
@@ -443,6 +487,8 @@ private fun VentoyVersionRow(
                     },
                     enabled = releaseActionEnabled && !serverBusy,
                     modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
                         .heightIn(min = 48.dp)
                         .semantics { contentDescription = updateLabel },
                 ) {
@@ -454,7 +500,10 @@ private fun VentoyVersionRow(
                         onIntent(UiIntent.RequestDestructive(DestructiveAction.VENTOY_INSTALL))
                     },
                     enabled = releaseActionEnabled,
-                    modifier = Modifier.heightIn(min = 48.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .heightIn(min = 48.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -467,43 +516,6 @@ private fun VentoyVersionRow(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.semantics(mergeDescendants = true) {
-                    contentDescription = serverCd
-                },
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Dns,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = upstreamText,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = false,
-                    modifier = Modifier.heightIn(min = 24.dp),
-                )
-                IconButton(
-                    onClick = { onIntent(UiIntent.CheckVentoyUpstream) },
-                    enabled = !serverBusy,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = checkLabel },
-                ) {
-                    RefreshingIcon(busy = serverBusy)
-                }
-
             }
         }
     }
@@ -685,32 +697,37 @@ private fun WindowsImageBlock(
             stringResource(R.string.windows_copying_image, copyingTarget)
         isImageImportTarget ->
             stringResource(R.string.windows_copying_generic)
-        isImageInspecting ->
-            stringResource(R.string.import_inspecting)
         selectedImage != null ->
             selectedImage.name.ifBlank { selectedImage.path }
         else ->
             stringResource(R.string.selection_not_selected)
     }
 
-    val chooseDescription = stringResource(R.string.import_choose)
-    // Detached stick hides the USB-gated picker row; Busy keeps it with enabled guards.
-    // Live import status + cancel below stays in all states.
-    val showImagePicker = state.presence != DevicePresence.Absent && state.presence != DevicePresence.Disconnected
+    val chooseDescription = stringResource(R.string.ventoy_pick_windows_image_cd)
+    // Detached stick keeps the row and its empty state, only the pick action is disabled:
+    // the image is written to the stick, so no source can be chosen without one.
+    val canPickImage = state.actionsEnabled && state.presence != DevicePresence.Absent &&
+        state.presence != DevicePresence.Disconnected
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        if (showImagePicker) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = stringResource(R.string.windows_selected_image),
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     text = statusText,
@@ -728,16 +745,15 @@ private fun WindowsImageBlock(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                FilledTonalButton(
-                    onClick = { imageSourcePrompt = true },
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .semantics { contentDescription = chooseDescription },
-                ) {
-                    Text(chooseDescription)
-                }
+            }
+            IconButton(
+                onClick = { imageSourcePrompt = true },
+                enabled = canPickImage,
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics { contentDescription = chooseDescription },
+            ) {
+                GlyphIcon(Glyph.File, size = 20.dp)
             }
         }
 
@@ -774,7 +790,10 @@ private fun WindowsImageBlock(
     }
 
     if (imageSourcePrompt) {
-        ModalBottomSheet(onDismissRequest = { imageSourcePrompt = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { imageSourcePrompt = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             Text(
                 text = chooseDescription,
                 style = MaterialTheme.typography.titleLarge,
@@ -923,7 +942,10 @@ internal fun ImportFolderDialog(
             FolderReadProblem.Unreadable -> stringResource(R.string.import_folder_read_failed)
             null -> null
         }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(stringResource(R.string.import_folder_title), style = MaterialTheme.typography.titleLarge)

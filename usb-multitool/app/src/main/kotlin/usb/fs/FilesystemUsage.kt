@@ -66,6 +66,20 @@ sealed interface FilesystemUsage {
 }
 
 /**
+ * Per-partition progress of a sequential free-space batch. Never invents a percent:
+ * [UsbFsUsageVolume.space] is one blocking call with no callback. UI may show ordinal
+ * progress (measured of planned) from these phases alone.
+ *
+ * [Waiting] means the batch paused for a user operation or exclusive claim — not
+ * [FilesystemUsage.Unavailable] and not a disconnected device.
+ */
+enum class FilesystemUsagePhase {
+    Queued,
+    Calculating,
+    Waiting,
+}
+
+/**
  * Everything the measurement is valid for: attachment generation, device identity,
  * partition geometry and filesystem type. A snapshot whose key no longer matches
  * the selected partition must be rendered as unknown, never as a stale value.

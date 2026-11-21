@@ -2,6 +2,8 @@ package usb.ui
 
 import usb.fs.FilesystemId
 import usb.fs.FilesystemSpace
+import usb.fs.FilesystemUsage
+import usb.fs.FilesystemUsagePhase
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -45,13 +48,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.ViewColumn
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.UnfoldMore
-import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -90,6 +90,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -252,6 +253,7 @@ fun PartitionsScreen(
 
         AlertDialog(
             onDismissRequest = { createRegion = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             title = { Text(stringResource(R.string.partitions_create_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -543,6 +545,7 @@ fun PartitionsScreen(
         val nameOk = newName.isNotEmpty() && PartitionName.problem(newName) == null
         AlertDialog(
             onDismissRequest = { renameTargetId = null; renameBinding = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             title = { Text(stringResource(R.string.partitions_rename_title)) },
             text = {
                 OutlinedTextField(
@@ -594,6 +597,7 @@ fun PartitionsScreen(
             VolumeLabel.problem(newLabel, labelFs) == null
         AlertDialog(
             onDismissRequest = { labelTargetId = null; labelBinding = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             title = { Text(stringResource(R.string.partitions_rename_label_title)) },
             text = {
                 OutlinedTextField(
@@ -661,7 +665,10 @@ fun PartitionsScreen(
     }
 
     if (partitionPickerOpen) {
-        ModalBottomSheet(onDismissRequest = { partitionPickerOpen = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { partitionPickerOpen = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -714,7 +721,7 @@ fun PartitionsScreen(
                         } else null,
                         trailingContent = {
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                if (partition.displayEfi) Badge(text = "EFI")
+                                if (partition.displayEfi) Badge(text = stringResource(R.string.partitions_badge_efi))
                                 if (readOnly) {
                                     Badge(
                                         text = stringResource(R.string.partitions_access_ro),
@@ -737,7 +744,6 @@ fun PartitionsScreen(
                             .clickable {
                                 onIntent(UiIntent.SelectPartition(partition.id))
                                 partitionPickerOpen = false
-                                revealToken++
                             },
                     )
                 }
@@ -761,8 +767,12 @@ fun PartitionsScreen(
                 val stickyAccess = state.partitionWriteAccess(stickyPartition)
                 val stickyRo = stickyAccess == PartitionWriteAccess.ReadOnly ||
                     stickyAccess == PartitionWriteAccess.DriverReadOnly
+                val stickySpace = state.filesystemSpace(stickyPartition)
+                val stickyName = stickyPartition.name.ifBlank { stickyPartition.id }
+                val stickyLabel = stickyPartition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
+                val stickyTitle = stickyLabel?.let { "$stickyName ($it)" } ?: stickyName
                 Surface(
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -771,59 +781,68 @@ fun PartitionsScreen(
                             onClick = { partitionPickerOpen = true },
                         ),
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp)
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text(
                                     text = stringResource(
                                         R.string.partitions_sticky_title,
                                         stickyIndex,
-                                        stickyPartition.name.ifBlank { stickyPartition.id },
+                                        stickyTitle,
                                     ),
-                                    style = MaterialTheme.typography.titleSmall,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
                                 )
-                                Text(
-                                    text = stringResource(
-                                        R.string.partitions_sticky_meta,
-                                        partitionSizeLabel(state, stickyPartition) ?: "—",
-                                        stickyPartition.filesystemLabel.ifEmpty { "—" },
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                if (stickyPartition.filesystemLabel.isNotEmpty()) {
+                                    Badge(text = stickyPartition.filesystemLabel)
+                                }
+                                if (stickyPartition.displayEfi) {
+                                    Badge(text = stringResource(R.string.partitions_badge_efi))
+                                }
+                                if (stickyRo) {
+                                    Badge(
+                                        text = stringResource(R.string.partitions_access_ro),
+                                        container = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        content = writeAccessTone(readWrite = false),
+                                    )
+                                }
                             }
-                            if (stickyRo) {
-                                Badge(
-                                    text = stringResource(R.string.partitions_access_ro),
-                                    container = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                    content = writeAccessTone(readWrite = false),
-                                )
-                            }
-                            if (stickyPartition.displayEfi) {
-                                Badge(text = "EFI")
-                            }
-                            Icon(
-                                imageVector = Icons.Rounded.UnfoldMore,
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Text(
+                                text = partitionUsageLabel(state, stickyPartition, stickySpace),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Icon(
+                            imageVector = Icons.Rounded.UnfoldMore,
+                            contentDescription = stringResource(
+                                R.string.partitions_sticky_expand_a11y,
+                            ),
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -842,10 +861,32 @@ fun PartitionsScreen(
                 title = stringResource(R.string.partitions_layout_title),
                 titleColor = MaterialTheme.colorScheme.onSurface,
                 trailing = {
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.partitions_scheme_help_title),
-                        infoText = stringResource(R.string.partitions_scheme_help_text),
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        val countA11y = pluralStringResource(
+                            R.plurals.partitions_count_a11y,
+                            state.partitions.size,
+                            state.partitions.size,
+                        )
+                        Box(
+                            modifier = Modifier.clearAndSetSemantics {
+                                contentDescription = countA11y
+                            },
+                        ) {
+                            Badge(
+                                text = stringResource(
+                                    R.string.partitions_count_badge,
+                                    state.partitions.size,
+                                ),
+                            )
+                        }
+                        InfoHelpButton(
+                            infoTitle = stringResource(R.string.partitions_scheme_help_title),
+                            infoText = stringResource(R.string.partitions_scheme_help_text),
+                        )
+                    }
                 },
                 modifier = Modifier.onGloballyPositioned {
                     layoutCardTopPx = it.positionInRoot().y
@@ -853,7 +894,21 @@ fun PartitionsScreen(
             ) {
                 val schemeName = currentScheme?.toTableScheme()?.name
                     ?: stringResource(R.string.partitions_scheme_unknown)
-                val usagePair = diskUsagePair(state)
+                val geometry = diskGeometry(state)
+                if (geometry != null) {
+                    FactRow(
+                        label = stringResource(R.string.partitions_geometry_size_label),
+                        value = geometry.sizeLabel,
+                    )
+                    FactRow(
+                        label = stringResource(R.string.partitions_geometry_blocks_label),
+                        value = stringResource(
+                            R.string.partitions_geometry_blocks_value,
+                            geometry.totalSectors.toString(),
+                        ),
+                        mono = true,
+                    )
+                }
                 if (!state.partitionTableRecognized &&
                     state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
                     state.tableValid && !state.partitionTableAmbiguous
@@ -889,39 +944,10 @@ fun PartitionsScreen(
                     val target = currentScheme?.let {
                         if (it == PartitionScheme.Gpt) PartitionScheme.Mbr else PartitionScheme.Gpt
                     }
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_layout_heading,
-                                    schemeName,
-                                    state.partitions.size,
-                                ),
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (usagePair != null) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.partitions_layout_usage_pair,
-                                        usagePair.first,
-                                        usagePair.second,
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
                         if (target != null) {
                             val targetName = target.toTableScheme().name
                             val capsuleA11y = stringResource(
@@ -937,7 +963,8 @@ fun PartitionsScreen(
                                     MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
                                 ),
                                 modifier = Modifier
-                                    .height(48.dp)
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
                                     .semantics { contentDescription = capsuleA11y }
                                     .clickable(
                                         enabled = state.actionsEnabled && !schemeBlocked,
@@ -947,62 +974,53 @@ fun PartitionsScreen(
                             ) {
                                 Row(
                                     modifier = Modifier
-                                        .padding(horizontal = 6.dp)
-                                        .fillMaxHeight(),
+                                        .fillMaxSize()
+                                        .padding(horizontal = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
                                         color = MaterialTheme.colorScheme.secondaryContainer,
+                                        modifier = Modifier.weight(1f),
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.ViewColumn,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                            Text(
-                                                text = schemeName,
-                                                style = MaterialTheme.typography.labelLarge.copy(
-                                                    fontFamily = FontFamily.Monospace,
-                                                ),
-                                            )
-                                        }
+                                        Text(
+                                            text = schemeName,
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(
+                                                horizontal = 8.dp,
+                                                vertical = 4.dp,
+                                            ),
+                                        )
                                     }
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    Text(
+                                        text = stringResource(R.string.partitions_scheme_arrow),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
                                         color = MaterialTheme.colorScheme.errorContainer,
+                                        modifier = Modifier.weight(1f),
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.WarningAmber,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp),
-                                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                            )
-                                            Text(
-                                                text = targetName,
-                                                style = MaterialTheme.typography.labelLarge.copy(
-                                                    fontFamily = FontFamily.Monospace,
-                                                ),
-                                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                            )
-                                        }
+                                        Text(
+                                            text = targetName,
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                            ),
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(
+                                                horizontal = 8.dp,
+                                                vertical = 4.dp,
+                                            ),
+                                        )
                                     }
                                 }
                             }
@@ -1062,7 +1080,7 @@ fun PartitionsScreen(
                         .selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    orderedPartitions.forEach { partition ->
+                    orderedPartitions.forEachIndexed { index, partition ->
                         val isSelected = partition.id == state.selectedPartitionId
                         val access = state.partitionWriteAccess(partition)
                         val readOnly = access == PartitionWriteAccess.ReadOnly ||
@@ -1077,7 +1095,11 @@ fun PartitionsScreen(
                         }
                         val displayName = partition.name.ifBlank { partition.id }
                         val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
-                        val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
+                        val rowTitle = stringResource(
+                            R.string.partitions_ordinal_title,
+                            index + 1,
+                            displayLabel?.let { "$displayName ($it)" } ?: displayName,
+                        )
                         val rowSpace = state.filesystemSpace(partition)
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -1126,7 +1148,7 @@ fun PartitionsScreen(
                                         Badge(text = partition.filesystemLabel)
                                     }
                                     if (partition.displayEfi) {
-                                        Badge(text = "EFI")
+                                        Badge(text = stringResource(R.string.partitions_badge_efi))
                                     }
                                     if (accessDescription != null && readOnly) {
                                         Box(
@@ -1167,6 +1189,32 @@ fun PartitionsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.partitions_create_action))
+                }
+            }
+
+            SectionCard(
+                title = stringResource(R.string.partitions_repair_title),
+                subtitle = stringResource(R.string.partitions_repair_subtitle),
+                trailing = {
+                    InfoHelpButton(
+                        infoTitle = stringResource(R.string.partitions_repair_info_title),
+                        infoText = stringResource(R.string.partitions_repair_info_text),
+                    )
+                },
+            ) {
+                OutlinedButton(
+                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR)) },
+                    enabled = state.actionsEnabled && !state.partitionTableDamaged,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.partitions_gpt_repair))
+                }
+                if (state.partitionTableDamaged) {
+                    Text(
+                        text = stringResource(R.string.partitions_gpt_repair_blocked),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
 
@@ -1221,6 +1269,7 @@ fun PartitionsScreen(
                     !state.partitionTableDamaged
                 AlertDialog(
                     onDismissRequest = { onIntent(UiIntent.DismissEfiWriteConfirmation) },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     title = { Text(stringResource(R.string.efi_confirm_title)) },
                     text = {
                         Text(
@@ -1266,6 +1315,7 @@ fun PartitionsScreen(
                 val changeBlocked = mbrTooLarge || backupUnknown
                 AlertDialog(
                     onDismissRequest = { schemeChangePrompt = null },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     title = {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1359,32 +1409,6 @@ fun PartitionsScreen(
                 onRawTargetMode = { rawTargetMode = it },
                 orderedPartitions = orderedPartitions,
             )
-
-            SectionCard(
-                title = stringResource(R.string.partitions_repair_title),
-                subtitle = stringResource(R.string.partitions_repair_subtitle),
-                trailing = {
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.partitions_repair_info_title),
-                        infoText = stringResource(R.string.partitions_repair_info_text),
-                    )
-                },
-            ) {
-                OutlinedButton(
-                    onClick = { onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR)) },
-                    enabled = state.actionsEnabled && !state.partitionTableDamaged,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.partitions_gpt_repair))
-                }
-                if (state.partitionTableDamaged) {
-                    Text(
-                        text = stringResource(R.string.partitions_gpt_repair_blocked),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
         }
     }
 }
@@ -1426,7 +1450,6 @@ private fun SelectedPartitionCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        val access = state.partitionWriteAccess(selected)
         val geometryKnown = selected.startLba != null && selected.sectorCount != null
         val renameEnabled = state.actionsEnabled && state.tableValid &&
             !state.partitionTableDamaged && geometryKnown &&
@@ -1567,20 +1590,6 @@ private fun SelectedPartitionCard(
             enabled = false,
             mono = true,
         )
-        HorizontalDivider(color = dividerColor)
-        FactRow(
-            label = stringResource(R.string.partitions_info_access_label),
-            value = when (access) {
-                PartitionWriteAccess.ReadOnly,
-                PartitionWriteAccess.DriverReadOnly,
-                -> stringResource(R.string.partitions_write_state_read_only)
-                PartitionWriteAccess.ReadWrite ->
-                    stringResource(R.string.partitions_write_state_read_write)
-                PartitionWriteAccess.Unknown ->
-                    stringResource(R.string.partitions_write_state_unknown)
-            },
-            enabled = false,
-        )
         if (selected.readOnly) {
             HorizontalDivider(color = dividerColor)
             val efiPolicyEnabled = state.isEfiWriteAllowed(selected)
@@ -1606,15 +1615,18 @@ private fun SelectedPartitionCard(
                     else R.string.efi_write_policy_protected,
                 ),
             )
-            InfoHint(
-                text = stringResource(R.string.efi_allow_hint),
-                infoTitle = stringResource(R.string.efi_policy_info_title),
-                infoText = stringResource(R.string.efi_policy_info_text),
+            Text(
+                text = stringResource(R.string.partitions_efi_ro_caption),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         val formatTarget = filesystemMenuTarget
         if (formatTarget != null) {
-            ModalBottomSheet(onDismissRequest = { onFilesystemMenu(null) }) {
+            ModalBottomSheet(
+                onDismissRequest = { onFilesystemMenu(null) },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1811,7 +1823,10 @@ private fun RawWriteSection(
                     Text(stringResource(R.string.partitions_raw_pick_image))
                 }
                 if (sourceSheetOpen) {
-                    ModalBottomSheet(onDismissRequest = { sourceSheetOpen = false }) {
+                    ModalBottomSheet(
+                        onDismissRequest = { sourceSheetOpen = false },
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2332,7 +2347,8 @@ private fun PartitionSelectStrip(
     }.sortedWith(compareBy { it.partition?.startLba ?: it.free?.startLba ?: ULong.MAX_VALUE })
     if (segments.isEmpty()) return
     val gap = 2.dp
-    // 48 dp meets Material touch guidance; horizontal scrolling preserves it on narrow screens.
+    // Interactive segments keep a 48 dp touch target; free-space visuals stay proportional.
+    // Horizontal scrolling accommodates targets wider than their on-disk spans.
     val minTouch = 48.dp
     val scroll = rememberScrollState()
     val density = LocalDensity.current
@@ -2345,17 +2361,24 @@ private fun PartitionSelectStrip(
         val availablePx = with(density) { maxWidth.toPx() }
         val gapPx = with(density) { gap.toPx() }
         val minPx = with(density) { minTouch.toPx() }
-        val maxPx = maxOf(minPx * 2.5f, availablePx * 0.6f)
-        val widthsPx = segments.map { segment ->
-            (segmentSpan(segment).toDouble() / totalSectors.toDouble() * availablePx).toFloat()
-                .coerceIn(minPx, maxPx)
+        val visualFreeMinPx = with(density) { 2.dp.toPx() }
+        val proportionalWidthsPx = segments.map { segment ->
+            (segmentSpan(segment).toDouble() / totalSectors.toDouble() * availablePx)
+                .toFloat().coerceAtLeast(visualFreeMinPx)
         }
-        val widths = widthsPx.map { with(density) { it.toDp() } }
+        val hitWidthsPx = segments.mapIndexed { index, segment ->
+            val selectable = segment.partition != null || segment.free?.let { free ->
+                state.tableValid && !state.partitionTableDamaged && free.startLba in creatableStarts
+            } == true
+            proportionalWidthsPx[index].coerceAtLeast(if (selectable) minPx else visualFreeMinPx)
+        }
+        val hitWidths = hitWidthsPx.map { with(density) { it.toDp() } }
+        val visualWidths = proportionalWidthsPx.map { with(density) { it.toDp() } }
         val selectedIndex = segments.indexOfFirst { it.partition?.id == state.selectedPartitionId }
-        LaunchedEffect(state.selectedPartitionId, widthsPx, scroll.maxValue) {
+        LaunchedEffect(state.selectedPartitionId, hitWidthsPx, scroll.maxValue) {
             if (selectedIndex >= 0) {
                 scroll.animateScrollTo(
-                    (widthsPx.take(selectedIndex).sum() + gapPx * selectedIndex).roundToInt(),
+                    (hitWidthsPx.take(selectedIndex).sum() + gapPx * selectedIndex).roundToInt(),
                 )
             }
         }
@@ -2393,7 +2416,7 @@ private fun PartitionSelectStrip(
                     } == true
                     Column(
                         modifier = Modifier
-                            .width(widths[index])
+                            .width(hitWidths[index])
                             .fillMaxHeight()
                             .then(
                                 if (partition != null) {
@@ -2417,7 +2440,7 @@ private fun PartitionSelectStrip(
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .width(visualWidths[index])
                                 .height(22.dp)
                                 .clip(RoundedCornerShape(4.dp))
                                 .background(
@@ -2564,23 +2587,25 @@ private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULon
 private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? =
     partitionSizeBytes(state, partition)?.let { DeviceIdentity.formatCapacity(it) }
 
-/**
- * `used / max` for one row, in units picked from the larger number. Both sides come from the
- * measured filesystem of this exact attachment when it is known, so `used <= max` always
- * holds; `max` falls back to the table geometry, and a side nothing measured prints `—`.
- */
+/** Display measured usage or the honest phase of the current per-partition probe. */
+@Composable
 private fun partitionUsageLabel(
     state: AppUiState,
     partition: PartitionTab,
     space: FilesystemSpace?,
 ): String {
-    val used = space?.usedBytes
-    val max = space?.totalBytes ?: partitionSizeBytes(state, partition)
-    return when {
-        used != null && max != null -> DeviceIdentity.formatCapacityPair(used, max)
-        used == null && max == null -> "—"
-        else -> (used?.let { DeviceIdentity.formatCapacity(it) } ?: "—") + " / " +
-            (max?.let { DeviceIdentity.formatCapacity(it) } ?: "—")
+    val measured = state.partitionUsageSnapshot(partition)?.usage as? FilesystemUsage.Known
+    if (measured != null) {
+        return DeviceIdentity.formatCapacityPair(measured.space.usedBytes, measured.space.totalBytes)
+    }
+    return when (state.partitionUsagePhase(partition)) {
+        FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
+        FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
+        FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
+        null -> {
+            val max = space?.totalBytes ?: partitionSizeBytes(state, partition)
+            if (max == null) "—" else "— / ${DeviceIdentity.formatCapacity(max)}"
+        }
     }
 }
 
@@ -2614,23 +2639,24 @@ private fun mibAlignSectors(sectorSize: Int): ULong? =
     }
 
 
-/** Used/total capacity pair for the layout heading; null when not honest. */
-@Composable
-private fun diskUsagePair(state: AppUiState): Pair<String, String>? {
-    if (!state.tableValid || state.partitionTableDamaged || state.partitionTableAmbiguous) {
-        return null
-    }
-    if (state.partitionScheme == null) return null
-    if (state.partitions.any { it.startLba == null || it.sectorCount == null }) return null
+/** Disk size and total LBA count for the Layout card; null when geometry is unknown. */
+private data class DiskGeometry(
+    val sizeLabel: String,
+    val totalSectors: ULong,
+)
+
+/** Size and block/LBA totals only: the layout card no longer claims used vs free space. */
+private fun diskGeometry(state: AppUiState): DiskGeometry? {
+    if (state.diskSectorSize <= 0) return null
     val sectorSize = state.diskSectorSize.toULong()
     val totalBytes = state.device?.capacityBytes ?: 0UL
     if (sectorSize == 0UL || totalBytes == 0UL) return null
     val totalSectors = totalBytes / sectorSize
     if (totalSectors == 0UL) return null
-    val occupied = state.partitions.sumOf { it.sectorCount ?: 0uL }
-    if (occupied > totalSectors) return null
-    val usedBytes = occupied * sectorSize
-    return DeviceIdentity.formatCapacity(usedBytes) to DeviceIdentity.formatCapacity(totalBytes)
+    return DiskGeometry(
+        sizeLabel = DeviceIdentity.formatCapacity(totalBytes),
+        totalSectors = totalSectors,
+    )
 }
 
 

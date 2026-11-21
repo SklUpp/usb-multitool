@@ -261,13 +261,21 @@ internal object VentoyTransitions {
     fun selectVentoySettingsDocument(
         state: AppUiState,
         intent: UiIntent.SelectVentoySettingsDocument,
-    ): ReduceResult =
-        when {
+    ): ReduceResult {
+        // A phone document is read through SAF and never touches the stick, so a missing
+        // attachment must not discard it: the phone picker stays usable with no USB drive.
+        // A stick that is present but Busy/PermissionRequired/unconfirmed still refuses,
+        // exactly as before, so a pick cannot race an operation on that attachment.
+        val stickAttached =
+            state.device != null &&
+                state.presence != DevicePresence.Absent &&
+                state.presence != DevicePresence.Disconnected
+        return when {
             intent.uri.isBlank() ->
                 ReduceResult(
                     state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceInvalid)),
                 )
-            !state.actionsEnabled ->
+            !state.actionsEnabled && stickAttached ->
                 ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
             intent.identity != null && intent.identity != state.device?.identity ->
                 ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
@@ -283,6 +291,7 @@ internal object VentoyTransitions {
                     device = state.device,
                 )
         }
+    }
 
     fun useDefaultVentoySettingsFile(state: AppUiState): ReduceResult =
         if (!state.actionsEnabled) {

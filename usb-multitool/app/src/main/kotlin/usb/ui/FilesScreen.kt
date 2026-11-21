@@ -80,7 +80,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.formatBinaryBytesPerSecond
 import usb.formatEtaDuration
-import usb.fs.FilesystemSpace
+import usb.fs.FilesystemUsage
+import usb.fs.FilesystemUsagePhase
+import usb.fs.FilesystemUsageSnapshot
 import usb.multitool.R
 import usb.remainingSeconds
 
@@ -218,7 +220,6 @@ fun FilesScreen(
     val selectedEntries = selection.entries
     val singleSelection = selection.single
     val uploadDescription = stringResource(R.string.files_copy_from_phone)
-    val space = selected?.let(state::filesystemSpace)
 
     // Blocked release marks an unconfirmed volume close/sync after a failed probe
     // release: partitions are cleared and presence stays Busy with no live operation.
@@ -282,7 +283,8 @@ fun FilesScreen(
                     partitions = state.partitions,
                     selectedId = selected?.id,
                     writeAccess = writeAccess,
-                    space = space,
+                    usageOf = state::partitionUsageSnapshot,
+                    phaseOf = state::partitionUsagePhase,
                     enabled = state.actionsEnabled,
                     sizeOf = { partitionSizeLabel(state, it) },
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
@@ -811,7 +813,8 @@ private fun FilesPickScreen(
                     partitions = state.partitions,
                     selectedId = mode.partitionId,
                     writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
-                    space = partition?.let(state::filesystemSpace),
+                    usageOf = state::partitionUsageSnapshot,
+                    phaseOf = state::partitionUsagePhase,
                     enabled = canAct && !transition.isRunning,
                     sizeOf = { partitionSizeLabel(state, it) },
                     onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
@@ -1385,7 +1388,8 @@ private fun PartitionChoiceRow(
     partitions: List<PartitionTab>,
     selectedId: String?,
     writeAccess: PartitionWriteAccess,
-    space: FilesystemSpace?,
+    usageOf: (PartitionTab) -> FilesystemUsageSnapshot?,
+    phaseOf: (PartitionTab) -> FilesystemUsagePhase?,
     enabled: Boolean,
     sizeOf: (PartitionTab) -> String?,
     onSelect: (String) -> Unit,
@@ -1438,16 +1442,23 @@ private fun PartitionChoiceRow(
                         maxLines = 1,
                     )
                 }
-                Text(
-                    text = freeSpaceText(space),
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                val selectedUsage = if (selected != null) {
+                    filesystemUsageText(usageOf(selected), phaseOf(selected))
+                } else {
+                    null
+                }
+                if (selectedUsage != null) {
+                    Text(
+                        text = selectedUsage,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             WriteAccessBadge(writeAccess)
             if (selectable) {
@@ -1481,6 +1492,7 @@ private fun PartitionChoiceRow(
                     // Nullable selectedId: no radio is active until a partition is chosen.
                     val isSelected = selectedId != null && partition.id == selectedId
                     val sizeLabel = sizeOf(partition)
+                    val usageLabel = filesystemUsageText(usageOf(partition), phaseOf(partition))
                     ListItem(
                         headlineContent = {
                             Text(
@@ -1492,18 +1504,34 @@ private fun PartitionChoiceRow(
                                 softWrap = false,
                             )
                         },
-                        supportingContent = sizeLabel?.let { labelText ->
+                        supportingContent = if (sizeLabel == null && usageLabel == null) {
+                            null
+                        } else {
                             {
-                                Text(
-                                    text = labelText,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                        fontFeatureSettings = "tnum",
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    softWrap = false,
-                                )
+                                Column {
+                                    if (sizeLabel != null) {
+                                        Text(
+                                            text = sizeLabel,
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontFeatureSettings = "tnum",
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            softWrap = false,
+                                        )
+                                    }
+                                    if (usageLabel != null) {
+                                        Text(
+                                            text = usageLabel,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            softWrap = false,
+                                        )
+                                    }
+                                }
                             }
                         },
                         leadingContent = {
@@ -1771,16 +1799,38 @@ private fun FilesPickRow(
     }
 }
 
+/**
+ * Explicit localized batch phase. Never a percent: one blocking `space()` call gives no
+ * progress, so the UI may state only which phase holds the partition. Null stays null so
+ * callers render nothing instead of inventing [R.string.filesystem_usage_unavailable].
+ */
 @Composable
-private fun freeSpaceText(space: FilesystemSpace?): String =
-    if (space != null) {
-        stringResource(
+internal fun filesystemUsagePhaseText(phase: FilesystemUsagePhase?): String? =
+    when (phase) {
+        FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
+        FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
+        FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
+        null -> null
+    }
+
+/**
+ * One usage line for a partition: measured free/total from a snapshot whose key still
+ * matches, otherwise the in-flight phase. A measured [FilesystemUsage.Unavailable] is a
+ * real answer and stays visible; a missing snapshot with no phase renders nothing.
+ */
+@Composable
+internal fun filesystemUsageText(
+    snapshot: FilesystemUsageSnapshot?,
+    phase: FilesystemUsagePhase?,
+): String? =
+    when (val usage = snapshot?.usage) {
+        is FilesystemUsage.Known -> stringResource(
             R.string.filesystem_usage_known,
-            DeviceIdentity.formatCapacity(space.freeBytes),
-            DeviceIdentity.formatCapacity(space.totalBytes),
+            DeviceIdentity.formatCapacity(usage.space.freeBytes),
+            DeviceIdentity.formatCapacity(usage.space.totalBytes),
         )
-    } else {
-        stringResource(R.string.filesystem_usage_unavailable)
+        is FilesystemUsage.Unavailable -> stringResource(R.string.filesystem_usage_unavailable)
+        null -> filesystemUsagePhaseText(phase)
     }
 
 private fun partitionSizeLabel(state: AppUiState, partition: PartitionTab): String? =

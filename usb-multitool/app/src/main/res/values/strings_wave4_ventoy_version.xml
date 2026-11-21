@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- a11y for installed → bundled pair (no visible "Version" subtitle). -->
-    <string name="ventoy_version_pair_cd">On USB %1$s, bundled %2$s</string>
-    <!-- a11y for the server fact next to refresh. -->
-    <string name="ventoy_version_server_cd">Server %1$s</string>
+    <!-- Version rows are announced per row (installed, bundled, server): each merged row
+         reads its own label and value exactly once, so no combined pair description exists. -->
 </resources>

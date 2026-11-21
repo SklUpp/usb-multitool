@@ -4,6 +4,7 @@ import usb.service.OperationToken
 import usb.fs.FilesystemId
 import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsageKey
+import usb.fs.FilesystemUsagePhase
 import usb.fs.FilesystemUsageSnapshot
 import usb.fs.FormatCatalog
 import usb.partition.TableScheme
@@ -1323,14 +1324,28 @@ data class AppUiState(
      */
     val pendingFilesBatchConflict: FilesConflict? = null,
     /**
-     * Last read-only free-space measurement of one exact attachment + partition geometry.
-     * Rendered only while its key still matches the live selection; invalidated on a new
-     * attachment, a different selection and every finished operation, so a value measured
-     * before a write can never be shown as current.
+     * Last read-only free-space measurement of the selected partition.
+     * Kept for selected-row access / write-state; batch results also land in
+     * [partitionUsage]. Rendered only while its key still matches the live
+     * selection; invalidated on a new attachment, geometry change and every
+     * finished write, so a value measured before a write can never be shown.
      */
     val filesystemUsage: FilesystemUsageSnapshot? = null,
-    /** Id of the newest measurement request; answers to older requests are dropped. */
+    /** Id of the newest selected/batch measurement request; answers to older requests are dropped. */
     val filesystemUsageGeneration: Long = 0L,
+    /**
+     * Measured free-space by exact [FilesystemUsageKey]. Survives partition
+     * selection changes; cleared on attachment/geometry/write invalidation.
+     */
+    val partitionUsage: Map<FilesystemUsageKey, FilesystemUsageSnapshot> = emptyMap(),
+    /**
+     * In-flight batch phases keyed by partition id. Cleared when the batch
+     * finishes, is cancelled, or the attachment is replaced. Never stores a
+     * fabricated percent.
+     */
+    val partitionUsagePhases: Map<String, FilesystemUsagePhase> = emptyMap(),
+    /** Monotonic fence for every batch; stale step answers are ignored after invalidation. */
+    val filesystemUsageBatchGeneration: Long = 0L,
     val operation: OperationProgress? = null,
     val pendingConfirmation: DestructiveConfirmation? = null,
     /** Exact EFI override target awaiting explicit UI confirmation. */
@@ -1717,12 +1732,11 @@ data class AppUiState(
 
     /**
      * Write state for [partition]. EFI policy blocks writes before driver facts; otherwise
-     * report only access from a matching mounted-handle measurement.
+     * report only access from a matching mounted-handle measurement (map or selected).
      */
     fun partitionWriteAccess(partition: PartitionTab): PartitionWriteAccess {
         if (!isEfiWriteAllowed(partition)) return PartitionWriteAccess.ReadOnly
-        val key = filesystemUsageKey(partition)
-        val access = filesystemUsage?.takeIf { key != null && it.matches(key) }?.access
+        val access = partitionUsageSnapshot(partition)?.access
         return when (access) {
             FilesystemAccess.ReadOnly -> PartitionWriteAccess.DriverReadOnly
             FilesystemAccess.ReadWrite -> PartitionWriteAccess.ReadWrite
@@ -1818,11 +1832,43 @@ fun AppUiState.filesystemUsageKey(partition: PartitionTab): FilesystemUsageKey? 
 }
 
 /**
- * Whether the host must ask for a fresh measurement. Any invalidation (selection change,
- * attachment refresh, finished operation) drops the snapshot, so a matching key alone is
- * not proof that the shown value is current. While a request for the same key is still in
- * flight the host does not ask again, and a published `Known`/`Unavailable` snapshot for
- * that key ends the cycle, so the refresh cannot loop.
+ * Measured snapshot for [partition]: [partitionUsage] first, then the selected
+ * [filesystemUsage] fallback when its key still matches. Never invents space.
+ */
+fun AppUiState.partitionUsageSnapshot(partition: PartitionTab): FilesystemUsageSnapshot? {
+    val key = filesystemUsageKey(partition) ?: return null
+    partitionUsage[key]?.takeIf { it.matches(key) }?.let { return it }
+    return filesystemUsage?.takeIf { it.matches(key) }
+}
+
+/** In-flight batch phase for [partition], or null when idle/measured. */
+fun AppUiState.partitionUsagePhase(partition: PartitionTab): FilesystemUsagePhase? =
+    partitionUsagePhases[partition.id]
+
+/**
+ * Measurable partitions for a sequential batch: selected first, then the rest in
+ * table order. Entries without a full key are omitted (unsupported/unknown FS).
+ */
+fun AppUiState.measurableFilesystemUsageKeys(): List<Pair<String, FilesystemUsageKey>> {
+    val selectedId = selectedPartitionId
+    val ordered =
+        if (selectedId == null) {
+            partitions
+        } else {
+            val selected = partitions.firstOrNull { it.id == selectedId }
+            val rest = partitions.filter { it.id != selectedId }
+            if (selected == null) partitions else listOf(selected) + rest
+        }
+    return ordered.mapNotNull { partition ->
+        filesystemUsageKey(partition)?.let { partition.id to it }
+    }
+}
+
+/**
+ * Whether the host must ask for a fresh selected measurement. Invalidation drops
+ * snapshots, so a matching key alone is not proof. While a request for the same key
+ * is still in flight the host does not ask again. Reads only the legacy selected
+ * slot — [partitionUsage] is owned by the batch path and must not suppress this.
  */
 fun AppUiState.needsFilesystemUsageRequest(
     key: FilesystemUsageKey?,
@@ -1835,6 +1881,28 @@ fun AppUiState.needsFilesystemUsageRequest(
     val measured = filesystemUsage?.matches(key) == true
     val pending = inFlightKey == key
     return !(key == lastRequestedKey && (measured || pending))
+}
+
+/**
+ * Whether any measurable partition still needs a batch pass. Used by the host so
+ * selected rows read the map/cache and never start a parallel legacy measure.
+ */
+fun AppUiState.needsFilesystemUsageBatch(
+    lastBatchKeys: Set<FilesystemUsageKey>?,
+    batchInFlight: Boolean,
+    operationFinished: Boolean,
+): Boolean {
+    val planned = measurableFilesystemUsageKeys()
+    if (planned.isEmpty()) return false
+    if (batchInFlight) return false
+    // Paused (Waiting) work resumes only through an invalidation that drops the phases.
+    if (partitionUsagePhases.isNotEmpty()) return false
+    val plannedKeys = planned.map { it.second }.toSet()
+    val missing = plannedKeys.any { key -> partitionUsage[key]?.matches(key) != true }
+    if (!missing) return false
+    // A finished write cleared the map; retry even though the plan is unchanged.
+    if (operationFinished) return true
+    return lastBatchKeys != plannedKeys
 }
 
 /**

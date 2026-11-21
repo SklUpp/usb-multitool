@@ -1884,17 +1884,15 @@ private val AppShapes = Shapes(
 )
 
 /**
- * Real free space of [partition], or null unless the measured snapshot still describes this
+ * Real free space of [partition], or null unless a measured snapshot still describes this
  * exact attachment: same attach generation, device identity, start LBA, sector count, sector
- * size and filesystem. A reformatted partition or a re-plugged stick with the same model but no
- * serial therefore reports "unavailable" instead of stale numbers, and the table's free regions
- * are never substituted here.
+ * size and filesystem. Reads the durable batch map first (via [partitionUsageSnapshot]), then
+ * the legacy selected slot when its key still matches. A reformatted partition or a re-plugged
+ * stick with the same model but no serial therefore reports "unavailable" instead of stale
+ * numbers, and the table's free regions are never substituted here.
  */
 internal fun AppUiState.filesystemSpace(partition: PartitionTab): FilesystemSpace? {
-    val snapshot = filesystemUsage ?: return null
-    // The reducer owns the key shape; sharing it keeps row and measurement from drifting apart.
-    val key = filesystemUsageKey(partition) ?: return null
-    if (!snapshot.matches(key)) return null
+    val snapshot = partitionUsageSnapshot(partition) ?: return null
     return (snapshot.usage as? FilesystemUsage.Known)?.space
 }
 

@@ -12,8 +12,9 @@ import usb.ventoy.VentoySettingsSource
 /**
  * The phone settings import: a SAF document is picked in MainActivity and handed to the
  * reducer as [UiIntent.SelectVentoySettingsDocument]. Reading it must not depend on the
- * stick's partition table (the document is read from the phone, the stick is only written on
- * Apply), and the read answer must reach [AppUiState.ventoyGlobalSettings].
+ * stick's partition table or on a stick being attached at all (the document is read from
+ * the phone, the stick is only written on Apply), and the read answer must reach
+ * [AppUiState.ventoyGlobalSettings].
  */
 class VentoySettingsImportTest {
     private val stick = DeviceIdentity(
@@ -158,6 +159,42 @@ class VentoySettingsImportTest {
         assertNull(landed.state.ventoyGlobalSettings)
         assertEquals(picked, landed.state.ventoySettingsSource)
         assertTrue(landed.state.ventoySettingsSourceLoading)
+    }
+
+    @Test
+    fun aPhoneDocumentIsAcceptedWhileNoStickIsAttached() {
+        // Phone picker must stay usable without a flash drive: the SAF read needs no
+        // partition table and no attachment. Only Apply needs the stick.
+        val detached = AppUiState(presence = DevicePresence.Absent, device = null)
+
+        val reduced = UiReducer.reduce(
+            detached,
+            UiIntent.SelectVentoySettingsDocument(uri = picked.uri, displayName = picked.displayName),
+        )
+
+        assertEquals(picked, reduced.state.ventoySettingsSource)
+        assertTrue(reduced.state.ventoySettingsSourceLoading)
+        assertEquals(
+            listOf(UiEffect.LoadVentoyGlobalSettings(requestToken = 1L, source = picked)),
+            reduced.effects,
+        )
+        assertNull(reduced.state.statusMessage)
+    }
+
+    @Test
+    fun aPhoneDocumentIsAcceptedWhileTheStickIsDisconnected() {
+        val disconnected = AppUiState(
+            presence = DevicePresence.Disconnected,
+            device = stick.copy(attachGeneration = 5L),
+        )
+
+        val reduced = UiReducer.reduce(
+            disconnected,
+            UiIntent.SelectVentoySettingsDocument(uri = picked.uri),
+        )
+
+        assertEquals(VentoySettingsSource.Document(uri = picked.uri), reduced.state.ventoySettingsSource)
+        assertTrue(reduced.effects.single() is UiEffect.LoadVentoyGlobalSettings)
     }
 
     @Test

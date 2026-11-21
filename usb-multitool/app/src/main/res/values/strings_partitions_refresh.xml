@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Count pill beside the Layout section title. -->
+    <string name="partitions_count_badge">%1$d</string>
+    <plurals name="partitions_count_a11y">
+        <item quantity="one">%1$d partition</item>
+        <item quantity="other">%1$d partitions</item>
+    </plurals>
+    <!-- Geometry lines under Layout: size and block/LBA counts only. -->
+    <string name="partitions_geometry_size_label">Size</string>
+    <string name="partitions_geometry_blocks_label">Blocks / LBA</string>
+    <string name="partitions_geometry_blocks_value">%1$s</string>
+    <!-- Scheme capsule arrow (text, not an icon). -->
+    <string name="partitions_scheme_arrow">→</string>
+    <!-- Localized EFI badge text (same glyph in every locale). -->
+    <string name="partitions_badge_efi">EFI</string>
+    <!-- Compact caption under the EFI write control. -->
+    <string name="partitions_efi_ro_caption">Permission applies only to this partition and connection; reconnecting clears it.</string>
+    <!-- Sticky / sheet expand control. -->
+    <string name="partitions_sticky_expand_a11y">Choose another partition</string>
+    <!-- Ordinal prefix before a partition name in the list. -->
+    <string name="partitions_ordinal_title">%1$d. %2$s</string>
+</resources>

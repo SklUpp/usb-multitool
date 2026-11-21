@@ -9,6 +9,7 @@ import usb.fs.FilesystemSpace
 import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsageKey
+import usb.fs.FilesystemUsagePhase
 import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.partition.TableScheme
@@ -236,7 +237,7 @@ class FilesystemUsageUiTest {
     }
 
     @Test
-    fun finishedOperationInvalidatesButRunningDoesNot() {
+    fun writeInvalidatesAtStartAndAtEveryTerminalState() {
         val requested = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsage)
         val key = requireNotNull((requested.effects.single() as UiEffect.LoadFilesystemUsage).usageKey)
         val published = UiReducer.reduce(
@@ -254,7 +255,8 @@ class FilesystemUsageUiTest {
                 ),
             ),
         )
-        assertEquals(key, requireNotNull(running.state.filesystemUsage).key)
+        assertNull(running.state.filesystemUsage)
+        assertTrue(running.state.partitionUsage.isEmpty())
         for (terminal in listOf(
             OperationState.Completed,
             OperationState.Failed,
@@ -430,4 +432,456 @@ class FilesystemUsageUiTest {
         assertEquals("1", scheduled.effect.partitionId)
         assertEquals(scheduled.key, scheduled.effect.usageKey)
     }
+
+    // ---- Sequential batch: ordering, fencing, park/resume, write invalidation ----
+
+    private fun batchState(): AppUiState =
+        UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsageBatch).state
+
+    private fun AppUiState.measure(
+        partitionId: String,
+        free: ULong = 1uL,
+        total: ULong = 4uL,
+    ): AppUiState {
+        val partition = partitions.first { it.id == partitionId }
+        return UiReducer.reduce(
+            this,
+            UiIntent.FilesystemUsageStepResulted(
+                filesystemUsageBatchGeneration,
+                partitionId,
+                requireNotNull(filesystemUsageKey(partition)),
+                space(free, total),
+            ),
+        ).state
+    }
+
+    private fun AppUiState.written(): AppUiState {
+        val token = OperationTokenGenerator.next()
+        val running = UiReducer.reduce(
+            this,
+            UiIntent.OperationBegan(
+                OperationProgress(state = OperationState.Running, title = OperationTitle.Upload, token = token),
+            ),
+        ).state
+        return UiReducer.reduce(
+            running,
+            UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Completed, title = OperationTitle.Upload, token = token),
+            ),
+        ).state
+    }
+
+    @Test
+    fun batchPlanPutsTheSelectedPartitionFirstAndSkipsUnmeasurableOnes() {
+        assertEquals(listOf("1", "2"), ready().measurableFilesystemUsageKeys().map { it.first })
+        assertEquals(keyFor(ready(), data), ready().measurableFilesystemUsageKeys().first().second)
+        // Selected last still wins the first slot.
+        val selectedOther = ready(selected = "2")
+        assertEquals(listOf("2", "1"), selectedOther.measurableFilesystemUsageKeys().map { it.first })
+        val partial = ready(partitions = listOf(data.copy(filesystemId = null), other))
+        assertEquals(listOf("2"), partial.measurableFilesystemUsageKeys().map { it.first })
+    }
+
+    @Test
+    fun batchRequestQueuesEveryMeasurablePartitionAndEmitsOneSequentialEffect() {
+        val result = UiReducer.reduce(ready(), UiIntent.RequestFilesystemUsageBatch)
+        val effect = result.effects.single() as UiEffect.LoadFilesystemUsageBatch
+        assertEquals(1L, effect.usageGeneration)
+        assertEquals(1L, result.state.filesystemUsageBatchGeneration)
+        assertEquals(listOf("1", "2"), effect.steps.map { it.first })
+        assertEquals(
+            mapOf("1" to FilesystemUsagePhase.Queued, "2" to FilesystemUsagePhase.Queued),
+            result.state.partitionUsagePhases,
+        )
+        assertTrue(result.state.partitionUsage.isEmpty())
+        // Nothing is measured while a user operation owns the session: wait, do not fail.
+        val running = ready().copy(
+            operation = OperationProgress(
+                state = OperationState.Running,
+                title = OperationTitle.Upload,
+                token = OperationTokenGenerator.next(),
+            ),
+        )
+        val blocked = UiReducer.reduce(running, UiIntent.RequestFilesystemUsageBatch)
+        assertTrue(blocked.effects.isEmpty())
+        assertTrue(blocked.state.partitionUsagePhases.values.all { it == FilesystemUsagePhase.Waiting })
+    }
+
+    @Test
+    fun sequentialStepsAccumulateResultsAndClearOnlyTheirOwnPhase() {
+        val requested = batchState()
+        val afterOther = requested.measure("2", free = 2uL, total = 8uL)
+        assertEquals(1, afterOther.partitionUsage.size)
+        // The selected row still belongs to partition 1; another partition's result never
+        // overwrites it.
+        assertNull(afterOther.filesystemUsage)
+        assertNull(afterOther.partitionUsagePhase(other))
+        assertEquals(FilesystemUsagePhase.Queued, afterOther.partitionUsagePhase(data))
+        val afterData = afterOther.measure("1")
+        assertEquals(2, afterData.partitionUsage.size)
+        assertEquals(keyFor(afterData, data), requireNotNull(afterData.filesystemUsage).key)
+        assertTrue(afterData.partitionUsagePhases.isEmpty())
+        assertEquals(keyFor(afterData, other), requireNotNull(afterData.partitionUsageSnapshot(other)).key)
+    }
+
+    @Test
+    fun stepAnswerFromAnOlderBatchGenerationIsDropped() {
+        val first = batchState()
+        val second = UiReducer.reduce(first, UiIntent.RequestFilesystemUsageBatch).state
+        assertEquals(2L, second.filesystemUsageBatchGeneration)
+        val stale = UiReducer.reduce(
+            second,
+            UiIntent.FilesystemUsageStepResulted(1L, "1", keyFor(second, data), space(1uL, 2uL)),
+        ).state
+        assertTrue(stale.partitionUsage.isEmpty())
+        assertNull(stale.filesystemUsage)
+    }
+
+    @Test
+    fun stepAnswerForChangedGeometryOrFilesystemIsDropped() {
+        val requested = batchState()
+        val live = keyFor(requested, data)
+        val moved = live.copy(partitionStartLba = 4096uL)
+        val resized = live.copy(partitionSectorCount = live.partitionSectorCount + 1uL)
+        val otherFs = live.copy(filesystem = FilesystemId.NTFS)
+        for (stale in listOf(moved, resized, otherFs)) {
+            val dropped = UiReducer.reduce(
+                requested,
+                UiIntent.FilesystemUsageStepResulted(1L, "1", stale, space(1uL, 2uL)),
+            ).state
+            assertTrue("stale key $stale must not be stored", dropped.partitionUsage.isEmpty())
+            assertNull(dropped.filesystemUsage)
+        }
+    }
+
+    @Test
+    fun selectingAnotherPartitionKeepsMeasuredMapAndClearsLegacySelectedSlot() {
+        val measured = batchState().measure("1", free = 1uL, total = 4uL).measure("2", free = 2uL, total = 8uL)
+        val switched = UiReducer.reduce(measured, UiIntent.SelectPartition("2")).state
+        assertEquals(2, switched.partitionUsage.size)
+        // Legacy selected-only callers still see a cleared slot and request again.
+        assertNull(switched.filesystemUsage)
+        assertTrue(switched.partitionUsagePhases.isEmpty())
+        // Batch UI reads the durable map through helpers, never the cleared slot.
+        assertEquals(keyFor(switched, other), requireNotNull(switched.partitionUsageSnapshot(other)).key)
+        assertEquals(keyFor(switched, data), requireNotNull(switched.partitionUsageSnapshot(data)).key)
+        val back = UiReducer.reduce(switched, UiIntent.SelectPartition("1")).state
+        assertEquals(2, back.partitionUsage.size)
+        assertNull(back.filesystemUsage)
+        assertEquals(1uL, ((back.partitionUsageSnapshot(data)?.usage) as FilesystemUsage.Known).space.freeBytes)
+    }
+
+    @Test
+    fun deferredStepShowsWaitingAndStoresNoUnavailableValue() {
+        val requested = batchState()
+        val waiting = UiReducer.reduce(
+            requested,
+            UiIntent.FilesystemUsageStepDeferred(1L, "1", keyFor(requested, data)),
+        ).state
+        assertEquals(FilesystemUsagePhase.Waiting, waiting.partitionUsagePhase(data))
+        // The stopped batch parks every remaining step as Waiting, not failed.
+        assertEquals(FilesystemUsagePhase.Waiting, waiting.partitionUsagePhase(other))
+        assertTrue(waiting.partitionUsage.isEmpty())
+        assertNull(waiting.filesystemUsage)
+    }
+
+    @Test
+    fun waitingIsPublishedBeforeTheLockAndCalculatingOnlyAfterwards() {
+        val requested = batchState()
+        val waiting = UiReducer.reduce(
+            requested,
+            UiIntent.FilesystemUsageStepWaiting(1L, "1", keyFor(requested, data)),
+        ).state
+        assertEquals(FilesystemUsagePhase.Waiting, waiting.partitionUsagePhase(data))
+        val calculating = UiReducer.reduce(
+            waiting,
+            UiIntent.FilesystemUsageStepCalculating(1L, "1", keyFor(waiting, data)),
+        ).state
+        assertEquals(FilesystemUsagePhase.Calculating, calculating.partitionUsagePhase(data))
+        assertEquals(FilesystemUsagePhase.Queued, calculating.partitionUsagePhase(other))
+    }
+
+    @Test
+    fun cancelledBatchParksEveryUnfinishedPartitionAndKeepsResults() {
+        val partial = batchState().measure("1").let {
+            UiReducer.reduce(
+                it,
+                UiIntent.FilesystemUsageStepCalculating(1L, "2", keyFor(it, other)),
+            ).state
+        }
+        val cancelled = UiReducer.reduce(partial, UiIntent.CancelFilesystemUsageBatch).state
+        assertEquals(2L, cancelled.filesystemUsageBatchGeneration)
+        assertEquals(FilesystemUsagePhase.Waiting, cancelled.partitionUsagePhase(other))
+        assertEquals(1, cancelled.partitionUsage.size)
+        // A Calculating queued by a coroutine still inside the (non-interruptible) monitor
+        // cannot revive the cancelled batch.
+        val late = UiReducer.reduce(
+            cancelled,
+            UiIntent.FilesystemUsageStepCalculating(1L, "2", keyFor(cancelled, other)),
+        ).state
+        assertEquals(FilesystemUsagePhase.Waiting, late.partitionUsagePhase(other))
+    }
+
+    @Test
+    fun finishedWriteClearsTheMapAndDropsInFlightSteps() {
+        val measured = batchState().measure("1")
+        val finished = measured.written()
+        assertTrue(finished.partitionUsage.isEmpty())
+        assertNull(finished.filesystemUsage)
+        assertTrue(finished.filesystemUsageBatchGeneration > measured.filesystemUsageBatchGeneration)
+        // A value measured before the write can never surface after it.
+        val late = UiReducer.reduce(
+            finished,
+            UiIntent.FilesystemUsageStepResulted(
+                measured.filesystemUsageBatchGeneration,
+                "1",
+                keyFor(finished, data),
+                space(1uL, 4uL),
+            ),
+        ).state
+        assertTrue(late.partitionUsage.isEmpty())
+        assertNull(late.filesystemUsage)
+    }
+
+    @Test
+    fun readOnlyTerminalKeepsTheMapSoRowsStillShowSpace() {
+        val measured = batchState().measure("1")
+        val token = OperationTokenGenerator.next()
+        val running = UiReducer.reduce(
+            measured,
+            UiIntent.OperationBegan(
+                OperationProgress(state = OperationState.Running, title = OperationTitle.ReadScan, token = token),
+            ),
+        ).state
+        val finished = UiReducer.reduce(
+            running,
+            UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Completed, title = OperationTitle.ReadScan, token = token),
+            ),
+        ).state
+        assertEquals(1, finished.partitionUsage.size)
+        // Read-only terminal rebinds the selected slot from the durable map.
+        assertEquals(keyFor(finished, data), requireNotNull(finished.filesystemUsage).key)
+        assertEquals(keyFor(finished, data), requireNotNull(finished.partitionUsageSnapshot(data)).key)
+        assertTrue(finished.partitionUsagePhases.isEmpty())
+        // Geometry change on the same attachment drops keys that no longer match.
+        val resized = listOf(data.copy(sectorCount = requireNotNull(data.sectorCount) + 8uL), other)
+        val refreshed = UiReducer.reduce(
+            finished,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Busy,
+                device = device,
+                partitions = resized,
+            ),
+        ).state
+        assertTrue(refreshed.partitionUsage.isEmpty())
+    }
+
+    @Test
+    fun pausedBatchIsNotRescheduledInALoop() {
+        val requested = batchState()
+        val deferred = UiReducer.reduce(
+            requested,
+            UiIntent.FilesystemUsageStepDeferred(1L, "1", keyFor(requested, data)),
+        ).state
+        // Waiting phases pause the plan; a refresh must not restart it (Busy retry loop).
+        assertNull(
+            scheduleFilesystemUsageBatchRequest(
+                deferred,
+                lastBatchKeys = requested.measurableFilesystemUsageKeys().map { it.second }.toSet(),
+                batchInFlight = false,
+                operationFinished = false,
+            ),
+        )
+        // While any batch job is live nothing else may open a second claim.
+        assertNull(
+            scheduleFilesystemUsageBatchRequest(
+                batchState(),
+                lastBatchKeys = null,
+                batchInFlight = true,
+                operationFinished = false,
+            ),
+        )
+        // A write terminal clears the paused phases; the next refresh measures once.
+        val scheduled = requireNotNull(
+            scheduleFilesystemUsageBatchRequest(
+                deferred.written(),
+                lastBatchKeys = deferred.measurableFilesystemUsageKeys().map { it.second }.toSet(),
+                batchInFlight = false,
+                operationFinished = true,
+            ),
+        )
+        assertEquals(listOf("1", "2"), scheduled.steps.map { it.first })
+        // Steady state after every step answered: nothing is asked again.
+        val complete = scheduled.state.measure("1").measure("2")
+        assertNull(
+            scheduleFilesystemUsageBatchRequest(
+                complete,
+                lastBatchKeys = scheduled.steps.map { it.second }.toSet(),
+                batchInFlight = false,
+                operationFinished = false,
+            ),
+        )
+    }
+
+    @Test
+    fun staleDeferredParksWaitingWithoutImmediateReschedule() {
+        val requested = batchState()
+        val generation = requested.filesystemUsageBatchGeneration
+        // Host maps Stale -> FilesystemUsageStepDeferred; park, never bump.
+        val parked = UiReducer.reduce(
+            requested,
+            UiIntent.FilesystemUsageStepDeferred(generation, "1", keyFor(requested, data)),
+        ).state
+        assertEquals(generation, parked.filesystemUsageBatchGeneration)
+        assertEquals(FilesystemUsagePhase.Waiting, parked.partitionUsagePhase(data))
+        assertEquals(FilesystemUsagePhase.Waiting, parked.partitionUsagePhase(other))
+        // Phases still present: scheduler must not open another mount/close loop.
+        assertNull(
+            scheduleFilesystemUsageBatchRequest(
+                parked,
+                lastBatchKeys = requested.measurableFilesystemUsageKeys().map { it.second }.toSet(),
+                batchInFlight = false,
+                operationFinished = false,
+            ),
+        )
+        // Meaningful event clears phases; only then may missing keys resume.
+        val dismissed = UiReducer.reduce(
+            parked.copy(
+                pendingConfirmation = requireNotNull(
+                    UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.WIPE))
+                        .state.pendingConfirmation,
+                ),
+            ),
+            UiIntent.DismissConfirmation,
+        ).state
+        assertTrue(dismissed.partitionUsagePhases.isEmpty())
+        assertTrue(dismissed.filesystemUsageBatchGeneration > generation)
+        val scheduled = requireNotNull(
+            scheduleFilesystemUsageBatchRequest(dismissed, lastBatchKeys = null, batchInFlight = false, operationFinished = false),
+        )
+        assertEquals(listOf("1", "2"), scheduled.steps.map { it.first })
+    }
+
+    @Test
+    fun filesystemSpaceReadsDurableMapAfterSelectClearsLegacySlot() {
+        val measured = batchState().measure("1", free = 3uL, total = 9uL).measure("2", free = 4uL, total = 8uL)
+        val switched = UiReducer.reduce(measured, UiIntent.SelectPartition("2")).state
+        assertNull(switched.filesystemUsage)
+        // AppShell helper must still show map-backed space for every measured row.
+        assertEquals(4uL, requireNotNull(switched.filesystemSpace(other)).freeBytes)
+        assertEquals(3uL, requireNotNull(switched.filesystemSpace(data)).freeBytes)
+    }
+
+    @Test
+    fun readyRefreshRestartsPausedBatchAndRejectsOldAttachmentResult() {
+        val requested = batchState()
+        val key = keyFor(requested, data)
+        val deferred = UiReducer.reduce(
+            requested, UiIntent.FilesystemUsageStepDeferred(1L, "1", key),
+        ).state
+        val refreshed = UiReducer.reduce(
+            deferred,
+            UiIntent.DeviceChanged(
+                presence = DevicePresence.Ready,
+                device = device.copy(attachGeneration = device.attachGeneration + 1L),
+                partitions = listOf(data, other),
+                sectorSize = 512,
+            ),
+        ).state
+        assertTrue(refreshed.partitionUsagePhases.isEmpty())
+        assertTrue(refreshed.partitionUsage.isEmpty())
+        val scheduled = requireNotNull(scheduleFilesystemUsageBatchRequest(refreshed, null, false, false))
+        val stale = UiReducer.reduce(
+            scheduled.state, UiIntent.FilesystemUsageStepResulted(1L, "1", key, space(1uL, 2uL)),
+        ).state
+        assertTrue(stale.partitionUsage.isEmpty())
+    }
+
+    @Test
+    fun readOnlyTerminalResumesOnlyUnfinishedPartitions() {
+        val partial = batchState().measure("1")
+        val deferred = UiReducer.reduce(
+            partial, UiIntent.FilesystemUsageStepDeferred(1L, "2", keyFor(partial, other)),
+        ).state
+        val token = OperationTokenGenerator.next()
+        val running = UiReducer.reduce(
+            deferred, UiIntent.OperationBegan(
+                OperationProgress(state = OperationState.Running, title = OperationTitle.ReadScan, token = token),
+            ),
+        ).state
+        val terminal = UiReducer.reduce(
+            running, UiIntent.OperationUpdated(
+                OperationProgress(state = OperationState.Completed, title = OperationTitle.ReadScan, token = token),
+            ),
+        ).state
+        assertTrue(terminal.partitionUsagePhases.isEmpty())
+        // Selected snapshot rebinds from the durable map; write ops alone wipe it.
+        assertEquals(keyFor(terminal, data), requireNotNull(terminal.filesystemUsage).key)
+        assertEquals(keyFor(terminal, data), requireNotNull(terminal.partitionUsageSnapshot(data)).key)
+        val scheduled = requireNotNull(scheduleFilesystemUsageBatchRequest(terminal, null, false, true))
+        assertEquals(listOf("2"), scheduled.steps.map { it.first })
+        assertEquals(1, scheduled.state.partitionUsage.size)
+    }
+
+    @Test
+    fun dismissConfirmationClearsPhasesSoMissingKeysCanResume() {
+        val confirming = requireNotNull(
+            UiReducer.reduce(ready(), UiIntent.RequestDestructive(DestructiveAction.WIPE))
+                .state.pendingConfirmation,
+        )
+        val parked = batchState().copy(
+            pendingConfirmation = confirming,
+            partitionUsagePhases = mapOf(
+                "1" to FilesystemUsagePhase.Waiting,
+                "2" to FilesystemUsagePhase.Waiting,
+            ),
+        )
+        val dismissed = UiReducer.reduce(parked, UiIntent.DismissConfirmation).state
+        assertNull(dismissed.pendingConfirmation)
+        assertTrue(dismissed.partitionUsagePhases.isEmpty())
+        assertTrue(dismissed.filesystemUsageBatchGeneration > parked.filesystemUsageBatchGeneration)
+        val scheduled = requireNotNull(
+            scheduleFilesystemUsageBatchRequest(dismissed, lastBatchKeys = null, batchInFlight = false, operationFinished = false),
+        )
+        assertEquals(listOf("1", "2"), scheduled.steps.map { it.first })
+    }
+
+    @Test
+    fun ejectFailureAndBusyClearPhasesForResume() {
+        val requested = UiReducer.reduce(ready(), UiIntent.RequestEject).state
+        val withPhases = requested.copy(
+            partitionUsagePhases = mapOf("1" to FilesystemUsagePhase.Waiting, "2" to FilesystemUsagePhase.Queued),
+        )
+        val failed = UiReducer.reduce(
+            withPhases,
+            UiIntent.EjectResulted(
+                ejectGeneration = withPhases.ejectGeneration,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = false,
+                message = "SYNCHRONIZE CACHE failed",
+            ),
+        ).state
+        assertTrue(failed.actionsEnabled)
+        assertTrue(failed.partitionUsagePhases.isEmpty())
+        val busyParked = withPhases.copy(ejectInFlight = true)
+        val busy = UiReducer.reduce(
+            busyParked,
+            UiIntent.EjectResulted(
+                ejectGeneration = busyParked.ejectGeneration,
+                identity = device.identity,
+                attachGeneration = device.attachGeneration,
+                succeeded = false,
+                busy = true,
+            ),
+        ).state
+        assertTrue(busy.partitionUsagePhases.isEmpty())
+        assertTrue(busy.actionsEnabled)
+        val scheduled = requireNotNull(
+            scheduleFilesystemUsageBatchRequest(failed, lastBatchKeys = null, batchInFlight = false, operationFinished = false),
+        )
+        assertEquals(listOf("1", "2"), scheduled.steps.map { it.first })
+    }
+
 }

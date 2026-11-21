@@ -468,7 +468,9 @@ class FilesVolumeSession(
         pin: AttachmentPin?,
         partitionId: String,
         key: FilesystemUsageKey,
+        ensureActive: () -> Unit = {},
     ): FilesystemUsageSnapshot {
+        ensureActive()
         if (pin == null || currentAttachment() != pin || pin.attachGeneration != key.attachGeneration) {
             throw AttachmentChangedException()
         }
@@ -479,12 +481,14 @@ class FilesVolumeSession(
                 is CloseEpochResult.ClosedFailed -> throw closed.error
                 else -> Unit
             }
+            ensureActive()
             volume = volumeForLocked(pin, partitionId, writable = false)
             current = mounted ?: throw AttachmentChangedException()
             if (!mountMatches(current, pin, partitionId, volume, key)) {
                 throw AttachmentChangedException()
             }
         }
+        ensureActive()
         return FilesystemUsageProbe.measureLocked(volume, key)
     }
 
