@@ -541,6 +541,27 @@ class MainViewModel(
     }
 
     /**
+     * Create entry point for the rescue image and the GPT copy. Without a live persisted
+     * grant it republishes the loss (Diagnostics then offers Settings) and starts nothing:
+     * the SAF picker belongs to Settings, never to a create click. With a grant the usual
+     * pinned dispatch runs; [requireBackupFolder] still re-checks it right before I/O.
+     */
+    fun startCreateWithBackupFolder(action: BackupFolderAction) {
+        if (hasUsableBackupFolder()) {
+            requestBackupAction(action)
+            return
+        }
+        trace.log("backup.folder_lost", "action" to action.name)
+        onIntent(
+            UiIntent.SetBackupFolder(
+                uri = state.backupFolderUri,
+                name = state.backupFolderName,
+                usable = false,
+            ),
+        )
+    }
+
+    /**
      * Persist the user's tree choice. Returns false when the grant was not persisted or
      * the provider cannot describe the tree; the caller then keeps the picker flow open.
      */
@@ -7545,18 +7566,6 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Create actions need the common tree. When it is missing or its grant is gone, show
-     * the tree picker first and resume exactly that action after the user chooses.
-     */
-    private fun startWithBackupFolder(action: BackupFolderAction) {
-        if (viewModel.hasUsableBackupFolder()) {
-            viewModel.requestBackupAction(action)
-        } else {
-            openBackupFolderPicker(action)
-        }
-    }
-
-    /**
      * Records the pinned action before the picker opens. [BackupFolderAction.ChangeFolder]
      * first cancels a pending write action: a manual folder change must never resume an
      * earlier backup against a stick the user was no longer looking at.
@@ -7771,14 +7780,17 @@ class MainActivity : ComponentActivity() {
                     openBackupFolderPicker(BackupFolderAction.ChangeFolder)
                 },
                 onStartRescueBackup = {
-                    startWithBackupFolder(BackupFolderAction.RescueBackup)
+                    viewModel.startCreateWithBackupFolder(BackupFolderAction.RescueBackup)
                 },
                 onCreateGptCopy = {
-                    startWithBackupFolder(BackupFolderAction.GptCopy)
+                    viewModel.startCreateWithBackupFolder(BackupFolderAction.GptCopy)
                 },
                 onPickRestoreFolder = {
                     rescueArchiveFolderPicker.launch(null)
                 },
+                // Live persisted-grant check for the Diagnostics create buttons; the write
+                // path still re-verifies it in requireBackupFolder() before opening the disk.
+                backupFolderGrantValid = { viewModel.hasUsableBackupFolder() },
                 onExportTrace = {
                     traceExportLauncher.launch("usb-multitool-trace.log")
                 },

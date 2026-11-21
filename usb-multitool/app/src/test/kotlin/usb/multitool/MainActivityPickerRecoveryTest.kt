@@ -545,4 +545,47 @@ class MainActivityPickerRecoveryTest {
         )
         assertFalse(vm.hasUsableBackupFolder())
     }
+
+    @Test
+    fun createClickWithoutLiveGrantPublishesLossAndStartsNothing() {
+        val app = RuntimeEnvironment.getApplication()
+        val uri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3AStale")
+        app.getSharedPreferences("ui_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("backup_folder_uri", uri.toString())
+            .putString("backup_folder_name", "Stale")
+            .apply()
+
+        val vm = MainViewModel(app)
+        assertFalse(vm.hasUsableBackupFolder())
+        assertNull(vm.state.operation)
+
+        vm.startCreateWithBackupFolder(BackupFolderAction.RescueBackup)
+
+        assertEquals(uri.toString(), vm.state.backupFolderUri)
+        assertEquals("Stale", vm.state.backupFolderName)
+        assertFalse(vm.state.backupFolderUsable)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.BackupFolderPermissionLost),
+            vm.state.statusMessage,
+        )
+        assertNull(vm.state.operation)
+    }
+
+    @Test
+    fun createClickWithLiveGrantDispatchesPinnedAction() {
+        val app = RuntimeEnvironment.getApplication()
+        val uri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ALive")
+        val vm = MainViewModel(app)
+        assertTrue(vm.onBackupFolderPicked(uri))
+        assertTrue(vm.hasUsableBackupFolder())
+
+        vm.startCreateWithBackupFolder(BackupFolderAction.GptCopy)
+
+        // No attached stick: the pinned dispatch reports the missing target, not folder loss.
+        assertEquals(
+            UiMessage.Key(UiMessageKey.BackupFolderTargetChanged),
+            vm.state.statusMessage,
+        )
+    }
 }

@@ -314,11 +314,18 @@ object UiStateHostCheck {
         require(
             UiReducer.reduce(ready, UiIntent.StartReadScan).effects.single() is UiEffect.ReadScan,
         ) { "read scan must submit real disk work" }
+        val readyWithFolder = ready.copy(
+            backupFolderUri = "content://tree/backups",
+            backupFolderName = "Backups",
+            backupFolderUsable = true,
+        )
         require(
-            UiReducer.reduce(ready, UiIntent.StartRescueBackup).effects.single() is UiEffect.RescueBackup,
+            UiReducer.reduce(readyWithFolder, UiIntent.StartRescueBackup).effects.single()
+                is UiEffect.RescueBackup,
         ) { "rescue backup must submit real disk work" }
         require(
-            UiReducer.reduce(ready, UiIntent.CaptureGptBackup).effects.single() is UiEffect.CaptureGptBackup,
+            UiReducer.reduce(readyWithFolder, UiIntent.CaptureGptBackup).effects.single()
+                is UiEffect.CaptureGptBackup,
         ) { "GPT capture must submit real disk work" }
 
         val noBackup =

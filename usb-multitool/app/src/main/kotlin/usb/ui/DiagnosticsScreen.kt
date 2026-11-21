@@ -19,11 +19,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,12 +49,31 @@ fun DiagnosticsScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickBackup: () -> Unit = {},
-    onPickBackupFolder: () -> Unit = {},
+    onOpenBackupSettings: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
     onPickRestoreFolder: () -> Unit = {},
+    /** Live persisted-grant check from the shell; required so a stale snapshot cannot ship. */
+    backupFolderGrantValid: () -> Boolean,
 ) {
     var dangerExpanded by remember { mutableStateOf(false) }
+    // The persisted SAF grant can vanish after startup while [AppUiState.backupFolderUsable]
+    // still holds the old snapshot. Create clicks re-check the live grant: a lost grant
+    // publishes that fact and opens Settings, so no SAF chooser ever starts from here.
+    val requestCreate: (() -> Unit) -> Unit = { create ->
+        if (backupFolderGrantValid()) {
+            create()
+        } else {
+            onIntent(
+                UiIntent.SetBackupFolder(
+                    uri = state.backupFolderUri,
+                    name = state.backupFolderName,
+                    usable = false,
+                ),
+            )
+            onOpenBackupSettings()
+        }
+    }
     val usbPresent = state.device != null &&
         (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy)
     val dangerActionLabel = stringResource(
@@ -123,55 +142,78 @@ fun DiagnosticsScreen(
                 )
             },
         ) {
-            Row(
+            val backupFolderReady = state.backupFolderUsable
+            val folderStatusText = when {
+                state.backupFolderUri == null ->
+                    stringResource(R.string.diagnostics_backup_folder_none)
+                else ->
+                    state.backupFolderName
+                        ?: state.backupFolderUri?.substringAfterLast('/')
+                        ?: stringResource(R.string.diagnostics_backup_folder_none)
+            }
+            val folderStatusColor = when {
+                state.backupFolderUri != null && !state.backupFolderUsable ->
+                    MaterialTheme.colorScheme.error
+                state.backupFolderUri == null ->
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                else ->
+                    MaterialTheme.colorScheme.onSurface
+            }
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.diagnostics_backup_folder),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = state.backupFolderName
-                            ?: state.backupFolderUri?.substringAfterLast('/')
-                            ?: stringResource(R.string.diagnostics_backup_folder_none),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (state.backupFolderUri != null && !state.backupFolderUsable) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                val pickFolderLabel = stringResource(
-                    if (state.backupFolderUri == null) {
-                        R.string.diagnostics_pick_folder
-                    } else {
-                        R.string.diagnostics_change_folder
-                    },
+                Text(
+                    text = stringResource(R.string.diagnostics_backup_folder),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val folderContentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                // Nothing chosen yet is the primary next step; changing an existing folder
-                // stays a secondary, outlined action.
-                if (state.backupFolderUri == null) {
-                    FilledTonalButton(
-                        onClick = onPickBackupFolder,
-                        contentPadding = folderContentPadding,
+                Text(
+                    text = folderStatusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = folderStatusColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!backupFolderReady) {
+                    // Folder choice lives in Settings; create actions stay blocked until a
+                    // usable tree is available. Restore/wipe keep their own paths.
+                    val noticeText = stringResource(
+                        if (state.backupFolderUri == null) {
+                            R.string.msg_choose_backup_folder
+                        } else {
+                            R.string.msg_backup_folder_permission_lost
+                        },
+                    )
+                    val openSettingsLabel =
+                        stringResource(R.string.diagnostics_backup_open_settings)
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(pickFolderLabel, style = MaterialTheme.typography.labelMedium)
-                    }
-                } else {
-                    OutlinedButton(
-                        onClick = onPickBackupFolder,
-                        contentPadding = folderContentPadding,
-                    ) {
-                        Text(pickFolderLabel, style = MaterialTheme.typography.labelMedium)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = noticeText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = onOpenBackupSettings,
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                Text(openSettingsLabel)
+                            }
+                        }
                     }
                 }
             }
@@ -185,9 +227,11 @@ fun DiagnosticsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(
-                    onClick = onStartRescueBackup,
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.weight(1f),
+                    onClick = { requestCreate(onStartRescueBackup) },
+                    enabled = state.actionsEnabled && backupFolderReady,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                 ) {
                     GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
@@ -201,7 +245,9 @@ fun DiagnosticsScreen(
                 }
                 OutlinedButton(
                     onClick = onPickRestoreFolder,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                 ) {
                     GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
@@ -260,9 +306,11 @@ fun DiagnosticsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(
-                    onClick = onCreateGptCopy,
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.weight(1f),
+                    onClick = { requestCreate(onCreateGptCopy) },
+                    enabled = state.actionsEnabled && backupFolderReady,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                 ) {
                     GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
@@ -276,7 +324,9 @@ fun DiagnosticsScreen(
                 }
                 OutlinedButton(
                     onClick = onPickBackup,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                 ) {
                     GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)

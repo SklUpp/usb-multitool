@@ -57,10 +57,10 @@ internal object RescueBackupTransitions {
         nonDestructiveEffect(state, UiEffect.ReadScan)
 
     fun startRescueBackup(state: AppUiState): ReduceResult =
-        nonDestructiveEffect(state, UiEffect.RescueBackup)
+        createBackupEffect(state, UiEffect.RescueBackup)
 
     fun captureGptBackup(state: AppUiState): ReduceResult =
-        nonDestructiveEffect(state, UiEffect.CaptureGptBackup)
+        createBackupEffect(state, UiEffect.CaptureGptBackup)
 
     fun setRescueImage(state: AppUiState, intent: UiIntent.SetRescueImage): ReduceResult {
         return if (intent.requestId < state.rescueImageSelectionGeneration) {
@@ -117,6 +117,23 @@ internal object RescueBackupTransitions {
                         }),
             )
         }
+    }
+
+    /**
+     * Rescue image and GPT copy write into the shared backup tree. [backupFolderUsable] is
+     * only the UI/reducer snapshot; the Activity still verifies the live grant before I/O.
+     * Restore, wipe, and other folder-free work stay on [nonDestructiveEffect].
+     */
+    private fun createBackupEffect(state: AppUiState, effect: UiEffect): ReduceResult {
+        if (!state.actionsEnabled) {
+            return ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
+        }
+        if (!state.backupFolderUsable) {
+            return ReduceResult(
+                state.withStatus(UiMessage.Key(UiMessageKey.ChooseBackupFolder)),
+            )
+        }
+        return ReduceResult(state, effects = listOf(effect))
     }
 
     /** Read-only disk work still needs a ready device; otherwise report why nothing ran. */

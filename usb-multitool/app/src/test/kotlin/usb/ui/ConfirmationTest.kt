@@ -472,12 +472,17 @@ class UiStateMachineTest {
         assertTrue(
             UiReducer.reduce(ready(), UiIntent.StartReadScan).effects.single() is UiEffect.ReadScan,
         )
+        val withFolder = ready().copy(
+            backupFolderUri = "content://tree/backups",
+            backupFolderName = "Backups",
+            backupFolderUsable = true,
+        )
         assertTrue(
-            UiReducer.reduce(ready(), UiIntent.StartRescueBackup).effects.single()
+            UiReducer.reduce(withFolder, UiIntent.StartRescueBackup).effects.single()
                 is UiEffect.RescueBackup,
         )
         assertTrue(
-            UiReducer.reduce(ready(), UiIntent.CaptureGptBackup).effects.single()
+            UiReducer.reduce(withFolder, UiIntent.CaptureGptBackup).effects.single()
                 is UiEffect.CaptureGptBackup,
         )
 
