@@ -1563,6 +1563,14 @@ private fun JournalLine(
     val row = journalRow(line)
     val stampColor = MaterialTheme.colorScheme.onSurfaceVariant
     val levelColor = row.tone.contentColor()
+    val levelLabel = stringResource(
+        when (row.level) {
+            JournalLevel.Error -> R.string.journal_level_error
+            JournalLevel.Warning -> R.string.journal_level_warning
+            JournalLevel.Success -> R.string.journal_level_success
+            JournalLevel.Info -> R.string.journal_level_info
+        },
+    )
     Text(
         text = buildAnnotatedString {
             row.time?.let {
@@ -1570,7 +1578,7 @@ private fun JournalLine(
                 append(FACT_SEPARATOR)
             }
             withStyle(SpanStyle(color = levelColor, fontWeight = FontWeight.Medium)) {
-                append(row.level)
+                append(levelLabel)
             }
             append(FACT_SEPARATOR)
             append(row.text)
@@ -1584,10 +1592,12 @@ private fun JournalLine(
     )
 }
 
+private enum class JournalLevel { Error, Warning, Success, Info }
+
 /** One journal row: `HH:mm:ss · Level · text`, blanks omitted. */
 private data class JournalRow(
     val time: String?,
-    val level: String,
+    val level: JournalLevel,
     val text: String,
     val tone: StatusTone,
 )
@@ -1616,10 +1626,10 @@ private fun journalRow(line: String): JournalRow {
     return JournalRow(
         time = time,
         level = when (tone) {
-            StatusTone.Error -> "Error"
-            StatusTone.Warning -> "Warning"
-            StatusTone.Success -> "Success"
-            StatusTone.Neutral -> "Info"
+            StatusTone.Error -> JournalLevel.Error
+            StatusTone.Warning -> JournalLevel.Warning
+            StatusTone.Success -> JournalLevel.Success
+            StatusTone.Neutral -> JournalLevel.Info
         },
         text = text,
         tone = tone,

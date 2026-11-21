@@ -280,6 +280,10 @@
     <string name="filesystem_usage_label">Free in filesystem</string>
     <string name="filesystem_usage_known">Free %1$s of %2$s</string>
     <string name="filesystem_usage_unavailable">unavailable</string>
+    <string name="journal_level_error">Error</string>
+    <string name="journal_level_warning">Warning</string>
+    <string name="journal_level_success">Success</string>
+    <string name="journal_level_info">Info</string>
     <string name="filesystem_usage_unavailable_unsupported">unavailable: filesystem type has no space query</string>
     <string name="filesystem_usage_unavailable_engine">unavailable: filesystem engine not linked</string>
     <string name="filesystem_usage_unavailable_closed">unavailable: volume closed before query</string>

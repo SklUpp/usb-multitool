@@ -280,6 +280,10 @@
     <string name="filesystem_usage_label">Свободно в ФС</string>
     <string name="filesystem_usage_known">Свободно %1$s из %2$s</string>
     <string name="filesystem_usage_unavailable">недоступно</string>
+    <string name="journal_level_error">Ошибка</string>
+    <string name="journal_level_warning">Предупреждение</string>
+    <string name="journal_level_success">Успех</string>
+    <string name="journal_level_info">Инфо</string>
     <string name="filesystem_usage_unavailable_unsupported">недоступно: тип ФС не поддерживает запрос</string>
     <string name="filesystem_usage_unavailable_engine">недоступно: движок ФС не подключён</string>
     <string name="filesystem_usage_unavailable_closed">недоступно: том закрыт до запроса</string>
