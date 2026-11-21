@@ -384,7 +384,7 @@ object UiStateHostCheck {
 
         val efi = ready.copy(selectedPartitionId = "2")
         listOf(
-            UiIntent.CreateFolder("reports"),
+            createFolderIntent(efi, "reports"),
             UiIntent.DeleteEntry("win11.iso"),
             UiIntent.UploadFile("content://test/new.iso"),
         ).forEach { intent ->

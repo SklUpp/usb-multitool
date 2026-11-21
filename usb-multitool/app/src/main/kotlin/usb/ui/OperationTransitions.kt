@@ -102,7 +102,13 @@ internal object OperationTransitions {
                 if (sameStateTick) next.copy(statusMessage = message) else next.withStatus(message)
             }
         }
-        return ReduceResult(base)
+        return ReduceResult(
+            if (terminal) {
+                base.copy(operationStatusSequence = base.statusSequence)
+            } else {
+                base
+            },
+        )
     }
 
     fun cancel(state: AppUiState, token: usb.service.OperationToken): ReduceResult =

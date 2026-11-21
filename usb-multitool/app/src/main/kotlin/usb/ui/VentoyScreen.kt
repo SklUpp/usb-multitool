@@ -489,15 +489,15 @@ private fun VentoyVersionRow(
                         val upstream = state.upstreamVentoyRelease
                         val pinned = state.upstreamVentoyPinned
                         if (upstream != null && pinned != null) {
-                            val current = state.downloadedVentoyRelease?.release
-                                ?: state.installedVentoyRelease
-                                ?: state.bundledVentoyRelease
-                            val cmp = ventoyReleaseComparison(current, upstream)
-                            if (cmp.order != null && cmp.order <= 0) {
-                                onIntent(
-                                    UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE),
-                                )
-                            } else {
+                            // Install/update writes the verified download or the bundled
+                            // payload; the installed version is not the source. Download only
+                            // when upstream is newer than that actual local target.
+                            val target = ventoyTargetRelease(
+                                bundled = state.bundledVentoyRelease,
+                                downloaded = state.downloadedVentoyRelease?.release,
+                            )
+                            val cmp = ventoyReleaseComparison(target, upstream)
+                            if (cmp.order != null && cmp.order > 0) {
                                 downloadPrompt = if (pinned == false) {
                                     DownloadPrompt.Unpinned
                                 } else {
@@ -506,6 +506,10 @@ private fun VentoyVersionRow(
                                 promptRelease = upstream
                                 promptPinned = pinned
                                 promptRequest = state.ventoyUpstreamRequest
+                            } else {
+                                onIntent(
+                                    UiIntent.RequestDestructive(DestructiveAction.VENTOY_UPDATE),
+                                )
                             }
                         } else {
                             // No checked upstream yet — write bundled/downloaded only.

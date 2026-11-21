@@ -320,7 +320,7 @@ class UiStateMachineTest {
     @Test
     fun createFolderAndDeleteEmitRealDiskEffects() {
         val state = ready().copy(currentPath = "/docs", files = emptyList())
-        val mkdir = UiReducer.reduce(state, UiIntent.CreateFolder("reports"))
+        val mkdir = UiReducer.reduce(state, createFolderIntent(state, "reports"))
         val mkdirEffect = mkdir.effects.single() as UiEffect.CreateFolder
         assertEquals("/docs", mkdirEffect.path)
         assertEquals("reports", mkdirEffect.name)
@@ -329,7 +329,7 @@ class UiStateMachineTest {
         val deleteEffect = delete.effects.single() as UiEffect.DeleteEntry
         assertEquals("manual.pdf", deleteEffect.name)
 
-        val rejected = UiReducer.reduce(state, UiIntent.CreateFolder("a/b"))
+        val rejected = UiReducer.reduce(state, createFolderIntent(state, "a/b"))
         assertTrue(rejected.effects.isEmpty())
         assertNotNull(rejected.state.statusMessage)
     }
@@ -426,10 +426,20 @@ class UiStateMachineTest {
     }
 
     @Test
+    fun createFolderRejectsDifferentDirectory() {
+        val state = ready().copy(currentPath = "/docs")
+        val intent = createFolderIntent(state, "reports")
+        val navigated = state.copy(currentPath = "/other")
+        val result = UiReducer.reduce(navigated, intent)
+        assertTrue(result.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), result.state.statusMessage)
+    }
+
+    @Test
     fun fileEffectsAreSuppressedWhileBusy() {
         val busy = ready().copy(presence = DevicePresence.Busy)
         assertTrue(UiReducer.reduce(busy, UiIntent.UploadFile("content://docs/42")).effects.isEmpty())
-        assertTrue(UiReducer.reduce(busy, UiIntent.CreateFolder("x")).effects.isEmpty())
+        assertTrue(UiReducer.reduce(busy, createFolderIntent(busy, "x")).effects.isEmpty())
         assertTrue(UiReducer.reduce(busy, UiIntent.DeleteEntry("x")).effects.isEmpty())
     }
 
@@ -437,7 +447,7 @@ class UiStateMachineTest {
     fun readOnlyPartitionRefusesWritesUntilEnabled() {
         val efi = ready().copy(selectedPartitionId = "2")
         listOf(
-            UiIntent.CreateFolder("reports"),
+            createFolderIntent(efi, "reports"),
             UiIntent.DeleteEntry("ubuntu.iso"),
             UiIntent.UploadFile("content://docs/42"),
         ).forEach { intent ->

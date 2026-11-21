@@ -15,6 +15,7 @@ import usb.ui.DestructiveAction
 import usb.ui.PartitionTab
 import usb.ui.UiIntent
 import usb.ui.UiReducer
+import usb.ui.createFolderIntent
 
 class PartitionSafetyUiTest {
     private val espGuid = EFI_SYSTEM_TYPE_GUID
@@ -106,7 +107,7 @@ class PartitionSafetyUiTest {
 
         val efiBSelected = unlocked.copy(selectedPartitionId = efiB.id)
         listOf(
-            UiIntent.CreateFolder("x"),
+            createFolderIntent(efiBSelected, "x"),
             UiIntent.DeleteEntry("x"),
             UiIntent.UploadFile("content://x"),
         ).forEach { intent ->

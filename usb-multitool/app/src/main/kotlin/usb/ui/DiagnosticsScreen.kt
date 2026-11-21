@@ -240,8 +240,6 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_create_image),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 FilledTonalButton(
@@ -257,8 +255,6 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_restore_image),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -316,8 +312,6 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_create_gpt_copy),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 FilledTonalButton(
@@ -333,8 +327,6 @@ fun DiagnosticsScreen(
                     Text(
                         text = stringResource(R.string.diagnostics_restore_gpt),
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

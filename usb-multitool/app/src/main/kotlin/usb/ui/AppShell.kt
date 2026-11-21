@@ -44,6 +44,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -1271,6 +1272,11 @@ private fun OperationStatusLine(
     val operation = state.operation
     val running = operation?.state == OperationState.Running ||
         operation?.state == OperationState.Queued
+    val newerStandalone = state.statusMessage?.takeIf {
+        operation?.state?.isTerminal() == true &&
+            state.statusSequence > state.operationStatusSequence
+    }
+    val newerStandaloneText = newerStandalone?.localized()
     val standaloneMessage = facts == null && state.statusMessage != null
     val openLabel = stringResource(R.string.shell_status_open_details)
     val titleText = when {
@@ -1334,6 +1340,18 @@ private fun OperationStatusLine(
                         },
                     ),
             )
+            if (newerStandaloneText != null) {
+                Text(
+                    text = newerStandaloneText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 10.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
             if (running) {
                 val total = operation?.bytesTotal ?: 0L
                 val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
@@ -1375,6 +1393,11 @@ private fun StatusDialog(
 ) {
     val op = state.operation
     val facts = operationStatusFacts(state)
+    val newerStatus = state.statusMessage?.takeIf {
+        op?.state?.isTerminal() == true &&
+            state.statusSequence > state.operationStatusSequence
+    }
+    val newerStatusText = newerStatus?.localized()
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
     val cancelable = running == true && op?.cancelable == true
     data class CancelRequest(val token: OperationToken, val name: String)
@@ -1402,7 +1425,11 @@ private fun StatusDialog(
         }
         buildList {
             add(fact.name to StatusTone.Neutral)
-            statusLine?.let { add(it to statusTone) }
+            if (newerStatusText != null) {
+                add(newerStatusText to StatusTone.Neutral)
+            } else {
+                statusLine?.let { add(it to statusTone) }
+            }
         }.take(2)
     } ?: state.statusMessage?.let {
         listOf(it.localized() to StatusTone.Neutral)

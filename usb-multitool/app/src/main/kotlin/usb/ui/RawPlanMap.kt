@@ -378,8 +378,12 @@ private fun RawUnifiedMap(
                                 change.consume()
                                 val proposedX = (xForLba(dragLba) + dragAmount.x)
                                     .coerceIn(0f, contentPx)
-                                val next = chooseStart(lbaAtX(proposedX))
-                                dragLba = next
+                                // Keep the unsnapped LBA as the next drag origin. Storing the
+                                // snapped value makes every small delta inside the snap radius
+                                // return to the same edge, trapping the marker there.
+                                val raw = lbaAtX(proposedX)
+                                dragLba = raw
+                                val next = chooseStart(raw)
                                 onStartChange(next)
                                 keepMarkerVisible(xForLba(next))
                             },

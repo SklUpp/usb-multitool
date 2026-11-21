@@ -164,6 +164,8 @@ fun FilesScreen(
     }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
+    var newFolderPath by remember { mutableStateOf<String?>(null) }
+    var newFolderBinding by remember { mutableStateOf<PartitionBinding?>(null) }
     // Capture the exact batch pin at confirm-open time so refresh/navigation cannot retarget.
     var pendingDeleteSelection by remember(
         state.selectedPartitionId,
@@ -311,7 +313,21 @@ fun FilesScreen(
                 onClearSelection = { selectedNames = emptySet() },
                 onRefresh = { onIntent(UiIntent.RefreshFiles) },
                 onNavigateUp = { onIntent(UiIntent.NavigateUp) },
-                onNewFolder = { showNewFolderDialog = true },
+                onNewFolder = {
+                    val device = state.device
+                    val partition = state.selectedPartition()
+                    if (device != null && partition != null) {
+                        newFolderPath = state.currentPath
+                        newFolderBinding = PartitionBinding(
+                            device = device,
+                            partitionId = partition.id,
+                            startLba = partition.startLba,
+                            sectorCount = partition.sectorCount,
+                        )
+                        newFolderName = ""
+                        showNewFolderDialog = true
+                    }
+                },
                 onSaveToPhone = {
                     val device = state.device
                     val partition = state.selectedPartition()
@@ -438,7 +454,12 @@ fun FilesScreen(
 
     if (showNewFolderDialog) {
         AlertDialog(
-            onDismissRequest = { showNewFolderDialog = false; newFolderName = "" },
+            onDismissRequest = {
+                showNewFolderDialog = false
+                newFolderName = ""
+                newFolderPath = null
+                newFolderBinding = null
+            },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -462,15 +483,28 @@ fun FilesScreen(
                 TextButton(
                     onClick = {
                         val name = newFolderName.trim()
-                        if (name.isNotEmpty()) onIntent(UiIntent.CreateFolder(name))
+                        val targetPath = newFolderPath
+                        val binding = newFolderBinding
+                        if (name.isNotEmpty() && targetPath != null && binding != null) {
+                            onIntent(UiIntent.CreateFolder(name, targetPath, binding))
+                        }
                         showNewFolderDialog = false
                         newFolderName = ""
+                        newFolderPath = null
+                        newFolderBinding = null
                     },
                     enabled = newFolderName.isNotBlank(),
                 ) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showNewFolderDialog = false; newFolderName = "" }) {
+                TextButton(
+                    onClick = {
+                        showNewFolderDialog = false
+                        newFolderName = ""
+                        newFolderPath = null
+                        newFolderBinding = null
+                    },
+                ) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },

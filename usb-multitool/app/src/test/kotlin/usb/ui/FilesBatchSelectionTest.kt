@@ -132,17 +132,17 @@ class FilesBatchSelectionTest {
     }
 
     @Test
-    fun fatChildPathPreservesExactLeafAndRejectsTrimmed() {
+    fun fatChildPathPreservesExactLeafAndRejectsSeparators() {
         assertEquals("/docs/a.bin", fatChildPath("/docs", "a.bin"))
-        // Trailing/leading whitespace would silently retarget under trim — reject.
-        assertThrows(IllegalArgumentException::class.java) {
-            fatChildPath("/", "victim ")
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            fatChildPath("/", " victim")
-        }
+        // Spaces are valid on EXT/NTFS; keep them exact instead of trimming to a sibling.
+        assertEquals("/victim ", fatChildPath("/", "victim "))
+        assertEquals("/ victim", fatChildPath("/", " victim"))
+        assertEquals("/docs/a ", fatChildPath("/docs/", "a "))
         assertThrows(IllegalArgumentException::class.java) {
             fatChildPath("/docs", "a/b")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            fatChildPath("/docs", "..")
         }
     }
 

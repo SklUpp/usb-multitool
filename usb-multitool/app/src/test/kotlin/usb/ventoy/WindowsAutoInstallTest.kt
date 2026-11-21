@@ -184,4 +184,34 @@ class WindowsAutoInstallTest {
         assertEquals(1, (root["auto_install"] as List<*>).size)
         assertEquals(mapOf("file" to "/ventoy/theme/theme.txt"), root["theme"])
     }
+
+    @Test
+    fun nonArrayControlIsNotReplaced() {
+        val json = """{"control":{"VTOY_MENU_LANGUAGE":"en_US"}}"""
+        assertThrows(IllegalStateException::class.java) {
+            WindowsSetup.mergeControlOptions(json, SetupOptions(bypassChecks = false))
+        }
+    }
+
+    @Test
+    fun nonArrayAutoInstallIsNotReplaced() {
+        val json = """{"auto_install":{"image":"/Win/one.img"}}"""
+        assertThrows(IllegalStateException::class.java) {
+            WindowsSetup.mergeAutoInstall(
+                json,
+                listOf("/Win/two.img"),
+                "/ventoy/two.xml",
+                SetupOptions(),
+                overwrite = false,
+            )
+        }
+    }
+
+    @Test
+    fun duplicateJsonKeysAreRejectedBeforeRewrite() {
+        val json = """{"control":[],"theme":{"file":"/a","file":"/b"}}"""
+        assertThrows(IllegalStateException::class.java) {
+            WindowsSetup.mergeControlOptions(json, SetupOptions(bypassChecks = false))
+        }
+    }
 }

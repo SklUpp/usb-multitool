@@ -1359,8 +1359,14 @@ object WindowsSetup {
         val rootMap = parseRootOrThrow(existingJson)
         applyControlOptions(rootMap, options)
 
+        val rawAutoInstall = rootMap["auto_install"]
+        if (rawAutoInstall != null && rawAutoInstall !is List<*>) {
+            throw IllegalStateException(
+                "\"auto_install\" is not a JSON array; refusing to overwrite it",
+            )
+        }
         val autoInstallList: MutableList<Any?> =
-            ((rootMap["auto_install"] as? List<*>)?.toMutableList()) ?: mutableListOf()
+            ((rawAutoInstall as? List<*>)?.toMutableList()) ?: mutableListOf()
 
         if (!overwrite) {
             val conflict = normalized.firstOrNull { path ->
@@ -1558,8 +1564,14 @@ object WindowsSetup {
         parseRootOrNull(json) ?: linkedMapOf()
 
     private fun applyControlOptions(rootMap: MutableMap<String, Any?>, options: SetupOptions) {
+        val rawControl = rootMap["control"]
+        if (rawControl != null && rawControl !is List<*>) {
+            throw IllegalStateException(
+                "\"control\" is not a JSON array; refusing to overwrite it",
+            )
+        }
         val controlList: MutableList<Any?> =
-            ((rootMap["control"] as? List<*>)?.toMutableList()) ?: mutableListOf()
+            ((rawControl as? List<*>)?.toMutableList()) ?: mutableListOf()
 
         fun setControlFlag(key: String, value: String) {
             for (i in controlList.indices) {
@@ -1704,6 +1716,9 @@ internal object MiniJson {
                     throw IllegalArgumentException("Expected object key string at $pos")
                 }
                 val key = parseString()
+                if (map.containsKey(key)) {
+                    throw IllegalArgumentException("Duplicate JSON object key \"$key\" at $pos")
+                }
                 skipWhitespace()
                 if (pos >= s.length || s[pos] != ':') {
                     throw IllegalArgumentException("Expected ':' after object key at $pos")

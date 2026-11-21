@@ -1383,6 +1383,12 @@ data class AppUiState(
      * value, so the shell can show each emission once. Clearing a message never bumps.
      */
     val statusSequence: Long = 0L,
+    /**
+     * [statusSequence] at the moment the current operation reached a terminal state.
+     * A later sequence belongs to a newer standalone rejection and must stay visible
+     * instead of being masked by the still-present terminal operation.
+     */
+    val operationStatusSequence: Long = 0L,
     /** SAF URI of the image queued for the next raw write. */
     val imageUri: String? = null,
     /** Provider DISPLAY_NAME for [imageUri], never an opaque document id. */
@@ -1952,18 +1958,25 @@ object PartitionRangeMath {
     }
 }
 
-/** Normalize a FAT path: leading slash, no trailing slash, root is "/". */
+/** Normalize slash framing only: names keep spaces exactly. Root is "/". */
 fun normalizeFatPath(path: String): String {
-    val trimmed = path.trim().trim('/')
+    val trimmed = path.trim('/')
     return if (trimmed.isEmpty()) "/" else "/$trimmed"
 }
 
-/** Absolute FAT path of [name] inside directory [parent]; root is "/". */
+/** Absolute volume path of [name] inside directory [parent]; root is "/". */
 fun fatChildPath(parent: String, name: String): String {
-    val base = parent.trim().trim('/')
-    // Never silently trim [name]: padding/slash canonicalization would retarget
-    // a distinct USB sibling (e.g. EXT `victim` vs `victim `).
-    require(name.isNotEmpty() && name == name.trim() && '/' !in name && '\\' !in name) {
+    val base = parent.trim('/')
+    // Never trim or normalize [name]: spaces are valid on EXT/NTFS and trimming would
+    // retarget a distinct USB sibling (e.g. `victim` vs `victim `).
+    require(
+        name.isNotEmpty() &&
+            name != "." &&
+            name != ".." &&
+            '/' !in name &&
+            '\\' !in name &&
+            '\u0000' !in name,
+    ) {
         "invalid child name \"$name\""
     }
     return when {
@@ -1974,7 +1987,7 @@ fun fatChildPath(parent: String, name: String): String {
 
 /** Parent directory of absolute [path]; the root has no parent. */
 fun fatParentPath(path: String): String {
-    val trimmed = path.trim().trim('/')
+    val trimmed = path.trim('/')
     val cut = trimmed.lastIndexOf('/')
     return if (cut <= 0) "/" else "/" + trimmed.substring(0, cut)
 }

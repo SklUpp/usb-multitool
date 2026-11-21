@@ -692,8 +692,12 @@ sealed class UiIntent {
      */
     data object RefreshFiles : UiIntent()
 
-    /** Create a real folder named [name] inside [AppUiState.currentPath]. */
-    data class CreateFolder(val name: String) : UiIntent()
+    /** Create a real folder named [name] inside the captured [path] on the pinned volume. */
+    data class CreateFolder(
+        val name: String,
+        val path: String,
+        val binding: PartitionBinding,
+    ) : UiIntent()
 
     /** Delete entry [name] from [AppUiState.currentPath] on the volume. */
     data class DeleteEntry(val name: String) : UiIntent()
@@ -1463,11 +1467,6 @@ object UiReducer {
                     sameStick -> retainedSelection
                     else -> null
                 }
-                val candidateMatchesDevice =
-                    intent.presence == DevicePresence.Ready &&
-                        trustedStick &&
-                        intent.device?.identity == state.linkOverwriteCandidateIdentity &&
-                        intent.device?.attachGeneration == state.linkOverwriteCandidateGeneration
                 // Ventoy/XML is scoped to the current attachment.
                 val keepVentoy =
                     sameStick &&
@@ -1826,6 +1825,11 @@ object UiReducer {
                         windowsImageLinksIdentity =
                             if (keepVentoy) state.windowsImageLinksIdentity else null,
                         pendingWindowsUnlink = null,
+                        // A refresh may change either file; never keep a half-populated
+                        // overwrite dialog that can retarget with fallback values.
+                        linkOverwriteCandidate = null,
+                        linkOverwriteCandidateIdentity = null,
+                        linkOverwriteCandidateGeneration = null,
                         linkOverwriteCandidatePaths = emptyList(),
                         linkOverwriteCandidateTemplatePath = null,
                         // A dropped stick pin must not keep reading another geometry's bytes:
@@ -1908,12 +1912,6 @@ object UiReducer {
                         ventoyUpstreamRequest = state.ventoyUpstreamRequest,
                         ventoyDownloadError =
                             if (keepVentoy) state.ventoyDownloadError else null,
-                        linkOverwriteCandidate =
-                            state.linkOverwriteCandidate.takeIf { candidateMatchesDevice },
-                        linkOverwriteCandidateIdentity =
-                            state.linkOverwriteCandidateIdentity.takeIf { candidateMatchesDevice },
-                        linkOverwriteCandidateGeneration =
-                            state.linkOverwriteCandidateGeneration.takeIf { candidateMatchesDevice },
                     ).let { next ->
                         if (intent.presence == DevicePresence.Ready) {
                             // Probe posts Probing before Ready; keep other statuses (errors),
@@ -4337,6 +4335,7 @@ object UiReducer {
             is UiIntent.CreateFolder -> {
                 val name = intent.name.trim()
                 val block = writeBlockMessage(state)
+                val pinProblem = bindingProblem(state, intent.binding)
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
@@ -4344,6 +4343,10 @@ object UiReducer {
                         )
                     !state.actionsEnabled ->
                         ReduceResult(state.withStatus(presenceMessage(state.presence)))
+                    pinProblem != null ->
+                        ReduceResult(state.withStatus(pinProblem))
+                    state.currentPath != intent.path ->
+                        ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.TargetChanged)))
                     block != null ->
                         ReduceResult(state.withStatus(block))
                     !validEntryName(name) ->
@@ -4354,7 +4357,7 @@ object UiReducer {
                             effects =
                                 listOf(
                                     UiEffect.CreateFolder(
-                                        path = state.currentPath,
+                                        path = intent.path,
                                         name = name,
                                     ),
                                 ),
@@ -5423,10 +5426,12 @@ object UiReducer {
      */
     private fun validEntryName(name: String): Boolean =
         name.isNotBlank() &&
+            name == name.trim() &&
             name != "." &&
             name != ".." &&
             '/' !in name &&
-            '\\' !in name
+            '\\' !in name &&
+            '\u0000' !in name
 
     /**
      * Bare names resolve under /ventoy; a full path is itself. Display-only path join —
