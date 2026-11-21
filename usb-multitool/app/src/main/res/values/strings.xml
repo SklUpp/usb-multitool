@@ -817,6 +817,9 @@
     <string name="unattend_editor_invalid">The XML is refused: it must be well-formed unattend XML without DOCTYPE or ENTITY declarations.</string>
     <string name="unattend_editor_destructive_ack">I understand these sections can erase disks on the target computer</string>
     <string name="windows_selected_image">Selected image:</string>
+    <string name="windows_status_selected">Selected</string>
+    <string name="unattend_unknown_title">Unrecognized XML elements preserved: %1$d</string>
+    <string name="unattend_unknown_element">%1$s · %2$s</string>
     <string name="windows_copying_image">Copying %1$s to Ventoy partition…</string>
     <string name="windows_copying_generic">Copying image to Ventoy partition…</string>
     <string name="windows_template_choose_source">Template source</string>

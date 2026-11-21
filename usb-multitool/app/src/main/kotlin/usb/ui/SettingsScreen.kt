@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -90,6 +91,7 @@ internal fun SettingsScreen(
                     Text(
                         text = stringResource(R.string.settings_about_title),
                         style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.semantics { heading() },
                     )
                     Text(
                         text = versionName?.let { stringResource(R.string.app_version_label, it) }
@@ -114,7 +116,11 @@ private fun SettingsAppearance(state: AppUiState, onIntent: (UiIntent) -> Unit) 
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(stringResource(R.string.settings_appearance_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(R.string.settings_appearance_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.semantics { heading() },
+            )
             SettingRow(
                 label = stringResource(R.string.theme_label),
                 value = themeLabel(state.darkTheme),
@@ -193,7 +199,11 @@ private fun SettingsBackups(state: AppUiState, onPickBackupFolder: () -> Unit) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(stringResource(R.string.diagnostics_backups_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(R.string.diagnostics_backups_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.semantics { heading() },
+            )
             Text(
                 text = state.backupFolderUri?.let { uri ->
                     state.backupFolderName?.takeIf { it.isNotBlank() }?.let { "$it\n$uri" } ?: uri

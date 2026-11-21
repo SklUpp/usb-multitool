@@ -529,7 +529,7 @@ private fun VentoyVersionRow(
                         .heightIn(min = 48.dp)
                         .semantics { contentDescription = updateLabel },
                 ) {
-                    Text(stringResource(R.string.ventoy_update), fontWeight = FontWeight.SemiBold)
+                    Text(updateLabel, fontWeight = FontWeight.SemiBold)
                 }
                 // Existing destructive format+install (not uninstall — none exists).
                 Button(
@@ -796,6 +796,13 @@ private fun WindowsImageBlock(
                         softWrap = true,
                     )
                 }
+            }
+            if (selectedImage != null && !isImageImportTarget && !isImageInspecting) {
+                Text(
+                    text = stringResource(R.string.windows_status_selected),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
             IconButton(
                 onClick = { imageSourcePrompt = true },

@@ -818,6 +818,9 @@
     <string name="unattend_editor_invalid">XML отклонён: нужен корректный unattend XML без DOCTYPE и ENTITY.</string>
     <string name="unattend_editor_destructive_ack">Я понимаю, что эти разделы могут стереть диски на целевом компьютере</string>
     <string name="windows_selected_image">Выбранный образ:</string>
+    <string name="windows_status_selected">Выбран</string>
+    <string name="unattend_unknown_title">Нераспознанные элементы XML сохранены: %1$d</string>
+    <string name="unattend_unknown_element">%1$s · %2$s</string>
     <string name="windows_copying_image">Копируется файл %1$s на раздел ventoy…</string>
     <string name="windows_copying_generic">Копируется образ на раздел ventoy…</string>
     <string name="windows_template_choose_source">Источник шаблона</string>

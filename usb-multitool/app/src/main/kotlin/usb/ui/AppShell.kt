@@ -420,9 +420,9 @@ fun AppShell(
                                         )
                                     },
                                     colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                        selectedIconColor = MaterialTheme.colorScheme.onSurface,
-                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
                                         unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                         unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                     ),
@@ -974,6 +974,9 @@ private fun DeviceHeader(
         DevicePresence.Absent -> stringResource(R.string.header_absent)
     }
     var moreOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(operationLocked) {
+        if (operationLocked) moreOpen = false
+    }
     val logLabel = stringResource(R.string.log_screen_title)
     val moreLabel = stringResource(R.string.more_actions)
 TopAppBar(
@@ -1009,6 +1012,7 @@ TopAppBar(
                 Box {
                     IconButton(
                         onClick = { moreOpen = true },
+                        enabled = !operationLocked,
                         modifier = Modifier
                             .size(48.dp)
                             .semantics { contentDescription = moreLabel },

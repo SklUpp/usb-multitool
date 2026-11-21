@@ -436,10 +436,6 @@ fun DiagnosticsScreen(
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.weight(1f),
                     )
-                    InfoHelpButton(
-                        infoTitle = stringResource(R.string.diagnostics_danger_title),
-                        infoText = stringResource(R.string.diagnostics_danger_body),
-                    )
                     GlyphIcon(
                         glyph = if (dangerExpanded) Glyph.ChevronUp else Glyph.ChevronDown,
                         tint = MaterialTheme.colorScheme.error,

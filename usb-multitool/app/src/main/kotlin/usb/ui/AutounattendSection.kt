@@ -261,6 +261,11 @@ internal fun AutounattendSection(
         ConfigFileStatusRow(
             pathLabel = pathLabel,
             sizeLabel = xmlSizeLabel,
+            statusLabel = if (document != null) {
+                stringResource(R.string.windows_status_selected)
+            } else {
+                null
+            },
             // Unset or failed resolve stays dimmed; a chosen path is normal weight.
             dimmedPath = resolvedPath == null,
             // Prospect is only a suggestion: create-new may allocate Win11_1.xml etc.
@@ -321,6 +326,30 @@ internal fun AutounattendSection(
                             text = autounattendProblemText(problem),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (doc.unknownElements.isNotEmpty()) {
+                    val unknownElementFormat =
+                        stringResource(R.string.unattend_unknown_element)
+                    Text(
+                        text = stringResource(
+                            R.string.unattend_unknown_title,
+                            doc.unknownElements.size,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    doc.unknownElements.forEach { element ->
+                        Text(
+                            text = element.path?.let { path ->
+                                unknownElementFormat.format(element.name, path)
+                            } ?: element.name,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -1717,6 +1746,7 @@ private fun CompactStagedControls(
 private fun ConfigFileStatusRow(
     pathLabel: String?,
     sizeLabel: String?,
+    statusLabel: String? = null,
     dimmedPath: Boolean,
     showChanged: Boolean,
     onReset: (() -> Unit)?,
@@ -1778,6 +1808,13 @@ private fun ConfigFileStatusRow(
                     )
                 }
             }
+            statusLabel?.let { status ->
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             if (showChanged) {
                 Badge(
                     text = stringResource(R.string.wave4_changed_badge),
@@ -1835,6 +1872,7 @@ private fun AddParameterDialog(
     var value by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
     val resources = LocalContext.current.resources
+    val clearLabel = stringResource(R.string.settings_clear_field)
     val catalog = state.ventoyControlKeyCatalog
     val catalogKeys = catalog?.keys.orEmpty()
     AlertDialog(
@@ -1983,6 +2021,22 @@ private fun AddParameterDialog(
                     label = { Text(stringResource(R.string.settings_key_label)) },
                     singleLine = true,
                     enabled = actionsEnabled,
+                    trailingIcon = if (key.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    key = ""
+                                    problem = null
+                                },
+                                enabled = actionsEnabled,
+                                modifier = Modifier.semantics {
+                                    contentDescription = clearLabel
+                                },
+                            ) { GlyphIcon(Glyph.Close, size = 18.dp) }
+                        }
+                    } else {
+                        null
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -1994,6 +2048,22 @@ private fun AddParameterDialog(
                     label = { Text(stringResource(R.string.settings_value_label)) },
                     singleLine = true,
                     enabled = actionsEnabled,
+                    trailingIcon = if (value.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    value = ""
+                                    problem = null
+                                },
+                                enabled = actionsEnabled,
+                                modifier = Modifier.semantics {
+                                    contentDescription = clearLabel
+                                },
+                            ) { GlyphIcon(Glyph.Close, size = 18.dp) }
+                        }
+                    } else {
+                        null
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 problem?.let {

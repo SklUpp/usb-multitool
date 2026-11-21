@@ -4,6 +4,7 @@ import usb.fs.FilesystemId
 import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsagePhase
+import usb.fs.FilesystemUsageReason
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
@@ -101,6 +102,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import kotlin.math.roundToInt
@@ -1528,7 +1530,7 @@ private fun SelectedPartitionCard(
         val renameEnabled = state.actionsEnabled && state.tableValid &&
             !state.partitionTableDamaged && geometryKnown &&
             !selected.readOnly && !state.partitionTableAmbiguous && namesSupported
-        val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.1f)
+        val dividerColor = MaterialTheme.colorScheme.outlineVariant
         FactRow(
             label = stringResource(R.string.partitions_info_name_label),
             value = selected.name.ifBlank { "—" },
@@ -2263,8 +2265,33 @@ private fun RawWriteSection(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                is RawRangeWarning.MetadataCoverageUnknown -> Unit
-                                is RawRangeWarning.OverlapsObjects -> Unit
+                                is RawRangeWarning.MetadataCoverageUnknown -> Text(
+                                    text = stringResource(R.string.raw_map_metadata_incomplete),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                is RawRangeWarning.OverlapsObjects -> warning.overlaps.forEach { overlap ->
+                                    val objectLabel = when (overlap.target.kind) {
+                                        RawObjectKind.Partition ->
+                                            overlap.target.name
+                                                ?: stringResource(R.string.raw_map_legend_partition)
+                                        RawObjectKind.BootArea ->
+                                            stringResource(R.string.raw_map_object_boot)
+                                        RawObjectKind.TableArea ->
+                                            stringResource(R.string.raw_map_object_table)
+                                    }
+                                    Text(
+                                        text = stringResource(
+                                            R.string.raw_map_overlap_line,
+                                            objectLabel,
+                                            overlap.target.startLba.toLong(),
+                                            (overlap.target.endLbaExclusive - 1UL).toLong(),
+                                            overlap.overlapSectors.toLong(),
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
@@ -2690,6 +2717,7 @@ private fun MibBoundaryTicks(
                     fontFeatureSettings = "tnum",
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
             )
             Text(
                 text = stringResource(
@@ -2702,6 +2730,8 @@ private fun MibBoundaryTicks(
                     fontFeatureSettings = "tnum",
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -2725,9 +2755,22 @@ private fun partitionUsageLabel(
     partition: PartitionTab,
     space: FilesystemSpace?,
 ): String {
-    val measured = state.partitionUsageSnapshot(partition)?.usage as? FilesystemUsage.Known
-    if (measured != null) {
-        return DeviceIdentity.formatCapacityPair(measured.space.usedBytes, measured.space.totalBytes)
+    when (val usage = state.partitionUsageSnapshot(partition)?.usage) {
+        is FilesystemUsage.Known ->
+            return DeviceIdentity.formatCapacityPair(usage.space.usedBytes, usage.space.totalBytes)
+        is FilesystemUsage.Unavailable -> return stringResource(
+            when (usage.reason) {
+                FilesystemUsageReason.UnsupportedFilesystem ->
+                    R.string.filesystem_usage_unavailable_unsupported
+                FilesystemUsageReason.EngineMissing ->
+                    R.string.filesystem_usage_unavailable_engine
+                FilesystemUsageReason.Closed ->
+                    R.string.filesystem_usage_unavailable_closed
+                FilesystemUsageReason.IoFailure ->
+                    R.string.filesystem_usage_unavailable_io
+            },
+        )
+        null -> Unit
     }
     return when (state.partitionUsagePhase(partition)) {
         FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
