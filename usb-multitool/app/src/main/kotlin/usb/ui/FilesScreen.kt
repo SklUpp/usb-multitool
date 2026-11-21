@@ -276,6 +276,7 @@ fun FilesScreen(
                     writeAccessOf = state::partitionWriteAccess,
                     usageOf = state::partitionUsageSnapshot,
                     phaseOf = state::partitionUsagePhase,
+                    sectorSize = state.diskSectorSize,
                     enabled = state.actionsEnabled,
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
@@ -777,6 +778,7 @@ private fun FilesPickScreen(
                 writeAccessOf = state::partitionWriteAccess,
                 usageOf = state::partitionUsageSnapshot,
                 phaseOf = state::partitionUsagePhase,
+                sectorSize = state.diskSectorSize,
                 enabled = canAct && !state.isRunning,
                 onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
             )
@@ -1395,6 +1397,7 @@ internal fun PartitionDropdown(
     writeAccessOf: (PartitionTab) -> PartitionWriteAccess,
     usageOf: (PartitionTab) -> FilesystemUsageSnapshot?,
     phaseOf: (PartitionTab) -> FilesystemUsagePhase?,
+    sectorSize: Int?,
     enabled: Boolean,
     onSelect: (String) -> Unit,
 ) {
@@ -1437,7 +1440,14 @@ internal fun PartitionDropdown(
                             partition = partition,
                             selected = isSelected,
                             access = writeAccessOf(partition),
-                            usage = filesystemUsageText(usageOf(partition), phaseOf(partition)),
+                            usage = filesystemUsageText(
+                                snapshot = usageOf(partition),
+                                phase = phaseOf(partition),
+                                totalBytes = partitionSizeBytes(
+                                    partition,
+                                    sectorSize,
+                                ),
+                            ),
                         )
                     },
                     onClick = {
@@ -1803,6 +1813,7 @@ internal fun filesystemUsagePhaseText(phase: FilesystemUsagePhase?): String? =
 internal fun filesystemUsageText(
     snapshot: FilesystemUsageSnapshot?,
     phase: FilesystemUsagePhase?,
+    totalBytes: ULong? = null,
 ): String? =
     when (val usage = snapshot?.usage) {
         is FilesystemUsage.Known -> stringResource(
@@ -1822,8 +1833,21 @@ internal fun filesystemUsageText(
                     R.string.filesystem_usage_unavailable_io
             },
         )
-        null -> filesystemUsagePhaseText(phase)
+        null -> filesystemUsagePhaseText(phase) ?: totalBytes?.let {
+            stringResource(
+                R.string.filesystem_usage_known,
+                "—",
+                DeviceIdentity.formatCapacity(it),
+            )
+        }
     }
+
+internal fun partitionSizeBytes(partition: PartitionTab, sectorSize: Int?): ULong? {
+    val count = partition.sectorCount ?: return null
+    if (sectorSize == null || sectorSize <= 0) return null
+    if (count > ULong.MAX_VALUE / sectorSize.toULong()) return null
+    return count * sectorSize.toULong()
+}
 
 internal fun partitionDisplayName(partition: PartitionTab): String =
     partition.name.ifBlank { partition.id } +

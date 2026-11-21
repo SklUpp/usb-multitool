@@ -580,6 +580,7 @@ fun PartitionsScreen(
                 writeAccessOf = state::partitionWriteAccess,
                 usageOf = state::partitionUsageSnapshot,
                 phaseOf = state::partitionUsagePhase,
+                sectorSize = state.diskSectorSize,
                 enabled = state.actionsEnabled,
                 onSelect = { onIntent(UiIntent.SelectPartition(it)) },
             )
@@ -2211,27 +2212,17 @@ private fun StripLegend(color: Color, label: String, outlined: Boolean = false) 
 
 
 /** Size in bytes from the live table, or null when the geometry cannot express it. */
-private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULong? {
-    val sectors = partition.sectorCount ?: return null
-    val sectorSize = state.diskSectorSize
-    if (sectorSize <= 0 || sectors > ULong.MAX_VALUE / sectorSize.toULong()) return null
-    return sectors * sectorSize.toULong()
-}
+private fun partitionSizeBytes(state: AppUiState, partition: PartitionTab): ULong? =
+    partitionSizeBytes(partition, state.diskSectorSize)
 
 /** Free/size line shared with the fixed partition picker. */
 @Composable
-private fun partitionUsageLabel(state: AppUiState, partition: PartitionTab): String {
+private fun partitionUsageLabel(state: AppUiState, partition: PartitionTab): String =
     filesystemUsageText(
         snapshot = state.partitionUsageSnapshot(partition),
         phase = state.partitionUsagePhase(partition),
-    )?.let { return it }
-    val maximum = partitionSizeBytes(state, partition)
-    return stringResource(
-        R.string.filesystem_usage_known,
-        "—",
-        maximum?.let(DeviceIdentity::formatCapacity) ?: "—",
-    )
-}
+        totalBytes = partitionSizeBytes(state, partition),
+    ) ?: "—"
 
 /**
  * "LBA start–end · count sectors" (or another [templateId] shape) for one exact range, or
