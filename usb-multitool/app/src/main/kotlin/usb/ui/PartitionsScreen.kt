@@ -122,6 +122,8 @@ fun PartitionsScreen(
     var createRegion by remember(state.device, state.freeRegions) { mutableStateOf<FreeRegionUi?>(null) }
     var sectorCount by remember { mutableStateOf("") }
     var startLbaInput by remember { mutableStateOf("") }
+    var startMibInput by remember { mutableStateOf("") }
+    var endMibInput by remember { mutableStateOf("") }
     var createName by remember { mutableStateOf("") }
     var createLabel by remember { mutableStateOf("") }
     var createFormatId by remember { mutableStateOf<FilesystemId?>(state.selectedFormatId) }
@@ -158,10 +160,16 @@ fun PartitionsScreen(
         val align = mibAlignSectors(state.diskSectorSize) ?: 1UL
         createRegion = region
         startLbaInput = start.toString()
-        sectorCount = ((sectors / align) * align).toString()
+        val alignedCount = (sectors / align) * align
+        sectorCount = alignedCount.toString()
         createName = ""
         createLabel = ""
         createFormatId = state.selectedFormatId
+        val firstAligned = region.startLba + if (region.startLba % align == 0UL) 0UL else align - region.startLba % align
+        val startMib = if (start >= firstAligned) (start - firstAligned) / align else 0UL
+        val endMib = startMib + (alignedCount / align)
+        startMibInput = startMib.toString()
+        endMibInput = endMib.toString()
     }
     createRegion?.let { region ->
         // Same precondition as UiReducer.RequestCreatePartition: whole MiB alignment.
@@ -188,8 +196,6 @@ fun PartitionsScreen(
         }
         val extraValid = (!namesSupported || nameProblem == null) &&
             (createLabel.isBlank() || (formatSupportsLabel && labelProblem == null))
-        val valid = regionFits && isAligned && fits && extraValid
-
         // Slider positions are whole MiB offsets; the authoritative bound stays ULong.
         val availableMib =
             if (alignSectors != null && firstAligned != null && firstAligned < regionEnd) {
@@ -215,19 +221,13 @@ fun PartitionsScreen(
             }
         val sliderStart =
             if (alignSectors != null && startOffsetSectors != null) {
-                PartitionRangeMath.snapToMib(
-                    (startOffsetSectors / alignSectors).toFloat(),
-                    availableMib,
-                )
+                startOffsetSectors / alignSectors
             } else {
                 0UL
             }
         val sliderEnd =
             if (alignSectors != null && endOffsetSectors != null) {
-                PartitionRangeMath.snapToMib(
-                    (endOffsetSectors.toDouble() / alignSectors.toDouble()).toFloat(),
-                    availableMib,
-                ).coerceAtLeast(sliderStart)
+                (endOffsetSectors / alignSectors).coerceAtLeast(sliderStart)
             } else {
                 sliderStart
             }
@@ -235,7 +235,52 @@ fun PartitionsScreen(
         // 0..max range would claim boundaries the fields do not hold.
         val sliderVisible =
             alignSectors != null && firstAligned != null && startOffsetSectors != null &&
-            availableMib >= 1UL && sliderStart <= availableMib
+            availableMib >= 1UL && sliderStart <= availableMib && sliderEnd <= availableMib
+
+        val parsedStartMib = startMibInput.toULongOrNull()
+        val parsedEndMib = endMibInput.toULongOrNull()
+        val startMibProblem = when {
+            startMibInput.isNotBlank() && parsedStartMib == null ->
+                stringResource(R.string.partitions_create_error_out_of_bounds, availableMib.toLong())
+            parsedStartMib != null && parsedStartMib > availableMib ->
+                stringResource(R.string.partitions_create_error_out_of_bounds, availableMib.toLong())
+            parsedStartMib != null && parsedEndMib != null && parsedStartMib > parsedEndMib ->
+                stringResource(R.string.partitions_create_start_error_greater_than_end)
+            else -> null
+        }
+        val endMibProblem = when {
+            endMibInput.isNotBlank() && parsedEndMib == null ->
+                stringResource(R.string.partitions_create_error_out_of_bounds, availableMib.toLong())
+            parsedEndMib != null && parsedEndMib > availableMib ->
+                stringResource(R.string.partitions_create_error_out_of_bounds, availableMib.toLong())
+            parsedStartMib != null && parsedEndMib != null && parsedEndMib <= parsedStartMib ->
+                stringResource(R.string.partitions_create_end_error_less_than_start)
+            else -> null
+        }
+        // The confirm action submits LBA/count, so the visible fields must describe exactly
+        // that geometry; a half-applied text edit must never create a different range.
+        val mibInputsValid = startMibProblem == null && endMibProblem == null &&
+            parsedStartMib == sliderStart && parsedEndMib == sliderEnd &&
+            sliderEnd > sliderStart
+        val valid = regionFits && isAligned && fits && extraValid && mibInputsValid
+
+        val otherPartitionSizesMib = remember(state.partitions, alignSectors) {
+            val align = alignSectors ?: return@remember emptyList<ULong>()
+            if (align == 0UL) emptyList()
+            else state.partitions.mapNotNull { it.sectorCount?.div(align) }
+        }
+        val baseSnapPoints = remember(availableMib, firstAligned, alignSectors, otherPartitionSizesMib) {
+            if (alignSectors == null || firstAligned == null) emptyList()
+            else PartitionRangeMath.snapPoints(
+                availableMib = availableMib,
+                firstAligned = firstAligned,
+                sectorsPerMib = alignSectors,
+                otherPartitionSizesMib = otherPartitionSizesMib,
+            )
+        }
+        val sizeMagnets = remember(otherPartitionSizesMib) {
+            (PartitionRangeMath.standardSizesMib + otherPartitionSizesMib).distinct()
+        }
 
         AlertDialog(
             onDismissRequest = { createRegion = null },
@@ -304,20 +349,128 @@ fun PartitionsScreen(
                             endLba.toLong(),
                             (sliderEnd - sliderStart).toLong(),
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (availableMib > 0UL) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(26.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                                        .semantics {
+                                            contentDescription = rangeState
+                                        },
+                                ) {
+                                    if (sliderStart > 0UL) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(sliderStart.toFloat())
+                                                .fillMaxHeight()
+                                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                                .padding(horizontal = 2.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (sliderStart.toFloat() / availableMib.toFloat() > 0.15f) {
+                                                Text(
+                                                    text = stringResource(R.string.partitions_create_preview_free),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    val partitionMib = if (sliderEnd > sliderStart) sliderEnd - sliderStart else 0UL
+                                    if (partitionMib > 0UL) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(partitionMib.toFloat())
+                                                .fillMaxHeight()
+                                                .background(MaterialTheme.colorScheme.secondaryContainer)
+                                                .border(
+                                                    width = 1.5.dp,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    shape = RoundedCornerShape(4.dp),
+                                                )
+                                                .padding(horizontal = 2.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = stringResource(
+                                                    R.string.partitions_create_size_mib,
+                                                    partitionMib.toLong(),
+                                                ),
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                maxLines = 1,
+                                            )
+                                        }
+                                    }
+                                    val freeAfter = if (availableMib > sliderEnd) availableMib - sliderEnd else 0UL
+                                    if (freeAfter > 0UL) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(freeAfter.toFloat())
+                                                .fillMaxHeight()
+                                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                                .padding(horizontal = 2.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (freeAfter.toFloat() / availableMib.toFloat() > 0.15f) {
+                                                Text(
+                                                    text = stringResource(R.string.partitions_create_preview_free),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             RangeSlider(
                                 value = safeStart..safeEnd,
                                 onValueChange = { range ->
-                                    val startMib =
-                                        PartitionRangeMath.snapToMib(range.start, availableMib)
-                                    val endMib =
-                                        PartitionRangeMath.snapToMib(range.endInclusive, availableMib)
-                                            .coerceAtLeast(startMib)
+                                    val magnetThreshold = (availableMib.toFloat() * 0.02f).coerceIn(1f, 1024f)
+                                    val movingStart =
+                                        kotlin.math.abs(range.start - safeStart) >=
+                                            kotlin.math.abs(range.endInclusive - safeEnd)
+                                    val snapStart =
+                                        if (movingStart) {
+                                            val points = baseSnapPoints + PartitionRangeMath.sizePointsBelow(
+                                                anchorMib = sliderEnd,
+                                                sizes = sizeMagnets,
+                                            )
+                                            PartitionRangeMath.snapWithMagnets(
+                                                position = range.start,
+                                                maxMib = availableMib,
+                                                snapPoints = points,
+                                                thresholdMib = magnetThreshold,
+                                            ).coerceAtMost(if (sliderEnd > 0UL) sliderEnd - 1UL else 0UL)
+                                        } else {
+                                            sliderStart
+                                        }
+                                    val snapEnd =
+                                        if (!movingStart) {
+                                            val points = baseSnapPoints + PartitionRangeMath.sizePointsAbove(
+                                                anchorMib = sliderStart,
+                                                maxMib = availableMib,
+                                                sizes = sizeMagnets,
+                                            )
+                                            PartitionRangeMath.snapWithMagnets(
+                                                position = range.endInclusive,
+                                                maxMib = availableMib,
+                                                snapPoints = points,
+                                                thresholdMib = magnetThreshold,
+                                            ).coerceAtLeast(snapStart + 1UL)
+                                        } else {
+                                            sliderEnd
+                                        }
                                     val selection = PartitionRangeMath.sectorsFor(
                                         firstAligned = regionBase,
                                         regionEnd = regionEnd,
-                                        startMib = startMib,
-                                        endMib = endMib,
+                                        startMib = snapStart,
+                                        endMib = snapEnd,
                                         sectorsPerMib = mibSectors,
                                     )
                                     if (selection != null) {
@@ -325,9 +478,11 @@ fun PartitionsScreen(
                                         sectorCount = selection.second.toString()
                                     } else {
                                         startLbaInput =
-                                            (regionBase + startMib * mibSectors).toString()
+                                            (regionBase + snapStart * mibSectors).toString()
                                         sectorCount = "0"
                                     }
+                                    startMibInput = snapStart.toString()
+                                    endMibInput = snapEnd.toString()
                                 },
                                 valueRange = 0f..maxMibFloat,
                                 modifier = Modifier
@@ -350,6 +505,65 @@ fun PartitionsScreen(
                                 ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedTextField(
+                                    value = startMibInput,
+                                    onValueChange = { input ->
+                                        startMibInput = input
+                                        val s = input.toULongOrNull()
+                                        val e = parsedEndMib
+                                        if (s != null && e != null && s < e && e <= availableMib) {
+                                            val selection = PartitionRangeMath.sectorsFor(
+                                                firstAligned = regionBase,
+                                                regionEnd = regionEnd,
+                                                startMib = s,
+                                                endMib = e,
+                                                sectorsPerMib = mibSectors,
+                                            )
+                                            if (selection != null) {
+                                                startLbaInput = selection.first.toString()
+                                                sectorCount = selection.second.toString()
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    label = { Text(stringResource(R.string.partitions_create_start_mib)) },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    isError = startMibProblem != null,
+                                    supportingText = startMibProblem?.let { msg -> { Text(msg) } },
+                                )
+                                OutlinedTextField(
+                                    value = endMibInput,
+                                    onValueChange = { input ->
+                                        endMibInput = input
+                                        val e = input.toULongOrNull()
+                                        val s = parsedStartMib
+                                        if (e != null && s != null && e > s && e <= availableMib) {
+                                            val selection = PartitionRangeMath.sectorsFor(
+                                                firstAligned = regionBase,
+                                                regionEnd = regionEnd,
+                                                startMib = s,
+                                                endMib = e,
+                                                sectorsPerMib = mibSectors,
+                                            )
+                                            if (selection != null) {
+                                                startLbaInput = selection.first.toString()
+                                                sectorCount = selection.second.toString()
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    label = { Text(stringResource(R.string.partitions_create_end_mib)) },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    isError = endMibProblem != null,
+                                    supportingText = endMibProblem?.let { msg -> { Text(msg) } },
+                                )
+                            }
                         }
                     }
                     Column(
