@@ -160,6 +160,9 @@ class AndroidUsbBulkChannel private constructor(
                 )
             }
             if (n == 0) {
+                // A standalone IN ZLP terminates the data phase, including when it
+                // follows an exact multiple of the max packet size.
+                if (endpoint.direction == UsbConstants.USB_DIR_IN) break
                 throw DiskException.IoFailure("bulkTransfer returned 0 bytes")
             }
             transferred += n

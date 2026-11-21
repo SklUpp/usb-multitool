@@ -19,9 +19,14 @@ class BotSessionImplTest {
         val outTimeouts = mutableListOf<Int>()
         // Queued responses for bulkIn
         private val inResponses = ArrayDeque<ByteArray>()
+        private var zeroNextIn = false
 
         fun queueIn(bytes: ByteArray) {
             inResponses.addLast(bytes)
+        }
+
+        fun queueZlp() {
+            zeroNextIn = true
         }
 
         fun queueCsw(tag: Int, residue: Int = 0, status: CswStatus = CswStatus.PASSED) {
@@ -37,6 +42,10 @@ class BotSessionImplTest {
             if (!connected) throw DiskException.Disconnected()
             inCalls.add(length)
             inTimeouts.add(timeoutMs)
+            if (zeroNextIn) {
+                zeroNextIn = false
+                return 0
+            }
             val resp = if (inResponses.isNotEmpty()) inResponses.removeFirst() else ByteArray(0)
             val toTake = minOf(length, resp.size)
             destination.put(resp, 0, toTake)
@@ -98,6 +107,22 @@ class BotSessionImplTest {
 
         // Verify channel bulkIn calls: first asked for 96 bytes (returned 36),
         // then next call MUST BE for 13 bytes (CSW), NOT retrying remaining data!
+        assertEquals(listOf(96, BotConstants.CSW_SIZE), channel.inCalls)
+    }
+
+    @Test
+    fun standaloneZlpEndsDataPhaseThenReadsCsw() {
+        val channel = ScriptedBulkChannel()
+        val session = BotSessionImpl(channel)
+
+        // No data packet: the zero-length bulkIn is a standalone ZLP, not an I/O error.
+        channel.queueZlp()
+        channel.queueCsw(tag = 1, residue = 96, status = CswStatus.PASSED)
+
+        val csw = session.transfer(ScsiCommand.inquiry(96), ByteBuffer.allocate(96))
+
+        assertEquals(CswStatus.PASSED, csw.status)
+        assertEquals(96, csw.residue)
         assertEquals(listOf(96, BotConstants.CSW_SIZE), channel.inCalls)
     }
 

@@ -35,7 +35,8 @@ class RawSourceChooserTest {
         val volume = InMemoryUsbVolume((1..10).associate { "/f$it.bin" to byteArrayOf(it.toByte()) })
         val listing = RawSourceChooser.list(volume, "/", maxEntries = 3, maxDepth = 0)
         assertTrue(listing.truncated)
-        assertEquals(3, listing.candidates.size)
+        // /ISO is a directory entry and now counts toward the same bound.
+        assertEquals(2, listing.candidates.size)
     }
 
     @Test
@@ -66,15 +67,29 @@ class RawSourceChooserTest {
     }
 
     @Test
-    fun respectsMaxDepth() {
+    fun respectsMaxDepthAndReportsTheOmission() {
         val volume =
             InMemoryUsbVolume(
                 mapOf(
                     "/a/b/deep.bin" to byteArrayOf(1),
                     "/a/top.bin" to byteArrayOf(2),
+                    "/b/ok.bin" to byteArrayOf(3),
                 ),
             )
         val listing = RawSourceChooser.list(volume, "/", maxEntries = 10, maxDepth = 1)
-        assertEquals(listOf("/a/top.bin"), listing.candidates.map { it.path })
+        // A depth omission under /a must not suppress the eligible sibling /b.
+        assertEquals(listOf("/a/top.bin", "/b/ok.bin"), listing.candidates.map { it.path })
+        assertTrue("a depth-limited listing must not look complete", listing.truncated)
+    }
+
+    @Test
+    fun directoriesCountTowardTheEntryLimit() {
+        val volume =
+            InMemoryUsbVolume(
+                (1..10).associate { "/dir$it/file.bin" to byteArrayOf(it.toByte()) },
+            )
+        val listing = RawSourceChooser.list(volume, "/", maxEntries = 4, maxDepth = 3)
+        assertTrue(listing.truncated)
+        assertTrue("directory traversal exceeded the bound", listing.candidates.size <= 2)
     }
 }

@@ -632,9 +632,17 @@ int ntfs_engine_read(uint64_t vol_handle, const char *path,
     return 0;
 }
 
-static void split_path(const char *path, char *parent, size_t parent_sz, const char **filename)
+#define NTFS_MAX_NAME_UNITS 255
+
+static int ntfs_name_units_ok(int units)
+{
+	return units >= 1 && units <= NTFS_MAX_NAME_UNITS;
+}
+
+static int split_path(const char *path, char *parent, size_t parent_sz, const char **filename)
 {
     const char *slash = strrchr(path, '/');
+    if (parent_sz == 0) return -EINVAL;
     if (!slash) {
         snprintf(parent, parent_sz, "/");
         *filename = path;
@@ -642,25 +650,30 @@ static void split_path(const char *path, char *parent, size_t parent_sz, const c
         snprintf(parent, parent_sz, "/");
         *filename = slash + 1;
     } else {
+        /* Never silently truncate a parent: that would target another directory. */
         size_t len = (size_t)(slash - path);
-        if (len >= parent_sz) len = parent_sz - 1;
+        if (len >= parent_sz) return -EINVAL;
         memcpy(parent, path, len);
         parent[len] = '\0';
         *filename = slash + 1;
     }
+    return 0;
 }
 
 static int delete_created_file(NtfsVolumeContext *v, const char *path, ntfs_inode *owned)
 {
     char parent[512];
     const char *filename = NULL;
-    split_path(path, parent, sizeof(parent), &filename);
-    if (!filename || !*filename) { ntfs_inode_close(owned); return -EINVAL; }
+    if (split_path(path, parent, sizeof(parent), &filename) != 0 ||
+        !filename || !*filename) {
+        ntfs_inode_close(owned);
+        return -EINVAL;
+    }
     ntfs_inode *dir = ntfs_pathname_to_inode(v->vol, NULL, parent);
     if (!dir) { ntfs_inode_close(owned); return -EIO; }
     ntfschar *uname = NULL;
     int ulen = ntfs_mbstoucs(filename, &uname);
-    if (ulen < 0 || !uname) {
+    if (!ntfs_name_units_ok(ulen) || !uname) {
         ntfs_inode_close(dir);
         ntfs_inode_close(owned);
         return -EINVAL;
@@ -686,6 +699,13 @@ int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
 	 * reports the full length as written; refuse instead of faking success. */
 	if (NVolReadOnly(v->vol)) return -EROFS;
 
+    char parent[512];
+    const char *filename = NULL;
+    if (split_path(path, parent, sizeof(parent), &filename) != 0 ||
+        !filename || !*filename) {
+        return -EINVAL;
+    }
+
     int created = 0;
     errno = 0;
     ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
@@ -693,11 +713,6 @@ int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
         int e = errno;
         if (!create) return (e == ENOENT) ? -ENOENT : -EIO;
         if (e != 0 && e != ENOENT) return -EIO;
-
-        char parent[512];
-        const char *filename = NULL;
-        split_path(path, parent, sizeof(parent), &filename);
-        if (!filename || !*filename) return -EINVAL;
 
         errno = 0;
         ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
@@ -710,7 +725,8 @@ int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
 
         ntfschar *uname = NULL;
         int ulen = ntfs_mbstoucs(filename, &uname);
-        if (ulen < 0 || !uname) {
+        if (!ntfs_name_units_ok(ulen) || !uname) {
+            free(uname);
             ntfs_inode_close(dir_ni);
             return -EINVAL;
         }
@@ -764,9 +780,24 @@ int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
         }
         return -EIO;
     }
-    ntfs_inode_close(ni);
+    int close_rc = ntfs_inode_close(ni);
     *out_written = (size_t)written;
-    return 0;
+    if (close_rc == 0) return 0;
+
+    /* Close flushes metadata. If it failed after a create, reopen by path and
+     * remove the new file so a failed upload does not leave an unreported target.
+     * If rollback itself fails, report the distinct cleanup error. */
+    if (created) {
+        errno = 0;
+        ntfs_inode *reopened = ntfs_pathname_to_inode(v->vol, NULL, path);
+        int lookup_errno = errno;
+        if (!reopened) {
+            return lookup_errno == ENOENT ? -EIO : NTFS_ENGINE_CLEANUP_FAILED;
+        }
+        int cleanup = delete_created_file(v, path, reopened);
+        if (cleanup != 0) return NTFS_ENGINE_CLEANUP_FAILED;
+    }
+    return -EIO;
 }
 
 int ntfs_engine_write(uint64_t vol_handle, const char *path, uint64_t offset,
@@ -781,6 +812,13 @@ int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
     if (!v || !v->vol || !path) return -EINVAL;
     if (NVolReadOnly(v->vol)) return -EROFS;
 
+    char parent[512];
+    const char *filename = NULL;
+    if (split_path(path, parent, sizeof(parent), &filename) != 0 ||
+        !filename || !*filename) {
+        return -EINVAL;
+    }
+
     errno = 0;
     ntfs_inode *existing = ntfs_pathname_to_inode(v->vol, NULL, path);
     if (existing) {
@@ -788,11 +826,6 @@ int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
         return -EEXIST;
     }
     if (errno != 0 && errno != ENOENT) return -EIO;
-
-    char parent[512];
-    const char *filename = NULL;
-    split_path(path, parent, sizeof(parent), &filename);
-    if (!filename || !*filename) return -EINVAL;
 
     errno = 0;
     ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
@@ -808,7 +841,8 @@ int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
 
     ntfschar *uname = NULL;
     int ulen = ntfs_mbstoucs(filename, &uname);
-    if (ulen < 0 || !uname) {
+    if (!ntfs_name_units_ok(ulen) || !uname) {
+        free(uname);
         ntfs_inode_close(dir_ni);
         return -EINVAL;
     }
@@ -817,7 +851,7 @@ int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
     free(uname);
     ntfs_inode_close(dir_ni);
     if (!ni) return -EIO;
-    ntfs_inode_close(ni);
+    if (ntfs_inode_close(ni) != 0) return -EIO;
     return 0;
 }
 
@@ -847,13 +881,13 @@ int ntfs_engine_delete(uint64_t vol_handle, const char *path)
 		}
 	}
 
-	char parent[512];
-	const char *filename = NULL;
-	split_path(path, parent, sizeof(parent), &filename);
-	if (!filename || !*filename) {
-		ntfs_inode_close(ni);
-		return -EINVAL;
-	}
+    char parent[512];
+    const char *filename = NULL;
+    if (split_path(path, parent, sizeof(parent), &filename) != 0 ||
+        !filename || !*filename) {
+        ntfs_inode_close(ni);
+        return -EINVAL;
+    }
 
 	errno = 0;
 	ntfs_inode *dir_ni = ntfs_pathname_to_inode(v->vol, NULL, parent);
@@ -865,7 +899,8 @@ int ntfs_engine_delete(uint64_t vol_handle, const char *path)
 
 	ntfschar *uname = NULL;
 	int ulen = ntfs_mbstoucs(filename, &uname);
-	if (ulen < 0 || !uname) {
+	if (!ntfs_name_units_ok(ulen) || !uname) {
+		free(uname);
 		ntfs_inode_close(dir_ni);
 		ntfs_inode_close(ni);
 		return -EINVAL;
@@ -905,9 +940,9 @@ int ntfs_engine_rename(uint64_t vol_handle, const char *from, const char *to)
 	char from_parent[512], to_parent[512];
 	const char *from_name = NULL;
 	const char *to_name = NULL;
-	split_path(from, from_parent, sizeof(from_parent), &from_name);
-	split_path(to, to_parent, sizeof(to_parent), &to_name);
-	if (!from_name || !*from_name || !to_name || !*to_name) {
+	if (split_path(from, from_parent, sizeof(from_parent), &from_name) != 0 ||
+	    split_path(to, to_parent, sizeof(to_parent), &to_name) != 0 ||
+	    !from_name || !*from_name || !to_name || !*to_name) {
 		ntfs_inode_close(ni);
 		return -EINVAL;
 	}
@@ -954,7 +989,8 @@ int ntfs_engine_rename(uint64_t vol_handle, const char *from, const char *to)
 
 	ntfschar *new_uname = NULL;
 	int new_ulen = ntfs_mbstoucs(to_name, &new_uname);
-	if (new_ulen < 0 || !new_uname) {
+	if (!ntfs_name_units_ok(new_ulen) || !new_uname) {
+		free(new_uname);
 		if (!shared_parent) ntfs_inode_close(from_dir);
 		ntfs_inode_close(to_dir);
 		ntfs_inode_close(ni);
@@ -963,7 +999,7 @@ int ntfs_engine_rename(uint64_t vol_handle, const char *from, const char *to)
 
 	ntfschar *old_uname = NULL;
 	int old_ulen = ntfs_mbstoucs(from_name, &old_uname);
-	if (old_ulen < 0 || !old_uname) {
+	if (!ntfs_name_units_ok(old_ulen) || !old_uname) {
 		free(new_uname);
 		if (!shared_parent) ntfs_inode_close(from_dir);
 		ntfs_inode_close(to_dir);

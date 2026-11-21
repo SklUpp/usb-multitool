@@ -134,7 +134,9 @@ class BotSessionImpl(
             if (!channel.isConnected()) throw DiskException.Disconnected()
             val requested = remaining
             val n = channel.bulkIn(destination, requested, timeoutMs)
-            if (n <= 0) throw DiskException.IoFailure("short bulk IN returned $n")
+            if (n < 0) throw DiskException.IoFailure("short bulk IN returned $n")
+            // Zero bytes is a standalone ZLP: the device ended the data phase.
+            if (n == 0) break
             total += n
             remaining -= n
             if (n < requested) {

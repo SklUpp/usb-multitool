@@ -15,6 +15,7 @@ import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsUsageVolume
 import usb.fs.UsbFsVolume
 import usb.image.ImageStaging
+import usb.image.MeasurementHandle
 import usb.operation.DiskOperation
 import usb.operation.OperationState
 import usb.saf.SafBackupFolder
@@ -84,13 +85,22 @@ object FilesOperations {
         val expected = openableSizeBytes(resolver, uri)
         val staged = ImageStaging.createUnique(filesDir, openableDisplayName(resolver, uri) ?: "file")
         try {
-            val input = resolver.openInputStream(uri) ?: error("cannot open $uri for reading")
-            input.use { source ->
+            val handle = MeasurementHandle()
+            val cancelSource: () -> Unit = { handle.cancel() }
+            operation.onInactive(cancelSource)
+            var source: java.io.InputStream? = null
+            var primary: Throwable? = null
+            try {
+                if (!handle.isActive()) throw CancellationException("Staging cancelled")
+                source = resolver.openInputStream(uri) ?: error("cannot open $uri for reading")
+                handle.attach(source)
                 FileOutputStream(staged).use { output ->
                     val buffer = ByteArray(chunkBytes)
                     var total = 0L
                     while (true) {
-                        if (!operation.isActive()) throw CancellationException("Staging cancelled")
+                        if (!operation.isActive()) {
+                            throw CancellationException("Staging cancelled")
+                        }
                         val count = source.read(buffer)
                         if (count <= 0) break
                         output.write(buffer, 0, count)
@@ -102,6 +112,18 @@ object FilesOperations {
                     if (expected != null && total != expected) {
                         throw IOException("staged size mismatch: got $total, expected $expected")
                     }
+                }
+            } catch (failure: Throwable) {
+                primary = failure
+                throw failure
+            } finally {
+                operation.removeInactiveListener(cancelSource)
+                try {
+                    source?.let(handle::releaseOrThrow)
+                } catch (closeFailure: Throwable) {
+                    if (primary != null) primary.addSuppressed(closeFailure) else throw closeFailure
+                } finally {
+                    handle.abandon()
                 }
             }
             if (!operation.isActive()) throw CancellationException("Staging cancelled")

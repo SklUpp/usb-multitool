@@ -144,7 +144,12 @@ object PartitionWriter {
         }
     }
 
-    private fun validateGptGeometry(disk: BlockDevice, header: GptHeader, entrySectors: ULong) {
+    private fun validateGptGeometry(
+        disk: BlockDevice,
+        header: GptHeader,
+        entrySectors: ULong,
+        backupEntriesLba: ULong,
+    ) {
         require(header.entrySize == ENTRY_SIZE) {
             "unsupported GPT entry size ${header.entrySize}; only $ENTRY_SIZE is writable"
         }
@@ -163,21 +168,22 @@ object PartitionWriter {
         }
         require(entrySectors > 0UL && entrySectors <= disk.sectorCount) { "invalid GPT entry geometry" }
         require(header.entryLba <= disk.sectorCount - entrySectors) { "GPT primary entries outside disk" }
-        require(header.backupLba >= entrySectors) { "GPT backup entries overlap disk start" }
+        require(backupEntriesLba <= disk.sectorCount - entrySectors) {
+            "GPT backup entries outside disk"
+        }
         val primaryEnd = header.entryLba + entrySectors
-        val backupStart = header.backupLba - entrySectors
-        val backupEnd = header.backupLba
+        val backupEnd = backupEntriesLba + entrySectors
         fun overlaps(start: ULong, end: ULong, otherStart: ULong, otherEnd: ULong) =
             start < otherEnd && otherStart < end
         require(!overlaps(header.entryLba, primaryEnd, 0UL, 1UL)) { "GPT entries overlap LBA 0" }
-        require(!overlaps(backupStart, backupEnd, 0UL, 1UL)) { "GPT entries overlap LBA 0" }
+        require(!overlaps(backupEntriesLba, backupEnd, 0UL, 1UL)) { "GPT backup entries overlap LBA 0" }
         require(!overlaps(header.entryLba, primaryEnd, header.currentLba, header.currentLba + 1UL)) { "GPT primary entries overlap header" }
         require(!overlaps(header.entryLba, primaryEnd, header.backupLba, header.backupLba + 1UL)) { "GPT primary entries overlap header" }
-        require(!overlaps(backupStart, backupEnd, header.currentLba, header.currentLba + 1UL)) { "GPT backup entries overlap header" }
-        require(!overlaps(backupStart, backupEnd, header.backupLba, header.backupLba + 1UL)) { "GPT backup entries overlap header" }
-        require(!overlaps(header.entryLba, primaryEnd, backupStart, backupEnd)) { "GPT entry arrays overlap" }
+        require(!overlaps(backupEntriesLba, backupEnd, header.currentLba, header.currentLba + 1UL)) { "GPT backup entries overlap header" }
+        require(!overlaps(backupEntriesLba, backupEnd, header.backupLba, header.backupLba + 1UL)) { "GPT backup entries overlap header" }
+        require(!overlaps(header.entryLba, primaryEnd, backupEntriesLba, backupEnd)) { "GPT entry arrays overlap" }
         require(!overlaps(header.entryLba, primaryEnd, header.firstUsable, header.lastUsable + 1UL)) { "GPT entries overlap usable range" }
-        require(!overlaps(backupStart, backupEnd, header.firstUsable, header.lastUsable + 1UL)) { "GPT entries overlap usable range" }
+        require(!overlaps(backupEntriesLba, backupEnd, header.firstUsable, header.lastUsable + 1UL)) { "GPT entries overlap usable range" }
     }
 
     private fun commitGpt(disk: BlockDevice, table: PartitionTable): CommitPayload.Gpt {
@@ -197,10 +203,15 @@ object PartitionWriter {
         require(entryCount <= Int.MAX_VALUE / ENTRY_SIZE) { "GPT entry count too large" }
         val entryBytes = entryCount * ENTRY_SIZE
         val entrySectors = (entryBytes.toULong() + sectorSize.toULong() - 1UL) / sectorSize.toULong()
-        validateGptGeometry(disk, header, entrySectors)
+        // The backup array must be written where the validated backup header records it,
+        // not at a predicted offset: displaced layouts are legal and predicting can
+        // overwrite unrelated sectors.
+        val backupEntriesLba = table.gptBackupEntriesLba
+            ?: throw IllegalArgumentException(
+                "GPT backup entry array location is unknown; refusing to rewrite",
+            )
+        validateGptGeometry(disk, header, entrySectors, backupEntriesLba)
         val backupLba = header.backupLba
-        val backupEntriesLba = backupLba - entrySectors
-        require(entrySectors < backupLba) { "GPT backup entries overlap header" }
 
         for (partition in table.partitions) {
             val last = partition.startLba + partition.sectorCount - 1UL

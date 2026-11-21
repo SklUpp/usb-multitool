@@ -23,15 +23,18 @@ typedef enum FatMkfsType {
 	FAT_MKFS_ANY = 7
 } FatMkfsType;
 
+/* FatFs FF_LFN_BUF (768) plus the terminating NUL. */
+#define FAT_ENGINE_NAME_MAX 769
+
 typedef struct FatDirEnt {
-	char name[256];
+	char name[FAT_ENGINE_NAME_MAX];
 	uint8_t is_dir;
 	uint64_t size;
 	uint8_t attrib;
 } FatDirEnt;
 
 typedef struct FatStat {
-	char name[256];
+	char name[FAT_ENGINE_NAME_MAX];
 	uint8_t is_dir;
 	uint64_t size;
 	uint8_t attrib;

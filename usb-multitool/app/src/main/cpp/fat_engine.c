@@ -289,7 +289,7 @@ int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t ca
 	FatVolume *v;
 	DIR dir;
 	FILINFO fno;
-	char full[512];
+	char full[1024];
 	FRESULT fr;
 	size_t n = 0;
 
@@ -338,7 +338,7 @@ int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 {
 	FatVolume *v;
 	FILINFO fno;
-	char full[512];
+	char full[1024];
 	FRESULT fr;
 	const char *p;
 
@@ -386,7 +386,7 @@ int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 int fat_engine_mkdir(uint64_t volume, const char *path)
 {
 	FatVolume *v;
-	char full[512];
+	char full[1024];
 	FRESULT fr;
 	if (!path) return (int)FR_INVALID_PARAMETER;
 	pthread_mutex_lock(&g_fat_mu);
@@ -409,7 +409,7 @@ int fat_engine_mkdir(uint64_t volume, const char *path)
 int fat_engine_delete(uint64_t volume, const char *path)
 {
 	FatVolume *v;
-	char full[512];
+	char full[1024];
 	FRESULT fr;
 	if (!path) return (int)FR_INVALID_PARAMETER;
 	pthread_mutex_lock(&g_fat_mu);
@@ -432,7 +432,7 @@ int fat_engine_delete(uint64_t volume, const char *path)
 int fat_engine_rename(uint64_t volume, const char *from, const char *to)
 {
 	FatVolume *v;
-	char a[512], b[512];
+	char a[1024], b[1024];
 	FRESULT fr;
 	if (!from || !to) return (int)FR_INVALID_PARAMETER;
 	pthread_mutex_lock(&g_fat_mu);
@@ -458,7 +458,7 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 {
 	FatVolume *v;
 	FIL fil;
-	char full[512];
+	char full[1024];
 	FRESULT fr;
 	UINT br = 0;
 
@@ -503,7 +503,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 {
 	FatVolume *v;
 	FIL fil;
-	char full[512];
+	char full[1024];
 	FRESULT fr;
 	UINT bw = 0;
 	BYTE mode;

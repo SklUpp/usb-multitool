@@ -2,6 +2,7 @@ package usb.partition
 
 import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,6 +11,33 @@ import usb.device.DiskException
 
 class PartitionWriterFaultTest {
     private fun gptDisk(): ImageBlockDevice = SyntheticGpt.build(sectorCount = 16384UL)
+
+    @Test
+    fun writesDisplacedBackupArrayAtTheRecordedLocation() {
+        val disk = SyntheticGpt.build(
+            sectorCount = 16384UL,
+            backupEntriesLba = 16320UL,
+        )
+        val table = PartitionTable.read(disk)
+        assertEquals(16320UL, table.gptBackupEntriesLba)
+        val next = PartitionEditor.create(table, size = 2048UL, type = PartitionType.BASIC)
+        val fault = FaultyBlockDevice(disk)
+
+        PartitionWriter.commit(fault, next)
+
+        assertTrue("recorded backup array was not written", "write:16320" in fault.ops)
+        assertFalse("predicted backup array was written", "write:16351" in fault.ops)
+        assertEquals(16320UL, PartitionTable.read(fault).gptBackupEntriesLba)
+    }
+
+    @Test
+    fun refusesToRewriteWhenTheBackupArrayLocationIsUnknown() {
+        val disk = gptDisk()
+        val table = PartitionTable.read(disk)
+        assertThrows(IllegalArgumentException::class.java) {
+            PartitionWriter.commit(disk, table.copy(gptBackupEntriesLba = null))
+        }
+    }
 
     private fun edited(disk: ImageBlockDevice): Pair<PartitionTable, PartitionTable> {
         val old = PartitionTable.read(disk)

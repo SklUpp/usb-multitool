@@ -488,6 +488,41 @@ int main(int argc, char **argv)
         assert(rc == 0);
         printf("PASS: empty directory delete succeeds\n");
 
+        /* 256 UTF-16 units exceeds NTFS's 255-unit component limit. */
+        {
+            char too_long[1 + 256 * 2 + 1];
+            too_long[0] = '/';
+            for (int i = 0; i < 256; i++) {
+                too_long[1 + i * 2] = (char)0xD1;
+                too_long[2 + i * 2] = (char)0x8F;
+            }
+            too_long[1 + 256 * 2] = '\0';
+            wrote = 0;
+            rc = ntfs_engine_write(vol, too_long, 0, "x", 1, true, &wrote);
+            assert(rc == -EINVAL);
+            printf("PASS: 256-unit NTFS name rejected\n");
+        }
+
+        /* A parent path that does not fit the fixed buffer must never be truncated.
+         * Do not try to create it first: the guard itself rejects directories whose
+         * parent is already over the limit, so such a parent cannot exist via this API. */
+        {
+            char deep[600] = "";
+            for (int i = 0; i < 43; i++) {
+                size_t used = strlen(deep);
+                snprintf(deep + used, sizeof(deep) - used, "/directory%02d", i);
+            }
+            assert(strlen(deep) > 512);
+            char deep_file[620];
+            snprintf(deep_file, sizeof(deep_file), "%s/file.txt", deep);
+            wrote = 0;
+            rc = ntfs_engine_write(vol, deep_file, 0, "x", 1, true, &wrote);
+            assert(rc == -EINVAL);
+            rc = ntfs_engine_mkdir(vol, deep_file);
+            assert(rc == -EINVAL);
+            printf("PASS: overlong NTFS parent rejected without truncation\n");
+        }
+
         wrote = 0;
         rc = ntfs_engine_write(vol, "/rename_src.txt", 0, "xy", 2, true, &wrote);
         assert(rc == 0);

@@ -148,7 +148,12 @@ object RawWriter {
             // serves both the decoded length and the confirmation digest. A provider SIZE
             // is only authoritative for an immutable snapshot or when no confirmed decoded
             // length exists; expectedDecodedBytes is checked below instead.
-            closeQuietly()
+            // A provider close can block; hand the stale stream to the bounded closer so
+            // cancellation can still reach the measurement pass.
+            val staleHandle = MeasurementHandle(admission.take())
+            staleHandle.attach(input)
+            staleHandle.cancel()
+            admission.acquire()
             val checked =
                 measureWithCancellation(source, operation, measureLimit, admission.take())
             input = openSource(source, admission)
@@ -312,7 +317,8 @@ object RawWriter {
         digest: java.security.MessageDigest? = null,
         operation: DiskOperation,
     ): RawWriteResult {
-        val expected = input.decodedSizeHint ?: known
+        // A provider's SIZE hint is untrusted; preflight already measured the decoded bytes.
+        val expected = known
         if (expected != null && (expected < 0L || expected.toULong() > capacity)) {
             throw ImageTooLargeException("image $expected exceeds selected range $capacity bytes")
         }

@@ -18,22 +18,55 @@ struct JniBlockCtx {
 	jmethodID readMid = nullptr;
 	jmethodID writeMid = nullptr;
 	jmethodID syncMid = nullptr;
+	jbyteArray scratch = nullptr; /* global ref, reused across sector I/O */
+	jsize scratch_len = 0;
 	uint32_t sector_size = 0;
 	uint64_t sector_count = 0;
 	UsbBlockOps ops{};
 };
 
+struct ThreadDetacher {
+	JavaVM *jvm = nullptr;
+	~ThreadDetacher()
+	{
+		if (jvm) jvm->DetachCurrentThread();
+	}
+};
+
+thread_local ThreadDetacher tls_detacher;
 thread_local JNIEnv *tls_env = nullptr;
 
 JNIEnv *env_for(JavaVM *jvm)
 {
 	if (tls_env) return tls_env;
 	JNIEnv *env = nullptr;
-	if (jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
-		if (jvm->AttachCurrentThread(&env, nullptr) != 0) return nullptr;
+	jint status = jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+	if (status == JNI_EDETACHED) {
+		if (jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
+		/* Attached native threads must detach before they exit, or ART aborts. */
+		tls_detacher.jvm = jvm;
+	} else if (status != JNI_OK) {
+		return nullptr;
 	}
 	tls_env = env;
 	return env;
+}
+
+jbyteArray scratch_for(JNIEnv *env, JniBlockCtx *c, jlong bytes)
+{
+	if (bytes <= 0 || bytes > INT32_MAX) return nullptr;
+	jsize len = static_cast<jsize>(bytes);
+	if (!c->scratch || c->scratch_len < len) {
+		jbyteArray local = env->NewByteArray(len);
+		if (!local) return nullptr;
+		jbyteArray global = reinterpret_cast<jbyteArray>(env->NewGlobalRef(local));
+		env->DeleteLocalRef(local);
+		if (!global) return nullptr;
+		if (c->scratch) env->DeleteGlobalRef(c->scratch);
+		c->scratch = global;
+		c->scratch_len = len;
+	}
+	return c->scratch;
 }
 
 int jni_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
@@ -42,16 +75,15 @@ int jni_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 	JNIEnv *env = env_for(c->jvm);
 	if (!env) return -1;
 	const jlong bytes = static_cast<jlong>(sectors) * c->sector_size;
-	jbyteArray arr = env->NewByteArray(static_cast<jsize>(bytes));
+	jbyteArray arr = scratch_for(env, c, bytes);
 	if (!arr) return -1;
-	jint rc = env->CallIntMethod(c->callback, c->readMid, static_cast<jlong>(lba), arr);
+	jint rc = env->CallIntMethod(c->callback, c->readMid, static_cast<jlong>(lba),
+				     arr, static_cast<jint>(bytes));
 	if (env->ExceptionCheck() || rc != 0) {
 		env->ExceptionClear();
-		env->DeleteLocalRef(arr);
 		return -1;
 	}
 	env->GetByteArrayRegion(arr, 0, static_cast<jsize>(bytes), reinterpret_cast<jbyte *>(buf));
-	env->DeleteLocalRef(arr);
 	return 0;
 }
 
@@ -61,12 +93,12 @@ int jni_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors)
 	JNIEnv *env = env_for(c->jvm);
 	if (!env) return -1;
 	const jlong bytes = static_cast<jlong>(sectors) * c->sector_size;
-	jbyteArray arr = env->NewByteArray(static_cast<jsize>(bytes));
+	jbyteArray arr = scratch_for(env, c, bytes);
 	if (!arr) return -1;
 	env->SetByteArrayRegion(arr, 0, static_cast<jsize>(bytes),
 				reinterpret_cast<const jbyte *>(buf));
-	jint rc = env->CallIntMethod(c->callback, c->writeMid, static_cast<jlong>(lba), arr);
-	env->DeleteLocalRef(arr);
+	jint rc = env->CallIntMethod(c->callback, c->writeMid, static_cast<jlong>(lba),
+				     arr, static_cast<jint>(bytes));
 	if (env->ExceptionCheck() || rc != 0) {
 		env->ExceptionClear();
 		return -1;
@@ -175,8 +207,8 @@ Java_usb_fs_FatFsNative_nativeOpenBlock(JNIEnv *env, jclass, jobject callback,
 	JavaVM *jvm = nullptr;
 	env->GetJavaVM(&jvm);
 	jclass cls = env->GetObjectClass(callback);
-	jmethodID readMid = env->GetMethodID(cls, "readSectors", "(J[B)I");
-	jmethodID writeMid = env->GetMethodID(cls, "writeSectors", "(J[B)I");
+	jmethodID readMid = env->GetMethodID(cls, "readSectors", "(J[BI)I");
+	jmethodID writeMid = env->GetMethodID(cls, "writeSectors", "(J[BI)I");
 	jmethodID syncMid = env->GetMethodID(cls, "sync", "()I");
 	if (!readMid || !writeMid || !syncMid) return 0;
 
@@ -204,6 +236,7 @@ Java_usb_fs_FatFsNative_nativeCloseBlock(JNIEnv *env, jclass, jlong handle)
 	if (!ops) return;
 	auto *ctx = static_cast<JniBlockCtx *>(ops->ctx);
 	if (ctx) {
+		if (ctx->scratch) env->DeleteGlobalRef(ctx->scratch);
 		if (ctx->callback) env->DeleteGlobalRef(ctx->callback);
 		delete ctx;
 	}

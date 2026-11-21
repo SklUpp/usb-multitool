@@ -43,8 +43,39 @@ Recorded from user feedback. Status is updated only after code and verification.
 
 - [x] Partition, total, remaining, declared size, and size input labels use MiB.
 
+## Slider and MiB fields
+
+- [x] Slider snaps only the thumb the user moved; the other boundary stays exact.
+- [x] Magnets include both free-region boundaries, 25/50/75%, standard sizes,
+  every disk-aligned GiB boundary, and start/end points that preserve a standard
+  or existing partition size relative to the opposite boundary.
+- [x] `Начало, МиБ` and `Конец, МиБ` are synchronized with the slider, captions,
+  and submitted LBA/count; a text edit that does not match the submitted
+  geometry blocks creation.
+- [x] Zero-length ranges and ends past the free region are rejected.
+- [x] Slider and preview use exact offset-sector math, not rounded Float MiB.
+
+## USB and JNI review fixes
+
+- [x] Bulk IN requests stay within the 16 KiB USBFS buffer, so kernel-split
+  completions are not mistaken for short packets; standalone IN ZLPs end the
+  data phase before CSW.
+- [x] Native threads attached with `AttachCurrentThread` detach at thread exit;
+  JVM-managed threads are never detached.
+- [x] FatFs block callbacks reuse one JNI scratch array and pass an explicit
+  byte length, avoiding per-sector `NewByteArray` allocation.
+- [x] FatFs volume slots are recycled; repeated mounts cannot exhaust `FF_VOLUMES`.
+- [x] GPT backup entries use the recorded `gptBackupEntriesLba`; raw writes use
+  the measured size; SAF cancellation uses bounded single-owner close; NTFS name
+  and parent bounds plus close-failure rollback are enforced; FAT LFN buffers
+  hold the 765-byte worst case.
+
 ## Verification
 
 - [x] Compile, unit tests, lint. CI run `44955094683` is green.
+- [x] Targeted JVM tests pass for GPT, raw writer/source chooser, SAF staging,
+  FatFs callback/JNI signature, BOT ZLP, slider math, and string parity.
+- [x] FatFs host tests pass, including a 765-byte/255-unit UTF-8 name round-trip.
+- [ ] NTFS host test and full CI for the review-fix commit are pending.
 - [ ] Visual check on device (pinning transition, strip taps, status dialog).
-- [x] CI green after push; APK is built only by CI.
+- [ ] CI green for the review-fix commit; APK is built only by CI.

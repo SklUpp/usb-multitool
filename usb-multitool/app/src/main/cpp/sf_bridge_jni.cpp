@@ -63,11 +63,23 @@ struct BridgeCtx {
 std::mutex g_runs_mutex;
 BridgeCtx *g_runs[kMaxRuns] = {};
 
+struct ThreadDetacher {
+    JavaVM *jvm = nullptr;
+    ~ThreadDetacher() {
+        if (jvm) jvm->DetachCurrentThread();
+    }
+};
+
+thread_local ThreadDetacher tls_detacher;
+
 JNIEnv *env_for(BridgeCtx *ctx) {
     JNIEnv *env = nullptr;
-    if (ctx->vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        if (ctx->vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
-    }
+    jint status = ctx->vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+    if (status == JNI_OK) return env;
+    if (status != JNI_EDETACHED) return nullptr;
+    if (ctx->vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
+    /* Attached native threads must detach before they exit, or ART aborts. */
+    tls_detacher.jvm = ctx->vm;
     return env;
 }
 

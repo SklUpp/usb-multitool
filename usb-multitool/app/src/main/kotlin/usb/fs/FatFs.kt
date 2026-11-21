@@ -125,10 +125,14 @@ internal fun closeVolumeResources(umount: () -> Unit, closeBlock: () -> Unit) {
     throw failure
 }
 
-/** JNI block backend: relative LBA sector I/O. Return 0 on success. */
+/**
+ * JNI block backend: relative LBA sector I/O. The native layer reuses one scratch
+ * array, so [length] says how many bytes of [buffer] this call owns. Return 0 on
+ * success.
+ */
 interface FatBlockCallback {
-    fun readSectors(lba: Long, buffer: ByteArray): Int
-    fun writeSectors(lba: Long, buffer: ByteArray): Int
+    fun readSectors(lba: Long, buffer: ByteArray, length: Int): Int
+    fun writeSectors(lba: Long, buffer: ByteArray, length: Int): Int
     fun sync(): Int
 }
 

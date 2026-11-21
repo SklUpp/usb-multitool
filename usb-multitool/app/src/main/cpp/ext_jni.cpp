@@ -30,14 +30,28 @@ struct MountedVolumeWrapper {
     JniBlockDevice *block_dev = nullptr;
 };
 
+struct ThreadDetacher {
+    JavaVM *jvm = nullptr;
+    ~ThreadDetacher()
+    {
+        if (jvm) jvm->DetachCurrentThread();
+    }
+};
+
+thread_local ThreadDetacher tls_detacher;
 thread_local JNIEnv *tls_env = nullptr;
 
 JNIEnv *get_env(JavaVM *jvm)
 {
     if (tls_env) return tls_env;
     JNIEnv *env = nullptr;
-    if (jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        if (jvm->AttachCurrentThread(&env, nullptr) != 0) return nullptr;
+    jint status = jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if (jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
+        /* Attached native threads must detach before they exit, or ART aborts. */
+        tls_detacher.jvm = jvm;
+    } else if (status != JNI_OK) {
+        return nullptr;
     }
     tls_env = env;
     return env;

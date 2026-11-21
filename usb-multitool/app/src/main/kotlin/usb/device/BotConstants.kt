@@ -14,5 +14,11 @@ object BotConstants {
     const val REQUEST_TYPE_ENDPOINT_OUT = 0x02
     const val TRANSFER_TIMEOUT_MS = 5_000
     const val SYNCHRONIZE_CACHE_TIMEOUT_MS = 30_000
-    const val MAX_BULK_REQUEST = 64 * 1024
+    /**
+     * Android's synchronous bulkTransfer is backed by the USBFS buffer and returns at
+     * most 16 KiB per call. Requesting more makes every 16 KiB completion look like a
+     * short packet; keep the request at the kernel limit so `n < chunk` means the
+     * device actually ended the data phase.
+     */
+    const val MAX_BULK_REQUEST = 16 * 1024
 }

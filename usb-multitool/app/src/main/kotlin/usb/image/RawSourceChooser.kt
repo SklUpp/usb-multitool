@@ -41,9 +41,11 @@ object RawSourceChooser {
         val found = ArrayList<RawSourceFile>()
         val unreadable = ArrayList<String>()
         var truncated = false
+        var entryLimitReached = false
+        var visited = 0
 
         fun walk(dir: String, depth: Int) {
-            if (truncated) return
+            if (entryLimitReached) return
             checkActive(isActive)
             val entries =
                 if (depth == 0 || dir == root) {
@@ -62,14 +64,20 @@ object RawSourceChooser {
             for (entry in entries.sortedWith(compareByDescending<usb.fs.UsbFsDirEntry> { it.isDirectory }.thenBy { it.name.lowercase() })) {
                 checkActive(isActive)
                 if (entry.name == "." || entry.name == "..") continue
-                val path = join(dir, entry.name)
-                if (entry.isDirectory) {
-                    if (depth < maxDepth) walk(path, depth + 1)
-                    continue
-                }
-                if (found.size >= maxEntries) {
+                if (visited >= maxEntries) {
+                    entryLimitReached = true
                     truncated = true
                     return
+                }
+                visited++
+                val path = join(dir, entry.name)
+                if (entry.isDirectory) {
+                    if (depth < maxDepth) {
+                        walk(path, depth + 1)
+                    } else {
+                        truncated = true
+                    }
+                    continue
                 }
                 found.add(RawSourceFile(path = path, name = entry.name, sizeBytes = entry.size.coerceAtLeast(0L)))
             }

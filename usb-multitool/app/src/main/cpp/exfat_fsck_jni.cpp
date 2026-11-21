@@ -41,13 +41,27 @@ jmethodID g_bb_clear = nullptr;
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_method_cache_mu = PTHREAD_MUTEX_INITIALIZER;
 
+struct ThreadDetacher {
+    JavaVM *jvm = nullptr;
+    ~ThreadDetacher() {
+        if (jvm) jvm->DetachCurrentThread();
+    }
+};
+
+thread_local ThreadDetacher tls_detacher;
+
 JNIEnv *env_for_current_thread() {
     JNIEnv *env = nullptr;
-    if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) ==
-        JNI_OK)
+    jint status = g_vm->GetEnv(reinterpret_cast<void **>(&env),
+                               JNI_VERSION_1_6);
+    if (status == JNI_OK)
         return env;
+    if (status != JNI_EDETACHED)
+        return nullptr;
     if (g_vm->AttachCurrentThread(&env, nullptr) != 0)
         return nullptr;
+    /* Attached native threads must detach before they exit, or ART aborts. */
+    tls_detacher.jvm = g_vm;
     return env;
 }
 

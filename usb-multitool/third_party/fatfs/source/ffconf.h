@@ -147,7 +147,8 @@
 /  When LFN is not enabled, this option has no effect. */
 
 
-#define FF_LFN_BUF		255
+/* FF_LFN_UNICODE=2 returns UTF-8: 255 UTF-16 units can occupy up to 765 bytes. */
+#define FF_LFN_BUF		768
 #define FF_SFN_BUF		12
 /* This set of options defines size of file name members in the FILINFO structure
 /  which is used to read out directory items. These values should be suffcient for

@@ -21,23 +21,27 @@ class BlockDeviceFatCallback(
 ) : FatBlockCallback {
     private val sectorSize = device.sectorSize
 
-    override fun readSectors(lba: Long, buffer: ByteArray): Int =
-        transfer(lba, buffer.size) { device.read(lba.toULong(), ByteBuffer.wrap(buffer)) }
+    override fun readSectors(lba: Long, buffer: ByteArray, length: Int): Int =
+        transfer(lba, buffer, length) {
+            device.read(lba.toULong(), ByteBuffer.wrap(buffer, 0, length))
+        }
 
-    override fun writeSectors(lba: Long, buffer: ByteArray): Int =
-        transfer(lba, buffer.size) { device.write(lba.toULong(), ByteBuffer.wrap(buffer)) }
+    override fun writeSectors(lba: Long, buffer: ByteArray, length: Int): Int =
+        transfer(lba, buffer, length) {
+            device.write(lba.toULong(), ByteBuffer.wrap(buffer, 0, length))
+        }
 
     override fun sync(): Int =
         runCatching { device.sync() }.fold({ 0 }, ::errno)
 
-    private inline fun transfer(lba: Long, bytes: Int, block: () -> Unit): Int {
-        if (!validRequest(lba, bytes)) return FAT_EINVAL
+    private inline fun transfer(lba: Long, buffer: ByteArray, bytes: Int, block: () -> Unit): Int {
+        if (!validRequest(lba, buffer, bytes)) return FAT_EINVAL
         return runCatching(block).fold({ 0 }, ::errno)
     }
 
-    /** Aligned, non-empty, and fully inside the device geometry. */
-    private fun validRequest(lba: Long, bytes: Int): Boolean {
-        if (lba < 0L || bytes <= 0 || bytes % sectorSize != 0) return false
+    /** Aligned, non-empty, within the scratch array, and inside the device geometry. */
+    private fun validRequest(lba: Long, buffer: ByteArray, bytes: Int): Boolean {
+        if (lba < 0L || bytes <= 0 || bytes > buffer.size || bytes % sectorSize != 0) return false
         val blocks = (bytes / sectorSize).toULong()
         val capacity = device.sectorCount
         return blocks <= capacity && lba.toULong() <= capacity - blocks

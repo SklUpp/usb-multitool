@@ -259,6 +259,58 @@ static void test_format_over_existing_content(void)
 	unlink(img);
 	printf("OK format over existing content (kind=%d)\n", (int)kind);
 }
+/* A 255-unit name is valid; in UTF-8 (Cyrillic) it occupies 510 bytes and
+ * must survive create/list/stat/delete without truncation. */
+static void test_long_utf8_name(void)
+{
+	const char *img = "longname.img";
+	const uint32_t ss = 512;
+	const uint64_t sc = (32ull * 1024 * 1024) / ss;
+	uint64_t block, vol = 0;
+	FatFsKind kind = FAT_KIND_UNKNOWN;
+	FatDirEnt ents[8];
+	FatStat st;
+	char name[1 + 255 * 3 + 1];
+	size_t n = 0, wrote = 0;
+	int rc, found = 0;
+
+	/* U+4E2D is three UTF-8 bytes; 255 units is the worst-case 765-byte name. */
+	for (int i = 0; i < 255; i++) {
+		name[i * 3] = (char)0xE4;
+		name[i * 3 + 1] = (char)0xB8;
+		name[i * 3 + 2] = (char)0xAD;
+	}
+	name[255 * 3] = '\0';
+
+	unlink(img);
+	block = image_block_open(img, ss, sc, 1);
+	if (!block) fail("longname open", -1);
+	rc = fat_engine_mkfs(block, ss, sc, FAT_MKFS_FAT, 0);
+	if (rc != 0) fail("longname mkfs", rc);
+	rc = fat_engine_mount(block, ss, sc, &kind, &vol);
+	if (rc != 0) fail("longname mount", rc);
+
+	rc = fat_engine_write_file(vol, name, 0, "u", 1, &wrote, 1, 1);
+	if (rc != 0 || wrote != 1) fail("longname write", rc);
+	rc = fat_engine_stat(vol, name, &st);
+	if (rc != 0 || st.size != 1) fail("longname stat", rc);
+
+	rc = fat_engine_list(vol, "/", ents, 8, &n);
+	if (rc != 0 || n < 1) fail("longname list", rc);
+	for (size_t i = 0; i < n; i++) {
+		if (strcmp(ents[i].name, name) == 0) found = 1;
+	}
+	if (!found) fail("longname list lost bytes", -1);
+
+	rc = fat_engine_delete(vol, name);
+	if (rc != 0) fail("longname delete", rc);
+	rc = fat_engine_umount(vol);
+	if (rc != 0) fail("longname umount", rc);
+	image_block_close(block);
+	unlink(img);
+	printf("OK max 255-unit UTF-8 name round-trip\n");
+}
+
 /* Over-long path must refuse before any FatFs op so a truncated name cannot
  * create/delete a shorter neighbor that already exists. */
 static void test_path_overflow_preserves_neighbor(void)
@@ -271,7 +323,7 @@ static void test_path_overflow_preserves_neighbor(void)
 	FatStat st;
 	size_t wrote = 0, got = 0;
 	char neighbor[] = "keep.txt";
-	char long_path[600];
+	char long_path[1100];
 	char buf[16];
 	int rc;
 	size_t i;
@@ -288,7 +340,7 @@ static void test_path_overflow_preserves_neighbor(void)
 	rc = fat_engine_write_file(vol, neighbor, 0, "SAFE", 4, &wrote, 4, 1);
 	if (rc != 0 || wrote != 4) fail("pathovf neighbor write", rc);
 
-	/* "0:/" + path must exceed 512. Build a single-component path of 'A's. */
+	/* "0:/" + path must exceed 1024. Build a single-component path of 'A's. */
 	long_path[0] = '/';
 	for (i = 1; i < sizeof(long_path) - 1; i++) long_path[i] = 'A';
 	long_path[sizeof(long_path) - 1] = '\0';
@@ -375,6 +427,7 @@ int main(void)
 		 (64ull * 1024 * 1024) / 4096);
 
 	test_list_over_256();
+	test_long_utf8_name();
 	test_short_write();
 	test_format_over_existing_content();
 	test_path_overflow_preserves_neighbor();
