@@ -737,9 +737,7 @@
     <string name="settings_problem_duplicate_key">Duplicate key &quot;%1$s&quot;</string>
     <string name="settings_problem_duplicate_keys">Cannot edit duplicate Ventoy keys safely: %1$s</string>
     <string name="settings_problem_no_changes">No Ventoy setting changes to apply</string>
-    <string name="settings_clear_field">Clear</string>
     <string name="settings_delete_row">Delete row</string>
-    <string name="settings_add">Add parameter</string>
     <string name="settings_staged">Staged settings</string>
     <string name="settings_staged_hint">Update writes them into the selected file in place. Unknown JSON sections are preserved.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>

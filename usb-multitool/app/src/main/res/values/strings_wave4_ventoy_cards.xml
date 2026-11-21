@@ -18,7 +18,6 @@
     <string name="wave4_custom_section">Custom keys</string>
     <string name="wave4_custom_section_hint">Any other key/value pair, preserved exactly. Use this only when no official key fits.</string>
     <string name="wave4_add_custom">Add custom key</string>
-    <string name="wave4_add_param_title">Add custom key</string>
     <string name="wave4_add_param_confirm">Add</string>
     <string name="wave4_catalog_source">Official catalogue</string>
     <string name="wave4_catalog_bundled">%1$d keys bundled for Ventoy %2$s. Refresh to parse the upstream page.</string>

@@ -18,7 +18,6 @@
     <string name="wave4_custom_section">Кастомные ключи</string>
     <string name="wave4_custom_section_hint">Любая другая пара ключ/значение сохраняется как есть. Используйте, только если официальный ключ не подходит.</string>
     <string name="wave4_add_custom">Добавить кастомный ключ</string>
-    <string name="wave4_add_param_title">Добавить кастомный ключ</string>
     <string name="wave4_add_param_confirm">Добавить</string>
     <string name="wave4_catalog_source">Официальный каталог</string>
     <string name="wave4_catalog_bundled">%1$d ключей встроено для Ventoy %2$s. «Обновить» разберёт страницу с сервера.</string>

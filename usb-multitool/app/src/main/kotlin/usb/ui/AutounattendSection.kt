@@ -918,11 +918,18 @@ private fun GlobalSettingsEditorDialog(
 ) {
     val entries = (state.ventoyGlobalSettings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
     var applyProblem by remember { mutableStateOf<String?>(null) }
-    var addParamOpen by remember { mutableStateOf(false) }
+    var customAddOpen by remember { mutableStateOf(false) }
+    var customKey by remember { mutableStateOf("") }
+    var customValue by remember { mutableStateOf("") }
+    var customProblem by remember { mutableStateOf<String?>(null) }
     var officialPickerOpen by remember { mutableStateOf(false) }
     val applyProblemRequester = remember { BringIntoViewRequester() }
+    val customProblemRequester = remember { BringIntoViewRequester() }
     LaunchedEffect(applyProblem) {
         if (applyProblem != null) applyProblemRequester.bringIntoView()
+    }
+    LaunchedEffect(customProblem) {
+        if (customProblem != null) customProblemRequester.bringIntoView()
     }
     // Pending changes seed a new dialog session, but must not reset local rows while editing.
     val drafts = remember(entries) {
@@ -1160,32 +1167,104 @@ private fun GlobalSettingsEditorDialog(
                                 )
                             }
                         }
-                        FilledTonalButton(
-                            onClick = { addParamOpen = true },
-                            enabled = state.actionsEnabled,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp),
-                        ) {
-                            Text(stringResource(R.string.wave4_add_custom))
+                        if (customAddOpen) {
+                            val existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
+                                VentoyControlCatalog.known.map { it.key }.toSet() +
+                                state.ventoyControlKeyCatalog?.keys?.map { it.key }.orEmpty().toSet()
+                            OutlinedTextField(
+                                value = customKey,
+                                onValueChange = {
+                                    customKey = it
+                                    customProblem = null
+                                },
+                                label = { Text(stringResource(R.string.settings_key_label)) },
+                                singleLine = true,
+                                enabled = state.actionsEnabled,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = customValue,
+                                onValueChange = {
+                                    customValue = it
+                                    customProblem = null
+                                },
+                                label = { Text(stringResource(R.string.settings_value_label)) },
+                                singleLine = true,
+                                enabled = state.actionsEnabled,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            customProblem?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.bringIntoViewRequester(customProblemRequester),
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        customAddOpen = false
+                                        customKey = ""
+                                        customValue = ""
+                                        customProblem = null
+                                    },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(stringResource(R.string.settings_cancel))
+                                }
+                                TextButton(
+                                    onClick = {
+                                        val trimmed = customKey.trim()
+                                        val issue = VentoyControlCatalog.keyIssue(trimmed)
+                                            ?: VentoyControlCatalog.valueIssue(trimmed, customValue)
+                                        customProblem = when {
+                                            issue != null -> context.resources.controlIssueText(issue)
+                                            trimmed in existingKeys -> context.resources.getString(
+                                                R.string.settings_problem_duplicate_key,
+                                                trimmed,
+                                            )
+                                            else -> null
+                                        }
+                                        if (customProblem == null) {
+                                            drafts.add(
+                                                EditorPairDraft(
+                                                    "new:${drafts.size}:$trimmed",
+                                                    null,
+                                                    trimmed,
+                                                    "",
+                                                    customValue,
+                                                ),
+                                            )
+                                            customAddOpen = false
+                                            customKey = ""
+                                            customValue = ""
+                                        }
+                                    },
+                                    enabled = state.actionsEnabled && customKey.isNotBlank(),
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(stringResource(R.string.wave4_add_param_confirm))
+                                }
+                            }
+                        } else {
+                            FilledTonalButton(
+                                onClick = { customAddOpen = true },
+                                enabled = state.actionsEnabled,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp),
+                            ) {
+                                Text(stringResource(R.string.wave4_add_custom))
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    if (addParamOpen) {
-        AddCustomParameterDialog(
-            actionsEnabled = state.actionsEnabled,
-            existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
-                VentoyControlCatalog.known.map { it.key }.toSet() +
-                state.ventoyControlKeyCatalog?.keys?.map { it.key }.orEmpty().toSet(),
-            onAdd = { key, value ->
-                drafts.add(EditorPairDraft("new:${drafts.size}:$key", null, key, "", value))
-                addParamOpen = false
-            },
-            onDismiss = { addParamOpen = false },
-        )
     }
     if (officialPickerOpen) {
         OfficialControlKeyPickerDialog(
@@ -2126,133 +2205,6 @@ private fun kindLabel(kind: VentoyControlKeyKind): String =
         VentoyControlKeyKind.TEXT -> stringResource(R.string.wave4_key_kind_text)
         VentoyControlKeyKind.PATH -> stringResource(R.string.wave4_key_kind_path)
     }
-
-@Composable
-private fun AddCustomParameterDialog(
-    actionsEnabled: Boolean,
-    existingKeys: Set<String>,
-    onAdd: (String, String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var key by remember { mutableStateOf("") }
-    var value by remember { mutableStateOf("") }
-    var problem by remember { mutableStateOf<String?>(null) }
-    val resources = LocalContext.current.resources
-    val clearLabel = stringResource(R.string.settings_clear_field)
-    val problemRequester = remember { BringIntoViewRequester() }
-    LaunchedEffect(problem) {
-        if (problem != null) problemRequester.bringIntoView()
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 6.dp,
-        title = { Text(stringResource(R.string.wave4_add_param_title)) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = key,
-                    onValueChange = {
-                        key = it
-                        problem = null
-                    },
-                    label = { Text(stringResource(R.string.settings_key_label)) },
-                    singleLine = true,
-                    enabled = actionsEnabled,
-                    trailingIcon = if (key.isNotEmpty()) {
-                        {
-                            IconButton(
-                                onClick = {
-                                    key = ""
-                                    problem = null
-                                },
-                                enabled = actionsEnabled,
-                                modifier = Modifier.semantics {
-                                    contentDescription = clearLabel
-                                },
-                            ) { GlyphIcon(Glyph.Close, size = 18.dp) }
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = {
-                        value = it
-                        problem = null
-                    },
-                    label = { Text(stringResource(R.string.settings_value_label)) },
-                    singleLine = true,
-                    enabled = actionsEnabled,
-                    trailingIcon = if (value.isNotEmpty()) {
-                        {
-                            IconButton(
-                                onClick = {
-                                    value = ""
-                                    problem = null
-                                },
-                                enabled = actionsEnabled,
-                                modifier = Modifier.semantics {
-                                    contentDescription = clearLabel
-                                },
-                            ) { GlyphIcon(Glyph.Close, size = 18.dp) }
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                problem?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.bringIntoViewRequester(problemRequester),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val trimmed = key.trim()
-                    val issue =
-                        VentoyControlCatalog.keyIssue(trimmed)
-                            ?: VentoyControlCatalog.valueIssue(trimmed, value)
-                    when {
-                        issue != null -> problem = resources.controlIssueText(issue)
-                        trimmed in existingKeys ->
-                            problem = resources.getString(
-                                R.string.settings_problem_duplicate_key,
-                                trimmed,
-                            )
-                        else -> onAdd(trimmed, value)
-                    }
-                },
-                enabled = actionsEnabled && key.isNotBlank(),
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text(stringResource(R.string.wave4_add_param_confirm))
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text(stringResource(R.string.settings_cancel))
-            }
-        },
-    )
-}
 
 @Composable
 private fun knownControlTitle(key: String): String =

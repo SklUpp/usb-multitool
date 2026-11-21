@@ -738,9 +738,7 @@
     <string name="settings_problem_duplicate_key">Повторяющийся ключ &quot;%1$s&quot;</string>
     <string name="settings_problem_duplicate_keys">Нельзя безопасно изменить повторяющиеся ключи Ventoy: %1$s</string>
     <string name="settings_problem_no_changes">Нет изменений настроек Ventoy для применения</string>
-    <string name="settings_clear_field">Очистить</string>
     <string name="settings_delete_row">Удалить строку</string>
-    <string name="settings_add">Добавить параметр</string>
     <string name="settings_staged">Подготовленные настройки</string>
     <string name="settings_staged_hint">«Обновить» записывает их в выбранный файл на месте. Неизвестные разделы JSON сохраняются.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
