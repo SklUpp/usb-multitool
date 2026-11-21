@@ -52,7 +52,7 @@ object FilesOperationPolicy {
      * Rejects blank/`.`/`..` segments and separators so SAF or USB names cannot escape.
      */
     fun resolveInsideTree(basePath: String, vararg childSegments: String): String {
-        var current = normalizeVolumePath(basePath)
+        var current = normalizeVolumePathExact(basePath)
         for (raw in childSegments) {
             require('/' !in raw && '\\' !in raw) {
                 "invalid path segment \"$raw\" under $current"
@@ -61,6 +61,12 @@ object FilesOperationPolicy {
             current = if (current == "/") "/$segment" else "$current/$segment"
         }
         return current
+    }
+
+    /** Absolute volume path with slash framing only; names keep leading/trailing spaces. */
+    fun normalizeVolumePathExact(path: String): String {
+        val trimmed = path.trim('/')
+        return if (trimmed.isEmpty()) "/" else "/$trimmed"
     }
 
     /** Absolute volume path with a single leading slash and no trailing slash (except root). */

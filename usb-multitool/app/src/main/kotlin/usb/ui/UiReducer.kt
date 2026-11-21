@@ -4333,7 +4333,7 @@ object UiReducer {
             }
 
             is UiIntent.CreateFolder -> {
-                val name = intent.name.trim()
+                val name = intent.name
                 val block = writeBlockMessage(state)
                 val pinProblem = bindingProblem(state, intent.binding)
                 when {

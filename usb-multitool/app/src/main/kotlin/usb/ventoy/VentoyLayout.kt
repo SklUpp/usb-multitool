@@ -1360,7 +1360,7 @@ object WindowsSetup {
         applyControlOptions(rootMap, options)
 
         val rawAutoInstall = rootMap["auto_install"]
-        if (rawAutoInstall != null && rawAutoInstall !is List<*>) {
+        if (rootMap.containsKey("auto_install") && rawAutoInstall !is List<*>) {
             throw IllegalStateException(
                 "\"auto_install\" is not a JSON array; refusing to overwrite it",
             )
@@ -1565,7 +1565,7 @@ object WindowsSetup {
 
     private fun applyControlOptions(rootMap: MutableMap<String, Any?>, options: SetupOptions) {
         val rawControl = rootMap["control"]
-        if (rawControl != null && rawControl !is List<*>) {
+        if (rootMap.containsKey("control") && rawControl !is List<*>) {
             throw IllegalStateException(
                 "\"control\" is not a JSON array; refusing to overwrite it",
             )

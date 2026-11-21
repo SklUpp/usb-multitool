@@ -482,7 +482,7 @@ fun FilesScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val name = newFolderName.trim()
+                        val name = newFolderName
                         val targetPath = newFolderPath
                         val binding = newFolderBinding
                         if (name.isNotEmpty() && targetPath != null && binding != null) {
@@ -537,11 +537,11 @@ fun FilesScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (binding != null) onIntent(UiIntent.RenameEntry(target.name, renameName.trim(), binding))
+                        if (binding != null) onIntent(UiIntent.RenameEntry(target.name, renameName, binding))
                         renameTarget = null
                         renameBinding = null
                     },
-                    enabled = binding != null && renameName.trim().isNotEmpty(),
+                    enabled = binding != null && renameName.isNotEmpty(),
                 ) { Text(stringResource(R.string.action_confirm)) }
             },
             dismissButton = {

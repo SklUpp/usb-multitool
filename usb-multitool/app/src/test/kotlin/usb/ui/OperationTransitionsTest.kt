@@ -41,6 +41,15 @@ class OperationTransitionsTest {
         )
 
         assertEquals(UiMessage.Key(UiMessageKey.Success), completedUpdate.state.statusMessage)
+        assertEquals(
+            completedUpdate.state.statusSequence,
+            completedUpdate.state.operationStatusSequence,
+        )
+        val rejected = UiReducer.reduce(
+            completedUpdate.state,
+            UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)),
+        )
+        assertTrue(rejected.state.statusSequence > rejected.state.operationStatusSequence)
         assertEquals(FilesListingState.Loading, completed.state.filesListingState)
         assertTrue(completed.state.files.isEmpty())
         assertEquals(listOf(UiEffect.LoadFiles("/")), completed.effects)

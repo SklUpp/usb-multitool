@@ -164,6 +164,31 @@ class FilesOperationsBatchTest {
     }
 
     @Test
+    fun downloadChildrenPreservesPaddedParentInsteadOfTrimming() {
+        val volume = MemoryVolume()
+        volume.mkdir("/docs")
+        volume.mkdir("/docs ")
+        volume.write("/docs/report.txt", byteArrayOf(8), create = true)
+        volume.write("/docs /report.txt", byteArrayOf(7), create = true)
+        val (saf, resolver) = RecordingResolver.paired()
+        FilesOperations.downloadChildren(
+            resolver = resolver.resolver,
+            volume = volume,
+            parentPath = "/docs ",
+            names = listOf("report.txt"),
+            destTree = saf,
+            destParent = saf.root,
+            operation = DiskOperation("dl-padded"),
+            filesDir = filesDir,
+            conflict = { error("unexpected $it") },
+        )
+        assertEquals(
+            byteArrayOf(7).toList(),
+            resolver.written[saf.child(saf.root, "report.txt")!!]!!.toList(),
+        )
+    }
+
+    @Test
     fun nonemptyDestinationDirectoryCannotReplaceOnDownload() {
         val volume = MemoryVolume()
         volume.mkdir("/docs")

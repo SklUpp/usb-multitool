@@ -187,23 +187,31 @@ class WindowsAutoInstallTest {
 
     @Test
     fun nonArrayControlIsNotReplaced() {
-        val json = """{"control":{"VTOY_MENU_LANGUAGE":"en_US"}}"""
-        assertThrows(IllegalStateException::class.java) {
-            WindowsSetup.mergeControlOptions(json, SetupOptions(bypassChecks = false))
+        for (json in listOf(
+            """{"control":{"VTOY_MENU_LANGUAGE":"en_US"}}""",
+            """{"control":null}""",
+        )) {
+            assertThrows(IllegalStateException::class.java) {
+                WindowsSetup.mergeControlOptions(json, SetupOptions(bypassChecks = false))
+            }
         }
     }
 
     @Test
     fun nonArrayAutoInstallIsNotReplaced() {
-        val json = """{"auto_install":{"image":"/Win/one.img"}}"""
-        assertThrows(IllegalStateException::class.java) {
-            WindowsSetup.mergeAutoInstall(
-                json,
-                listOf("/Win/two.img"),
-                "/ventoy/two.xml",
-                SetupOptions(),
-                overwrite = false,
-            )
+        for (json in listOf(
+            """{"auto_install":{"image":"/Win/one.img"}}""",
+            """{"auto_install":null}""",
+        )) {
+            assertThrows(IllegalStateException::class.java) {
+                WindowsSetup.mergeAutoInstall(
+                    json,
+                    listOf("/Win/two.img"),
+                    "/ventoy/two.xml",
+                    SetupOptions(),
+                    overwrite = false,
+                )
+            }
         }
     }
 

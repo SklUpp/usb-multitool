@@ -205,7 +205,7 @@ object FilesOperations {
     }
 
     private fun parentOf(path: String): String {
-        val normalized = FilesOperationPolicy.normalizeVolumePath(path)
+        val normalized = FilesOperationPolicy.normalizeVolumePathExact(path)
         if (normalized == "/") return "/"
         val cut = normalized.lastIndexOf('/')
         return if (cut <= 0) "/" else normalized.substring(0, cut)
@@ -529,7 +529,7 @@ object FilesOperations {
         onProgress: ((String) -> Unit)? = null,
         filesDir: File,
     ) {
-        val root = FilesOperationPolicy.normalizeVolumePath(sourcePath)
+        val root = FilesOperationPolicy.normalizeVolumePathExact(sourcePath)
         try {
             downloadEntry(resolver, volume, root, destTree, destParent, operation, conflict, onProgress, filesDir)
         } catch (failure: Throwable) {
@@ -626,7 +626,7 @@ object FilesOperations {
         onCursor: (BatchDownloadCursor) -> Unit = {},
         filesDir: File,
     ) {
-        val parent = FilesOperationPolicy.normalizeVolumePath(parentPath)
+        val parent = FilesOperationPolicy.normalizeVolumePathExact(parentPath)
         val roots = ArrayDeque(resume?.remainingRoots ?: names)
         val park = DownloadParkState(roots.toList())
         val trackedConflict: (FilesConflict) -> FilesConflictDecision = { c ->

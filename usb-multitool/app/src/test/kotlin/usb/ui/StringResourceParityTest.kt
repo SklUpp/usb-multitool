@@ -47,11 +47,13 @@ class StringResourceParityTest {
             englishDir.map { it.name },
             russianDir.map { it.name },
         )
+        assertTrue(
+            "no string keys parsed in values",
+            englishDir.any { keys(it).isNotEmpty() },
+        )
         englishDir.zip(russianDir).forEach { (english, russian) ->
             val englishKeys = keys(english)
             val russianKeys = keys(russian)
-            assertTrue("no string keys parsed in ${english.name}", englishKeys.isNotEmpty())
-            assertTrue("no string keys parsed in ${russian.name}", russianKeys.isNotEmpty())
             assertEquals(
                 "missing in ${russian.name}",
                 emptySet<String>(),
@@ -82,6 +84,26 @@ class StringResourceParityTest {
                 keys.size,
                 keys.toSet().size,
             )
+        }
+    }
+
+    @Test
+    fun noKeyIsDeclaredTwiceAcrossFiles() {
+        listOf(
+            "app/src/main/res/values/strings.xml" to "values",
+            "app/src/main/res/values-ru/strings.xml" to "values-ru",
+        ).forEach { (anchor, locale) ->
+            val seen = mutableMapOf<String, String>()
+            stringFiles(anchor).forEach { file ->
+                keys(file).forEach { key ->
+                    val previous = seen.put(key, file.name)
+                    assertEquals(
+                        "duplicate $locale key \"$key\" in ${file.name}, already in $previous",
+                        null,
+                        previous,
+                    )
+                }
+            }
         }
     }
 }

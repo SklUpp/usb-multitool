@@ -436,6 +436,41 @@ class UiStateMachineTest {
     }
 
     @Test
+    fun createFolderRejectsStaleDeviceOrGeometry() {
+        val state = ready().copy(currentPath = "/docs")
+        val intent = createFolderIntent(state, "reports")
+
+        val newDevice = state.copy(
+            device = requireNotNull(state.device).copy(attachGeneration = 99L),
+        )
+        val staleDevice = UiReducer.reduce(newDevice, intent)
+        assertTrue(staleDevice.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), staleDevice.state.statusMessage)
+
+        val changedGeometry = state.copy(
+            partitions = state.partitions.map { it.copy(sectorCount = it.sectorCount + 1uL) },
+        )
+        val staleGeometry = UiReducer.reduce(changedGeometry, intent)
+        assertTrue(staleGeometry.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), staleGeometry.state.statusMessage)
+    }
+
+    @Test
+    fun paddedFolderAndRenameNamesAreRejected() {
+        val state = ready().copy(currentPath = "/docs")
+        val folder = UiReducer.reduce(state, createFolderIntent(state, " reports "))
+        assertTrue(folder.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.InvalidFolderName), folder.state.statusMessage)
+
+        val rename = UiReducer.reduce(
+            state,
+            UiIntent.RenameEntry("ubuntu.iso", " linux.iso ", renameBinding(state)),
+        )
+        assertTrue(rename.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.InvalidEntryName), rename.state.statusMessage)
+    }
+
+    @Test
     fun fileEffectsAreSuppressedWhileBusy() {
         val busy = ready().copy(presence = DevicePresence.Busy)
         assertTrue(UiReducer.reduce(busy, UiIntent.UploadFile("content://docs/42")).effects.isEmpty())
