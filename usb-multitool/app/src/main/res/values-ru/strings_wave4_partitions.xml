@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Карточка разметки: схема · число разделов. -->
-    <string name="partitions_layout_heading">%1$s · %2$d разделов</string>
+    <!-- Карточка разметки: схема, число разделов. -->
+    <string name="partitions_layout_heading">%1$s, %2$d разделов</string>
     <!-- Краткая ёмкость used/total под заголовком. -->
     <string name="partitions_layout_usage_pair">%1$s / %2$s</string>
     <!-- Капсула смены схемы: current → target. -->
     <string name="partitions_scheme_capsule_a11y">Сменить схему с %1$s на %2$s</string>
     <!-- Заголовок листа выбора раздела. -->
     <string name="partitions_select_sheet_title">Выберите раздел</string>
-    <!-- Вторая строка sticky: размер · ФС. -->
-    <string name="partitions_sticky_meta">%1$s · %2$s</string>
+    <!-- Вторая строка sticky: размер, ФС. -->
+    <string name="partitions_sticky_meta">%1$s, %2$s</string>
     <!-- Первая строка sticky: порядковый номер + имя. -->
     <string name="partitions_sticky_title">%1$d. %2$s</string>
     <!-- Строки фактов выбранного раздела. -->

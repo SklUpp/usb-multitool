@@ -2397,7 +2397,7 @@ class MainViewModel(
         )
         // Same-device re-probes (onStart) repeat the trace line but not the journal line.
         if (!sameDevice) {
-            onIntent(UiIntent.AppendLog(logLine("USB attached: $key · generation $gen")))
+            onIntent(UiIntent.AppendLog(logLine("USB attached: $key, generation $gen")))
         }
         // Fence after the device switch: any mount still opening for the previous stick was
         // allocated at or below it and is closed below; a mount that can now succeed allocates
@@ -2830,7 +2830,7 @@ class MainViewModel(
             trace.log("usb.detach", "device" to detachedKey, "gen" to detachedGeneration)
             onIntent(
                 UiIntent.AppendLog(
-                    logLine("USB detached: $detachedKey · generation $detachedGeneration"),
+                    logLine("USB detached: $detachedKey, generation $detachedGeneration"),
                 ),
             )
         }

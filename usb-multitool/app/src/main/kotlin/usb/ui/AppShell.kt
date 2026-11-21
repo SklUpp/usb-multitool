@@ -282,7 +282,7 @@ fun AppShell(
         var snackbarToken by rememberSaveable { mutableStateOf<Long?>(null) }
         val shellFacts = operationStatusFacts(state)
         val snackbarText = shellFacts?.let { fact ->
-            listOfNotNull(fact.name, fact.result ?: fact.state).joinToString(" · ")
+            listOfNotNull(fact.name, fact.result ?: fact.state).joinToString(", ")
         } ?: state.statusMessage?.localized()
         LaunchedEffect(state.operation?.token, state.operation?.state) {
             val operation = state.operation ?: return@LaunchedEffect
@@ -463,6 +463,7 @@ fun AppShell(
                         if (!panels.journalScreenOpen) {
                             OperationStatusLine(
                                 state = state,
+                                onIntent = onIntent,
                                 onOpenDetails = { operationDetailsOpen = true },
                             )
                         }
@@ -945,7 +946,7 @@ private fun DeviceHeader(
     val subtitle = when (state.presence) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
-            state.partitionScheme?.name?.let { append(" · ").append(it) }
+            state.partitionScheme?.name?.let { append(", ").append(it) }
         }
         DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
         DevicePresence.Busy -> stringResource(R.string.header_busy)
@@ -1116,7 +1117,7 @@ private fun LogOpenButton(
         modifier = Modifier
             .heightIn(min = 48.dp)
             .focusRequester(focusRequester)
-            .semantics { contentDescription = "$label · $lineCount" },
+            .semantics { contentDescription = "$label, $lineCount" },
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium)
@@ -1131,7 +1132,7 @@ internal fun operationProgressFacts(metric: String?, speed: String?, eta: String
     listOfNotNull(metric, speed, eta).filter { it.isNotEmpty() }.joinToString(FACT_SEPARATOR)
 
 /** Field separator shared by every status surface: strip, dialog and journal prefix. */
-private const val FACT_SEPARATOR = " · "
+private const val FACT_SEPARATOR = ", "
 
 /** Colour family of one status fact; `error` is reserved for real failures. */
 private enum class StatusTone { Neutral, Success, Warning, Error }
@@ -1161,7 +1162,7 @@ private data class OperationStatusFacts(
     val resultTone: StatusTone,
     val tone: StatusTone,
 ) {
-    /** The one-line strip text: `name · state · progress`, blanks omitted. */
+    /** The one-line strip text: `name, state, progress`, blanks omitted. */
     val summary: String get() = listOfNotNull(name, state, progress).joinToString(FACT_SEPARATOR)
 }
 
@@ -1254,17 +1255,46 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
 }
 
 /**
+ * Cancel action shared by every long-operation surface. It is visible only while the
+ * serialized operation is queued/running and cancelable, and always targets that exact
+ * token. Direct cancel matches the existing Ventoy/ISO progress action; the status dialog
+ * keeps its explicit two-step confirmation.
+ */
+@Composable
+internal fun CancelOperationButton(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val operation = state.operation ?: return
+    if (!operation.cancelable ||
+        (operation.state != OperationState.Running && operation.state != OperationState.Queued)
+    ) {
+        return
+    }
+    TextButton(
+        onClick = { onIntent(UiIntent.CancelOperation(operation.token)) },
+        modifier = modifier.heightIn(min = 48.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.action_cancel),
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+/**
  * Permanent status block under the header: inset `surfaceContainer*` band (not a card,
  * not an error banner). Whole block is tappable (48 dp). One-line title
  * `Status: &lt;operation&gt; — &lt;state&gt;` (no subtitle, no separate expand control).
  * Idle/standalone use neutral ink. The title announces running operation state and
  * standalone messages, while the progress track remains visible without becoming a live
- * region. Thin rounded progress track only while running. No dividers; cancel lives only in
- * the dialog.
+ * region. Thin rounded progress track only while running. No dividers.
  */
 @Composable
 private fun OperationStatusLine(
     state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
     onOpenDetails: () -> Unit,
 ) {
     val facts = operationStatusFacts(state)
@@ -1321,13 +1351,9 @@ private fun OperationStatusLine(
         shadowElevation = 0.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = titleText,
-                style = MaterialTheme.typography.titleSmall,
-                color = titleColor,
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
                     .then(
                         if (running || standaloneMessage) {
                             Modifier.semantics { liveRegion = LiveRegionMode.Polite }
@@ -1335,7 +1361,24 @@ private fun OperationStatusLine(
                             Modifier
                         },
                     ),
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = titleText,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = titleColor,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+                if (running) {
+                    CancelOperationButton(
+                        state = state,
+                        onIntent = onIntent,
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
+            }
             if (newerStandaloneText != null) {
                 Text(
                     text = newerStandaloneText,
@@ -1594,7 +1637,7 @@ private fun JournalLine(
 
 private enum class JournalLevel { Error, Warning, Success, Info }
 
-/** One journal row: `HH:mm:ss · Level · text`, blanks omitted. */
+/** One journal row: `HH:mm:ss, Level, text`, blanks omitted. */
 private data class JournalRow(
     val time: String?,
     val level: JournalLevel,

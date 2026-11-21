@@ -6,11 +6,11 @@
 
     <string name="app_version_label">v%1$s</string>
     <string name="app_version_unknown">Version unknown</string>
-    <string name="app_version_open">Version %1$s · open the project page on GitHub</string>
-    <string name="app_version_open_unknown">Installed version unknown · open the project page on GitHub</string>
+    <string name="app_version_open">Version %1$s, open the project page on GitHub</string>
+    <string name="app_version_open_unknown">Installed version unknown, open the project page on GitHub</string>
     <string name="app_version_no_browser">No app can open the project page</string>
 
-    <string name="log_title_count">Log · %1$d</string>
+    <string name="log_title_count">Log, %1$d</string>
     <string name="log_collapse">Collapse log</string>
     <string name="log_screen_title">Log</string>
     <string name="log_back">Back to tabs</string>
@@ -38,9 +38,8 @@
     <string name="efi_confirm_body">This lifts application write protection for %1$s on disk %2$s at LBA %3$s for %4$s sectors. Reconnect or geometry changes clear permission. Enable only when you intend to modify EFI contents.</string>
 
     <string name="partitions_create_title">Create partition</string>
-    <string name="partitions_create_free_sectors">Free %1$d sectors · %2$d bytes/sector</string>
+    <string name="partitions_create_free_sectors">Free %1$d sectors, %2$d bytes/sector</string>
     <string name="partitions_create_no_aligned_space">No space aligned to 1 MiB in this free region</string>
-    <string name="partitions_create_free_range">Free from LBA %1$d to LBA %2$d · step %3$d sectors · %4$d bytes/sector</string>
     <string name="partitions_range_short">The slider uses equal whole-MiB steps inside the free region. Tick marks are MiB alignment marks, thinned on large regions, not the partition-map block edges; the LBA and size fields stay authoritative.</string>
     <string name="partitions_range_info_title">New partition boundaries</string>
     <string name="partitions_range_info_text">The slider is a uniform whole-MiB scale of the selected free region, not a proportional disk map. Tick marks are MiB alignment marks; on large regions they are thinned, so only the two labelled ends are exact: the first usable aligned LBA and the last sector the right handle can select. These are the selectable span limits, not necessarily the neighbouring block edges: an unaligned region start skips a few sectors and an unaligned tail stays outside the MiB span. The left handle sets the start. The right handle sets the end. The start must stay aligned to 1 MiB. The whole range must fit inside the region. The reducer checks the values again before a write. Type the LBA and sector count directly to use an end that is not MiB-aligned. Snap to existing partition edges lives on the raw-write disk map, where those blocks are drawn.</string>
@@ -51,16 +50,14 @@
     <string name="partitions_range_label">Boundaries, MiB</string>
     <string name="partitions_range_a11y">New partition start and end on the whole-MiB alignment grid</string>
     <string name="partitions_range_a11y_state">Start %1$d MiB (LBA %2$d), end %3$d MiB (LBA %4$d), length %5$d MiB</string>
-    <string name="partitions_range_caption">Start %1$d MiB · end %2$d MiB · %3$d MiB</string>
     <string name="partitions_range_ticks_a11y">MiB alignment marks for the free region, thinned on large regions; the labelled ends are the first usable aligned sector and the last selectable sector</string>
-    <string name="partitions_range_tick_edge_label">%1$d MiB · LBA %2$d</string>
+    <string name="partitions_range_tick_edge_label">%1$d MiB, LBA %2$d</string>
     <string name="partitions_create_start_mib">Start, MiB</string>
     <string name="partitions_create_end_mib">End, MiB</string>
     <string name="partitions_create_size_mib">Size %1$d MiB</string>
     <string name="partitions_create_start_error_greater_than_end">Start must be ≤ end</string>
     <string name="partitions_create_end_error_less_than_start">End must be greater than start</string>
     <string name="partitions_create_error_out_of_bounds">Must be 0 to %1$d MiB</string>
-    <string name="partitions_create_preview_free">Free</string>
     <string name="partitions_size_sectors">Size in sectors</string>
     <string name="partitions_size_support">Enter a positive sector count that fits the free region.</string>
     <string name="partitions_continue">Continue</string>
@@ -114,7 +111,7 @@
     <string name="partitions_scheme_prompt_note">Changing the scheme erases every partition: the volumes stop being reachable and their files are lost.</string>
     <string name="partitions_scheme_repair_note">Fix backup GPT is non-destructive: it keeps every partition and needs a readable primary GPT.</string>
     <string name="partitions_scheme_erase_title">Partitions to erase:</string>
-    <string name="partitions_scheme_erase_partition">• %1$s — %2$s</string>
+    <string name="partitions_scheme_erase_partition">%1$s — %2$s</string>
     <string name="partitions_scheme_change_action">Change to %1$s</string>
     <string name="partitions_scheme_convert_to">Convert to %1$s</string>
     <string name="partitions_scheme_initialize_action">Initialize table</string>
@@ -126,7 +123,7 @@
     <string name="partitions_scheme_backup_unknown">Backup GPT metadata is unreadable; the destructive scheme change is disabled until the table is restored or re-read.</string>
     <string name="partitions_scheme_backup_unverified">Backup GPT data has not been verified yet; re-read the device before a destructive scheme change.</string>
     <string name="partitions_scheme_blocked">MBR and GPT disagree; fix the table before initializing.</string>
-    <string name="partitions_lba_range">LBA %1$d–%2$d · %3$d sectors</string>
+    <string name="partitions_lba_range">LBA %1$d–%2$d, %3$d sectors</string>
     <string name="partitions_name_label">Partition name (GPT)</string>
     <string name="partitions_name_support">Up to 36 characters, stored in the GPT entry — not a volume label.</string>
     <string name="partitions_mbr_no_name">MBR stores no partition name; only the filesystem can carry a label.</string>
@@ -183,7 +180,7 @@
     <string name="usb_empty_otg">Connect a drive using a compatible USB OTG adapter.</string>
     <string name="usb_empty_permission">Allow USB access when Android asks.</string>
     <string name="header_used_accessibility">Used %1$d%% of capacity</string>
-    <string name="header_used_caption">Used %1$d%% · %2$s</string>
+    <string name="header_used_caption">Used %1$d%%, %2$s</string>
     <string name="status_overwrite_title">Ventoy link overwrite</string>
     <string name="status_link_exists">A link already exists for %1$s. Confirm the overwrite explicitly.</string>
     <string name="status_overwrite">Overwrite link</string>
@@ -371,8 +368,8 @@
     <string name="ventoy_upstream_check_failed">Upstream version check failed: %1$s</string>
     <string name="ventoy_install">Install</string>
     <string name="ventoy_update">Update</string>
-    <string name="ventoy_update_from_to">Update · %1$s → %2$s</string>
-    <string name="ventoy_update_to">Update · %1$s</string>
+    <string name="ventoy_update_from_to">Update, %1$s → %2$s</string>
+    <string name="ventoy_update_to">Update, %1$s</string>
     <string name="ventoy_download_warning_title">Download this Ventoy release?</string>
     <string name="ventoy_download_unpinned_warning_title">Download without an independent trusted SHA?</string>
     <string name="ventoy_download_already_latest_title">Ventoy is already latest</string>
@@ -663,7 +660,7 @@
     <string name="layout_install_target">Install target: partition %1$d (first Primary)</string>
     <string name="layout_no_install_target">Install target: none</string>
     <string name="layout_no_wipe_rewrite">WillWipeDisk=false: Windows Setup will not perform a full-disk wipe, but it will create and format the partitions listed here on the target disk.</string>
-    <string name="layout_partition_line">%1$d. %2$s · %3$d MiB · %4$s</string>
+    <string name="layout_partition_line">%1$d) %2$s — %3$d MiB — %4$s</string>
     <string name="layout_partitions">Partitions: %1$d</string>
     <string name="layout_remaining">Remaining: %1$d MiB</string>
     <string name="layout_total">Partitions total: %1$d MiB</string>
@@ -818,7 +815,7 @@
     <string name="windows_selected_image">Selected image:</string>
     <string name="windows_status_selected">Selected</string>
     <string name="unattend_unknown_title">Unrecognized XML elements preserved: %1$d</string>
-    <string name="unattend_unknown_element">%1$s · %2$s</string>
+    <string name="unattend_unknown_element">%1$s, %2$s</string>
     <string name="windows_copying_image">Copying %1$s to Ventoy partition…</string>
     <string name="windows_copying_generic">Copying image to Ventoy partition…</string>
     <string name="windows_template_choose_source">Template source</string>
@@ -873,8 +870,8 @@
     <string name="settings_save">Save</string>
     <string name="settings_source_status_reading">Reading…</string>
     <string name="settings_source_status_unread">Not read yet</string>
-    <string name="settings_source_status_valid">Valid JSON · %1$d settings</string>
-    <string name="settings_source_status_empty">Valid JSON · no settings</string>
+    <string name="settings_source_status_valid">Valid JSON, %1$d settings</string>
+    <string name="settings_source_status_empty">Valid JSON, no settings</string>
     <string name="settings_source_status_missing">File not found</string>
     <string name="settings_source_status_error">Not valid JSON / unreadable</string>
     <string name="settings_source_partial">The write failed after the document was opened; it may be truncated. No rollback is possible.</string>
@@ -885,7 +882,7 @@
 <string name="op_upload_batch">Upload %1$d entries</string>
 <string name="op_delete_batch">Delete %1$d entries</string>
 <string name="op_batch_current_file_pct">file %1$d%%</string>
-<string name="op_batch_current_file_bytes">Current file · %1$s / %2$s</string>
+<string name="op_batch_current_file_bytes">Current file, %1$s / %2$s</string>
 <string name="op_eta">ETA %1$s</string>
     <string name="settings_title_screen">Settings</string>
     <string name="settings_back">Back</string>

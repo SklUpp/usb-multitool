@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Single geometry signature under Layout: capacity · block/LBA count. -->
-    <string name="partitions_geometry_signature">%1$s · %2$s blocks/LBA</string>
+    <!-- Single geometry signature under Layout: capacity, block/LBA count. -->
+    <string name="partitions_geometry_signature">%1$s, %2$s blocks/LBA</string>
     <!-- Count pill beside Layout: localized label + number (plurals). -->
     <plurals name="partitions_count_label">
         <item quantity="one">%1$d partition</item>

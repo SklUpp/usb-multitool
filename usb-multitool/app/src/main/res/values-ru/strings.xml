@@ -6,11 +6,11 @@
 
     <string name="app_version_label">v%1$s</string>
     <string name="app_version_unknown">Версия неизвестна</string>
-    <string name="app_version_open">Версия %1$s · открыть страницу проекта на GitHub</string>
-    <string name="app_version_open_unknown">Установленная версия неизвестна · открыть страницу проекта на GitHub</string>
+    <string name="app_version_open">Версия %1$s, открыть страницу проекта на GitHub</string>
+    <string name="app_version_open_unknown">Установленная версия неизвестна, открыть страницу проекта на GitHub</string>
     <string name="app_version_no_browser">Нет приложения, которое может открыть страницу проекта</string>
 
-    <string name="log_title_count">Журнал · %1$d</string>
+    <string name="log_title_count">Журнал, %1$d</string>
     <string name="log_collapse">Свернуть журнал</string>
     <string name="log_screen_title">Журнал</string>
     <string name="log_back">Назад к вкладкам</string>
@@ -38,9 +38,8 @@
     <string name="efi_confirm_body">Защита записи приложения будет снята для %1$s на диске %2$s, LBA %3$s, секторов: %4$s. Переподключение или изменение геометрии сбросит разрешение. Включайте только при намеренном изменении EFI.</string>
 
     <string name="partitions_create_title">Создать раздел</string>
-    <string name="partitions_create_free_sectors">Свободно %1$d секторов · %2$d байт/сектор</string>
+    <string name="partitions_create_free_sectors">Свободно %1$d секторов, %2$d байт/сектор</string>
     <string name="partitions_create_no_aligned_space">В свободном регионе нет места, выровненного по 1 МиБ</string>
-    <string name="partitions_create_free_range">Свободно с LBA %1$d до LBA %2$d · шаг %3$d секторов · %4$d байт/сектор</string>
     <string name="partitions_range_short">Ползунок — равные шаги целых МиБ внутри свободного региона. Риски — метки выравнивания по МиБ, на больших регионах они разрежены; это не границы блоков карты разделов. Поля LBA и размера остаются точнее.</string>
     <string name="partitions_range_info_title">Границы нового раздела</string>
     <string name="partitions_range_info_text">Ползунок — равномерная шкала целых МиБ выбранного свободного региона, а не пропорциональная карта диска. Риски — метки выравнивания по МиБ; на больших регионах они разрежены, поэтому точны только два подписанных конца: первый пригодный выровненный LBA и последний сектор, который может выбрать правая ручка. Это границы выбираемого пролёта, а не обязательно края соседних блоков: при невыровненном начале региона несколько секторов пропускается, а невыровненный хвост остаётся за пределами пролёта МиБ. Левая ручка — начало, правая — конец. Начало должно оставаться выровненным по 1 МиБ, весь диапазон — внутри региона; редьюсер повторно проверяет значения перед записью. Введите LBA и число секторов вручную, если нужен конец, не кратный МиБ. Привязка к краям существующих разделов — на карте диска для сырой записи.</string>
@@ -51,16 +50,14 @@
     <string name="partitions_range_label">Границы, МиБ</string>
     <string name="partitions_range_a11y">Начало и конец нового раздела на сетке выравнивания целых МиБ</string>
     <string name="partitions_range_a11y_state">Начало %1$d МиБ (LBA %2$d), конец %3$d МиБ (LBA %4$d), длина %5$d МиБ</string>
-    <string name="partitions_range_caption">Начало %1$d МиБ · конец %2$d МиБ · %3$d МиБ</string>
     <string name="partitions_range_ticks_a11y">Метки выравнивания по МиБ свободного региона, на больших регионах разрежены; подписанные концы — первый пригодный выровненный сектор и последний выбираемый сектор</string>
-    <string name="partitions_range_tick_edge_label">%1$d МиБ · LBA %2$d</string>
+    <string name="partitions_range_tick_edge_label">%1$d МиБ, LBA %2$d</string>
     <string name="partitions_create_start_mib">Начало, МиБ</string>
     <string name="partitions_create_end_mib">Конец, МиБ</string>
     <string name="partitions_create_size_mib">Размер %1$d МиБ</string>
     <string name="partitions_create_start_error_greater_than_end">Начало должно быть ≤ конца</string>
     <string name="partitions_create_end_error_less_than_start">Конец должен быть больше начала</string>
     <string name="partitions_create_error_out_of_bounds">Должно быть от 0 до %1$d МиБ</string>
-    <string name="partitions_create_preview_free">Свободно</string>
     <string name="partitions_size_sectors">Размер в секторах</string>
     <string name="partitions_size_support">Введите положительное число секторов в пределах свободной области.</string>
     <string name="partitions_continue">Продолжить</string>
@@ -114,7 +111,7 @@
     <string name="partitions_scheme_prompt_note">Смена схемы стирает все разделы: их тома станут недоступны, а файлы будут потеряны.</string>
     <string name="partitions_scheme_repair_note">«Исправить резервную GPT» не стирает разделы: она сохраняется, нужна читаемая основная GPT.</string>
     <string name="partitions_scheme_erase_title">Будут стёрты разделы:</string>
-    <string name="partitions_scheme_erase_partition">• %1$s — %2$s</string>
+    <string name="partitions_scheme_erase_partition">%1$s — %2$s</string>
     <string name="partitions_scheme_change_action">Сменить на %1$s</string>
     <string name="partitions_scheme_convert_to">Конвертировать в %1$s</string>
     <string name="partitions_scheme_initialize_action">Инициализировать таблицу</string>
@@ -126,7 +123,7 @@
     <string name="partitions_scheme_backup_unknown">Метаданные резервной GPT не читаются; деструктивная смена схемы отключена до восстановления или повторного чтения таблицы.</string>
     <string name="partitions_scheme_backup_unverified">Данные резервной GPT ещё не проверены; обновите устройство перед деструктивной сменой схемы.</string>
     <string name="partitions_scheme_blocked">MBR и GPT описывают разные разделы; сначала исправьте таблицу.</string>
-    <string name="partitions_lba_range">LBA %1$d–%2$d · %3$d секторов</string>
+    <string name="partitions_lba_range">LBA %1$d–%2$d, %3$d секторов</string>
     <string name="partitions_name_label">Имя раздела (GPT)</string>
     <string name="partitions_name_support">До 36 символов; хранится в записи GPT, а не в файловой системе.</string>
     <string name="partitions_mbr_no_name">MBR не хранит имя раздела; метку может нести только файловая система.</string>
@@ -183,7 +180,7 @@
     <string name="usb_empty_otg">Подключите накопитель через совместимый USB OTG-адаптер.</string>
     <string name="usb_empty_permission">Разрешите доступ к USB в запросе Android.</string>
     <string name="header_used_accessibility">Занято %1$d%% ёмкости</string>
-    <string name="header_used_caption">Занято %1$d%% · %2$s</string>
+    <string name="header_used_caption">Занято %1$d%%, %2$s</string>
     <string name="status_overwrite_title">Перезапись связи Ventoy</string>
     <string name="status_link_exists">Ссылка уже существует для %1$s. Нужно явное подтверждение перезаписи.</string>
     <string name="status_overwrite">Перезаписать связь</string>
@@ -371,8 +368,8 @@
     <string name="ventoy_install">Установить</string>
     <string name="ventoy_download_unpinned_warning_title">Скачать без независимой доверенной SHA?</string>
     <string name="ventoy_download_unpinned_warning_body">Для upstream %1$s нет независимой доверенной SHA. Структурная проверка неполная. Непривязанный hash вычисляется из тех же загруженных файлов и не является независимым якорем доверия; повреждённый или подменённый релиз может сделать флешку незагрузочной. При штатном обновлении обычный раздел данных сохраняется, но операция не атомарна; чистая установка стирает данные. Загружайте только если принимаете риск; запись начнётся только после отдельного подтверждения установки/обновления.</string>
-    <string name="ventoy_update_from_to">Обновить · %1$s → %2$s</string>
-    <string name="ventoy_update_to">Обновить · %1$s</string>
+    <string name="ventoy_update_from_to">Обновить, %1$s → %2$s</string>
+    <string name="ventoy_update_to">Обновить, %1$s</string>
     <string name="ventoy_download">Загрузить проверенный релиз</string>
     <string name="ventoy_download_warning_title">Скачать новый релиз Ventoy?</string>
     <string name="ventoy_download_warning_confirm">Скачать</string>
@@ -664,7 +661,7 @@
     <string name="layout_install_target">Цель установки: раздел %1$d (первый основной)</string>
     <string name="layout_no_install_target">Цель установки: нет</string>
     <string name="layout_no_wipe_rewrite">WillWipeDisk=false: Windows Setup не будет полностью очищать диск, но создаст и отформатирует перечисленные здесь разделы на целевом диске.</string>
-    <string name="layout_partition_line">%1$d. %2$s · %3$d МиБ · %4$s</string>
+    <string name="layout_partition_line">%1$d) %2$s — %3$d МиБ — %4$s</string>
     <string name="layout_partitions">Разделов: %1$d</string>
     <string name="layout_remaining">Остаток: %1$d МиБ</string>
     <string name="layout_total">Сумма разделов: %1$d МиБ</string>
@@ -819,7 +816,7 @@
     <string name="windows_selected_image">Выбранный образ:</string>
     <string name="windows_status_selected">Выбран</string>
     <string name="unattend_unknown_title">Нераспознанные элементы XML сохранены: %1$d</string>
-    <string name="unattend_unknown_element">%1$s · %2$s</string>
+    <string name="unattend_unknown_element">%1$s, %2$s</string>
     <string name="windows_copying_image">Копируется файл %1$s на раздел ventoy…</string>
     <string name="windows_copying_generic">Копируется образ на раздел ventoy…</string>
     <string name="windows_template_choose_source">Источник шаблона</string>
@@ -874,8 +871,8 @@
     <string name="settings_save">Сохранить</string>
     <string name="settings_source_status_reading">Чтение…</string>
     <string name="settings_source_status_unread">Ещё не прочитано</string>
-    <string name="settings_source_status_valid">JSON допустим · настроек: %1$d</string>
-    <string name="settings_source_status_empty">JSON допустим · настроек нет</string>
+    <string name="settings_source_status_valid">JSON допустим, настроек: %1$d</string>
+    <string name="settings_source_status_empty">JSON допустим, настроек нет</string>
     <string name="settings_source_status_missing">Файл не найден</string>
     <string name="settings_source_status_error">Не JSON или не читается</string>
     <string name="settings_source_partial">Запись не удалась после открытия документа; он может быть обрезан. Откат невозможен.</string>
@@ -886,7 +883,7 @@
 <string name="op_upload_batch">Загрузка %1$d записей</string>
 <string name="op_delete_batch">Удаление %1$d записей</string>
 <string name="op_batch_current_file_pct">файл %1$d%%</string>
-<string name="op_batch_current_file_bytes">Текущий файл · %1$s / %2$s</string>
+<string name="op_batch_current_file_bytes">Текущий файл, %1$s / %2$s</string>
 <string name="op_eta">Осталось %1$s</string>
     <string name="settings_title_screen">Настройки</string>
     <string name="settings_back">Назад</string>

@@ -128,6 +128,7 @@ fun DiagnosticsScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                CancelOperationButton(state = state, onIntent = onIntent)
             }
         }
 

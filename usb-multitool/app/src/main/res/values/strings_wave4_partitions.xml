@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Layout card: scheme · partition count. -->
-    <string name="partitions_layout_heading">%1$s · %2$d partitions</string>
+    <!-- Layout card: scheme, partition count. -->
+    <string name="partitions_layout_heading">%1$s, %2$d partitions</string>
     <!-- Short used/total capacity under the heading. -->
     <string name="partitions_layout_usage_pair">%1$s / %2$s</string>
     <!-- Scheme-change capsule: current → target labels stay mono scheme names. -->
     <string name="partitions_scheme_capsule_a11y">Change scheme from %1$s to %2$s</string>
     <!-- Sticky / sheet partition picker title. -->
     <string name="partitions_select_sheet_title">Select partition</string>
-    <!-- Sticky second line: size · filesystem. -->
-    <string name="partitions_sticky_meta">%1$s · %2$s</string>
+    <!-- Sticky second line: size, filesystem. -->
+    <string name="partitions_sticky_meta">%1$s, %2$s</string>
     <!-- Sticky first line: ordinal + name. -->
     <string name="partitions_sticky_title">%1$d. %2$s</string>
     <!-- Selected-card fact rows. -->

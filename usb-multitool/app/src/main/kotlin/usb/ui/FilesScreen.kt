@@ -280,6 +280,7 @@ fun FilesScreen(
                     enabled = state.actionsEnabled,
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
+                CancelOperationButton(state = state, onIntent = onIntent)
                 // Matches the empty-partitions branch below: the same known blocked
                 // release state renders the localized card here too, since partitions
                 // can be retained while the volume refuses to remount.
@@ -888,7 +889,7 @@ private fun FilesPickScreen(
                                 copying.state == OperationState.Partial
                         Text(
                             text =
-                                "${operationLabel(copying)} · " +
+                                "${operationLabel(copying)}: " +
                                     operationStateLabel(copying.state),
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
@@ -1400,6 +1401,7 @@ internal fun PartitionDropdown(
     sectorSize: Int?,
     enabled: Boolean,
     onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == id } }
@@ -1413,7 +1415,7 @@ internal fun PartitionDropdown(
     ExposedDropdownMenuBox(
         expanded = expanded && rowEnabled,
         onExpandedChange = { if (rowEnabled) expanded = !expanded },
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         TextField(
             value = selected?.let(::partitionDisplayName).orEmpty(),

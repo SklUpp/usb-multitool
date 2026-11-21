@@ -2,7 +2,7 @@
 <resources>
     <!-- Компактные карточки ventoy.json / unattend.xml (wave 4). -->
     <string name="wave4_file_not_selected">Файл не выбран</string>
-    <string name="wave4_status_path_size">%1$s · %2$s</string>
+    <string name="wave4_status_path_size">%1$s, %2$s</string>
     <string name="wave4_changed_badge">Изменено</string>
     <string name="wave4_editor">Редактор</string>
     <string name="wave4_write">Записать</string>

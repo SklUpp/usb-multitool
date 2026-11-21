@@ -521,6 +521,11 @@ private fun VentoyVersionRow(
                     )
                 }
             }
+            CancelOperationButton(
+                state = state,
+                onIntent = onIntent,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 

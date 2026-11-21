@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Единая подпись геометрии под «Разметка»: объём · блоки/LBA. -->
-    <string name="partitions_geometry_signature">%1$s · %2$s блоков/LBA</string>
+    <!-- Единая подпись геометрии под «Разметка»: объём, блоки/LBA. -->
+    <string name="partitions_geometry_signature">%1$s, %2$s блоков/LBA</string>
     <!-- Таблетка счётчика у «Разметка»: локализованная надпись + число. -->
     <plurals name="partitions_count_label">
         <item quantity="one">%1$d раздел</item>

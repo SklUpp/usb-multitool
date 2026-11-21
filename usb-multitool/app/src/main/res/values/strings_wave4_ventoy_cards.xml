@@ -2,7 +2,7 @@
 <resources>
     <!-- Compact ventoy.json / unattend.xml config cards (wave 4). -->
     <string name="wave4_file_not_selected">File not selected</string>
-    <string name="wave4_status_path_size">%1$s · %2$s</string>
+    <string name="wave4_status_path_size">%1$s, %2$s</string>
     <string name="wave4_changed_badge">Changed</string>
     <string name="wave4_editor">Editor</string>
     <string name="wave4_write">Write</string>

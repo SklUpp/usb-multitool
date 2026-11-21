@@ -350,84 +350,6 @@ fun PartitionsScreen(
                             (sliderEnd - sliderStart).toLong(),
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (availableMib > 0UL) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(26.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                                        .semantics {
-                                            contentDescription = rangeState
-                                        },
-                                ) {
-                                    if (sliderStart > 0UL) {
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(sliderStart.toFloat())
-                                                .fillMaxHeight()
-                                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                                                .padding(horizontal = 2.dp),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            if (sliderStart.toFloat() / availableMib.toFloat() > 0.15f) {
-                                                Text(
-                                                    text = stringResource(R.string.partitions_create_preview_free),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
-                                                )
-                                            }
-                                        }
-                                    }
-                                    val partitionMib = if (sliderEnd > sliderStart) sliderEnd - sliderStart else 0UL
-                                    if (partitionMib > 0UL) {
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(partitionMib.toFloat())
-                                                .fillMaxHeight()
-                                                .background(MaterialTheme.colorScheme.secondaryContainer)
-                                                .border(
-                                                    width = 1.5.dp,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    shape = RoundedCornerShape(4.dp),
-                                                )
-                                                .padding(horizontal = 2.dp),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Text(
-                                                text = stringResource(
-                                                    R.string.partitions_create_size_mib,
-                                                    partitionMib.toLong(),
-                                                ),
-                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                                maxLines = 1,
-                                            )
-                                        }
-                                    }
-                                    val freeAfter = if (availableMib > sliderEnd) availableMib - sliderEnd else 0UL
-                                    if (freeAfter > 0UL) {
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(freeAfter.toFloat())
-                                                .fillMaxHeight()
-                                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                                                .padding(horizontal = 2.dp),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            if (freeAfter.toFloat() / availableMib.toFloat() > 0.15f) {
-                                                Text(
-                                                    text = stringResource(R.string.partitions_create_preview_free),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                             RangeSlider(
                                 value = safeStart..safeEnd,
                                 onValueChange = { range ->
@@ -492,19 +414,6 @@ fun PartitionsScreen(
                                         stateDescription = rangeState
                                     },
                             )
-                            Text(
-                                text = stringResource(
-                                    R.string.partitions_range_caption,
-                                    sliderStart.toLong(),
-                                    sliderEnd.toLong(),
-                                    (sliderEnd - sliderStart).toLong(),
-                                ),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontFeatureSettings = "tnum",
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -564,6 +473,17 @@ fun PartitionsScreen(
                                     supportingText = endMibProblem?.let { msg -> { Text(msg) } },
                                 )
                             }
+                            Text(
+                                text = stringResource(
+                                    R.string.partitions_create_size_mib,
+                                    (sliderEnd - sliderStart).toLong(),
+                                ),
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontFeatureSettings = "tnum",
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                     Column(
@@ -762,19 +682,30 @@ fun PartitionsScreen(
     val blockedHint = writeBlockHint(state)
     val screenScroll = rememberScrollState()
     var viewportTop by remember { mutableIntStateOf(0) }
-    var selectedTop by remember { mutableIntStateOf(Int.MAX_VALUE) }
-    var selectedBottom by remember { mutableIntStateOf(0) }
-    val initialPinnedHeaderHeightPx = with(LocalDensity.current) { 64.dp.roundToPx() }
-    var pinnedHeaderHeightPx by remember {
-        mutableIntStateOf(initialPinnedHeaderHeightPx)
+    var partitionSelectorTop by remember { mutableIntStateOf(Int.MAX_VALUE) }
+    var partitionListBottom by remember { mutableIntStateOf(0) }
+    val initialSelectorHeightPx = with(LocalDensity.current) { 56.dp.roundToPx() }
+    var partitionSelectorHeightPx by remember {
+        mutableIntStateOf(initialSelectorHeightPx)
     }
-    LaunchedEffect(state.selectedPartitionId) {
-        selectedTop = Int.MAX_VALUE
-        selectedBottom = 0
-    }
-    val selectedSectionPinned = selectedTop < viewportTop &&
-        selectedBottom > viewportTop + pinnedHeaderHeightPx
+    val pinnedPartitionSelector = partitionSelectorTop < viewportTop &&
+        partitionListBottom > viewportTop + partitionSelectorHeightPx
     val latestState by rememberUpdatedState(state)
+
+    @Composable
+    fun partitionSelector(modifier: Modifier = Modifier) {
+        PartitionDropdown(
+            partitions = state.partitions,
+            selectedId = state.selectedPartitionId,
+            writeAccessOf = state::partitionWriteAccess,
+            usageOf = state::partitionUsageSnapshot,
+            phaseOf = state::partitionUsagePhase,
+            sectorSize = state.diskSectorSize,
+            enabled = state.actionsEnabled,
+            onSelect = { onIntent(UiIntent.SelectPartition(it)) },
+            modifier = modifier,
+        )
+    }
     LaunchedEffect(
         state.device,
         state.selectedPartitionId,
@@ -785,24 +716,6 @@ fun PartitionsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface)
-                .padding(bottom = 8.dp),
-        ) {
-            PartitionDropdown(
-                partitions = state.partitions,
-                selectedId = state.selectedPartitionId,
-                writeAccessOf = state::partitionWriteAccess,
-                usageOf = state::partitionUsageSnapshot,
-                phaseOf = state::partitionUsagePhase,
-                sectorSize = state.diskSectorSize,
-                enabled = state.actionsEnabled,
-                onSelect = { onIntent(UiIntent.SelectPartition(it)) },
-            )
-        }
-
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1014,10 +927,26 @@ fun PartitionsScreen(
                     )
                 }
 
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            partitionSelectorTop = coordinates.positionInRoot().y.roundToInt()
+                            partitionSelectorHeightPx = coordinates.size.height
+                        },
+                ) {
+                    partitionSelector()
+                }
+                CancelOperationButton(state = state, onIntent = onIntent)
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .selectableGroup(),
+                        .selectableGroup()
+                        .onGloballyPositioned { coordinates ->
+                            partitionListBottom =
+                                (coordinates.positionInRoot().y + coordinates.size.height).roundToInt()
+                        },
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     orderedPartitions.forEach { partition ->
@@ -1179,11 +1108,6 @@ fun PartitionsScreen(
                     filesystemMenuTarget = filesystemMenuTarget,
                     onFilesystemMenu = { filesystemMenuTarget = it },
                     latestState = latestState,
-                    modifier = Modifier.onGloballyPositioned { coordinates ->
-                        val top = coordinates.positionInRoot().y.roundToInt()
-                        selectedTop = top
-                        selectedBottom = top + coordinates.size.height
-                    },
                 )
             }
 
@@ -1239,17 +1163,22 @@ fun PartitionsScreen(
             )
         }
         androidx.compose.animation.AnimatedVisibility(
-            visible = selectedSectionPinned,
+            visible = pinnedPartitionSelector,
             modifier = Modifier.align(Alignment.TopStart),
             enter = fadeIn(tween(140)) + expandVertically(tween(160)),
             exit = fadeOut(tween(100)) + shrinkVertically(tween(120)),
         ) {
-            selected?.let {
-                PinnedSelectedHeader(
-                    selected = it,
-                    modifier = Modifier.onGloballyPositioned { coordinates ->
-                        pinnedHeaderHeightPx = coordinates.size.height
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 3.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        partitionSelectorHeightPx = coordinates.size.height
                     },
+            ) {
+                partitionSelector(
+                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
         }
@@ -1261,37 +1190,6 @@ private enum class RawTargetMode {
     WholeDisk,
     Partition,
     Custom,
-}
-
-@Composable
-private fun PinnedSelectedHeader(selected: PartitionTab, modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shadowElevation = 3.dp,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 64.dp)
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .semantics { heading() },
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.partitions_selected_title),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = selected.name.ifBlank { selected.id },
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1788,7 +1686,7 @@ private fun RawWriteSection(
                             text = buildString {
                                 append(sizeLabel)
                                 if (sourceSectors != null) {
-                                    append(" · ")
+                                    append(", ")
                                     append(
                                         stringResource(
                                             R.string.partitions_raw_source_sectors,
@@ -2003,7 +1901,7 @@ private fun RawWriteSection(
                         )
                         val warning = rangeAssessment?.message
                         Text(
-                            text = if (warning != null) "$verdictCore · $warning" else verdictCore,
+                            text = if (warning != null) "$verdictCore — $warning" else verdictCore,
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontFeatureSettings = "tnum",
@@ -2148,6 +2046,7 @@ private fun RawWriteSection(
                     ) {
                         Text(stringResource(R.string.partitions_raw_write_sectors))
                     }
+                    CancelOperationButton(state = state, onIntent = onIntent)
                 }
             }
         }
