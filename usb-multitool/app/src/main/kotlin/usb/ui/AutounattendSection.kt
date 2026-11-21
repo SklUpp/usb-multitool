@@ -1059,6 +1059,7 @@ private fun GlobalSettingsEditorDialog(
             Scaffold(
                 topBar = {
                     TopAppBar(
+                        expandedHeight = adaptiveTopAppBarHeight(),
                         title = { Text(stringResource(R.string.settings_editor_title)) },
                         navigationIcon = {
                             IconButton(
@@ -1241,6 +1242,7 @@ private fun AutounattendRawEditorDialog(
             Scaffold(
                 topBar = {
                     TopAppBar(
+                        expandedHeight = adaptiveTopAppBarHeight(),
                         title = { Text(stringResource(R.string.unattend_editor_title)) },
                         navigationIcon = {
                             IconButton(

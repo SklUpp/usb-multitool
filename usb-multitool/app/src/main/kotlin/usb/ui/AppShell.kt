@@ -138,6 +138,7 @@ import androidx.compose.ui.semantics.collectionItemInfo
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -976,6 +977,7 @@ private fun DeviceHeader(
     val logLabel = stringResource(R.string.log_screen_title)
     val moreLabel = stringResource(R.string.more_actions)
 TopAppBar(
+        expandedHeight = adaptiveTopAppBarHeight(),
         title = {
             Column {
                 Text(
@@ -2060,6 +2062,18 @@ internal fun SectionCard(
 }
 
 /**
+ * Material 3 [TopAppBar] clips its content at a fixed 64 dp height. The shell header has
+ * two text lines, and titles use larger type elsewhere, so grow the bar only as the user's
+ * font scale needs it. At 100% the standard 64 dp is unchanged; at 200% 40 dp extra covers
+ * both lines plus the bar's vertical content padding.
+ */
+@Composable
+internal fun adaptiveTopAppBarHeight(): Dp {
+    val fontScale = LocalDensity.current.fontScale
+    return 64.dp + ((fontScale - 1f).coerceIn(0f, 1f) * 40f).dp
+}
+
+/**
  * Compact single-choice dropdown: one 48 dp row with the current value, full option list
  * on demand. Used where chips/segmented rows cost too much vertical space.
  */
@@ -2100,8 +2114,6 @@ internal fun <T> CompactChoice(
                     text = selectedLabel,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
             GlyphIcon(
@@ -2121,18 +2133,20 @@ internal fun <T> CompactChoice(
             ),
         ) {
             options.forEach { (value, text) ->
+                val optionSelected = value == selected
                 DropdownMenuItem(
                     text = { Text(text) },
                     onClick = {
                         expanded = false
                         onSelect(value)
                     },
-                    trailingIcon = if (value == selected) {
+                    modifier = Modifier.semantics { this.selected = optionSelected },
+                    trailingIcon = if (optionSelected) {
                         {
-                            Text(
-                                text = "✓",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                            GlyphIcon(
+                                glyph = Glyph.Check,
+                                size = 20.dp,
+                                tint = MaterialTheme.colorScheme.primary,
                             )
                         }
                     } else {

@@ -835,9 +835,9 @@
     <string name="import_folder_refreshing">Обновление папок…</string>
     <string name="import_folder_missing">Этой папки больше нет на флешке. Перейдите выше или обновите список.</string>
     <string name="import_folder_not_directory">Этот путь не является папкой.</string>
-    <string name="import_folder_read_failed">Не удалось прочитать папку. Обновите список или перейдите выше.</string>
+    <string name="import_folder_read_failed">Не удалось прочитать папку. Перейдите выше и откройте папку снова.</string>
     <string name="import_folder_blocked">Действия с папками ждут завершения текущей операции с диском или подтверждения.</string>
-    <string name="import_folder_not_loaded">Список папок не загружен. Обновите его.</string>
+    <string name="import_folder_not_loaded">Список папок не загружен. Перейдите выше и откройте папку снова.</string>
     <string name="import_overwrite_title">Файл уже существует</string>
     <string name="import_overwrite_body">Указанный файл уже есть. Замена уничтожит его текущее содержимое.</string>
     <string name="import_target_label">Назначение</string>

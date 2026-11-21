@@ -87,6 +87,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -933,7 +934,8 @@ fun PartitionsScreen(
                                         enabled = state.actionsEnabled && !schemeBlocked,
                                         role = Role.Button,
                                         onClick = { schemeChangePrompt = capsuleTarget },
-                                    ),
+                                    )
+                                    .alpha(if (state.actionsEnabled && !schemeBlocked) 1f else 0.38f),
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1385,7 +1387,11 @@ fun PartitionsScreen(
                                     R.string.partitions_scheme_change_action,
                                     changeTarget.toTableScheme().name,
                                 ),
-                                color = MaterialTheme.colorScheme.error,
+                                color = if (changeBlocked) {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
                                 fontWeight = FontWeight.Bold,
                             )
                         }
@@ -2449,7 +2455,6 @@ private fun PartitionSelectStrip(
                 val fill = when {
                     partition != null && isSelected -> MaterialTheme.colorScheme.primary
                     partition != null -> MaterialTheme.colorScheme.secondaryContainer
-                    segment.free != null -> MaterialTheme.colorScheme.surfaceVariant
                     else -> MaterialTheme.colorScheme.surfaceContainerHighest
                 }
                 val interactive = widths[index] >= 48.dp && (
@@ -2460,7 +2465,16 @@ private fun PartitionSelectStrip(
                         .width(widths[index])
                         .fillMaxHeight()
                         .background(fill)
-                        .then(if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface) else Modifier)
+                        .then(
+                            when {
+                                isSelected -> Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface)
+                                segment.free != null -> Modifier.border(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                )
+                                else -> Modifier
+                            },
+                        )
                         .then(
                             when {
                                 interactive && partition != null -> Modifier.selectable(

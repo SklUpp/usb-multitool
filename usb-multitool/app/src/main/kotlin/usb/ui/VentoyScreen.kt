@@ -1013,14 +1013,21 @@ internal fun ImportOverwriteDialog(
                         text = stringResource(R.string.import_overwrite_body),
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    InfoRow(
-                        stringResource(R.string.import_target_label),
-                        if (proposal.directory == "/") {
+                    Text(
+                        text = stringResource(R.string.import_target_label),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = if (proposal.directory == "/") {
                             "/${proposal.targetName}"
                         } else {
                             "${proposal.directory}/${proposal.targetName}"
                         },
-                        monospaceValue = true,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     proposal.sizeBytes?.let { size ->
                         InfoRow(

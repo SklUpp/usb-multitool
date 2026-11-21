@@ -72,6 +72,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.expanded
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.disabled
@@ -642,8 +644,6 @@ private fun FilesPickHeader(mode: FilesPickMode, onCancel: () -> Unit) {
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
                     .semantics { heading() },
@@ -678,6 +678,7 @@ private fun FilesPickScreen(
     modifier: Modifier,
 ) {
     val partition = state.partitions.firstOrNull { it.id == mode.partitionId }
+    val ventoyDataPartitionId = state.ventoyDataPartition()?.id
     val canAct = state.actionsEnabled && partition != null
     val copying = state.operation?.takeIf { it.title is OperationTitle.ImportTarget }
     val upDescription = stringResource(R.string.files_up)
@@ -741,6 +742,24 @@ private fun FilesPickScreen(
     // is flat.
     Column(modifier = modifier.fillMaxSize()) {
     FilesPickHeader(mode = mode, onCancel = { onIntent(UiIntent.CancelFilesPick) })
+        // The selector is part of the fixed chrome, not the scrolling list: scrolling a deep
+        // folder must not hide the partition the pick belongs to.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+        ) {
+            PartitionChoiceRow(
+                partitions = state.partitions,
+                selectedId = mode.partitionId,
+                writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
+                usageOf = state::partitionUsageSnapshot,
+                phaseOf = state::partitionUsagePhase,
+                enabled = canAct && !state.isRunning,
+                sizeOf = { partitionSizeLabel(state, it) },
+                onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
+            )
+        }
         AnimatedContent(
             targetState = directoryContentKey(
                 state,
@@ -773,19 +792,6 @@ private fun FilesPickScreen(
             contentPadding = PaddingValues(bottom = 16.dp),
             userScrollEnabled = true
         ) {
-            item(key = "pick-partition") {
-                PartitionChoiceRow(
-                    partitions = state.partitions,
-                    selectedId = mode.partitionId,
-                    writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
-                    usageOf = state::partitionUsageSnapshot,
-                    phaseOf = state::partitionUsagePhase,
-                    enabled = canAct && !state.isRunning,
-                    sizeOf = { partitionSizeLabel(state, it) },
-                    onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
-                )
-            }
-
             item(key = "pick-folder") {
                 SectionCard(
                     title = stringResource(R.string.files_section_folder),
@@ -802,15 +808,12 @@ private fun FilesPickScreen(
                         }
                     },
                 ) {
-                    // One monospace line with a trailing slash, start-ellipsized like the browser
-                    // path: a deep FAT path must not wrap and push the rows down.
+                    // Full path, wrapped without a line cap: the deepest folder must remain
+                    // identifiable and must not be silently start-ellipsized.
                     Text(
                         text = folderPathLabel(target.path),
                         style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.StartEllipsis,
-                        softWrap = false,
                     )
                     Text(
                         text = hint,
@@ -831,14 +834,14 @@ private fun FilesPickScreen(
                             }
                         }
                         if (mode.purpose == FilesPickPurpose.WindowsImage &&
-                            mode.target == FilesPickTarget.File
+                            mode.target == FilesPickTarget.File &&
+                            mode.partitionId == ventoyDataPartitionId
                         ) {
                             OutlinedButton(
                                 onClick = {
                                     onRequestDeviceImage(state.currentPath, mode.sessionId)
                                 },
                                 enabled =
-                                        mode.partitionId == "1" &&
                                     canAct && !state.isRunning &&
                                         state.isoImportSafInFlight == null &&
                                         state.isoImportUsbInFlight == null &&
@@ -977,16 +980,53 @@ private fun FilesPickScreen(
             val pickError = target.error.ifEmpty { null }
             when {
                 pickListingState == FilesListingState.Failed.name -> item(key = "pick-error") {
-                    EmptyHint(pickError ?: stringResource(R.string.import_folder_read_failed))
+                    Text(
+                        text = pickError ?: stringResource(R.string.import_folder_read_failed),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
                 }
                 pickListingState == FilesListingState.Loading.name -> item(key = "pick-loading") {
-                    EmptyHint(stringResource(R.string.files_listing))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text(
+                            text = stringResource(R.string.files_listing),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
                 pickListingState == FilesListingState.Stale.name -> item(key = "pick-not-loaded") {
-                    EmptyHint(stringResource(R.string.import_folder_not_loaded))
+                    Text(
+                        text = stringResource(R.string.import_folder_not_loaded),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
                 }
                 pickRows.isEmpty() -> item(key = "pick-empty") {
-                    EmptyHint(stringResource(R.string.files_empty_folder))
+                    val emptyText =
+                        if (mode.target == FilesPickTarget.Folder &&
+                            state.files.any { !it.isDirectory }
+                        ) {
+                            R.string.files_empty_subfolders
+                        } else {
+                            R.string.files_empty_folder
+                        }
+                    EmptyHint(stringResource(emptyText))
                 }
                     else -> items(pickRows, key = { it.name }) { entry ->
                     // Snapshot row: leaving content never sees live-list swaps mid-transition.
@@ -996,6 +1036,16 @@ private fun FilesPickScreen(
                         // Keep the confirmation next to the chosen row, so it cannot be
                         // scrolled off-screen together with the header.
                         if (picked != null && selectedPickEntry != null) {
+                            Text(
+                                text = folderPathLabel(target.path) + entry.name,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
                             OutlinedButton(
                                 onClick = {
                                     // The reducer revalidates the name against live files.
@@ -1013,6 +1063,7 @@ private fun FilesPickScreen(
                             entry = entry,
                             isSelected = picked != null && selectedPickEntry != null,
                             actionsEnabled = canAct && !state.isRunning,
+                            allowLongPress = mode.target != FilesPickTarget.Folder,
                             onToggleSelect = {
                                 val live = entries.firstOrNull { it.name == entry.name } ?: return@FilesPickRow
                                 selectedPickState?.value =
@@ -1242,25 +1293,12 @@ private fun FolderSubblock(
                 text = pathLabel,
                 modifier = Modifier
                     .weight(1f)
-                    // 48 dp target, text centred inside it: a bare `heightIn` would leave the
-                    // one-line path hanging at the top of the box, above the icon centre line.
-                    .heightIn(min = 48.dp)
-                    .wrapContentHeight(Alignment.CenterVertically)
-                    .clickable(
-                        enabled = canNavigateUp,
-                        onClickLabel = upDescription,
-                        role = Role.Button,
-                        onClick = onNavigateUp,
-                    )
                     .padding(start = 4.dp)
                     .semantics { contentDescription = pathA11y },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.StartEllipsis,
-                softWrap = false,
             )
             if (isLoading) {
                 IconButton(
@@ -1343,6 +1381,7 @@ private fun PartitionChoiceRow(
     )
     val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
     val rowEnabled = enabled && selectable
+    val isExpanded = expanded
     LaunchedEffect(rowEnabled) {
         if (!rowEnabled) expanded = false
     }
@@ -1368,6 +1407,8 @@ private fun PartitionChoiceRow(
                         role = Role.Button,
                         onClick = { expanded = !expanded },
                     )
+                    .semantics { expanded = isExpanded }
+                    .alpha(if (enabled) 1f else 0.38f)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1406,15 +1447,26 @@ private fun PartitionChoiceRow(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
+                    selected?.let { sizeOf(it) }?.let { size ->
+                        Text(
+                            text = stringResource(R.string.partitions_geometry_size_label) + " " + size,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 WriteAccessBadge(writeAccess)
                 if (selectable) {
-                    IconButton(
-                        onClick = { expanded = !expanded },
-                        enabled = rowEnabled,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .semantics { contentDescription = expandDescription },
+                    // Decorative: the whole row already exposes one button action and the
+                    // expanded state, so a second focus stop would duplicate it.
+                    Box(
+                        modifier = Modifier.size(48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
                         GlyphIcon(
                             glyph = if (expanded) Glyph.ChevronUp else Glyph.ChevronDown,
@@ -1577,6 +1629,16 @@ private fun FileRow(
         else -> stringResource(R.string.files_open_folder)
     }
     val longClickLabel = stringResource(R.string.files_select_file)
+    val contentColor = if (actionsEnabled) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    val supportingColor = if (actionsEnabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    }
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = if (isSelected) {
@@ -1617,9 +1679,7 @@ private fun FileRow(
                     } else {
                         FontWeight.Normal
                     },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = false,
+                    color = contentColor,
                 )
             },
             supportingContent = if (!entry.isDirectory) {
@@ -1630,7 +1690,7 @@ private fun FileRow(
                             fontFamily = FontFamily.Monospace,
                             fontFeatureSettings = "tnum",
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = supportingColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         softWrap = false,
@@ -1645,7 +1705,7 @@ private fun FileRow(
                         if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
                     ),
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = contentColor,
                     modifier = Modifier.size(24.dp),
                 )
             },
@@ -1684,6 +1744,7 @@ private fun FilesPickRow(
     onToggleSelect: () -> Unit,
     onNavigate: () -> Unit,
     modifier: Modifier = Modifier,
+    allowLongPress: Boolean = true,
 ) {
     val clickLabel = if (entry.isDirectory) {
         stringResource(R.string.files_open_folder)
@@ -1691,6 +1752,16 @@ private fun FilesPickRow(
         stringResource(R.string.files_select_file)
     }
     val longClickLabel = stringResource(R.string.files_select_file)
+    val contentColor = if (actionsEnabled) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    val supportingColor = if (actionsEnabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    }
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = if (isSelected) {
@@ -1709,10 +1780,10 @@ private fun FilesPickRow(
             .combinedClickable(
                 enabled = actionsEnabled,
                 onClickLabel = clickLabel,
-                onLongClickLabel = longClickLabel,
+                onLongClickLabel = longClickLabel.takeIf { allowLongPress },
                 role = Role.Button,
                 onClick = { if (entry.isDirectory) onNavigate() else onToggleSelect() },
-                onLongClick = onToggleSelect,
+                onLongClick = onToggleSelect.takeIf { allowLongPress },
             ),
     ) {
         ListItem(
@@ -1721,6 +1792,7 @@ private fun FilesPickRow(
                     text = entry.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                    color = contentColor,
                     softWrap = true,
                 )
             },
@@ -1729,7 +1801,7 @@ private fun FilesPickRow(
                     Text(
                         text = stringResource(R.string.type_folder),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = supportingColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1740,7 +1812,7 @@ private fun FilesPickRow(
                             fontFamily = FontFamily.Monospace,
                             fontFeatureSettings = "tnum",
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = supportingColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1752,7 +1824,7 @@ private fun FilesPickRow(
                         if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
                     ),
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface,
+                    tint = contentColor,
                     modifier = Modifier.size(24.dp),
                 )
             },

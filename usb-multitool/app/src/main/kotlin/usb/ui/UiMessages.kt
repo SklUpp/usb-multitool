@@ -415,6 +415,7 @@ fun confirmationTitle(confirmation: DestructiveConfirmation): String =
 internal fun isDataLosingConfirmation(confirmation: DestructiveConfirmation): Boolean =
     confirmation.action == DestructiveAction.FORMAT_PARTITION ||
         confirmation.action == DestructiveAction.WIPE ||
+        confirmation.action == DestructiveAction.VENTOY_INSTALL ||
         confirmation.action == DestructiveAction.INITIALIZE_PARTITION_TABLE ||
         (confirmation.action == DestructiveAction.SET_PARTITION_ROLE &&
             confirmation.partitionRole == PartitionRole.Efi)

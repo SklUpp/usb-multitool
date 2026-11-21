@@ -834,9 +834,9 @@
     <string name="import_folder_refreshing">Refreshing folders…</string>
     <string name="import_folder_missing">This folder no longer exists on the stick. Go up or refresh.</string>
     <string name="import_folder_not_directory">This path is not a folder.</string>
-    <string name="import_folder_read_failed">The folder could not be read. Refresh, or go up and try again.</string>
+    <string name="import_folder_read_failed">The folder could not be read. Go up and open the folder again.</string>
     <string name="import_folder_blocked">Folder actions wait until the current disk operation or confirmation finishes.</string>
-    <string name="import_folder_not_loaded">This folder list is not loaded. Refresh it.</string>
+    <string name="import_folder_not_loaded">This folder list is not loaded. Go up and open the folder again.</string>
     <string name="import_overwrite_title">File already exists</string>
     <string name="import_overwrite_body">The target below already exists. Replacing it destroys its current content.</string>
     <string name="import_target_label">Target</string>

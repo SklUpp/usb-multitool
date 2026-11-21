@@ -51,6 +51,7 @@ internal fun SettingsScreen(
     Column(modifier = modifier.fillMaxSize()) {
         val backLabel = stringResource(R.string.settings_back)
         TopAppBar(
+            expandedHeight = adaptiveTopAppBarHeight(),
             title = { Text(stringResource(R.string.settings_title_screen)) },
             navigationIcon = {
                 IconButton(
