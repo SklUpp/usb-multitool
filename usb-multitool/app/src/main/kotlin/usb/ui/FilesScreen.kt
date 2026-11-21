@@ -35,9 +35,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -87,6 +88,7 @@ import usb.formatBinaryBytesPerSecond
 import usb.formatEtaDuration
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsagePhase
+import usb.fs.FilesystemUsageReason
 import usb.fs.FilesystemUsageSnapshot
 import usb.multitool.R
 import usb.remainingSeconds
@@ -385,13 +387,11 @@ fun FilesScreen(
                 modifier = Modifier.weight(1f),
             )
         }
-        FilledIconButton(
+        FloatingActionButton(
             onClick = { if (canWrite) onRequestBatchUpload() },
-            enabled = canWrite,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
-                .size(48.dp)
                 .semantics { contentDescription = uploadDescription },
         ) {
             Icon(
@@ -1033,32 +1033,6 @@ private fun FilesPickScreen(
                     val picked = selectedPickState?.value?.takeIf { it.name == entry.name }
                         ?.takeIf { live -> live in pickRows }
                     Column(modifier = Modifier.animateItem()) {
-                        // Keep the confirmation next to the chosen row, so it cannot be
-                        // scrolled off-screen together with the header.
-                        if (picked != null && selectedPickEntry != null) {
-                            Text(
-                                text = folderPathLabel(target.path) + entry.name,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                            )
-                            OutlinedButton(
-                                onClick = {
-                                    // The reducer revalidates the name against live files.
-                                    onIntent(UiIntent.ConfirmFilesPickFile(entry.name))
-                                },
-                                enabled = canAct && listingUsable && !state.isRunning,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
-                            ) {
-                                Text(stringResource(R.string.files_pick_use_file))
-                            }
-                        }
                         FilesPickRow(
                             entry = entry,
                             isSelected = picked != null && selectedPickEntry != null,
@@ -1082,6 +1056,39 @@ private fun FilesPickScreen(
                 }
             }
         }
+        }
+        if (selectsFile && selectedPickEntry != null) {
+            Surface(
+                tonalElevation = 3.dp,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = folderPathLabel(state.currentPath) + selectedPickEntry.name,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = {
+                            // The reducer revalidates the name against live files.
+                            onIntent(UiIntent.ConfirmFilesPickFile(selectedPickEntry.name))
+                        },
+                        enabled = canAct && listingUsable && !state.isRunning,
+                    ) {
+                        Text(stringResource(R.string.files_pick_use_file))
+                    }
+                }
+            }
         }
     }
 
@@ -1360,7 +1367,7 @@ private fun FolderActionButton(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PartitionChoiceRow(
+internal fun PartitionChoiceRow(
     partitions: List<PartitionTab>,
     selectedId: String?,
     writeAccess: PartitionWriteAccess,
@@ -1866,7 +1873,18 @@ internal fun filesystemUsageText(
             DeviceIdentity.formatCapacity(usage.space.freeBytes),
             DeviceIdentity.formatCapacity(usage.space.totalBytes),
         )
-        is FilesystemUsage.Unavailable -> stringResource(R.string.filesystem_usage_unavailable)
+        is FilesystemUsage.Unavailable -> stringResource(
+            when (usage.reason) {
+                FilesystemUsageReason.UnsupportedFilesystem ->
+                    R.string.filesystem_usage_unavailable_unsupported
+                FilesystemUsageReason.EngineMissing ->
+                    R.string.filesystem_usage_unavailable_engine
+                FilesystemUsageReason.Closed ->
+                    R.string.filesystem_usage_unavailable_closed
+                FilesystemUsageReason.IoFailure ->
+                    R.string.filesystem_usage_unavailable_io
+            },
+        )
         null -> filesystemUsagePhaseText(phase)
     }
 

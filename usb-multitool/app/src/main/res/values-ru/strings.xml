@@ -279,6 +279,10 @@
     <string name="filesystem_usage_label">Свободно в ФС</string>
     <string name="filesystem_usage_known">Свободно %1$s из %2$s</string>
     <string name="filesystem_usage_unavailable">недоступно</string>
+    <string name="filesystem_usage_unavailable_unsupported">недоступно: тип ФС не поддерживает запрос</string>
+    <string name="filesystem_usage_unavailable_engine">недоступно: движок ФС не подключён</string>
+    <string name="filesystem_usage_unavailable_closed">недоступно: том закрыт до запроса</string>
+    <string name="filesystem_usage_unavailable_io">недоступно: ошибка ввода-вывода</string>
     <string name="filesystem_usage_note">Измеряется внутри файловой системы; свободная область в таблице разделов — другое значение.</string>
     <string name="diagnostics_pick_backup">Выбрать файл копии…</string>
     <string name="confirm_ack">Понимаю, что данные будут удалены</string>

@@ -1338,8 +1338,6 @@ private fun OperationStatusLine(
                 text = titleText,
                 style = MaterialTheme.typography.titleSmall,
                 color = titleColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp)
@@ -1463,8 +1461,6 @@ private fun StatusDialog(
                                 } else {
                                     tone.contentColor()
                                 },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }

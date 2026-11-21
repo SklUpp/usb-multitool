@@ -195,8 +195,9 @@ private fun SettingsBackups(state: AppUiState, onPickBackupFolder: () -> Unit) {
         ) {
             Text(stringResource(R.string.diagnostics_backups_title), style = MaterialTheme.typography.titleMedium)
             Text(
-                text = state.backupFolderName ?: state.backupFolderUri?.substringAfterLast('/')
-                    ?: stringResource(R.string.diagnostics_backup_folder_none),
+                text = state.backupFolderUri?.let { uri ->
+                    state.backupFolderName?.takeIf { it.isNotBlank() }?.let { "$it\n$uri" } ?: uri
+                } ?: stringResource(R.string.diagnostics_backup_folder_none),
                 style = MaterialTheme.typography.bodyMedium,
                 softWrap = true,
                 color = if (state.backupFolderUri != null && !state.backupFolderUsable) {

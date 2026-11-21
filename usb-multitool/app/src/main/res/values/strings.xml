@@ -279,6 +279,10 @@
     <string name="filesystem_usage_label">Free in filesystem</string>
     <string name="filesystem_usage_known">Free %1$s of %2$s</string>
     <string name="filesystem_usage_unavailable">unavailable</string>
+    <string name="filesystem_usage_unavailable_unsupported">unavailable: filesystem type has no space query</string>
+    <string name="filesystem_usage_unavailable_engine">unavailable: filesystem engine not linked</string>
+    <string name="filesystem_usage_unavailable_closed">unavailable: volume closed before query</string>
+    <string name="filesystem_usage_unavailable_io">unavailable: I/O error</string>
     <string name="filesystem_usage_note">Measured inside the filesystem; the free region in the partition table is a different value.</string>
     <string name="diagnostics_pick_backup">Choose backup file…</string>
     <string name="confirm_ack">I understand the data will be erased</string>

@@ -47,6 +47,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
@@ -668,7 +669,7 @@ fun PartitionsScreen(
     val screenScroll = rememberScrollState()
     var viewportTopPx by remember { mutableStateOf(0f) }
     var layoutCardTopPx by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
-    val stickyVisible = selected != null && layoutCardTopPx < viewportTopPx
+    val stickyVisible = false
     val revealRequester = remember { BringIntoViewRequester() }
     var revealToken by remember { mutableStateOf(0) }
     LaunchedEffect(revealToken) {
@@ -777,7 +778,7 @@ fun PartitionsScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxSize()) {
         AnimatedVisibility(
             visible = stickyVisible,
             enter = fadeIn() + expandVertically(),
@@ -874,9 +875,28 @@ fun PartitionsScreen(
             }
         }
 
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+        ) {
+            PartitionChoiceRow(
+                partitions = state.partitions,
+                selectedId = state.selectedPartitionId,
+                writeAccess = selected?.let(state::partitionWriteAccess)
+                    ?: PartitionWriteAccess.Unknown,
+                usageOf = state::partitionUsageSnapshot,
+                phaseOf = state::partitionUsagePhase,
+                enabled = state.actionsEnabled,
+                sizeOf = { partitionSizeLabel(state, it) },
+                onSelect = { onIntent(UiIntent.SelectPartition(it)) },
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f)
                 .zIndex(0f)
                 .onGloballyPositioned { viewportTopPx = it.positionInRoot().y }
                 .verticalScroll(screenScroll)
@@ -1149,8 +1169,6 @@ fun PartitionsScreen(
                                         text = rowTitle,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f),
                                     )
                                     if (partition.filesystemLabel.isNotEmpty()) {
@@ -1180,8 +1198,36 @@ fun PartitionsScreen(
                                         fontFeatureSettings = "tnum",
                                     ),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                val rowStart = partition.startLba
+                                val rowCount = partition.sectorCount
+                                val rowEnd = if (rowStart != null && rowCount != null &&
+                                    rowCount > 0UL &&
+                                    rowStart <= ULong.MAX_VALUE - (rowCount - 1UL)
+                                ) {
+                                    rowStart + rowCount - 1UL
+                                } else {
+                                    null
+                                }
+                                val rowRange = if (rowStart != null && rowEnd != null) {
+                                    stringResource(
+                                        R.string.partitions_info_lba_range_value,
+                                        rowStart.toLong(),
+                                        rowEnd.toLong(),
+                                    )
+                                } else {
+                                    null
+                                }
+                                Text(
+                                    text = listOfNotNull(
+                                        partitionSizeLabel(state, partition),
+                                        rowRange,
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontFeatureSettings = "tnum",
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
@@ -1307,7 +1353,30 @@ fun PartitionsScreen(
                     (state.rawGeometry == null ||
                         state.rawGeometry?.metadataProblem ==
                         RawSchemeProblem.GptBackupMetadataUnknown)
-                val changeBlocked = mbrTooLarge || backupUnknown
+                val geometryUnknown = state.partitions.any {
+                    it.startLba == null || it.sectorCount == null
+                }
+                val schemeUnknown =
+                    state.partitionTableRecognition == usb.partition.TableRecognition.SUPERFLOPPY ||
+                    (currentScheme == null && state.partitionTableRecognized)
+                val metadataUnverified = state.metadataFingerprint == null ||
+                    (if (changeTarget == PartitionScheme.Gpt) {
+                        state.initializationMetadataFingerprintGpt
+                    } else {
+                        state.initializationMetadataFingerprintMbr
+                    }) == null
+                val changeBlocked = mbrTooLarge || backupUnknown ||
+                    state.partitionTableAmbiguous || state.partitionTableDamaged ||
+                    !state.tableValid || geometryUnknown || schemeUnknown || metadataUnverified
+                val blockedReason = when {
+                    mbrTooLarge -> R.string.msg_scheme_mbr_too_large
+                    state.rawGeometry == null -> R.string.partitions_scheme_backup_unverified
+                    backupUnknown -> R.string.partitions_scheme_backup_unknown
+                    geometryUnknown -> R.string.msg_partition_geometry_unknown
+                    schemeUnknown -> R.string.msg_scheme_unknown
+                    metadataUnverified -> R.string.msg_scheme_metadata_unverified
+                    else -> R.string.partitions_scheme_blocked
+                }
                 AlertDialog(
                     onDismissRequest = { schemeChangePrompt = null },
                     containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -1344,14 +1413,7 @@ fun PartitionsScreen(
                             Text(stringResource(R.string.partitions_scheme_prompt_note))
                             if (changeBlocked) {
                                 Text(
-                                    text = stringResource(
-                                        when {
-                                            mbrTooLarge -> R.string.msg_scheme_mbr_too_large
-                                            state.rawGeometry == null ->
-                                                R.string.partitions_scheme_backup_unverified
-                                            else -> R.string.partitions_scheme_backup_unknown
-                                        },
-                                    ),
+                                    text = stringResource(blockedReason),
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             }
@@ -1573,28 +1635,36 @@ private fun SelectedPartitionCard(
             } else null,
         )
         HorizontalDivider(color = dividerColor)
-        val start = selected.startLba
-        val count = selected.sectorCount
-        val end = if (start != null && count != null && count > 0UL &&
-            start <= ULong.MAX_VALUE - (count - 1UL)
-        ) {
-            start + count - 1UL
-        } else {
-            null
+        val usage = state.partitionUsageSnapshot(selected)?.usage
+        val freeSpaceText = when (usage) {
+            is FilesystemUsage.Known -> DeviceIdentity.formatCapacity(usage.space.freeBytes)
+            else -> when (state.partitionUsagePhase(selected)) {
+                FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
+                FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
+                FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
+                else -> "—"
+            }
         }
         FactRow(
-            label = stringResource(R.string.partitions_info_lba_range_label),
-            value = if (start != null && end != null) {
-                stringResource(
-                    R.string.partitions_info_lba_range_value,
-                    start.toLong(),
-                    end.toLong(),
-                )
-            } else {
-                "—"
-            },
+            label = stringResource(R.string.partitions_strip_free),
+            value = freeSpaceText,
             enabled = false,
-            mono = true,
+        )
+        HorizontalDivider(color = dividerColor)
+        val access = state.partitionWriteAccess(selected)
+        val accessText = when (access) {
+            PartitionWriteAccess.ReadOnly,
+            PartitionWriteAccess.DriverReadOnly,
+            -> stringResource(R.string.partitions_write_state_read_only)
+            PartitionWriteAccess.ReadWrite ->
+                stringResource(R.string.partitions_write_state_read_write)
+            PartitionWriteAccess.Unknown ->
+                stringResource(R.string.partitions_write_state_unknown)
+        }
+        FactRow(
+            label = stringResource(R.string.partitions_info_access_label),
+            value = accessText,
+            enabled = false,
         )
         if (selected.readOnly) {
             HorizontalDivider(color = dividerColor)
@@ -1908,6 +1978,15 @@ private fun RawWriteSection(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        (state.stagedRawImagePath ?: state.imageUri)?.let { path ->
+                            Text(
+                                text = path,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Text(
                             text = buildString {
                                 append(sizeLabel)
@@ -2416,18 +2495,24 @@ private fun PartitionSelectStrip(
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val totalSectors = diskSectorCount
         val availablePx = with(density) { maxWidth.toPx() }
-        // Draw spans from the real LBA intervals and normalize once so adjacent
-        // boxes exactly cover the track. No minimum width is applied to drawing.
-        val rawWidthsPx = segments.map { segment ->
+        val minimumPx = with(density) { 48.dp.toPx() }
+        // Keep the real LBA proportions for usable segments, but never shrink a segment
+        // below 48 dp. The resulting track may be wider than the viewport and scrolls
+        // horizontally; every partition/free segment keeps a real touch target.
+        val widthsPx = segments.map { segment ->
             (segmentSpan(segment).toDouble() / totalSectors.toDouble() * availablePx)
-                .toFloat().coerceAtLeast(0.5f)
+                .toFloat().coerceAtLeast(minimumPx)
         }
-        val widthScale = if (rawWidthsPx.sum() > 0f) availablePx / rawWidthsPx.sum() else 1f
-        val widthsPx = rawWidthsPx.map { it * widthScale }
         val widths = widthsPx.map { with(density) { it.toDp() } }
-        Row(
+        val totalWidth = with(density) { widthsPx.sum().toDp() }
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+        ) {
+        Row(
+            modifier = Modifier
+                .width(totalWidth)
                 .height(48.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
@@ -2506,6 +2591,7 @@ private fun PartitionSelectStrip(
                     }
                 }
             }
+        }
         }
     }
 }

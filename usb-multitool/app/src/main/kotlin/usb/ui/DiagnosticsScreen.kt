@@ -146,10 +146,9 @@ fun DiagnosticsScreen(
             val folderStatusText = when {
                 state.backupFolderUri == null ->
                     stringResource(R.string.diagnostics_backup_folder_none)
-                else ->
-                    state.backupFolderName
-                        ?: state.backupFolderUri?.substringAfterLast('/')
-                        ?: stringResource(R.string.diagnostics_backup_folder_none)
+                else -> state.backupFolderUri?.let { uri ->
+                    state.backupFolderName?.takeIf { it.isNotBlank() }?.let { "$it\n$uri" } ?: uri
+                } ?: stringResource(R.string.diagnostics_backup_folder_none)
             }
             val folderStatusColor = when {
                 state.backupFolderUri != null && !state.backupFolderUsable ->

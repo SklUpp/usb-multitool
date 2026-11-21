@@ -875,8 +875,6 @@ internal fun GlobalSettingsCard(
                                 else -> R.string.wave4_write
                             },
                         ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1764,7 +1762,7 @@ private fun ConfigFileStatusRow(
                 color = if (dimmedPath || pathLabel == null) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
-                    MaterialTheme.colorScheme.onSurface
+                    MaterialTheme.colorScheme.tertiary
                 },
                 softWrap = true,
             )
@@ -2273,6 +2271,13 @@ private fun GenerateDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (template == null) {
+                    Text(
+                        text = stringResource(R.string.wave4_suggested_xml_path),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 OutlinedTextField(
                     value = language,
                     onValueChange = { language = it },
