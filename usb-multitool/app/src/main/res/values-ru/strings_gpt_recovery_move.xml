@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Сервис: исправление живой резервной GPT (DestructiveAction.GPT_REPAIR), отдельно от восстановления из файла. -->
+    <string name="diagnostics_gpt_repair">Исправить резервную GPT…</string>
+    <string name="diagnostics_gpt_repair_hint">Перенос живой резервной GPT; разделы сохраняются</string>
+    <string name="diagnostics_gpt_repair_a11y">Исправить резервную GPT на этом носителе. Переносит живой резервный заголовок и массив записей в текущий конец диска и пересчитывает контрольные суммы. Не восстанавливает из файла.</string>
+    <string name="diagnostics_gpt_repair_blocked">«Исправить резервную GPT» недоступно, пока основная GPT повреждена; используйте «Восстановить GPT из файла».</string>
+</resources>

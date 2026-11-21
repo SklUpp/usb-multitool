@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Service: live backup-GPT repair (DestructiveAction.GPT_REPAIR), distinct from file restore. -->
+    <string name="diagnostics_gpt_repair">Fix backup GPT…</string>
+    <string name="diagnostics_gpt_repair_hint">Relocate live backup GPT; keeps partitions</string>
+    <string name="diagnostics_gpt_repair_a11y">Fix backup GPT on this medium. Relocates the live backup header and entry array to the current disk end and recalculates checksums. Does not restore from a file.</string>
+    <string name="diagnostics_gpt_repair_blocked">Fix backup GPT is refused while the primary GPT is damaged; use Restore GPT from file.</string>
+</resources>

@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -133,8 +134,7 @@ fun DiagnosticsScreen(
         SectionCard(
             title = stringResource(R.string.diagnostics_backups_title),
             trailing = {
-                // One help per card: the image and GPT restore policies share this sheet,
-                // so the block-level rows keep no icons of their own.
+                // One help per card: rescue image + both GPT Service paths share this sheet.
                 InfoHelpButton(
                     infoTitle = stringResource(R.string.diagnostics_rescue_title),
                     infoText = stringResource(R.string.diagnostics_rescue_note) +
@@ -357,7 +357,47 @@ fun DiagnosticsScreen(
                     ),
                 )
             }
+            // Live backup-GPT repair: RequestDestructive(GPT_REPAIR), never GPT_RESTORE.
+            // Same UI guards as the former Partitions repair card: actionsEnabled and a
+            // readable primary (not partitionTableDamaged). No backup-folder grant needed.
+            val repairEnabled = state.actionsEnabled && !state.partitionTableDamaged
+            val repairLabel = stringResource(R.string.diagnostics_gpt_repair)
+            val repairA11y = stringResource(R.string.diagnostics_gpt_repair_a11y)
+            OutlinedButton(
+                onClick = {
+                    onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR))
+                },
+                enabled = repairEnabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = repairA11y },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                Spacer(Modifier.width(6.dp))
+                Column(modifier = Modifier.weight(1f, fill = false)) {
+                    Text(
+                        text = repairLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = stringResource(R.string.diagnostics_gpt_repair_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             if (state.partitionTableDamaged) {
+                Text(
+                    text = stringResource(R.string.diagnostics_gpt_repair_blocked),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
                 Text(
                     text = stringResource(R.string.diagnostics_gpt_restore_allowed),
                     style = MaterialTheme.typography.labelSmall,
@@ -566,3 +606,4 @@ private fun InspectionText(lines: List<String>) {
         }
     }
 }
+

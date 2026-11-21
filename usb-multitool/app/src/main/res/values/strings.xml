@@ -391,7 +391,7 @@
     <string name="diagnostics_pick_image">Pick image…</string>
     <string name="diagnostics_map_named">Map: %1$s</string>
     <string name="diagnostics_pick_map">Pick map…</string>
-    <string name="diagnostics_gpt_restore_info_text">Restore GPT from file writes a saved primary+backup critical-sector blob onto this medium after validation. It is not the same as Fix backup GPT on the Partitions tab, which only relocates the live backup structures to the current disk end. A file name alone does not prove the blob matches this disk.</string>
+    <string name="diagnostics_gpt_restore_info_text">Restore GPT from file writes a saved primary+backup critical-sector blob onto this medium after validation. Fix backup GPT is a separate Service action that only relocates the live backup structures to the current disk end and recalculates checksums; it keeps every partition and needs a readable primary GPT. A file name alone does not prove the blob matches this disk.</string>
     <string name="diagnostics_inspection_unavailable">Details unavailable — the file will be validated again at restore.</string>
     <string name="diagnostics_inspection_failed">Selected file rejected: %1$s</string>
     <string name="diagnostics_file_size">Source file size: %1$s</string>
