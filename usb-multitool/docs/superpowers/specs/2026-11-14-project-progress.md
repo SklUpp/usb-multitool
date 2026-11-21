@@ -313,5 +313,10 @@ unit/host-тесты, debug APK, проверка 16 KiB, lint и компиля
 - Windows layout: подписи размеров переведены с MB на MiB.
 - CI [44955094683](https://github.com/SklUpp/usb-multitool/actions/runs/44955094683)
   — success: unit/host-тесты, debug APK, 16 KiB, lint, Kotlin.
+- APK — артефакт CI `app-debug-apk` (id `14727057872`), скачан и проверен:
+  `~/apk-3e4a11b/app-debug.apk`, 86 642 887 байт, SHA-256
+  `a27c8a8d34cafd68ef4be6c72ccf7be0cb56d46531b9e0e4d304508b41913b47`;
+  `unzip -t` и `aapt2 dump badging` — без ошибок, package `usb.multitool 0.1.0`,
+  minSdk 28, target 36.
 - Не проверено: визуальный рендер, pin-переход, тапы полосы, TalkBack, IME,
   fontScale 2.0, физический USB/SAF.
