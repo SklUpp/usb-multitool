@@ -450,6 +450,32 @@ class FilesOperationsBatchTest {
     }
 
     @Test
+    fun uploadDocumentsPreservesPaddedDestinationInsteadOfTrimming() {
+        val volume = MemoryVolume()
+        volume.mkdir("/docs")
+        volume.mkdir("/docs ")
+        volume.write("/docs/a.bin", byteArrayOf(1), create = true)
+        volume.write("/docs /a.bin", byteArrayOf(2), create = true)
+        val a = Uri.parse("content://usb.batch.test.doc/padded-upload")
+        val resolver = RecordingResolver.inputsOnly(
+            contents = mapOf(a to byteArrayOf(9)),
+            names = mapOf(a to "a.bin"),
+        )
+        FilesOperations.uploadDocuments(
+            resolver = resolver.resolver,
+            uris = listOf(a),
+            destDir = "/docs ",
+            volume = volume,
+            operation = DiskOperation("up-padded"),
+            chunkBytes = 8,
+            filesDir = filesDir,
+            conflict = { FilesConflictDecision.ReplaceFile },
+        )
+        assertEquals(byteArrayOf(9).toList(), volume.read("/docs /a.bin", 0, 1).toList())
+        assertEquals(byteArrayOf(1).toList(), volume.read("/docs/a.bin", 0, 1).toList())
+    }
+
+    @Test
     fun pathEscapeRejectedByPolicyHelpers() {
         assertThrows(IllegalArgumentException::class.java) {
             FilesOperationPolicy.resolveInsideTree("/docs", "..")

@@ -1153,7 +1153,7 @@ object FilesOperations {
         onProgress: ((String) -> Unit)? = null,
         filesDir: File,
     ) {
-        val parent = FilesOperationPolicy.normalizeVolumePath(destDir)
+        val parent = FilesOperationPolicy.normalizeVolumePathExact(destDir)
         try {
             for (source in sources) {
                 if (!operation.isActive()) throw CancellationException("Upload cancelled")
@@ -1381,7 +1381,7 @@ object FilesOperations {
         onDocumentSettled: ((Uri) -> Unit)? = null,
         filesDir: File,
     ) {
-        val parent = FilesOperationPolicy.normalizeVolumePath(destDir)
+        val parent = FilesOperationPolicy.normalizeVolumePathExact(destDir)
         try {
             for (uri in uris) {
                 if (!operation.isActive()) throw CancellationException("Upload cancelled")
