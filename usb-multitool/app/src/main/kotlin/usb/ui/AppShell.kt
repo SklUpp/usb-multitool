@@ -63,7 +63,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Shapes
@@ -687,11 +686,6 @@ fun AppShell(
             ?.let { candidate ->
                 AlertDialog(
                     onDismissRequest = { onIntent(UiIntent.DismissLinkOverwrite) },
-                    modifier = Modifier.border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline,
-                        RoundedCornerShape(28.dp),
-                    ),
                     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                     textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -741,11 +735,6 @@ fun AppShell(
             }
             AlertDialog(
                 onDismissRequest = { onIntent(UiIntent.DismissConfirmation) },
-                modifier = Modifier.border(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline,
-                    RoundedCornerShape(28.dp),
-                ),
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                 titleContentColor = MaterialTheme.colorScheme.onSurface,
                 textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1022,10 +1011,6 @@ TopAppBar(
                         onDismissRequest = { moreOpen = false },
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         shadowElevation = 3.dp,
-                        border = BorderStroke(
-                            1.dp,
-                            MaterialTheme.colorScheme.outline,
-                        ),
                     ) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.settings_title_screen)) },
@@ -1426,15 +1411,12 @@ private fun StatusDialog(
     } ?: state.statusMessage?.let {
         listOf(it.localized() to StatusTone.Neutral)
     }.orEmpty()
-    // High = M3 AlertDialog default; border + strong outline supply the missing edge
-    // (AlertDialog has 0 shadow / no platform dim per ScoutAllPopups).
     val dialogContainer = MaterialTheme.colorScheme.surfaceContainerHigh
     val dialogTitleColor = MaterialTheme.colorScheme.onSurface
     val dialogTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val dialogShape = RoundedCornerShape(28.dp)
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, dialogShape),
         containerColor = dialogContainer,
         titleContentColor = dialogTitleColor,
         textContentColor = dialogTextColor,
@@ -1471,15 +1453,11 @@ private fun StatusDialog(
                 }
                 // Temporary operation journal — same JournalLine renderer as the full log.
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     contentColor = MaterialTheme.colorScheme.onSurface,
                     shape = RoundedCornerShape(8.dp),
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
-                    border = BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline,
-                    ),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(
@@ -1528,7 +1506,6 @@ private fun StatusDialog(
     cancelRequest?.let { request ->
         AlertDialog(
             onDismissRequest = { cancelRequest = null },
-            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, dialogShape),
             containerColor = dialogContainer,
             titleContentColor = dialogTitleColor,
             textContentColor = dialogTextColor,
@@ -1777,11 +1754,6 @@ private fun LogScreen(
     if (confirmCopy) {
         AlertDialog(
             onDismissRequest = { confirmCopy = false },
-            modifier = Modifier.border(
-                1.dp,
-                MaterialTheme.colorScheme.outline,
-                RoundedCornerShape(28.dp),
-            ),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1855,10 +1827,6 @@ private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) 
             onDismissRequest = { expanded = false },
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 3.dp,
-            border = BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outline,
-            ),
         ) {
             AppLanguage.entries.forEach { option ->
                 DropdownMenuItem(
@@ -2103,7 +2071,7 @@ internal fun <T> CompactChoice(
     )
     val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: "—"
     Box(modifier = modifier.fillMaxWidth()) {
-        OutlinedButton(
+        FilledTonalButton(
             onClick = { expanded = true },
             enabled = enabled,
             modifier = Modifier
@@ -2137,10 +2105,6 @@ internal fun <T> CompactChoice(
             onDismissRequest = { expanded = false },
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 3.dp,
-            border = BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outline,
-            ),
         ) {
             options.forEach { (value, text) ->
                 val optionSelected = value == selected

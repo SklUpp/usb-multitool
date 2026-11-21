@@ -19,8 +19,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -241,7 +241,7 @@ fun DiagnosticsScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = onPickRestoreFolder,
                     enabled = state.actionsEnabled,
                     modifier = Modifier
@@ -317,7 +317,7 @@ fun DiagnosticsScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = onPickBackup,
                     enabled = state.actionsEnabled,
                     modifier = Modifier
@@ -357,7 +357,7 @@ fun DiagnosticsScreen(
             val repairEnabled = state.actionsEnabled && !state.partitionTableDamaged
             val repairLabel = stringResource(R.string.diagnostics_gpt_repair)
             val repairA11y = stringResource(R.string.diagnostics_gpt_repair_a11y)
-            OutlinedButton(
+            FilledTonalButton(
                 onClick = {
                     onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_REPAIR))
                 },

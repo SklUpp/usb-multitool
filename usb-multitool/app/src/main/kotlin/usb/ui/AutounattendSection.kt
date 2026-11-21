@@ -35,8 +35,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -244,36 +242,14 @@ internal fun AutounattendSection(
                 }
             }
         }
-        // Display and generateTarget share prospectiveXmlPath so the placeholder matches
-        // the path RequestGenerateAutounattend would create.
+        // Only a real resolved file is shown. The prospective generate target stays an
+        // internal default and is never presented as if the user had selected it.
         val resolvedPath = runCatching {
             template?.let(VentoySetup::resolveXmlPath)
         }.getOrNull()
-        val pathLabel = resolvedPath
-            ?: if (template == null) prospectiveXmlPath
-            else stringResource(R.string.wave4_file_not_selected)
-        val xmlSizeLabel = document?.let { doc ->
-            val text = doc.sourceText ?: return@let null
-            val bytes = text.toByteArray(StandardCharsets.UTF_8).size.toLong() +
-                doc.sourceBom.size.toLong()
-            DeviceIdentity.formatCapacity(bytes.toULong())
-        }
         ConfigFileStatusRow(
-            pathLabel = pathLabel,
-            sizeLabel = xmlSizeLabel,
-            statusLabel = if (document != null) {
-                stringResource(R.string.windows_status_selected)
-            } else {
-                null
-            },
-            // Unset or failed resolve stays dimmed; a chosen path is normal weight.
+            pathLabel = resolvedPath,
             dimmedPath = resolvedPath == null,
-            // Prospect is only a suggestion: create-new may allocate Win11_1.xml etc.
-            pathHint = if (template == null && resolvedPath == null) {
-                stringResource(R.string.wave4_suggested_xml_path)
-            } else {
-                null
-            },
             showChanged = false,
             onReset = if (template != null) {
                 { onIntent(UiIntent.ClearWindowsTemplate) }
@@ -375,7 +351,7 @@ internal fun AutounattendSection(
             }
             // Raw XML editor stays reachable when source bytes exist; not part of two-button row.
             if (document?.sourceText != null) {
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = { xmlEditorOpen = true },
                     enabled = state.actionsEnabled,
                     modifier = Modifier
@@ -519,7 +495,7 @@ internal fun AutounattendSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(
+                    FilledTonalButton(
                         onClick = { onIntent(UiIntent.ClearWindowsSelection) },
                         enabled = selectedPaths.isNotEmpty(),
                         modifier = Modifier.weight(1f),
@@ -748,24 +724,8 @@ internal fun GlobalSettingsCard(
             customPath &&
                 (settings is VentoyGlobalSettings.Present || settings is VentoyGlobalSettings.Empty)
         val hasPendingWrite = pending.isNotEmpty() || importedFileReady
-        val sizeOrStatus = when {
-            state.ventoySettingsSourceLoading ->
-                stringResource(R.string.settings_source_status_reading)
-            settings == null -> stringResource(R.string.settings_source_status_unread)
-            settings == VentoyGlobalSettings.Missing ->
-                stringResource(R.string.settings_source_status_missing)
-            settings == VentoyGlobalSettings.Empty ->
-                stringResource(R.string.settings_source_status_empty)
-            settings is VentoyGlobalSettings.Present ->
-                stringResource(
-                    R.string.settings_source_status_valid,
-                    settings.entries.size,
-                )
-            else -> stringResource(R.string.settings_source_status_error)
-        }
         ConfigFileStatusRow(
             pathLabel = source.label(),
-            sizeLabel = sizeOrStatus,
             dimmedPath = !customPath,
             showChanged = hasPendingWrite,
             onReset = if (customPath) {
@@ -788,66 +748,50 @@ internal fun GlobalSettingsCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        when (settings) {
-            null -> {
-                if (!settingsGone) {
-                    EmptyHint(
-                        if (state.presence == DevicePresence.Ready) {
-                            stringResource(R.string.settings_not_loaded)
-                        } else {
-                            UiReducer.presenceMessage(state.presence).localized()
-                        },
-                    )
-                    TextButton(
-                        onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text(stringResource(R.string.settings_retry))
-                    }
-                }
-            }
-            VentoyGlobalSettings.Missing ->
-                EmptyHint(
-                    stringResource(
-                        if (customPath) {
-                            R.string.settings_source_status_missing
-                        } else {
-                            R.string.settings_missing
-                        },
-                    ),
-                )
-            VentoyGlobalSettings.Empty -> Unit
-            is VentoyGlobalSettings.ReadError -> {
-                Text(
-                    text = stringResource(
-                        when {
-                            settings.damagedLayout -> R.string.settings_damaged_layout
-                            customPath -> R.string.settings_source_status_error
-                            else -> R.string.settings_read_error
-                        },
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                if (!settings.damagedLayout) {
+        if (settings is VentoyGlobalSettings.ReadError) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
-                        text = settings.message,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                        text = stringResource(
+                            when {
+                                settings.damagedLayout -> R.string.settings_damaged_layout
+                                customPath -> R.string.settings_source_status_error
+                                else -> R.string.settings_read_error
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
-                }
-                if (!settingsGone) {
-                    TextButton(
-                        onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text(stringResource(R.string.settings_retry))
+                    if (!settings.damagedLayout) {
+                        Text(
+                            text = settings.message,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    if (!settingsGone) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.LoadVentoyGlobalSettings) },
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_retry),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
                     }
                 }
             }
-            is VentoyGlobalSettings.Present -> Unit
         }
         StagedControlsHints(state = state)
         if (pending.isNotEmpty()) {
@@ -863,7 +807,7 @@ internal fun GlobalSettingsCard(
                     .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = {
                         editorBaseline = state.pendingVentoyControls
                         editorOpen = true
@@ -880,31 +824,33 @@ internal fun GlobalSettingsCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Button(
-                    onClick = { onIntent(UiIntent.RequestApplyVentoyControls) },
-                    enabled = state.actionsEnabled && hasPendingWrite,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .heightIn(min = 48.dp),
-                ) {
-                    Text(
-                        stringResource(
-                            when {
-                                state.operation?.state == OperationState.Partial &&
-                                    state.operation?.title in setOf(
-                                        OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                                        OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
-                                    ) -> R.string.settings_retry_pending_action
-                                pending.isEmpty() &&
-                                    source is VentoySettingsSource.Document ->
-                                    R.string.settings_import_apply
-                                pending.isEmpty() && customPath ->
-                                    R.string.settings_import_copy_to_default
-                                else -> R.string.wave4_write
-                            },
-                        ),
-                    )
+                if (hasPendingWrite) {
+                    Button(
+                        onClick = { onIntent(UiIntent.RequestApplyVentoyControls) },
+                        enabled = state.actionsEnabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .heightIn(min = 48.dp),
+                    ) {
+                        Text(
+                            stringResource(
+                                when {
+                                    state.operation?.state == OperationState.Partial &&
+                                        state.operation?.title in setOf(
+                                            OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
+                                            OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
+                                        ) -> R.string.settings_retry_pending_action
+                                    pending.isEmpty() &&
+                                        source is VentoySettingsSource.Document ->
+                                        R.string.settings_import_apply
+                                    pending.isEmpty() && customPath ->
+                                        R.string.settings_import_copy_to_default
+                                    else -> R.string.wave4_write
+                                },
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -1080,7 +1026,6 @@ private fun GlobalSettingsEditorDialog(
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             shadowElevation = 6.dp,
         ) {
             Scaffold(
@@ -1263,7 +1208,6 @@ private fun AutounattendRawEditorDialog(
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             shadowElevation = 6.dp,
         ) {
             Scaffold(
@@ -1739,14 +1683,12 @@ private fun CompactStagedControls(
 
 
 /**
- * Shared compact status line for ventoy.json / unattend.xml cards:
- * monospace path · size, optional Changed badge, optional pick icon, optional ✕ reset.
+ * Shared selected-file row for ventoy.json / unattend.xml / Windows image:
+ * one truthful path (or an explicit "not selected") plus optional pick/reset actions.
  */
 @Composable
 private fun ConfigFileStatusRow(
     pathLabel: String?,
-    sizeLabel: String?,
-    statusLabel: String? = null,
     dimmedPath: Boolean,
     showChanged: Boolean,
     onReset: (() -> Unit)?,
@@ -1754,16 +1696,13 @@ private fun ConfigFileStatusRow(
     onPick: (() -> Unit)? = null,
     pickEnabled: Boolean = true,
     pickLabel: String? = null,
-    pathHint: String? = null,
 ) {
     val resetLabel = stringResource(R.string.wave4_reset_file)
     val chooseLabel = pickLabel ?: stringResource(R.string.wave4_choose_ellipsis)
-    // Always reserve a truthful path/status slot. Callers pass a real or prospective
-    // path; this fallback only covers a missing label. Unset targets are dimmed by the caller.
-    val statusText = when {
-        pathLabel == null -> stringResource(R.string.wave4_file_not_selected)
-        sizeLabel.isNullOrBlank() -> pathLabel
-        else -> stringResource(R.string.wave4_status_path_size, pathLabel, sizeLabel)
+    val statusText = if (pathLabel == null) {
+        stringResource(R.string.windows_file_none)
+    } else {
+        stringResource(R.string.windows_file_status, pathLabel)
     }
     Row(
         modifier = Modifier
@@ -1774,47 +1713,20 @@ private fun ConfigFileStatusRow(
     ) {
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            if (pathHint != null) {
-                Text(
-                    text = pathHint,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    softWrap = true,
-                )
-            }
             Text(
                 text = statusText,
                 style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = if (pathLabel == null) FontFamily.Default else FontFamily.Monospace,
                 ),
                 color = if (dimmedPath || pathLabel == null) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
-                    MaterialTheme.colorScheme.tertiary
+                    MaterialTheme.colorScheme.onSurface
                 },
                 softWrap = true,
             )
-            // When no path is chosen but a non-path status exists (e.g. reading), keep it
-            // under the empty-state label instead of replacing the path slot.
-            if (pathLabel == null) {
-                sizeLabel?.takeIf { it.isNotBlank() }?.let { status ->
-                    Text(
-                        text = status,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        softWrap = true,
-                    )
-                }
-            }
-            statusLabel?.let { status ->
-                Text(
-                    text = status,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
             if (showChanged) {
                 Badge(
                     text = stringResource(R.string.wave4_changed_badge),
@@ -1824,14 +1736,13 @@ private fun ConfigFileStatusRow(
             }
         }
         if (onPick != null) {
-            OutlinedIconButton(
+            FilledTonalIconButton(
                 onClick = onPick,
                 enabled = pickEnabled,
                 modifier = Modifier
                     .size(48.dp)
                     .semantics { contentDescription = chooseLabel },
-                colors = IconButtonDefaults.outlinedIconButtonColors(),
-                border = IconButtonDefaults.outlinedIconButtonBorder(enabled = pickEnabled),
+                colors = IconButtonDefaults.filledTonalIconButtonColors(),
             ) {
                 GlyphIcon(Glyph.File, size = 20.dp)
             }
@@ -1925,7 +1836,7 @@ private fun AddParameterDialog(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
-                    OutlinedButton(
+                    FilledTonalButton(
                         onClick = { onIntent(UiIntent.RefreshVentoyControlKeyCatalog) },
                         enabled = !state.ventoyControlKeyCatalogLoading,
                         modifier = Modifier.heightIn(min = 48.dp),
@@ -1986,7 +1897,7 @@ private fun AddParameterDialog(
                         )
                         catalogKeys.forEach { entry ->
                             val taken = entry.key in existingKeys
-                            OutlinedButton(
+                            FilledTonalButton(
                                 onClick = {
                                     key = entry.key
                                     problem = null

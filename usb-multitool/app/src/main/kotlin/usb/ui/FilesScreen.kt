@@ -47,11 +47,16 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -232,7 +237,7 @@ fun FilesScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 EmptyHint(stringResource(R.string.files_no_partitions_hint))
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -275,14 +280,13 @@ fun FilesScreen(
                     .heightIn(max = headerMaxHeight)
                     .verticalScroll(rememberScrollState()),
             ) {
-                PartitionChoiceRow(
+                PartitionDropdown(
                     partitions = state.partitions,
                     selectedId = selected?.id,
-                    writeAccess = writeAccess,
+                    writeAccessOf = state::partitionWriteAccess,
                     usageOf = state::partitionUsageSnapshot,
                     phaseOf = state::partitionUsagePhase,
                     enabled = state.actionsEnabled,
-                    sizeOf = { partitionSizeLabel(state, it) },
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
                 // Matches the empty-partitions branch below: the same known blocked
@@ -449,7 +453,6 @@ fun FilesScreen(
             onDismissRequest = { showNewFolderDialog = false; newFolderName = "" },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -493,7 +496,6 @@ fun FilesScreen(
             onDismissRequest = { renameTarget = null; renameBinding = null },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -544,7 +546,6 @@ fun FilesScreen(
             onDismissRequest = { pendingDeleteSelection = null },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
             iconContentColor = MaterialTheme.colorScheme.error,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -576,7 +577,6 @@ fun FilesScreen(
             },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -751,14 +751,13 @@ private fun FilesPickScreen(
                 .fillMaxWidth()
                 .padding(bottom = 8.dp),
         ) {
-            PartitionChoiceRow(
+            PartitionDropdown(
                 partitions = state.partitions,
                 selectedId = mode.partitionId,
-                writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
+                writeAccessOf = state::partitionWriteAccess,
                 usageOf = state::partitionUsageSnapshot,
                 phaseOf = state::partitionUsagePhase,
                 enabled = canAct && !state.isRunning,
-                sizeOf = { partitionSizeLabel(state, it) },
                 onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
             )
         }
@@ -828,7 +827,7 @@ private fun FilesPickScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     ) {
                         if (mode.target == FilesPickTarget.Folder) {
-                            OutlinedButton(
+                            FilledTonalButton(
                                 onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
                                 enabled = canAct && listingUsable && !state.isRunning,
                             ) {
@@ -839,7 +838,7 @@ private fun FilesPickScreen(
                             mode.target == FilesPickTarget.File &&
                             mode.partitionId == ventoyDataPartitionId
                         ) {
-                            OutlinedButton(
+                            FilledTonalButton(
                                 onClick = {
                                     onRequestDeviceImage(state.currentPath, mode.sessionId)
                                 },
@@ -1583,6 +1582,119 @@ internal fun PartitionChoiceRow(
 }
 
 /**
+ * One MD3 exposed dropdown for partition selection. The field shows only the current
+ * partition; the menu repeats the same row format everywhere: radio, name, filesystem,
+ * usage and RO/RW. No ordinal and no duplicated size.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PartitionDropdown(
+    partitions: List<PartitionTab>,
+    selectedId: String?,
+    writeAccessOf: (PartitionTab) -> PartitionWriteAccess,
+    usageOf: (PartitionTab) -> FilesystemUsageSnapshot?,
+    phaseOf: (PartitionTab) -> FilesystemUsagePhase?,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == id } }
+    val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
+    val rowEnabled = enabled && selectable
+    LaunchedEffect(rowEnabled) {
+        if (!rowEnabled) expanded = false
+    }
+    val placeholder = stringResource(R.string.files_select_partition)
+    val label = stringResource(R.string.files_partition_radio_group)
+    ExposedDropdownMenuBox(
+        expanded = expanded && rowEnabled,
+        onExpandedChange = { if (rowEnabled) expanded = !expanded },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        TextField(
+            value = selected?.let(::partitionDisplayName) ?: placeholder,
+            onValueChange = {},
+            readOnly = true,
+            enabled = rowEnabled,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(
+            expanded = expanded && rowEnabled,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 360.dp),
+        ) {
+            partitions.forEach { partition ->
+                DropdownMenuItem(
+                    text = {
+                        PartitionOptionRow(
+                            partition = partition,
+                            selected = partition.id == selectedId,
+                            access = writeAccessOf(partition),
+                            usage = filesystemUsageText(usageOf(partition), phaseOf(partition)),
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelect(partition.id)
+                    },
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PartitionOptionRow(
+    partition: PartitionTab,
+    selected: Boolean,
+    access: PartitionWriteAccess,
+    usage: String?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = partitionDisplayName(partition),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = MaterialTheme.colorScheme.onSurface,
+                softWrap = true,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (partition.filesystemLabel.isNotEmpty()) {
+                    Badge(text = partition.filesystemLabel)
+                }
+                usage?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        softWrap = true,
+                    )
+                }
+            }
+        }
+        WriteAccessBadge(access)
+    }
+}
+
+/**
  * Compact write chip: only `RO` or `RW` on one neutral container with a hairline border.
  * Tone from [writeAccessTone]: RW primary, RO theme-aware amber. Error stays reserved for
  * failures and destructive actions. Unknown renders no chip; the long factual description
@@ -1964,8 +2076,7 @@ private fun FileActionSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 560.dp)
-                .verticalScroll(rememberScrollState())
-                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(28.dp)),
+                .verticalScroll(rememberScrollState()),
         ) {
             ListItem(
                 headlineContent = {

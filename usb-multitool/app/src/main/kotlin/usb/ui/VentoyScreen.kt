@@ -37,6 +37,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -84,12 +85,6 @@ fun VentoyScreen(
     onPickWindowsFile: (WindowsImportKind, String?) -> Unit = { _, _ -> },
     onPickVentoySettingsFile: () -> Unit = {},
 ) {
-    val bundled = state.bundledVentoyRelease
-    val target = ventoyTargetRelease(bundled, state.downloadedVentoyRelease?.release)
-    val comparison = ventoyReleaseComparison(state.installedVentoyRelease, target)
-    // The update is always the same official operation whatever the version pair is; the
-    // versions explain what changes, they never rename the action.
-    val updateLabel = ventoyUpdateLabel(comparison)
     // Absent/Disconnected hides device-gated actions; Busy keeps them with enabled guards.
     val usbGone = state.presence == DevicePresence.Absent || state.presence == DevicePresence.Disconnected
     val releaseActionEnabled = state.actionsEnabled && state.ventoyInstallAvailable &&
@@ -246,7 +241,6 @@ fun VentoyScreen(
                 VentoyVersionRow(
                     state = state,
                     onIntent = onIntent,
-                    updateLabel = updateLabel,
                     releaseActionEnabled = releaseActionEnabled,
                     showDeviceActions = !usbGone,
                 )
@@ -310,12 +304,12 @@ fun VentoyScreen(
 private fun VentoyVersionRow(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
-    updateLabel: String,
     releaseActionEnabled: Boolean,
     showDeviceActions: Boolean,
 ) {
     val naText = stringResource(R.string.ventoy_version_na)
     val errorText = stringResource(R.string.ventoy_version_error)
+    val updateActionLabel = stringResource(R.string.ventoy_update)
     val installedText = when {
         state.installedVentoyReadError != null -> errorText
         else -> state.installedVentoyRelease ?: naText
@@ -527,9 +521,12 @@ private fun VentoyVersionRow(
                         .weight(1f)
                         .fillMaxHeight()
                         .heightIn(min = 48.dp)
-                        .semantics { contentDescription = updateLabel },
+                        .semantics { contentDescription = updateActionLabel },
                 ) {
-                    Text(updateLabel, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = updateActionLabel,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
                 // Existing destructive format+install (not uninstall — none exists).
                 Button(
@@ -676,26 +673,6 @@ private fun RefreshingIcon(busy: Boolean) {
 
 
 
-/**
- * The action is always "Update"; only the version pair changes. The official operation
- * keeps the data partition even when the installed release already equals the target, so
- * there is no "reinstall" label: that word implied reformatting that never happens.
- */
-@Composable
-private fun ventoyUpdateLabel(comparison: VentoyReleaseComparison): String =
-    when {
-        comparison.installed != null &&
-            comparison.target != null &&
-            !comparison.same ->
-            stringResource(
-                R.string.ventoy_update_from_to,
-                comparison.installed,
-                comparison.target,
-            )
-        comparison.target != null ->
-            stringResource(R.string.ventoy_update_to, comparison.target)
-        else -> stringResource(R.string.ventoy_update)
-    }
 
 
 /**
@@ -729,16 +706,17 @@ private fun WindowsImageBlock(
     val copyingTarget = (operation?.title as? OperationTitle.ImportTarget)?.targetName
         ?: selectedImage?.name
 
-    val statusText = when {
+    val fileText = when {
         isImageImportTarget && copyingTarget != null ->
             stringResource(R.string.windows_copying_image, copyingTarget)
         isImageImportTarget ->
             stringResource(R.string.windows_copying_generic)
         selectedImage != null ->
-            selectedImage.name.ifBlank { selectedImage.path }
+            stringResource(R.string.windows_file_status, selectedImage.path)
         else ->
-            stringResource(R.string.selection_not_selected)
+            stringResource(R.string.windows_file_none)
     }
+    val hasFile = selectedImage != null || isImageImportTarget
 
     val chooseDescription = stringResource(R.string.ventoy_pick_windows_image_cd)
     // Detached stick keeps the row and its empty state, only the pick action is disabled:
@@ -757,54 +735,20 @@ private fun WindowsImageBlock(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Column(
+            Text(
+                text = fileText,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = if (hasFile) FontFamily.Monospace else FontFamily.Default,
+                ),
+                color = if (hasFile) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                softWrap = true,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.windows_selected_image),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (selectedImage != null || isImageImportTarget) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    fontFamily = if (selectedImage != null || isImageImportTarget) {
-                        FontFamily.Monospace
-                    } else {
-                        FontFamily.Default
-                    },
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // Name first (short, readable), the validated stick path second. Phone
-                // picks become this post-copy path, so the label never guesses a source URI.
-                if (selectedImage != null && !isImageImportTarget && !isImageInspecting &&
-                    selectedImage.path != statusText
-                ) {
-                    Text(
-                        text = selectedImage.path,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        softWrap = true,
-                    )
-                }
-            }
-            if (selectedImage != null && !isImageImportTarget && !isImageInspecting) {
-                Text(
-                    text = stringResource(R.string.windows_status_selected),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(
+            )
+            FilledTonalIconButton(
                 onClick = { imageSourcePrompt = true },
                 enabled = canPickImage,
                 modifier = Modifier
@@ -1024,9 +968,8 @@ internal fun ImportOverwriteDialog(
     ) {
         Surface(
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             tonalElevation = 0.dp,
             shadowElevation = 6.dp,
             modifier = Modifier.fillMaxWidth(),

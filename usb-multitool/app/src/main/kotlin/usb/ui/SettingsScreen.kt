@@ -145,13 +145,9 @@ private fun LanguageSettingRow(language: AppLanguage, onIntent: (UiIntent) -> Un
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            // High (not default Container) + border: Container↔bg is ~1.07–1.12:1 and
-            // outline is still weak until AppShell retunes it, so ink-variant stroke
-            // keeps the edge readable on the current palette.
             modifier = Modifier.widthIn(min = 168.dp, max = 320.dp),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shadowElevation = 3.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant),
         ) {
             AppLanguage.entries.forEach { option ->
                 DropdownMenuItem(
