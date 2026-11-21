@@ -1172,6 +1172,12 @@ private data class OperationStatusFacts(
     val summary: String get() = listOfNotNull(name, state, progress).joinToString(FACT_SEPARATOR)
 }
 
+internal fun newerStandaloneStatusMessage(state: AppUiState): UiMessage? =
+    state.statusMessage?.takeIf {
+        state.operation?.state?.isTerminal() == true &&
+            state.statusSequence > state.operationStatusSequence
+    }
+
 @Composable
 private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
     val op = state.operation ?: return null
@@ -1272,10 +1278,7 @@ private fun OperationStatusLine(
     val operation = state.operation
     val running = operation?.state == OperationState.Running ||
         operation?.state == OperationState.Queued
-    val newerStandalone = state.statusMessage?.takeIf {
-        operation?.state?.isTerminal() == true &&
-            state.statusSequence > state.operationStatusSequence
-    }
+    val newerStandalone = newerStandaloneStatusMessage(state)
     val newerStandaloneText = newerStandalone?.localized()
     val standaloneMessage = facts == null && state.statusMessage != null
     val openLabel = stringResource(R.string.shell_status_open_details)
@@ -1393,10 +1396,7 @@ private fun StatusDialog(
 ) {
     val op = state.operation
     val facts = operationStatusFacts(state)
-    val newerStatus = state.statusMessage?.takeIf {
-        op?.state?.isTerminal() == true &&
-            state.statusSequence > state.operationStatusSequence
-    }
+    val newerStatus = newerStandaloneStatusMessage(state)
     val newerStatusText = newerStatus?.localized()
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
     val cancelable = running == true && op?.cancelable == true

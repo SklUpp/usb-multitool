@@ -50,6 +50,11 @@ class OperationTransitionsTest {
             UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)),
         )
         assertTrue(rejected.state.statusSequence > rejected.state.operationStatusSequence)
+        assertEquals(
+            UiMessage.Key(UiMessageKey.TargetChanged),
+            newerStandaloneStatusMessage(rejected.state),
+        )
+        assertEquals(null, newerStandaloneStatusMessage(completedUpdate.state))
         assertEquals(FilesListingState.Loading, completed.state.filesListingState)
         assertTrue(completed.state.files.isEmpty())
         assertEquals(listOf(UiEffect.LoadFiles("/")), completed.effects)

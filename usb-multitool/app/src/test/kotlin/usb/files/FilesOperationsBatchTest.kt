@@ -941,7 +941,7 @@ class FilesOperationsBatchTest {
         private val nodes = linkedMapOf<String, Node>("/" to Node(true))
         val events = mutableListOf<String>()
 
-        private fun key(path: String): String = FilesOperationPolicy.normalizeVolumePath(path)
+        private fun key(path: String): String = FilesOperationPolicy.normalizeVolumePathExact(path)
 
         override fun list(path: String): List<UsbFsDirEntry> {
             val parent = key(path)

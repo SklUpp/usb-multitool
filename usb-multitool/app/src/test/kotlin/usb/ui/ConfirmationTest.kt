@@ -448,7 +448,9 @@ class UiStateMachineTest {
         assertEquals(UiMessage.Key(UiMessageKey.TargetChanged), staleDevice.state.statusMessage)
 
         val changedGeometry = state.copy(
-            partitions = state.partitions.map { it.copy(sectorCount = it.sectorCount + 1uL) },
+            partitions = state.partitions.map {
+                it.copy(sectorCount = (it.sectorCount ?: 0uL) + 1uL)
+            },
         )
         val staleGeometry = UiReducer.reduce(changedGeometry, intent)
         assertTrue(staleGeometry.effects.isEmpty())
