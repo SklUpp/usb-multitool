@@ -54,6 +54,13 @@
     <string name="partitions_range_caption">Начало %1$d МиБ · конец %2$d МиБ · %3$d МиБ</string>
     <string name="partitions_range_ticks_a11y">Метки выравнивания по МиБ свободного региона, на больших регионах разрежены; подписанные концы — первый пригодный выровненный сектор и последний выбираемый сектор</string>
     <string name="partitions_range_tick_edge_label">%1$d МиБ · LBA %2$d</string>
+    <string name="partitions_create_start_mib">Начало, МиБ</string>
+    <string name="partitions_create_end_mib">Конец, МиБ</string>
+    <string name="partitions_create_size_mib">Размер %1$d МиБ</string>
+    <string name="partitions_create_start_error_greater_than_end">Начало должно быть ≤ конца</string>
+    <string name="partitions_create_end_error_less_than_start">Конец должен быть больше начала</string>
+    <string name="partitions_create_error_out_of_bounds">Должно быть от 0 до %1$d МиБ</string>
+    <string name="partitions_create_preview_free">Свободно</string>
     <string name="partitions_size_sectors">Размер в секторах</string>
     <string name="partitions_size_support">Введите положительное число секторов в пределах свободной области.</string>
     <string name="partitions_continue">Продолжить</string>

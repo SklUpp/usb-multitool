@@ -65,4 +65,71 @@ class PartitionRangeMathTest {
             ),
         )
     }
+
+    @Test
+    fun snapPointsIncludeBoundariesFractionsAndSizes() {
+        val points = PartitionRangeMath.snapPoints(
+            availableMib = 4096UL,
+            firstAligned = 2048UL,
+            sectorsPerMib = 2048UL,
+            otherPartitionSizesMib = listOf(500UL),
+        )
+        // Boundaries
+        org.junit.Assert.assertTrue(points.contains(0UL))
+        org.junit.Assert.assertTrue(points.contains(4096UL))
+        // Fractions
+        org.junit.Assert.assertTrue(points.contains(1024UL)) // 25%
+        org.junit.Assert.assertTrue(points.contains(2048UL)) // 50%
+        org.junit.Assert.assertTrue(points.contains(3072UL)) // 75%
+        // Other partition size
+        org.junit.Assert.assertTrue(points.contains(500UL))
+        org.junit.Assert.assertTrue(points.contains(4096UL - 500UL))
+    }
+
+    @Test
+    fun snapPointsIncludeEveryDiskAlignedGibBoundary() {
+        val points = PartitionRangeMath.snapPoints(
+            availableMib = 4096UL,
+            firstAligned = 2048UL, // 1 MiB, so disk GiB boundaries are offset by 1023 MiB
+            sectorsPerMib = 2048UL,
+        )
+        org.junit.Assert.assertTrue(points.contains(1023UL))
+        org.junit.Assert.assertTrue(points.contains(2047UL))
+        org.junit.Assert.assertTrue(points.contains(3071UL))
+    }
+
+    @Test
+    fun relativeSizePointsKeepTheExactPartitionSize() {
+        assertEquals(
+            listOf(1500UL, 500UL),
+            PartitionRangeMath.sizePointsBelow(anchorMib = 2000UL, sizes = listOf(500UL, 1500UL)),
+        )
+        assertEquals(
+            listOf(1500UL, 3500UL),
+            PartitionRangeMath.sizePointsAbove(
+                anchorMib = 1000UL,
+                maxMib = 3500UL,
+                sizes = listOf(500UL, 2500UL, 2600UL),
+            ),
+        )
+        assertEquals(
+            emptyList<ULong>(),
+            PartitionRangeMath.sizePointsAbove(4000UL, 1000UL, listOf(1UL)),
+        )
+    }
+
+    @Test
+    fun snapWithMagnetsSnapsNearSnapPoint() {
+        val snapPoints = listOf(0UL, 1024UL, 2048UL, 4096UL)
+        // Position 1020 is within threshold 10f of 1024
+        assertEquals(1024UL, PartitionRangeMath.snapWithMagnets(1020f, 4096UL, snapPoints, 10f))
+        // Position 1030 is within threshold 10f of 1024
+        assertEquals(1024UL, PartitionRangeMath.snapWithMagnets(1030f, 4096UL, snapPoints, 10f))
+        // Position 1050 is outside threshold 10f, falls back to snapToMib
+        assertEquals(1050UL, PartitionRangeMath.snapWithMagnets(1050f, 4096UL, snapPoints, 10f))
+        // Close to boundary 0
+        assertEquals(0UL, PartitionRangeMath.snapWithMagnets(5f, 4096UL, snapPoints, 10f))
+        // Close to boundary 4096
+        assertEquals(4096UL, PartitionRangeMath.snapWithMagnets(4092f, 4096UL, snapPoints, 10f))
+    }
 }

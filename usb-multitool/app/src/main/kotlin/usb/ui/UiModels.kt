@@ -1920,6 +1920,27 @@ object PartitionRangeMath {
     fun availableMib(availableSectors: ULong, sectorsPerMib: ULong): ULong =
         if (sectorsPerMib == 0UL) 0UL else availableSectors / sectorsPerMib
 
+    /** Partition sizes users commonly aim for, shared by preview and magnets. */
+    val standardSizesMib: List<ULong> = listOf(
+        256UL, 512UL, 1024UL, 2048UL, 4096UL, 8192UL,
+        10240UL, 16384UL, 20480UL, 32768UL, 65536UL, 131072UL,
+    )
+
+    /** Start candidates that keep an exact partition [sizeMib] below [anchorMib]. */
+    fun sizePointsBelow(anchorMib: ULong, sizes: List<ULong>): List<ULong> =
+        sizes.mapNotNull { size ->
+            if (size in 1UL until anchorMib) anchorMib - size else null
+        }.distinct()
+
+    /** End candidates that keep an exact partition [sizeMib] above [anchorMib]. */
+    fun sizePointsAbove(anchorMib: ULong, maxMib: ULong, sizes: List<ULong>): List<ULong> {
+        if (anchorMib > maxMib) return emptyList()
+        val room = maxMib - anchorMib
+        return sizes.mapNotNull { size ->
+            if (size in 1UL..room) anchorMib + size else null
+        }.distinct()
+    }
+
     /** Snap a slider position to a whole MiB, clamped to [0, maxMib]. */
     fun snapToMib(position: Float, maxMib: ULong): ULong {
         if (maxMib == 0UL || position.isNaN()) return 0UL
@@ -1927,6 +1948,94 @@ object PartitionRangeMath {
         if (rounded <= 0L) return 0UL
         val candidate = rounded.toULong()
         return if (candidate > maxMib) maxMib else candidate
+    }
+    /**
+     * Compute candidate magnetic snap points for the slider within [0, availableMib].
+     * Includes region boundaries (0, availableMib), fractions (25%, 50%, 75%),
+     * standard round/power-of-two sizes, 1 GiB multiples, disk-aligned GiB boundaries,
+     * and sizes of existing partitions.
+     */
+    fun snapPoints(
+        availableMib: ULong,
+        firstAligned: ULong = 0UL,
+        sectorsPerMib: ULong = 0UL,
+        otherPartitionSizesMib: List<ULong> = emptyList(),
+    ): List<ULong> {
+        if (availableMib == 0UL) return listOf(0UL)
+        val points = sortedSetOf<ULong>()
+        points.add(0UL)
+        points.add(availableMib)
+
+        if (availableMib >= 4UL) {
+            points.add(availableMib / 4UL)
+            points.add(availableMib / 2UL)
+            points.add(availableMib / 4UL * 3UL)
+        }
+
+        for (sz in standardSizesMib) {
+            if (sz < availableMib) {
+                points.add(sz)
+                points.add(availableMib - sz)
+            }
+        }
+
+        if (availableMib in 1024UL..1048576UL) {
+            val step = if (availableMib > 65536UL) 10240UL else 1024UL
+            var m = step
+            while (m < availableMib) {
+                points.add(m)
+                m += step
+            }
+        }
+
+        if (sectorsPerMib in 1UL..(ULong.MAX_VALUE / 1024UL)) {
+            val gibSectors = sectorsPerMib * 1024UL
+            val startRemainder = firstAligned % gibSectors
+            var nextGibSectors = if (startRemainder == 0UL) gibSectors else gibSectors - startRemainder
+            var nextGibMib = nextGibSectors / sectorsPerMib
+            while (nextGibMib < availableMib) {
+                points.add(nextGibMib)
+                if (nextGibSectors > ULong.MAX_VALUE - gibSectors) break
+                nextGibSectors += gibSectors
+                nextGibMib += 1024UL
+            }
+        }
+
+        for (pSz in otherPartitionSizesMib) {
+            if (pSz in 1UL until availableMib) {
+                points.add(pSz)
+                points.add(availableMib - pSz)
+            }
+        }
+
+        return points.toList()
+    }
+
+    /**
+     * Snap [position] to the nearest magnetic snap point in [snapPoints] if within
+     * [thresholdMib], otherwise fallback to standard [snapToMib].
+     */
+    fun snapWithMagnets(
+        position: Float,
+        maxMib: ULong,
+        snapPoints: List<ULong>,
+        thresholdMib: Float = 0f,
+    ): ULong {
+        val wholeMib = snapToMib(position, maxMib)
+        if (maxMib == 0UL || snapPoints.isEmpty() || thresholdMib <= 0f) {
+            return wholeMib
+        }
+        var bestPoint = wholeMib
+        var bestDist = Float.MAX_VALUE
+        for (pt in snapPoints) {
+            if (pt > maxMib) continue
+            val dist = kotlin.math.abs(position - pt.toFloat())
+            if (dist <= thresholdMib && dist < bestDist) {
+                bestDist = dist
+                bestPoint = pt
+            }
+        }
+        return bestPoint
     }
 
     /**

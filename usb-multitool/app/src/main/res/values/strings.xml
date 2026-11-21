@@ -54,6 +54,13 @@
     <string name="partitions_range_caption">Start %1$d MiB · end %2$d MiB · %3$d MiB</string>
     <string name="partitions_range_ticks_a11y">MiB alignment marks for the free region, thinned on large regions; the labelled ends are the first usable aligned sector and the last selectable sector</string>
     <string name="partitions_range_tick_edge_label">%1$d MiB · LBA %2$d</string>
+    <string name="partitions_create_start_mib">Start, MiB</string>
+    <string name="partitions_create_end_mib">End, MiB</string>
+    <string name="partitions_create_size_mib">Size %1$d MiB</string>
+    <string name="partitions_create_start_error_greater_than_end">Start must be ≤ end</string>
+    <string name="partitions_create_end_error_less_than_start">End must be greater than start</string>
+    <string name="partitions_create_error_out_of_bounds">Must be 0 to %1$d MiB</string>
+    <string name="partitions_create_preview_free">Free</string>
     <string name="partitions_size_sectors">Size in sectors</string>
     <string name="partitions_size_support">Enter a positive sector count that fits the free region.</string>
     <string name="partitions_continue">Continue</string>
