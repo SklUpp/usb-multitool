@@ -31,6 +31,7 @@
 |---|---|
 | [2026-11-14-project-progress.md](superpowers/specs/2026-11-14-project-progress.md) | Таблица срезов, CI-запуски, APK и ограничения проверок |
 | [2026-11-20-code-audit.md](superpowers/specs/2026-11-20-code-audit.md) | Аудит 2026-11-20: находки P1-P3, что исправлено и что осталось |
+| [2026-11-21-ui-audit-findings.md](superpowers/specs/2026-11-21-ui-audit-findings.md) | UI-аудит 2026-11-21: исправленное, оставшиеся дефекты и конфликты требований |
 
 ## Правила ведения
 
