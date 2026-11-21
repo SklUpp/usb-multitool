@@ -398,9 +398,6 @@ fun PartitionsScreen(
                         }
                     }
                     Column(
-                        modifier = Modifier
-                            .heightIn(max = 240.dp)
-                            .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         InfoHint(

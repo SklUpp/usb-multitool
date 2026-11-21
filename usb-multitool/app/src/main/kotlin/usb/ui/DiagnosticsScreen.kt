@@ -172,8 +172,6 @@ fun DiagnosticsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = folderStatusColor,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 if (!backupFolderReady) {
                     // Folder choice lives in Settings; create actions stay blocked until a
@@ -244,6 +242,7 @@ fun DiagnosticsScreen(
                 }
                 OutlinedButton(
                     onClick = onPickRestoreFolder,
+                    enabled = state.actionsEnabled,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp),
@@ -265,11 +264,9 @@ fun DiagnosticsScreen(
                         R.string.diagnostics_image_named,
                         state.rescueImageInspection?.displayName
                             ?: state.rescueImageUri?.substringAfterLast('/').orEmpty(),
-                    ),
+                    ) + "\n" + state.rescueImageUri.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 InspectionText(
                     rescueImageInspectionLines(
@@ -283,11 +280,9 @@ fun DiagnosticsScreen(
                         R.string.diagnostics_map_named,
                         state.rescueMapInspection?.displayName
                             ?: state.rescueMapUri?.substringAfterLast('/').orEmpty(),
-                    ),
+                    ) + "\n" + state.rescueMapUri.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 InspectionText(
                     rescueMapInspectionLines(
@@ -323,6 +318,7 @@ fun DiagnosticsScreen(
                 }
                 OutlinedButton(
                     onClick = onPickBackup,
+                    enabled = state.actionsEnabled,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp),
@@ -344,11 +340,9 @@ fun DiagnosticsScreen(
                         R.string.diagnostics_backup_file_named,
                         state.backupInspection?.displayName
                             ?: state.backupUri?.substringAfterLast('/').orEmpty(),
-                    ),
+                    ) + "\n" + state.backupUri.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 InspectionText(
                     gptBackupInspectionLines(

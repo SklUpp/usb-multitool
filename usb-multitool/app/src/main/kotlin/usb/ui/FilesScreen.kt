@@ -387,17 +387,19 @@ fun FilesScreen(
                 modifier = Modifier.weight(1f),
             )
         }
-        FloatingActionButton(
-            onClick = { if (canWrite) onRequestBatchUpload() },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .semantics { contentDescription = uploadDescription },
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Add,
-                contentDescription = null,
-            )
+        if (canWrite) {
+            FloatingActionButton(
+                onClick = onRequestBatchUpload,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .semantics { contentDescription = uploadDescription },
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = null,
+                )
+            }
         }
     }
     actionEntry?.let { entry ->
@@ -1020,7 +1022,7 @@ private fun FilesPickScreen(
                 pickRows.isEmpty() -> item(key = "pick-empty") {
                     val emptyText =
                         if (mode.target == FilesPickTarget.Folder &&
-                            state.files.any { !it.isDirectory }
+                            target.files.any { !it.isDirectory }
                         ) {
                             R.string.files_empty_subfolders
                         } else {
@@ -1417,8 +1419,8 @@ internal fun PartitionChoiceRow(
                         role = Role.Button,
                         onClick = { expanded = !expanded },
                     )
-                    .semantics { stateDescription = partitionState }
-                    .alpha(if (enabled) 1f else 0.38f)
+                    .semantics { if (rowEnabled) stateDescription = partitionState }
+                    .alpha(if (rowEnabled) 1f else 0.38f)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1453,8 +1455,6 @@ internal fun PartitionChoiceRow(
                                 fontFeatureSettings = "tnum",
                             ),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                     selected?.let { sizeOf(it) }?.let { size ->
@@ -1549,8 +1549,6 @@ internal fun PartitionChoiceRow(
                                             text = it,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
                                         )
                                     }
                                 }

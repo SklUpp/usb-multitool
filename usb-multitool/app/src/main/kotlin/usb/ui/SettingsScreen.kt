@@ -206,6 +206,13 @@ private fun SettingsBackups(state: AppUiState, onPickBackupFolder: () -> Unit) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+            if (state.backupFolderUri != null && !state.backupFolderUsable) {
+                Text(
+                    text = stringResource(R.string.msg_backup_folder_permission_lost),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             SettingRow(
                 label = stringResource(
                     if (state.backupFolderUri == null) R.string.diagnostics_pick_folder
