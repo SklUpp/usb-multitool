@@ -6,6 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.fs.FilesystemId
 import usb.ventoy.VentoyControlSetting
+import usb.ventoy.SettingStatus
+import usb.ventoy.VentoySetting
 import usb.ventoy.VentoyGlobalSettings
 import usb.ventoy.VentoySettingsSource
 import usb.service.OperationTokenGenerator
@@ -637,8 +639,13 @@ class VentoySettingsUiTest {
             ).state
         assertNull(afterInstall.ventoyGlobalSettings)
         assertEquals(4L, afterInstall.ventoyCacheEpoch)
-        // dropVentoyStickCaches keeps pins; partition list still shows pre-install geometry
-        // until refreshPartitions. Simulate the refreshed table with a moved part1.
+        // dropVentoyStickCaches clears geometry pins so the next Default load rebinds.
+        assertNull(afterInstall.ventoySettingsSourcePartitionId)
+        assertNull(afterInstall.ventoySettingsSourceStartLba)
+        assertNull(afterInstall.ventoySettingsSourceSectorCount)
+        // Install Completed on Default clears pending (snapshot already on stick).
+        assertEquals(emptyList<VentoyControlSetting>(), afterInstall.pendingVentoyControls)
+        // Simulate the refreshed table with a moved part1 after install.
         val refreshed =
             afterInstall.copy(
                 partitions =
@@ -712,6 +719,9 @@ class VentoySettingsUiTest {
             afterUpdate.ventoyGlobalSettings,
         )
         assertEquals(2L, afterUpdate.ventoyCacheEpoch)
+        assertNull(afterUpdate.ventoySettingsSourcePartitionId)
+        assertNull(afterUpdate.ventoySettingsSourceStartLba)
+        assertNull(afterUpdate.ventoySettingsSourceSectorCount)
         val load = UiReducer.reduce(afterUpdate, UiIntent.LoadVentoyGlobalSettings)
         assertTrue(load.effects.any { it is UiEffect.LoadVentoyGlobalSettings })
         assertTrue(load.state.ventoySettingsSourceLoading)
@@ -758,5 +768,256 @@ class VentoySettingsUiTest {
         assertEquals(VentoySettingsSource.Default, replaced.ventoySettingsSource)
         assertNull(replaced.ventoySettingsSourceIdentity)
         assertNull(replaced.ventoySettingsSourceAttachGeneration)
+    }
+
+    @Test
+    fun emptyEditorCommitKeepsStagedKnownKeysSoWriteStaysEnabled() {
+        val staged =
+            UiReducer.reduce(
+                ready(),
+                UiIntent.StageVentoyControl("VTOY_WIN11_BYPASS_CHECK", "1"),
+            ).state
+        val committed =
+            UiReducer.reduce(
+                staged,
+                UiIntent.CommitVentoyControls(
+                    removedKeys = emptySet(),
+                    settings = emptyList(),
+                ),
+            ).state
+        assertEquals(
+            "empty Apply must merge, not wipe staged known keys",
+            listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1")),
+            committed.pendingVentoyControls,
+        )
+        val apply = UiReducer.reduce(committed, UiIntent.RequestApplyVentoyControls)
+        assertTrue(apply.effects.any { it is UiEffect.ApplyVentoyControls })
+    }
+
+    @Test
+    fun editorCommitMergesCustomDraftsOverExistingStagedRows() {
+        val staged =
+            UiReducer.reduce(
+                ready(pending = listOf(VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1"))),
+                UiIntent.StageVentoyControl("KEEP_ME", "yes"),
+            ).state
+        val committed =
+            UiReducer.reduce(
+                staged,
+                UiIntent.CommitVentoyControls(
+                    removedKeys = emptySet(),
+                    settings = listOf(VentoyControlSetting("CUSTOM_KEY", "new")),
+                    discardedKeys = setOf("KEEP_ME"),
+                ),
+            ).state
+        assertEquals(
+            listOf(
+                VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1"),
+                VentoyControlSetting("CUSTOM_KEY", "new"),
+            ),
+            committed.pendingVentoyControls,
+        )
+    }
+
+    @Test
+    fun discardingStagedCustomUnknownKeepsOthersAndCancelRestoresBaseline() {
+        // Mirrors: stage custom on a Document source, Save, reopen, delete custom row, Save.
+        // discardedKeys erase the pending-only row; known staged rows and other customs stay.
+        val baseline =
+            listOf(
+                VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1"),
+                VentoyControlSetting("KEEP_OTHER", "yes"),
+                VentoyControlSetting("DROP_ME", "gone"),
+            )
+        val documentSource =
+            ready(pending = baseline).copy(
+                ventoySettingsSource = VentoySettingsSource.Document("content://ventoy/custom.json"),
+                ventoyGlobalSettings = VentoyGlobalSettings.Present(emptyList()),
+            )
+        val afterDiscard =
+            UiReducer.reduce(
+                documentSource,
+                UiIntent.CommitVentoyControls(
+                    removedKeys = emptySet(),
+                    settings = emptyList(),
+                    discardedKeys = setOf("DROP_ME"),
+                ),
+            ).state
+        assertEquals(
+            listOf(
+                VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1"),
+                VentoyControlSetting("KEEP_OTHER", "yes"),
+            ),
+            afterDiscard.pendingVentoyControls,
+        )
+        // Cancel restores the pre-edit baseline without writing the stick.
+        val restored =
+            UiReducer.reduce(
+                afterDiscard,
+                UiIntent.RestoreVentoyControls(baseline),
+            ).state
+        assertEquals(baseline, restored.pendingVentoyControls)
+        // Default path: discard alone is a real change (no silent no-changes ignore).
+        val defaultDiscard =
+            UiReducer.reduce(
+                ready(pending = baseline).copy(
+                    ventoySettingsSource = VentoySettingsSource.Default,
+                    ventoyGlobalSettings = VentoyGlobalSettings.Empty,
+                ),
+                UiIntent.CommitVentoyControls(
+                    removedKeys = emptySet(),
+                    settings = emptyList(),
+                    discardedKeys = setOf("DROP_ME"),
+                ),
+            ).state
+        assertEquals(
+            listOf(
+                VentoyControlSetting("VTOY_WIN11_BYPASS_CHECK", "1"),
+                VentoyControlSetting("KEEP_OTHER", "yes"),
+            ),
+            defaultDiscard.pendingVentoyControls,
+        )
+        // Import-original semantics: deleting a key that exists on the source file stages a
+        // removal (null), it is not discardedKeys (pending-only erase).
+        val withImportOriginal =
+            ready().copy(
+                ventoySettingsSource = VentoySettingsSource.Document("content://ventoy/custom.json"),
+                ventoyGlobalSettings =
+                    VentoyGlobalSettings.Present(
+                        listOf(
+                            VentoySetting(
+                                key = "IMPORT_KEY",
+                                rawValue = "from-file",
+                                status = SettingStatus.UnknownKey,
+                            ),
+                        ),
+                    ),
+                pendingVentoyControls = listOf(VentoyControlSetting("STAGED_ONLY", "temp")),
+            )
+        val removeImported =
+            UiReducer.reduce(
+                withImportOriginal,
+                UiIntent.CommitVentoyControls(
+                    removedKeys = setOf("IMPORT_KEY"),
+                    settings = emptyList(),
+                    discardedKeys = setOf("STAGED_ONLY"),
+                ),
+            ).state
+        assertEquals(
+            listOf(VentoyControlSetting("IMPORT_KEY", null)),
+            removeImported.pendingVentoyControls,
+        )
+    }
+
+    @Test
+    fun defaultApplyWithStalePinsRebindsToLivePart1() {
+        val stale =
+            ready(pending = controls).copy(
+                ventoySettingsSource = VentoySettingsSource.Default,
+                ventoyGlobalSettings = VentoyGlobalSettings.Empty,
+                ventoySettingsSourcePartitionId = "1",
+                ventoySettingsSourceStartLba = 2048uL,
+                ventoySettingsSourceSectorCount = 4096uL,
+                partitions =
+                    listOf(
+                        PartitionTab(
+                            id = "1",
+                            name = "Ventoy",
+                            readOnly = false,
+                            startLba = 8192uL,
+                            sectorCount = 2_000_000uL,
+                            filesystemId = FilesystemId.FAT,
+                        ),
+                    ),
+            )
+        val apply = UiReducer.reduce(stale, UiIntent.RequestApplyVentoyControls)
+        val effect = apply.effects.filterIsInstance<UiEffect.ApplyVentoyControls>().single()
+        assertEquals(8192uL, effect.partitionStartLba)
+        assertEquals(2_000_000uL, effect.partitionSectorCount)
+        assertNull(apply.state.statusMessage)
+    }
+
+    @Test
+    fun loadedSettingsAnswerCanRefreshGeometryPins() {
+        val loading =
+            ready().copy(
+                ventoyGlobalSettingsRequest = 3L,
+                ventoySettingsSourceLoading = true,
+                ventoySettingsSourcePartitionId = "1",
+                ventoySettingsSourceStartLba = 2048uL,
+                ventoySettingsSourceSectorCount = 4096uL,
+            )
+        val loaded =
+            UiReducer.reduce(
+                loading,
+                UiIntent.VentoyGlobalSettingsLoaded(
+                    VentoyGlobalSettings.Empty,
+                    epoch = loading.ventoyCacheEpoch,
+                    requestToken = 3L,
+                    source = VentoySettingsSource.Default,
+                    partitionId = "1",
+                    partitionStartLba = 8192uL,
+                    partitionSectorCount = 2_000_000uL,
+                ),
+            ).state
+        assertEquals(8192uL, loaded.ventoySettingsSourceStartLba)
+        assertEquals(2_000_000uL, loaded.ventoySettingsSourceSectorCount)
+        assertEquals(false, loaded.ventoySettingsSourceLoading)
+    }
+
+    @Test
+    fun refreshControlKeyCatalogEmitsNetworkFetchOutsideUsbClaim() {
+        val reduced = UiReducer.reduce(ready(), UiIntent.RefreshVentoyControlKeyCatalog)
+        assertTrue(reduced.state.ventoyControlKeyCatalogLoading)
+        assertEquals(1L, reduced.state.ventoyControlKeyCatalogRequest)
+        assertEquals(
+            listOf(UiEffect.FetchVentoyControlKeyCatalog(requestToken = 1L)),
+            reduced.effects,
+        )
+        val failed =
+            UiReducer.reduce(
+                reduced.state.copy(ventoyControlKeyCatalog = null),
+                UiIntent.SetVentoyControlKeyCatalog(
+                    requestToken = 1L,
+                    error = "offline",
+                ),
+            ).state
+        assertEquals("offline", failed.ventoyControlKeyCatalogError)
+        assertNull(failed.ventoyControlKeyCatalog)
+        assertEquals(false, failed.ventoyControlKeyCatalogLoading)
+    }
+
+    @Test
+    fun catalogNetworkFailureKeepsPreviousKeys() {
+        val previous =
+            usb.ventoy.VentoyControlKeyCatalog(
+                ventoyRelease = "1.1.07",
+                upstreamRef = "ventoy/Ventoy@v1.1.07:Plugson/www/plugson_control.html",
+                upstreamSha256 = "a".repeat(64),
+                fetchedAtEpochMs = 1L,
+                keys = listOf(
+                    usb.ventoy.VentoyControlKeyDef(
+                        key = "VTOY_MENU_TIMEOUT",
+                        kind = usb.ventoy.VentoyControlKeyKind.INTEGER,
+                    ),
+                ),
+            )
+        val loading =
+            ready().copy(
+                ventoyControlKeyCatalog = previous,
+                ventoyControlKeyCatalogRequest = 2L,
+                ventoyControlKeyCatalogLoading = true,
+            )
+        val failed =
+            UiReducer.reduce(
+                loading,
+                UiIntent.SetVentoyControlKeyCatalog(
+                    requestToken = 2L,
+                    error = "timeout",
+                ),
+            ).state
+        assertEquals(previous, failed.ventoyControlKeyCatalog)
+        assertEquals("timeout", failed.ventoyControlKeyCatalogError)
+        assertEquals(false, failed.ventoyControlKeyCatalogLoading)
     }
 }

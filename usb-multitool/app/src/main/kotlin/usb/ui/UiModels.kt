@@ -17,6 +17,7 @@ import usb.ventoy.LayoutPartition
 import usb.ventoy.UnreadableProblem
 import usb.ventoy.VentoyControlSetting
 import usb.ventoy.VentoyGlobalSettings
+import usb.ventoy.VentoyControlKeyCatalog
 import usb.ventoy.VentoyReleaseProvenance
 import usb.ventoy.VentoyReleaseSource
 import usb.ventoy.VentoyReleaseStoreState
@@ -1669,6 +1670,15 @@ data class AppUiState(
     val ventoyDownloadInFlight: Boolean = false,
     /** Last download failure, kept until the next attempt; never replaces the release fact. */
     val ventoyDownloadError: String? = null,
+    /**
+     * Official Plugson control-key catalog from a manual refresh. Null until the user
+     * taps refresh; network failure keeps the previous value and sets
+     * [ventoyControlKeyCatalogError] instead of pretending the list is empty.
+     */
+    val ventoyControlKeyCatalog: VentoyControlKeyCatalog? = null,
+    val ventoyControlKeyCatalogError: String? = null,
+    val ventoyControlKeyCatalogRequest: Long = 0L,
+    val ventoyControlKeyCatalogLoading: Boolean = false,
 ) {
     companion object { const val LOG_MAX_LINES = 200 }
     /** Verified downloaded bytes, only when the store fact is trustworthy. */

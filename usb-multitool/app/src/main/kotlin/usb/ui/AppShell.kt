@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -369,9 +371,12 @@ fun AppShell(
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
-            // targetSdk 36 draws edge to edge: the header, the tab content and the log
-            // layer must stay inside the status/navigation bars and any display cutout.
-            contentWindowInsets = WindowInsets.safeDrawing,
+            // Horizontal + top from safeDrawing only. Bottom comes from bottomBar /
+            // NavigationBar measurement so content PaddingValues.bottom is not short when
+            // safeDrawing-bottom is treated as already consumed.
+            contentWindowInsets = WindowInsets.safeDrawing.only(
+                WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
+            ),
             snackbarHost = { SnackbarHost(shellSnackbar) },
             bottomBar = {
                 Column(
@@ -430,6 +435,7 @@ fun AppShell(
             Box(
                 modifier = Modifier
                     .padding(padding)
+                    .consumeWindowInsets(padding)
                     .fillMaxSize(),
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
@@ -680,7 +686,15 @@ fun AppShell(
             ?.let { candidate ->
                 AlertDialog(
                     onDismissRequest = { onIntent(UiIntent.DismissLinkOverwrite) },
+                    modifier = Modifier.border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outline,
+                        RoundedCornerShape(28.dp),
+                    ),
                     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    shape = RoundedCornerShape(28.dp),
                     title = { Text(stringResource(R.string.status_overwrite_title)) },
                     text = {
                         Text(stringResource(R.string.status_link_exists, candidate.substringAfterLast('/')))
@@ -726,7 +740,14 @@ fun AppShell(
             }
             AlertDialog(
                 onDismissRequest = { onIntent(UiIntent.DismissConfirmation) },
+                modifier = Modifier.border(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline,
+                    RoundedCornerShape(28.dp),
+                ),
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 shape = RoundedCornerShape(28.dp),
                 title = {
                     Text(
@@ -993,8 +1014,12 @@ TopAppBar(
                     DropdownMenu(
                         expanded = moreOpen,
                         onDismissRequest = { moreOpen = false },
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         shadowElevation = 3.dp,
+                        border = BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline,
+                        ),
                     ) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.settings_title_screen)) },
@@ -1135,6 +1160,7 @@ private fun StatusTone.contentColor(): Color =
     when (this) {
         StatusTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
         StatusTone.Success -> MaterialTheme.colorScheme.primary
+        // Partial / unverified: tertiary (amber), not error — error is reserved for failures.
         StatusTone.Warning -> MaterialTheme.colorScheme.tertiary
         StatusTone.Error -> MaterialTheme.colorScheme.error
     }
@@ -1370,28 +1396,51 @@ private fun StatusDialog(
     var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
     val closeLabel = stringResource(R.string.shell_status_close)
     val techLines = state.operationLogLines
+    // Name + compact status/output share ≤2 lines. Prefer real progress while running;
+    // otherwise the localized readback / terminal result. Never invent a percent.
     val compactStatus = facts?.let { fact ->
-        val progress = listOfNotNull(fact.state, fact.progress)
+        val progressLine = listOfNotNull(fact.state, fact.progress)
             .joinToString(FACT_SEPARATOR)
             .takeIf { it.isNotEmpty() }
-            ?.let { it to fact.tone }
-        // Prefer the localized readback verdict in the second line when present;
-        // otherwise show the terminal operation result with its own tone.
-        val output = (fact.readback ?: fact.result)?.let { text ->
-            text to if (fact.readback != null) fact.readbackTone else fact.resultTone
+        val output = fact.readback ?: fact.result
+        val statusLine = when {
+            running && progressLine != null -> progressLine
+            output != null -> output
+            progressLine != null -> progressLine
+            else -> null
         }
-        listOfNotNull(progress, output).take(2)
+        val statusTone = when {
+            running && progressLine != null -> fact.tone
+            fact.readback != null -> fact.readbackTone
+            fact.result != null -> fact.resultTone
+            else -> fact.tone
+        }
+        buildList {
+            add(fact.name to StatusTone.Neutral)
+            statusLine?.let { add(it to statusTone) }
+        }.take(2)
     } ?: state.statusMessage?.let {
         listOf(it.localized() to StatusTone.Neutral)
     }.orEmpty()
+    // High = M3 AlertDialog default; border + strong outline supply the missing edge
+    // (AlertDialog has 0 shadow / no platform dim per ScoutAllPopups).
+    val dialogContainer = MaterialTheme.colorScheme.surfaceContainerHigh
+    val dialogTitleColor = MaterialTheme.colorScheme.onSurface
+    val dialogTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val dialogShape = RoundedCornerShape(28.dp)
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, dialogShape),
+        containerColor = dialogContainer,
+        titleContentColor = dialogTitleColor,
+        textContentColor = dialogTextColor,
+        shape = dialogShape,
         title = {
             Text(
                 text = stringResource(R.string.status_dialog_title),
                 modifier = Modifier.semantics { heading() },
                 style = MaterialTheme.typography.titleMedium,
+                color = dialogTitleColor,
             )
         },
         text = {
@@ -1401,35 +1450,34 @@ private fun StatusDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                val name = facts?.name
-                if (name != null || compactStatus.isNotEmpty()) {
+                if (compactStatus.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        name?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        compactStatus.forEach { (text, tone) ->
+                        compactStatus.forEachIndexed { index, (text, tone) ->
                             Text(
                                 text = text,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = tone.contentColor(),
+                                color = if (index == 0 && facts != null) {
+                                    dialogTitleColor
+                                } else {
+                                    tone.contentColor()
+                                },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
                 }
-                // Temporary operation journal only — shared journal renderer, no device summary.
+                // Temporary operation journal — same JournalLine renderer as the full log.
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     shape = RoundedCornerShape(8.dp),
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
+                    border = BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outline,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(
@@ -1444,7 +1492,7 @@ private fun StatusDialog(
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontFamily = FontFamily.Monospace,
                                 ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = dialogTextColor,
                             )
                         } else {
                             techLines.forEach { line ->
@@ -1478,7 +1526,11 @@ private fun StatusDialog(
     cancelRequest?.let { request ->
         AlertDialog(
             onDismissRequest = { cancelRequest = null },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, dialogShape),
+            containerColor = dialogContainer,
+            titleContentColor = dialogTitleColor,
+            textContentColor = dialogTextColor,
+            shape = dialogShape,
             title = { Text(stringResource(R.string.cancel_operation_title)) },
             text = { Text(stringResource(R.string.cancel_operation_body, request.name)) },
             confirmButton = {
@@ -1713,7 +1765,15 @@ private fun LogScreen(
     if (confirmCopy) {
         AlertDialog(
             onDismissRequest = { confirmCopy = false },
+            modifier = Modifier.border(
+                1.dp,
+                MaterialTheme.colorScheme.outline,
+                RoundedCornerShape(28.dp),
+            ),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = RoundedCornerShape(28.dp),
             title = { Text(stringResource(R.string.log_copy_all)) },
             text = {
                 Column(
@@ -1781,8 +1841,12 @@ private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) 
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 3.dp,
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline,
+            ),
         ) {
             AppLanguage.entries.forEach { option ->
                 DropdownMenuItem(
@@ -1844,6 +1908,7 @@ private fun darkDesignColors() = darkColorScheme(
     primary = Color(0xFFB4C5FF), onPrimary = Color(0xFF0E1E4A),
     primaryContainer = Color(0xFF25252B), onPrimaryContainer = Color(0xFFE6E6EA),
     secondaryContainer = Color(0xFF25252B), onSecondaryContainer = Color(0xFFE6E6EA),
+    tertiary = Color(0xFFE8C48A), onTertiary = Color(0xFF402D05),
     tertiaryContainer = Color(0xFF25252B), onTertiaryContainer = Color(0xFFE6E6EA),
     background = Color.Black, onBackground = Color(0xFFE6E6EA),
     surface = Color.Black, onSurface = Color(0xFFE6E6EA),
@@ -1853,7 +1918,9 @@ private fun darkDesignColors() = darkColorScheme(
     surfaceContainer = Color(0xFF121216),
     surfaceContainerHigh = Color(0xFF1D1D22),
     surfaceContainerHighest = Color(0xFF292930),
-    outline = Color(0xFF3A3A42), outlineVariant = Color(0xFF303038),
+    // ~3.0:1 vs High so dialog/menu borders are visible on AMOLED (old #3A3A42 was 1.49:1).
+    outline = Color(0xFF686870), outlineVariant = Color(0xFF303038),
+    scrim = Color.Black,
     error = Color(0xFFFFB4AB), onError = Color(0xFF690005),
     errorContainer = Color(0xFF93000A), onErrorContainer = Color(0xFFFFDAD6),
     inverseSurface = Color(0xFFE6E6EA), inverseOnSurface = Color.Black,
@@ -1863,18 +1930,25 @@ private fun lightDesignColors() = lightColorScheme(
     primary = Color(0xFF2D55C8), onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFE9E9EF), onPrimaryContainer = Color(0xFF1A1A1E),
     secondaryContainer = Color(0xFFE9E9EF), onSecondaryContainer = Color(0xFF1A1A1E),
-    tertiaryContainer = Color(0xFFE9E9EF), onTertiaryContainer = Color(0xFF1A1A1E),
+    tertiary = Color(0xFF8A5B12), onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFFFE0A8), onTertiaryContainer = Color(0xFF2B1700),
     background = Color(0xFFF7F7FA), onBackground = Color(0xFF1A1A1E),
     surface = Color(0xFFF7F7FA), onSurface = Color(0xFF1A1A1E),
     surfaceVariant = Color(0xFFE9E9EF), onSurfaceVariant = Color(0xFF5B5B66),
+    // Explicit Low/Lowest kill the lavender M3 baseline; dialogs stay High/Container.
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF2F2F6),
     surfaceContainer = Color(0xFFFFFFFF),
     surfaceContainerHigh = Color(0xFFE9E9EF),
     surfaceContainerHighest = Color(0xFFDCDCE4),
-    outline = Color(0xFFD3D3DB), outlineVariant = Color(0xFFD3D3DB),
+    // ~3.7:1 vs High — visible border; outlineVariant stays soft for inner dividers.
+    outline = Color(0xFF767680), outlineVariant = Color(0xFFC6C6D0),
+    scrim = Color.Black,
     error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFFF9DEDC), onErrorContainer = Color(0xFF410E0B),
     inverseSurface = Color(0xFF1A1A1E), inverseOnSurface = Color(0xFFF7F7FA),
 )
+
 
 private val AppShapes = Shapes(
     extraSmall = RoundedCornerShape(12.dp),
@@ -2039,8 +2113,12 @@ internal fun <T> CompactChoice(
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 3.dp,
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline,
+            ),
         ) {
             options.forEach { (value, text) ->
                 DropdownMenuItem(
@@ -2221,7 +2299,13 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
         )
     }
     if (showInfo) {
-        ModalBottomSheet(onDismissRequest = { showInfo = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showInfo = false },
+            // High (not Low/Container): kills lavender baseline and lifts sheet off bg.
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            tonalElevation = 0.dp,
+        ) {
             // Single scroll for title + body + close, so the close action is never
             // clipped on short screens or at large font scales; one close only.
             Column(

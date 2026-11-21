@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Permanent status block: Статус: &lt;операция&gt; — &lt;состояние&gt;. -->
+    <!-- Permanent status block one-liner: Статус: &lt;операция&gt; — &lt;состояние&gt;. -->
     <string name="shell_status_headline">Статус: %1$s — %2$s</string>
+    <!-- Окно статуса: строка 1 — имя операции; строка 2 — компактный реальный статус/вывод. -->
 </resources>

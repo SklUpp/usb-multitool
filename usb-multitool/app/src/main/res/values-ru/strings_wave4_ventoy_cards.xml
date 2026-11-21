@@ -18,8 +18,16 @@
     <string name="wave4_add_param_confirm">Добавить</string>
     <string name="wave4_popular_keys">Популярные ключи</string>
     <string name="wave4_popular_menu_timeout">Таймаут меню (VTOY_MENU_TIMEOUT)</string>
-    <string name="wave4_popular_theme">Путь темы (theme)</string>
     <string name="wave4_popular_boot_mode">Режим меню загрузки (VTOY_DEFAULT_MENU_MODE)</string>
+    <string name="wave4_catalog_keys_title">Официальные control-ключи</string>
+    <string name="wave4_catalog_refresh">Обновить список ключей</string>
+    <string name="wave4_catalog_refreshing">Обновление…</string>
+    <string name="wave4_catalog_idle">Нажмите «Обновить», чтобы загрузить официальные VTOY control-ключи. Ручной ввод остаётся доступен офлайн.</string>
+    <string name="wave4_catalog_empty">Официальная страница не вернула control-ключей.</string>
+    <string name="wave4_catalog_loaded">%1$d ключей из Ventoy %2$s. Выбор заполняет поле; «Записать» по-прежнему пишет изменения.</string>
+    <string name="wave4_catalog_error">Не удалось обновить ключи: %1$s</string>
+    <string name="wave4_catalog_kept_previous">Предыдущий список сохранён (%1$d ключей).</string>
+    <string name="wave4_catalog_manual_hint">Или введите любой ключ вручную (офлайн).</string>
     <string name="wave4_settings_help_body">**control** — значения из ventoy.json как записаны.\n\n**Известные ключи** дают явные варианты; остальные редактируются как key/value и сохраняются.\n\n**Изменения** подготавливаются и пишутся кнопкой «Записать», либо после подтверждённой установки/обновления Ventoy. Обновление файла со стика — снова откройте редактор или выберите файл после внешнего изменения.\n\n**Стандартный путь** `/ventoy/ventoy.json` показан приглушённо; свой путь — обычным цветом. ✕ возвращает стандартный файл.\n\n**Partial** — Ventoy установлен, но запись настроек не удалась; повтор доступен через «Записать».</string>
     <string name="wave4_unattend_help_body">**Файл ответов** лежит на разделе данных Ventoy; Windows Setup читает его при установке.\n\n**Включённые блоки** только записываются; непонятные приложению элементы сохраняются.\n\n**Шаблон** — существующий .xml на флешке или импортированный с телефона. ✕ сбрасывает выбор. Обновить файл после правки снаружи — выберите его снова.\n\n**Создать XML** открывает генератор; «Выбрать…» выбирает или заменяет шаблон.</string>
 </resources>

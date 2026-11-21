@@ -2008,6 +2008,8 @@ class MainViewModel(
 
             is UiEffect.WriteAutounattendRaw -> writeAutounattendRaw(effect)
             is UiEffect.CheckVentoyUpstream -> checkVentoyUpstream(effect.requestToken)
+            is UiEffect.FetchVentoyControlKeyCatalog ->
+                fetchVentoyControlKeyCatalog(effect.requestToken)
             is UiEffect.DownloadVentoyRelease ->
                 downloadVentoyRelease(effect.requestToken, effect.upstreamVersion)
             is UiEffect.LoadVentoyGlobalSettings ->
@@ -5125,6 +5127,50 @@ class MainViewModel(
     }
 
     /**
+     * Manual Plugson control-key catalog refresh. Runs on Dispatchers.IO and never opens
+     * or claims the USB device. Failure posts an error without clearing a previous catalog;
+     * success never writes ventoy.json — the user still stages and taps Write.
+     */
+    private fun fetchVentoyControlKeyCatalog(requestToken: Long) {
+        scope.launch {
+            val outcome = runCatching {
+                withContext(Dispatchers.IO) {
+                    usb.ventoy.VentoyControlKeyCatalogClient.fetch()
+                }
+            }
+            outcome.fold(
+                onSuccess = { result ->
+                    when (result) {
+                        is usb.ventoy.VentoyControlKeyCatalogResult.Ok ->
+                            onIntent(
+                                UiIntent.SetVentoyControlKeyCatalog(
+                                    requestToken = requestToken,
+                                    catalog = result.catalog,
+                                ),
+                            )
+                        is usb.ventoy.VentoyControlKeyCatalogResult.Failed ->
+                            onIntent(
+                                UiIntent.SetVentoyControlKeyCatalog(
+                                    requestToken = requestToken,
+                                    error = result.message,
+                                ),
+                            )
+                    }
+                },
+                onFailure = { failure ->
+                    onIntent(
+                        UiIntent.SetVentoyControlKeyCatalog(
+                            requestToken = requestToken,
+                            error = failure.message ?: failure.javaClass.simpleName,
+                        ),
+                    )
+                },
+            )
+        }
+    }
+
+
+    /**
      * Downloads and verifies a release without opening the USB device. The verified bytes
      * are published in app-private storage before the UI records the release, so a restart
      * can reuse exactly what was checked. Failure leaves the previous release untouched.
@@ -5312,6 +5358,7 @@ class MainViewModel(
                 } ?: throw AttachmentChangedException()
                 val disk = raw.disk
                 try {
+                    val probe = VentoyLayout.probe(disk)
                     val snapshot =
                         if (source is VentoySettingsSource.UsbFile) {
                             VentoySetup.readGlobalSettingsSnapshotAt(disk, source.path)
@@ -5330,6 +5377,9 @@ class MainViewModel(
                                 epoch = expectedEpoch,
                                 requestToken = requestToken,
                                 source = pinnedSource,
+                                partitionId = if (probe != null) "1" else null,
+                                partitionStartLba = probe?.part1StartLba,
+                                partitionSectorCount = probe?.part1SectorCount,
                             ),
                         )
                     }

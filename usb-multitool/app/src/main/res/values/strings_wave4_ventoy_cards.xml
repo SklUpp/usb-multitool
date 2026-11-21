@@ -18,8 +18,16 @@
     <string name="wave4_add_param_confirm">Add</string>
     <string name="wave4_popular_keys">Popular keys</string>
     <string name="wave4_popular_menu_timeout">Menu timeout (VTOY_MENU_TIMEOUT)</string>
-    <string name="wave4_popular_theme">Theme path (theme)</string>
     <string name="wave4_popular_boot_mode">Boot menu mode (VTOY_DEFAULT_MENU_MODE)</string>
+    <string name="wave4_catalog_keys_title">Official control keys</string>
+    <string name="wave4_catalog_refresh">Refresh key list</string>
+    <string name="wave4_catalog_refreshing">Refreshing…</string>
+    <string name="wave4_catalog_idle">Tap Refresh to load official VTOY control keys. Manual key entry stays available offline.</string>
+    <string name="wave4_catalog_empty">Official page returned no control keys.</string>
+    <string name="wave4_catalog_loaded">%1$d keys from Ventoy %2$s. Selecting a key fills the field; Write applies the change.</string>
+    <string name="wave4_catalog_error">Could not refresh keys: %1$s</string>
+    <string name="wave4_catalog_kept_previous">Previous list kept (%1$d keys).</string>
+    <string name="wave4_catalog_manual_hint">Or type any key manually (offline).</string>
     <string name="wave4_settings_help_body">**control** values come from ventoy.json exactly as written.\n\n**Known keys** offer explicit choices; other keys stay editable as key/value and are preserved.\n\n**Edits** are staged and written with Write, or after a confirmed Ventoy install/update. Update refreshes the selected file from the stick — open the editor or re-pick the file after an external change.\n\n**Default path** `/ventoy/ventoy.json` is dimmed; a custom path uses normal ink. The ✕ resets to the standard file.\n\n**Partial** means Ventoy is installed but the settings write failed; retry stays available via Write.</string>
     <string name="wave4_unattend_help_body">**Answer file** lives on the Ventoy data partition; Windows Setup reads it during installation.\n\n**Enabled blocks** only are written; elements this app does not understand are preserved.\n\n**Template** is an existing .xml chosen on the stick or imported from the phone. ✕ clears the selection. Refresh the file by choosing it again after an external edit.\n\n**Create XML** opens the generator; Choose picks or replaces the template.</string>
 </resources>

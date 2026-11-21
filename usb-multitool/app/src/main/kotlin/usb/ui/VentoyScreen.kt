@@ -8,6 +8,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -62,6 +65,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.isFinite
 import usb.multitool.R
 import usb.ventoy.FolderReadProblem
@@ -793,7 +798,7 @@ private fun WindowsImageBlock(
     if (imageSourcePrompt) {
         ModalBottomSheet(
             onDismissRequest = { imageSourcePrompt = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         ) {
             Text(
                 text = chooseDescription,
@@ -945,7 +950,7 @@ internal fun ImportFolderDialog(
         }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
     ) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -997,6 +1002,10 @@ internal fun ImportFolderDialog(
 /**
  * Existing target: replacing it is destructive, and a template that brings layout or
  * destructive sections needs a second explicit tick. Nothing here deletes the phone copy.
+ *
+ * Shared with Files/Autounattend. AlertDialog containerColor can equal background with no
+ * visible edge; this uses an outlined Surface so light/dark both show a real MD3 border
+ * (theme strengthens outline). Body scrolls at fontScale 2.0.
  */
 @Composable
 internal fun ImportOverwriteDialog(
@@ -1008,107 +1017,142 @@ internal fun ImportOverwriteDialog(
     var overwriteAck by remember(proposal) { mutableStateOf(false) }
     var markersAck by remember(proposal) { mutableStateOf(proposal.templateMarkers.isEmpty()) }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onCancel,
-        title = { Text(stringResource(R.string.import_overwrite_title)) },
-        text = {
+        properties = DialogProperties(usePlatformDefaultWidth = true),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            tonalElevation = 0.dp,
+            shadowElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Column(
                 modifier = Modifier
-                    .heightIn(max = 400.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.import_overwrite_body),
-                    style = MaterialTheme.typography.bodySmall,
+                    text = stringResource(R.string.import_overwrite_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
-                InfoRow(
-                    stringResource(R.string.import_target_label),
-                    if (proposal.directory == "/") {
-                        "/${proposal.targetName}"
-                    } else {
-                        "${proposal.directory}/${proposal.targetName}"
-                    },
-                    monospaceValue = true,
-                )
-                proposal.sizeBytes?.let { size ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Cap body so fontScale 2.0 still scrolls instead of clipping checkboxes.
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.import_overwrite_body),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     InfoRow(
-                        stringResource(R.string.import_size_label),
-                        DeviceIdentity.formatCapacity(size.coerceAtLeast(0L).toULong()),
+                        stringResource(R.string.import_target_label),
+                        if (proposal.directory == "/") {
+                            "/${proposal.targetName}"
+                        } else {
+                            "${proposal.directory}/${proposal.targetName}"
+                        },
                         monospaceValue = true,
                     )
-                }
-                if (proposal.templateMarkers.isNotEmpty()) {
-                    Text(
-                        text = stringResource(R.string.import_markers_title),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    proposal.templateMarkers.forEach { marker ->
+                    proposal.sizeBytes?.let { size ->
+                        InfoRow(
+                            stringResource(R.string.import_size_label),
+                            DeviceIdentity.formatCapacity(size.coerceAtLeast(0L).toULong()),
+                            monospaceValue = true,
+                        )
+                    }
+                    if (proposal.templateMarkers.isNotEmpty()) {
                         Text(
-                            text = marker,
-                            style = MaterialTheme.typography.labelSmall,
+                            text = stringResource(R.string.import_markers_title),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.error,
                         )
+                        proposal.templateMarkers.forEach { marker ->
+                            Text(
+                                text = marker,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .toggleable(
+                                    value = markersAck,
+                                    enabled = actionsEnabled,
+                                    role = Role.Checkbox,
+                                    onValueChange = { markersAck = it },
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Checkbox(
+                                checked = markersAck,
+                                onCheckedChange = null,
+                                enabled = actionsEnabled,
+                            )
+                            Text(
+                                text = stringResource(R.string.import_markers_ack),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                             .toggleable(
-                                value = markersAck,
+                                value = overwriteAck,
                                 enabled = actionsEnabled,
                                 role = Role.Checkbox,
-                                onValueChange = { markersAck = it },
+                                onValueChange = { overwriteAck = it },
                             ),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Checkbox(
-                            checked = markersAck,
+                            checked = overwriteAck,
                             onCheckedChange = null,
                             enabled = actionsEnabled,
                         )
                         Text(
-                            text = stringResource(R.string.import_markers_ack),
+                            text = stringResource(R.string.import_overwrite_ack),
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
                     }
                 }
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .toggleable(
-                            value = overwriteAck,
-                            enabled = actionsEnabled,
-                            role = Role.Checkbox,
-                            onValueChange = { overwriteAck = it },
-                        ),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Checkbox(
-                        checked = overwriteAck,
-                        onCheckedChange = null,
-                        enabled = actionsEnabled,
-                    )
-                    Text(
-                        text = stringResource(R.string.import_overwrite_ack),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
+                    TextButton(
+                        onClick = onCancel,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                    TextButton(
+                        onClick = onReplace,
+                        enabled = actionsEnabled && overwriteAck && markersAck,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(stringResource(R.string.import_overwrite_action))
+                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onReplace,
-                enabled = actionsEnabled && overwriteAck && markersAck,
-            ) { Text(stringResource(R.string.import_overwrite_action)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) }
-        },
-    )
+        }
+    }
 }

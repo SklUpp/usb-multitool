@@ -493,6 +493,10 @@ sealed class UiIntent {
         val requestToken: Long = 0L,
         /** Echoes the read source; a result for another file is stale. */
         val source: VentoySettingsSource = VentoySettingsSource.Default,
+        /** Live data-partition geometry from the host read; null keeps existing pins. */
+        val partitionId: String? = null,
+        val partitionStartLba: ULong? = null,
+        val partitionSectorCount: ULong? = null,
     ) : UiIntent()
     /** Only catalog-known keys and validated values. null value removes the key. */
     data class StageVentoyControl(val key: String, val value: String?) : UiIntent()
@@ -504,14 +508,31 @@ sealed class UiIntent {
         val removedKeys: Set<String>,
         val settings: List<VentoyControlSetting>,
         val duplicateKeys: Set<String> = emptySet(),
+        /**
+         * Pending-only keys dropped in the editor (no on-stick original). Unlike
+         * [removedKeys], these are erased from staging rather than staged as removals.
+         */
+        val discardedKeys: Set<String> = emptySet(),
     ) : UiIntent()
     data class CommitAndApplyVentoyControls(
         val removedKeys: Set<String>,
         val settings: List<VentoyControlSetting>,
         val duplicateKeys: Set<String> = emptySet(),
+        val discardedKeys: Set<String> = emptySet(),
     ) : UiIntent()
     /** Legacy direct apply path retained for retry/partial operation callers. */
     data object RequestApplyVentoyControls : UiIntent()
+    /** Manual Plugson control-key catalog refresh; never auto-runs and never writes ventoy.json. */
+    data object RefreshVentoyControlKeyCatalog : UiIntent()
+    /**
+     * Answer to [RefreshVentoyControlKeyCatalog]. An older [requestToken] is stale. Failure
+     * keeps the previous catalog (network error ≠ empty list).
+     */
+    data class SetVentoyControlKeyCatalog(
+        val requestToken: Long,
+        val catalog: usb.ventoy.VentoyControlKeyCatalog? = null,
+        val error: String? = null,
+    ) : UiIntent()
     data object CheckVentoyUpstream : UiIntent()
     /**
      * Answer to [CheckVentoyUpstream]. An older [requestToken] is stale; the check is
@@ -1082,6 +1103,12 @@ sealed interface UiEffect {
         /** Upstream latest; the host picks it only when this build pins it. */
         val upstreamVersion: String? = null,
     ) : UiEffect
+
+    /**
+     * HTTPS fetch of the official Plugson control-key page. Host must run this on
+     * Dispatchers.IO outside any USB claim/fencing; failure is not an empty catalog.
+     */
+    data class FetchVentoyControlKeyCatalog(val requestToken: Long) : UiEffect
 
     data class LoadVentoyGlobalSettings(
         val requestToken: Long,
@@ -3918,23 +3945,83 @@ object UiReducer {
                 if (intent.duplicateKeys.isNotEmpty()) {
                     ReduceResult(state.withStatus(UiMessage.Raw("Cannot edit duplicate Ventoy keys safely: ${intent.duplicateKeys.joinToString()}")))
                 } else {
-                    val merged = intent.removedKeys.map { VentoyControlSetting(it, null) } + intent.settings
-                    VentoyControlCatalog.problem(merged)?.let { problem ->
+                    mergeCommittedVentoyControls(
+                        state,
+                        intent.removedKeys,
+                        intent.settings,
+                        intent.discardedKeys,
+                    )?.let { problem ->
                         ReduceResult(state.withStatus(UiMessage.Raw(problem)))
                     } ?: VentoyTransitions.requestApplyVentoyControls(
-                        state.copy(pendingVentoyControls = merged).withStatus(null),
+                        state.copy(
+                            pendingVentoyControls = mergeVentoyControlPending(
+                                state.pendingVentoyControls,
+                                intent.removedKeys,
+                                intent.settings,
+                                intent.discardedKeys,
+                            ),
+                        ).withStatus(null),
                     )
                 }
             }
             is UiIntent.CommitVentoyControls -> {
-                val merged = intent.removedKeys.map { VentoyControlSetting(it, null) } + intent.settings
-                VentoyControlCatalog.problem(merged)?.let { problem ->
-                    ReduceResult(state.withStatus(UiMessage.Raw(problem)))
-                } ?: ReduceResult(state.copy(pendingVentoyControls = merged).withStatus(null))
+                if (intent.duplicateKeys.isNotEmpty()) {
+                    ReduceResult(state.withStatus(UiMessage.Raw("Cannot edit duplicate Ventoy keys safely: ${intent.duplicateKeys.joinToString()}")))
+                } else {
+                    mergeCommittedVentoyControls(
+                        state,
+                        intent.removedKeys,
+                        intent.settings,
+                        intent.discardedKeys,
+                    )?.let { problem ->
+                        ReduceResult(state.withStatus(UiMessage.Raw(problem)))
+                    } ?: ReduceResult(
+                        state.copy(
+                            pendingVentoyControls = mergeVentoyControlPending(
+                                state.pendingVentoyControls,
+                                intent.removedKeys,
+                                intent.settings,
+                                intent.discardedKeys,
+                            ),
+                        ).withStatus(null),
+                    )
+                }
             }
-             is UiIntent.RestoreVentoyControls ->
-                 ReduceResult(state.copy(pendingVentoyControls = intent.settings).withStatus(null))
+            is UiIntent.RestoreVentoyControls ->
+                ReduceResult(state.copy(pendingVentoyControls = intent.settings).withStatus(null))
             UiIntent.RequestApplyVentoyControls -> VentoyTransitions.requestApplyVentoyControls(state)
+
+            UiIntent.RefreshVentoyControlKeyCatalog -> {
+                if (state.ventoyControlKeyCatalogLoading) {
+                    ReduceResult(state)
+                } else {
+                    val token = state.ventoyControlKeyCatalogRequest + 1L
+                    ReduceResult(
+                        state.copy(
+                            ventoyControlKeyCatalogRequest = token,
+                            ventoyControlKeyCatalogLoading = true,
+                            // Keep prior catalog; failure must not look like empty keys.
+                            ventoyControlKeyCatalogError = null,
+                        ),
+                        effects = listOf(UiEffect.FetchVentoyControlKeyCatalog(requestToken = token)),
+                    )
+                }
+            }
+
+            is UiIntent.SetVentoyControlKeyCatalog ->
+                if (intent.requestToken != state.ventoyControlKeyCatalogRequest) {
+                    ReduceResult(state)
+                } else {
+                    ReduceResult(
+                        state.copy(
+                            ventoyControlKeyCatalog = intent.catalog ?: state.ventoyControlKeyCatalog,
+                            ventoyControlKeyCatalogError =
+                                intent.error?.trim()?.takeIf { it.isNotEmpty() },
+                            ventoyControlKeyCatalogLoading = false,
+                        ),
+                    )
+                }
+
 
             UiIntent.CheckVentoyUpstream -> {
                 val token = state.ventoyUpstreamRequest + 1L
@@ -5514,5 +5601,48 @@ object UiReducer {
         val sectorSize = state.diskSectorSize
         if (capacity == 0UL || sectorSize <= 0) return null
         return capacity / sectorSize.toULong()
+    }
+
+    /**
+     * Validate editor-committed rows before they merge into [AppUiState.pendingVentoyControls].
+     * Returns a problem string, or null when the merge is safe.
+     */
+    private fun mergeCommittedVentoyControls(
+        state: AppUiState,
+        removedKeys: Set<String>,
+        settings: List<VentoyControlSetting>,
+        discardedKeys: Set<String> = emptySet(),
+    ): String? {
+        val merged = mergeVentoyControlPending(
+            state.pendingVentoyControls,
+            removedKeys,
+            settings,
+            discardedKeys,
+        )
+        return VentoyControlCatalog.problem(merged)
+    }
+
+    /**
+     * Merge editor drafts into existing staged controls instead of replacing the whole list.
+     * Known keys staged from the card (StageVentoyControl) stay unless the editor renames,
+     * removes, or overrides them. Empty Apply therefore no longer wipes pending known keys.
+     * [discardedKeys] erase pending-only rows (never written as stick removals).
+     */
+    private fun mergeVentoyControlPending(
+        existing: List<VentoyControlSetting>,
+        removedKeys: Set<String>,
+        settings: List<VentoyControlSetting>,
+        discardedKeys: Set<String> = emptySet(),
+    ): List<VentoyControlSetting> {
+        val staged = LinkedHashMap<String, VentoyControlSetting>()
+        existing.forEach { staged[it.key] = it }
+        discardedKeys.forEach { staged.remove(it) }
+        removedKeys.forEach { key ->
+            staged[key] = VentoyControlSetting(key, null)
+        }
+        settings.forEach { setting ->
+            staged[setting.key] = setting
+        }
+        return staged.values.toList()
     }
 }

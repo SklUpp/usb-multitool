@@ -152,6 +152,35 @@ class ShellLogBehaviorTest {
         assertTrue("acknowledgement must say journal cleared: $russian", russian.contains("очищен"))
     }
 
+
+    @Test
+    fun statusHeadlineUsesOneLineOperationDashState() {
+        // Req 3: permanent block is "Status: <operation> — <state>" / RU equivalent.
+        val english = string(
+            "app/src/main/res/values/strings_status_refresh.xml",
+            "shell_status_headline",
+        )
+        assertEquals("Status: %1\$s — %2\$s", english)
+        val russian = string(
+            "app/src/main/res/values-ru/strings_status_refresh.xml",
+            "shell_status_headline",
+        )
+        assertEquals("Статус: %1\$s — %2\$s", russian)
+    }
+
+    @Test
+    fun statusDialogTitleIsStatusOnly() {
+        // Req 4: dialog title is just Status / Статус; operation name is body, not title.
+        assertEquals(
+            "Status",
+            string("app/src/main/res/values/strings_wave3_shell.xml", "status_dialog_title"),
+        )
+        assertEquals(
+            "Статус",
+            string("app/src/main/res/values-ru/strings_wave3_shell.xml", "status_dialog_title"),
+        )
+    }
+
     @Test
     fun copyAllIsAnExplicitLabeledAction() {
         assertTrue(string("app/src/main/res/values/strings.xml", "log_copy_all").isNotBlank())

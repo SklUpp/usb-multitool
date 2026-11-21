@@ -1,6 +1,7 @@
 package usb.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import android.content.res.Resources
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBar
@@ -521,7 +523,7 @@ internal fun AutounattendSection(
     if (templateSourcePrompt) {
         ModalBottomSheet(
             onDismissRequest = { templateSourcePrompt = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         ) {
             Text(
                 text = stringResource(R.string.windows_template_choose_source),
@@ -870,6 +872,11 @@ internal fun GlobalSettingsCard(
                     editorOpen = false
                     editorBaseline = null
                 },
+                onApplied = {
+                    // Staged successfully; keep pending and drop the cancel baseline.
+                    editorOpen = false
+                    editorBaseline = null
+                },
             )
         }
     }
@@ -910,6 +917,7 @@ private fun GlobalSettingsEditorDialog(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     onCancel: () -> Unit,
+    onApplied: () -> Unit,
 ) {
     val entries = (state.ventoyGlobalSettings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
     var applyProblem by remember { mutableStateOf<String?>(null) }
@@ -961,6 +969,20 @@ private fun GlobalSettingsEditorDialog(
             .filter { it.value == null && VentoyControlCatalog.known(it.key) != null }
             .map { it.key }
             .toSet()
+        // Pending-only custom rows (originalKey=null when seeded) that the user deleted from
+        // the editor must be erased from staging, not resurrected by merge and not written as
+        // stick removals (they never existed on the source file).
+        val draftKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet()
+        val discardedPendingUnknown = state.pendingVentoyControls
+            .asSequence()
+            .filter { pending ->
+                pending.value != null &&
+                    VentoyControlCatalog.known(pending.key) == null &&
+                    pending.key !in draftKeys &&
+                    entries.none { it.key == pending.key }
+            }
+            .map { it.key }
+            .toSet()
         val settings = rawSettings + knownSettings
         val duplicateKeys = duplicateOriginalCounts.keys.filter { key ->
             val expectedDraftCount = duplicateOriginalCounts[key]!! -
@@ -986,16 +1008,25 @@ private fun GlobalSettingsEditorDialog(
         if (validation != null) {
             applyProblem = validation
         } else if (state.ventoySettingsSource.isDefaultPath() &&
-            settings.isEmpty() && renamedOrDeleted.isEmpty() && knownRemoved.isEmpty()
+            settings.isEmpty() &&
+            renamedOrDeleted.isEmpty() &&
+            knownRemoved.isEmpty() &&
+            discardedPendingUnknown.isEmpty()
         ) {
             applyProblem = context.resources.getString(R.string.settings_problem_no_changes)
         } else {
             applyProblem = null
-            onIntent(UiIntent.CommitAndApplyVentoyControls(
-                removedKeys = renamedOrDeleted + knownRemoved,
-                settings = settings,
-                duplicateKeys = duplicateKeys,
-            ))
+            // Stage only: card Write / RequestApplyVentoyControls persists to the stick.
+            // CommitAndApply here emptied pending and left Write permanently inactive.
+            onIntent(
+                UiIntent.CommitVentoyControls(
+                    removedKeys = renamedOrDeleted + knownRemoved,
+                    settings = settings,
+                    duplicateKeys = duplicateKeys,
+                    discardedKeys = discardedPendingUnknown,
+                ),
+            )
+            onApplied()
         }
     }
     val closeLabel = stringResource(R.string.settings_cancel)
@@ -1003,7 +1034,9 @@ private fun GlobalSettingsEditorDialog(
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            shadowElevation = 6.dp,
         ) {
             Scaffold(
                 topBar = {
@@ -1025,7 +1058,7 @@ private fun GlobalSettingsEditorDialog(
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            containerColor = MaterialTheme.colorScheme.surface,
                         ),
                     )
                 },
@@ -1096,9 +1129,11 @@ private fun GlobalSettingsEditorDialog(
     }
     if (addParamOpen) {
         AddParameterDialog(
+            state = state,
             actionsEnabled = state.actionsEnabled,
             existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
                 VentoyControlCatalog.known.map { it.key }.toSet(),
+            onIntent = onIntent,
             onAdd = { key, value ->
                 drafts.add(EditorPairDraft("new:${drafts.size}:$key", null, key, "", value))
                 addParamOpen = false
@@ -1181,7 +1216,9 @@ private fun AutounattendRawEditorDialog(
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            shadowElevation = 6.dp,
         ) {
             Scaffold(
                 topBar = {
@@ -1199,7 +1236,7 @@ private fun AutounattendRawEditorDialog(
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            containerColor = MaterialTheme.colorScheme.surface,
                         ),
                     )
                 },
@@ -1365,7 +1402,7 @@ private fun SettingsSourceDialog(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
     ) {
         Text(
             text = stringResource(R.string.settings_source_choose),
@@ -1671,61 +1708,76 @@ private fun ConfigFileStatusRow(
     pickLabel: String? = null,
 ) {
     val resetLabel = stringResource(R.string.wave4_reset_file)
-    val statusText = when {
-        pathLabel == null -> stringResource(R.string.wave4_file_not_selected)
-        sizeLabel.isNullOrBlank() -> pathLabel
-        else -> stringResource(R.string.wave4_status_path_size, pathLabel, sizeLabel)
-    }
+    val chooseLabel = pickLabel ?: stringResource(R.string.wave4_choose_ellipsis)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = statusText,
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontFamily = FontFamily.Monospace,
-            ),
-            color = if (dimmedPath || pathLabel == null) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+        Column(
             modifier = Modifier.weight(1f),
-        )
-        if (showChanged) {
-            Badge(
-                text = stringResource(R.string.wave4_changed_badge),
-                container = MaterialTheme.colorScheme.primaryContainer,
-                content = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            if (pathLabel == null) {
+                // Avoid repeating "file not selected"; Choose is the affordance.
+                sizeLabel?.takeIf { it.isNotBlank() }?.let { status ->
+                    Text(
+                        text = status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else {
+                Text(
+                    text = if (sizeLabel.isNullOrBlank()) {
+                        pathLabel
+                    } else {
+                        stringResource(R.string.wave4_status_path_size, pathLabel, sizeLabel)
+                    },
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = if (dimmedPath) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (showChanged) {
+                Badge(
+                    text = stringResource(R.string.wave4_changed_badge),
+                    container = MaterialTheme.colorScheme.primaryContainer,
+                    content = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
         }
         if (onPick != null) {
-            IconButton(
+            OutlinedButton(
                 onClick = onPick,
                 enabled = pickEnabled,
                 modifier = Modifier
-                    .size(48.dp)
-                    .semantics {
-                        if (pickLabel != null) contentDescription = pickLabel
-                    },
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = chooseLabel },
             ) {
-                GlyphIcon(Glyph.File, size = 20.dp)
+                Text(stringResource(R.string.wave4_choose_ellipsis))
             }
         }
         if (onReset != null) {
-            IconButton(
+            FilledTonalButton(
                 onClick = onReset,
                 enabled = resetEnabled,
                 modifier = Modifier
-                    .size(48.dp)
+                    .heightIn(min = 48.dp)
                     .semantics { contentDescription = resetLabel },
             ) {
-                GlyphIcon(Glyph.Close, size = 20.dp)
+                GlyphIcon(Glyph.Close, size = 18.dp)
             }
         }
     }
@@ -1734,15 +1786,17 @@ private fun ConfigFileStatusRow(
 private data class PopularVentoyKey(val key: String, val labelRes: Int)
 
 private val POPULAR_VENTOY_KEYS = listOf(
+    // Only control-section VTOY_* shortcuts. Top-level keys such as theme are not control.
     PopularVentoyKey("VTOY_MENU_TIMEOUT", R.string.wave4_popular_menu_timeout),
-    PopularVentoyKey("theme", R.string.wave4_popular_theme),
     PopularVentoyKey("VTOY_DEFAULT_MENU_MODE", R.string.wave4_popular_boot_mode),
 )
 
 @Composable
 private fun AddParameterDialog(
+    state: AppUiState,
     actionsEnabled: Boolean,
     existingKeys: Set<String>,
+    onIntent: (UiIntent) -> Unit,
     onAdd: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1750,13 +1804,18 @@ private fun AddParameterDialog(
     var value by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
     val resources = LocalContext.current.resources
+    val catalog = state.ventoyControlKeyCatalog
+    val catalogKeys = catalog?.keys.orEmpty()
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp,
         title = { Text(stringResource(R.string.wave4_add_param_title)) },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 420.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1769,14 +1828,8 @@ private fun AddParameterDialog(
                     val taken = popular.key in existingKeys
                     FilledTonalButton(
                         onClick = {
+                            // Fill the key only; never invent default values (timeout/mode).
                             key = popular.key
-                            if (value.isEmpty()) {
-                                value = when (popular.key) {
-                                    "VTOY_MENU_TIMEOUT" -> "10"
-                                    "VTOY_DEFAULT_MENU_MODE" -> "0"
-                                    else -> value
-                                }
-                            }
                             problem = null
                         },
                         enabled = actionsEnabled && !taken,
@@ -1791,6 +1844,105 @@ private fun AddParameterDialog(
                         )
                     }
                 }
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.wave4_catalog_keys_title),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        onClick = { onIntent(UiIntent.RefreshVentoyControlKeyCatalog) },
+                        enabled = !state.ventoyControlKeyCatalogLoading,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(
+                            if (state.ventoyControlKeyCatalogLoading) {
+                                stringResource(R.string.wave4_catalog_refreshing)
+                            } else {
+                                stringResource(R.string.wave4_catalog_refresh)
+                            },
+                        )
+                    }
+                }
+                when {
+                    state.ventoyControlKeyCatalogError != null -> {
+                        Text(
+                            text = stringResource(
+                                R.string.wave4_catalog_error,
+                                state.ventoyControlKeyCatalogError!!,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        if (catalogKeys.isNotEmpty()) {
+                            Text(
+                                text = stringResource(
+                                    R.string.wave4_catalog_kept_previous,
+                                    catalogKeys.size,
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    catalog == null -> {
+                        Text(
+                            text = stringResource(R.string.wave4_catalog_idle),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    catalogKeys.isEmpty() -> {
+                        Text(
+                            text = stringResource(R.string.wave4_catalog_empty),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> {
+                        Text(
+                            text = stringResource(
+                                R.string.wave4_catalog_loaded,
+                                catalogKeys.size,
+                                catalog.ventoyRelease,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        catalogKeys.forEach { entry ->
+                            val taken = entry.key in existingKeys
+                            OutlinedButton(
+                                onClick = {
+                                    key = entry.key
+                                    problem = null
+                                },
+                                enabled = actionsEnabled && !taken,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp),
+                            ) {
+                                Text(
+                                    text = entry.key,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider()
+                Text(
+                    text = stringResource(R.string.wave4_catalog_manual_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 OutlinedTextField(
                     value = key,
                     onValueChange = {

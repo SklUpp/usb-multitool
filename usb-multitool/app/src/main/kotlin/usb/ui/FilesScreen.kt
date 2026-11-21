@@ -1,17 +1,14 @@
 package usb.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
@@ -20,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -63,7 +61,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -90,10 +87,7 @@ import usb.remainingSeconds
 internal fun AnimatedContentTransitionScope<DirectoryContentTarget>.directoryContentTransform(
     reducedMotion: Boolean,
 ): ContentTransform {
-    if (reducedMotion) return EnterTransition.None togetherWith ExitTransition.None
-    return fadeIn(tween(180))
-        .togetherWith(fadeOut(tween(120)))
-        .using(SizeTransform(clip = true))
+    return EnterTransition.None togetherWith ExitTransition.None
 }
 
 /** Stable AnimatedContent target: path drives motion, pins make stale content distinct. */
@@ -199,14 +193,6 @@ fun FilesScreen(
         state.device?.identity,
         state.device?.attachGeneration,
     ) { mutableStateOf<FileEntry?>(null) }
-    val baseContext = LocalContext.current
-    val reducedMotion = runCatching {
-        android.provider.Settings.Global.getFloat(
-            baseContext.contentResolver,
-            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
-        ) == 0f
-    }.getOrDefault(false)
 
 
     val selected = state.selectedPartition()
@@ -313,7 +299,6 @@ fun FilesScreen(
                 canWrite = canWrite,
                 selection = selection,
                 selectedNames = selectedNames,
-                reducedMotion = reducedMotion,
                 onToggleSelect = { entry ->
                     selectedNames = toggleSelectedName(selectedNames, entry.name)
                 },
@@ -451,42 +436,42 @@ fun FilesScreen(
 
     if (showNewFolderDialog) {
         AlertDialog(
-            onDismissRequest = {
-                showNewFolderDialog = false
-                newFolderName = ""
-            },
+            onDismissRequest = { showNewFolderDialog = false; newFolderName = "" },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
+            iconContentColor = MaterialTheme.colorScheme.primary,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            tonalElevation = 6.dp,
             title = { Text(stringResource(R.string.files_create_folder)) },
             text = {
-                OutlinedTextField(
-                    value = newFolderName,
-                    onValueChange = { newFolderName = it },
-                    label = { Text(stringResource(R.string.files_folder_name)) },
-                    singleLine = true,
-                )
+                Column(
+                    modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()).imePadding(),
+                ) {
+                    OutlinedTextField(
+                        value = newFolderName,
+                        onValueChange = { newFolderName = it },
+                        label = { Text(stringResource(R.string.files_folder_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         val name = newFolderName.trim()
-                        if (name.isNotEmpty()) {
-                            onIntent(UiIntent.CreateFolder(name))
-                        }
+                        if (name.isNotEmpty()) onIntent(UiIntent.CreateFolder(name))
                         showNewFolderDialog = false
                         newFolderName = ""
                     },
                     enabled = newFolderName.isNotBlank(),
-                ) {
-                    Text(stringResource(R.string.action_create))
-                }
+                ) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(
-                    onClick = {
-                        showNewFolderDialog = false
-                        newFolderName = ""
-                    },
-                ) {
-                    Text(stringResource(R.string.action_cancel))
+                TextButton(onClick = { showNewFolderDialog = false; newFolderName = "" }) {
+                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
         )
@@ -495,38 +480,41 @@ fun FilesScreen(
     renameTarget?.let { target ->
         val binding = renameBinding
         AlertDialog(
-            onDismissRequest = {
-                renameTarget = null
-                renameBinding = null
-            },
+            onDismissRequest = { renameTarget = null; renameBinding = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
+            iconContentColor = MaterialTheme.colorScheme.primary,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            tonalElevation = 6.dp,
             title = { Text(stringResource(R.string.files_rename_title)) },
             text = {
-                OutlinedTextField(
-                    value = renameName,
-                    onValueChange = { renameName = it },
-                    label = { Text(stringResource(R.string.files_new_name)) },
-                    singleLine = true,
-                )
+                Column(
+                    modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()).imePadding(),
+                ) {
+                    OutlinedTextField(
+                        value = renameName,
+                        onValueChange = { renameName = it },
+                        label = { Text(stringResource(R.string.files_new_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (binding != null) {
-                            onIntent(
-                                UiIntent.RenameEntry(target.name, renameName.trim(), binding),
-                            )
-                        }
+                        if (binding != null) onIntent(UiIntent.RenameEntry(target.name, renameName.trim(), binding))
                         renameTarget = null
                         renameBinding = null
                     },
                     enabled = binding != null && renameName.trim().isNotEmpty(),
-                ) {
-                    Text(stringResource(R.string.action_confirm))
-                }
+                ) { Text(stringResource(R.string.action_confirm)) }
             },
             dismissButton = {
                 TextButton(onClick = { renameTarget = null; renameBinding = null }) {
-                    Text(stringResource(R.string.action_cancel))
+                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
         )
@@ -537,41 +525,33 @@ fun FilesScreen(
         val count = pinned.items.size
         val singleName = pinned.items.singleOrNull()?.name.orEmpty()
         val confirmText = when {
-            hasDirectory && count == 1 ->
-                stringResource(R.string.files_delete_folder_confirm, singleName)
-            hasDirectory ->
-                stringResource(R.string.files_delete_recursive_confirm, count)
-            count == 1 ->
-                stringResource(R.string.files_delete_confirm, singleName)
-            else ->
-                pluralStringResource(R.plurals.files_delete_files_confirm, count, count)
+            hasDirectory && count == 1 -> stringResource(R.string.files_delete_folder_confirm, singleName)
+            hasDirectory -> stringResource(R.string.files_delete_recursive_confirm, count)
+            count == 1 -> stringResource(R.string.files_delete_confirm, singleName)
+            else -> pluralStringResource(R.plurals.files_delete_files_confirm, count, count)
         }
         AlertDialog(
             onDismissRequest = { pendingDeleteSelection = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
+            iconContentColor = MaterialTheme.colorScheme.error,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            tonalElevation = 6.dp,
             title = { Text(stringResource(R.string.action_delete)) },
-            text = { Text(confirmText) },
+            text = { Text(confirmText, modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (pinned.matches(state)) {
-                            onIntent(UiIntent.DeleteBatch(pinned))
-                        } else {
-                            onIntent(
-                                UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
-                            )
-                        }
-                        selectedNames = emptySet()
-                        pendingDeleteSelection = null
-                    },
-                ) {
-                    Text(stringResource(R.string.action_delete))
-                }
+                TextButton(onClick = {
+                    if (pinned.matches(state)) onIntent(UiIntent.DeleteBatch(pinned))
+                    else onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+                    selectedNames = emptySet()
+                    pendingDeleteSelection = null
+                }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { pendingDeleteSelection = null },
-                ) {
-                    Text(stringResource(R.string.action_cancel))
+                TextButton(onClick = { pendingDeleteSelection = null }) {
+                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
         )
@@ -584,53 +564,40 @@ fun FilesScreen(
             onDismissRequest = {
                 onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Cancel))
             },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
+            iconContentColor = MaterialTheme.colorScheme.primary,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            tonalElevation = 6.dp,
             title = { Text(stringResource(R.string.import_overwrite_title)) },
             text = {
                 Text(
                     buildString {
                         append(stringResource(R.string.import_overwrite_body))
                         append('\n')
-                        // pathLabel is already the full volume path including the leaf name.
                         append(filesBatchConflictPathDisplay(conflict))
                     },
+                    modifier = Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()),
                 )
             },
             confirmButton = {
-                Row {
-                    TextButton(
-                        onClick = {
-                            onIntent(
-                                UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Skip),
-                            )
-                        },
-                    ) {
-                        Text(stringResource(R.string.action_skip))
-                    }
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = {
+                        onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Skip))
+                    }) { Text(stringResource(R.string.action_skip), color = MaterialTheme.colorScheme.primary) }
                     if (replaceEnabled) {
-                        TextButton(
-                            onClick = {
-                                onIntent(
-                                    UiIntent.ResolveFilesBatchConflict(
-                                        FilesConflictDecision.ReplaceFile,
-                                    ),
-                                )
-                            },
-                        ) {
-                            Text(stringResource(R.string.import_overwrite_action))
-                        }
+                        TextButton(onClick = {
+                            onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.ReplaceFile))
+                        }) { Text(stringResource(R.string.import_overwrite_action), color = MaterialTheme.colorScheme.primary) }
                     }
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = {
-                        onIntent(
-                            UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Cancel),
-                        )
-                    },
-                ) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+                TextButton(onClick = {
+                    onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Cancel))
+                }) { Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             },
         )
     }
@@ -755,14 +722,6 @@ private fun FilesPickScreen(
         }
     // Equality, not name: a replacement entry with the same name but new size is stale.
     val selectedPickEntry = selectedPickState?.value?.takeIf { selected -> selected in entries }
-    val pickContext = LocalContext.current
-    val pickReducedMotion = runCatching {
-        android.provider.Settings.Global.getFloat(
-            pickContext.contentResolver,
-            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
-        ) == 0f
-    }.getOrDefault(false)
     LaunchedEffect(entries, selectedPickState?.value, listingUsable) {
         val pickerState = selectedPickState
         if (pickerState != null &&
@@ -782,7 +741,7 @@ private fun FilesPickScreen(
                 if (mode.target == FilesPickTarget.Folder) state.files.filter { it.isDirectory } else state.files,
             ),
             transitionSpec = {
-                directoryContentTransform(pickReducedMotion)
+                directoryContentTransform(reducedMotion = true)
             },
             label = "pick-folder",
             // One slot per directory/partition/stick pin: refresh keeps scroll.
@@ -806,7 +765,7 @@ private fun FilesPickScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             // Rhythm only; system/nav-bar inset stays in AppShell (pickOpen must mirror journal).
             contentPadding = PaddingValues(bottom = 16.dp),
-            userScrollEnabled = !transition.isRunning,
+            userScrollEnabled = true
         ) {
             item(key = "pick-partition") {
                 PartitionChoiceRow(
@@ -815,7 +774,7 @@ private fun FilesPickScreen(
                     writeAccess = partition?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown,
                     usageOf = state::partitionUsageSnapshot,
                     phaseOf = state::partitionUsagePhase,
-                    enabled = canAct && !transition.isRunning,
+                    enabled = canAct && !state.isRunning,
                     sizeOf = { partitionSizeLabel(state, it) },
                     onSelect = { onIntent(UiIntent.SelectFilesPickPartition(it)) },
                 )
@@ -828,7 +787,7 @@ private fun FilesPickScreen(
                     trailing = {
                         IconButton(
                             onClick = { onIntent(UiIntent.NavigateUp) },
-                            enabled = canAct && target.path != "/" && !transition.isRunning,
+                            enabled = canAct && target.path != "/" && !state.isRunning,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics { contentDescription = upDescription },
@@ -860,7 +819,7 @@ private fun FilesPickScreen(
                         if (mode.target == FilesPickTarget.Folder) {
                             OutlinedButton(
                                 onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
-                                enabled = canAct && listingUsable && !transition.isRunning,
+                                enabled = canAct && listingUsable && !state.isRunning,
                             ) {
                                 Text(stringResource(R.string.import_folder_use))
                             }
@@ -874,7 +833,7 @@ private fun FilesPickScreen(
                                 },
                                 enabled =
                                         mode.partitionId == "1" &&
-                                    canAct && !transition.isRunning &&
+                                    canAct && !state.isRunning &&
                                         state.isoImportSafInFlight == null &&
                                         state.isoImportUsbInFlight == null &&
                                         state.pendingIsoImport == null,
@@ -964,7 +923,7 @@ private fun FilesPickScreen(
                         if (copying.state == OperationState.Running && copying.cancelable) {
                             TextButton(
                                 onClick = { onIntent(UiIntent.CancelOperation(copying.token)) },
-                                enabled = !transition.isRunning,
+                            enabled = copying.cancelable,
                             ) {
                                 Text(stringResource(R.string.action_cancel))
                             }
@@ -987,7 +946,7 @@ private fun FilesPickScreen(
                         )
                         TextButton(
                             onClick = { onIntent(UiIntent.CancelWindowsIsoImport) },
-                            enabled = !transition.isRunning,
+                            enabled = true
                         ) {
                             Text(stringResource(R.string.action_cancel))
                         }
@@ -1036,7 +995,7 @@ private fun FilesPickScreen(
                                     // The reducer revalidates the name against live files.
                                     onIntent(UiIntent.ConfirmFilesPickFile(entry.name))
                                 },
-                                enabled = canAct && listingUsable && !transition.isRunning,
+                                enabled = canAct && listingUsable && !state.isRunning,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp),
@@ -1047,7 +1006,7 @@ private fun FilesPickScreen(
                         FilesPickRow(
                             entry = entry,
                             isSelected = picked != null && selectedPickEntry != null,
-                            actionsEnabled = canAct && !transition.isRunning,
+                            actionsEnabled = canAct && !state.isRunning,
                             onToggleSelect = {
                                 val live = entries.firstOrNull { it.name == entry.name } ?: return@FilesPickRow
                                 selectedPickState?.value =
@@ -1087,7 +1046,6 @@ private fun FolderCard(
     canWrite: Boolean,
     selection: ListingSelection,
     selectedNames: Set<String>,
-    reducedMotion: Boolean,
     onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
     onClearSelection: () -> Unit,
@@ -1102,163 +1060,134 @@ private fun FolderCard(
     modifier: Modifier = Modifier,
 ) {
     val loadingDescription = stringResource(R.string.files_listing)
-    // Whole card (selection bar + list) fades as one snapshot: both read the same
-    // target so leaving content never mixes live state under the exit fade.
-    AnimatedContent(
-        targetState = directoryContentKey(state),
-        transitionSpec = {
-            directoryContentTransform(reducedMotion)
-        },
-        label = "folder",
-        // One slot per directory/partition/stick pin: a listing refresh of the same
-        // directory reuses the slot (and its scroll state) instead of animating a new
-        // LazyColumn; navigation and attach changes create isolated exit/enter slots.
-        contentKey = {
-            listOf(it.partitionId, it.path, it.identity, it.attachGeneration)
-        },
-        // fillMaxSize: AnimatedContent gets weight(1f) height from the screen Column.
-        // Without it the inner weight/LazyColumn can measure unbounded, lay out every
-        // row, report canScroll=false, and look clipped with no gesture scroll.
-        modifier = modifier.fillMaxSize(),
-    ) { target ->
-        // Owned by this content slot, never shared with the outgoing slot.
-        val listState = rememberLazyListState()
-        // Reset only on directory/partition/stick change. A listing refresh keeps the
-        // same keys, so it updates rows without scrolling the reader back to the top.
-        LaunchedEffect(
-            target.partitionId,
-            target.path,
-            target.identity,
-            target.attachGeneration,
-        ) {
-            listState.scrollToItem(0)
+    val listState = rememberLazyListState()
+    LaunchedEffect(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) {
+        listState.scrollToItem(0)
+    }
+    val rows = state.files
+    val rowsState = state.filesListingState.name
+    val rowsError = state.filesError
+    val locked = state.isRunning
+    Column(modifier = modifier.fillMaxSize()) {
+        if (selection.entries.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FolderActionButton(
+                    glyph = Glyph.Download,
+                    description = stringResource(R.string.files_save_to_phone),
+                    enabled = filesBatchDownloadEnabled(canAct, selection.entries.map { it.toBatchItem() }) && !locked,
+                    onClick = onSaveToPhone,
+                )
+                FolderActionButton(
+                    glyph = Glyph.Pencil,
+                    description = stringResource(R.string.files_rename),
+                    enabled = filesBatchRenameEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
+                    onClick = onRename,
+                )
+                FolderActionButton(
+                    glyph = Glyph.Trash,
+                    description = stringResource(R.string.action_delete),
+                    enabled = filesBatchDeleteEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
+                    onClick = onDelete,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+                FolderActionButton(
+                    glyph = Glyph.Close,
+                    description = stringResource(R.string.files_clear_selection),
+                    enabled = canAct && !locked,
+                    onClick = onClearSelection,
+                )
+            }
         }
-        // Snapshot render: leaving content keeps the exact files it captured, so
-        // navigation never swaps rows under the exit fade.
-        val rows = target.files
-        val rowsState = target.listingState
-        val rowsError = target.error.ifEmpty { null }
-        val locked = transition.isRunning
-        Column(modifier = Modifier.fillMaxSize()) {
-            if (selection.entries.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FolderActionButton(
-                        glyph = Glyph.Download,
-                        description = stringResource(R.string.files_save_to_phone),
-                        enabled = filesBatchDownloadEnabled(canAct, selection.entries.map { it.toBatchItem() }) && !locked,
-                        onClick = onSaveToPhone,
-                    )
-                    FolderActionButton(
-                        glyph = Glyph.Pencil,
-                        description = stringResource(R.string.files_rename),
-                        enabled = filesBatchRenameEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
-                        onClick = onRename,
-                    )
-                    FolderActionButton(
-                        glyph = Glyph.Trash,
-                        description = stringResource(R.string.action_delete),
-                        enabled = filesBatchDeleteEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
-                        onClick = onDelete,
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                    FolderActionButton(
-                        glyph = Glyph.Close,
-                        description = stringResource(R.string.files_clear_selection),
-                        enabled = canAct && !locked,
-                        onClick = onClearSelection,
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
+            // The reducer clears files before a new path is loaded. Rendering the live
+            // state directly (rather than an exiting AnimatedContent slot) prevents old
+            // rows and the new path header from flashing together.
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 80.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                userScrollEnabled = true
+            ) {
+                item(key = "folder-subblock") {
+                    FolderSubblock(
+                        pathLabel = folderPathLabel(state.currentPath),
+                        canNavigateUp = canAct && state.currentPath != "/" && !locked,
+                        canAct = canAct && !locked,
+                        canWrite = canWrite && !locked,
+                        onNavigateUp = onNavigateUp,
+                        onRefresh = onRefresh,
+                        onNewFolder = onNewFolder,
+                        isLoading = isLoading,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     )
                 }
-            }
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                // fill=true so the list always receives a tight height from the card.
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) {
-                // One lazy area for the whole volume: the path/action sub-block is its
-                // first item, so a short window or a large font scrolls it away instead
-                // of squeezing the list to zero.
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    // AppShell Scaffold owns system/nav-bar insets (bottomBar + safeDrawing).
-                    // When pickOpen hides NavigationBar, AppShell must still apply navigationBars
-                    // bottom — do not add a second inset here. 80 dp clears only the upload FAB.
-                    contentPadding = PaddingValues(bottom = 80.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                    userScrollEnabled = !locked,
-                ) {
-                    item(key = "folder-subblock") {
-                        FolderSubblock(
-                            pathLabel = folderPathLabel(target.path),
-                            canNavigateUp = canAct && target.path != "/" && !locked,
-                            canAct = canAct && !locked,
-                            canWrite = canWrite && !locked,
-                            onNavigateUp = onNavigateUp,
-                            onRefresh = onRefresh,
-                            onNewFolder = onNewFolder,
-                            isLoading = isLoading,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                when {
+                    !state.actionsEnabled -> item(key = "presence") {
+                        EmptyHint(
+                            UiReducer.presenceMessage(state.presence).localized(),
+                            modifier = Modifier.padding(16.dp),
                         )
                     }
-                    when {
-                        !state.actionsEnabled -> item(key = "presence") {
-                            EmptyHint(
-                                UiReducer.presenceMessage(state.presence).localized(),
-                                modifier = Modifier.padding(16.dp),
+                    rowsState == FilesListingState.Loading.name -> item(key = "loading") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp)
+                                .semantics { contentDescription = loadingDescription },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
+                        }
+                    }
+                    rowsState == FilesListingState.Failed.name -> item(key = "error") {
+                        EmptyHint(
+                            rowsError ?: stringResource(R.string.import_folder_read_failed),
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                    rowsState == FilesListingState.Stale.name -> item(key = "not-loaded") {
+                        EmptyHint(
+                            stringResource(R.string.import_folder_not_loaded),
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                    rows.isEmpty() -> item(key = "empty") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.files_empty_folder),
+                                style = MaterialTheme.typography.bodyMedium,
                             )
                         }
-                        rowsState == FilesListingState.Loading.name -> item(key = "loading") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 32.dp)
-                                    .semantics { contentDescription = loadingDescription },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.5.dp)
-                            }
-                        }
-                        rowsState == FilesListingState.Failed.name -> item(key = "error") {
-                            EmptyHint(
-                                rowsError ?: stringResource(R.string.import_folder_read_failed),
-                                modifier = Modifier.padding(16.dp),
-                            )
-                        }
-                        rowsState == FilesListingState.Stale.name -> item(key = "not-loaded") {
-                            EmptyHint(
-                                stringResource(R.string.import_folder_not_loaded),
-                                modifier = Modifier.padding(16.dp),
-                            )
-                        }
-                        rows.isEmpty() -> item(key = "empty") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 32.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.files_empty_folder),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                            }
-                        }
-                        else -> items(rows, key = { it.name }) { entry ->
-                            FileRow(
-                                entry = entry,
-                                isSelected = entry.name in selectedNames,
-                                multiSelectActive = selectedNames.isNotEmpty(),
-                                actionsEnabled = canAct && !locked,
-                                onToggleSelect = { onToggleSelect(entry) },
-                                onNavigate = { onNavigate(entry) },
-                                onAction = { onAction(entry) },
-                            )
-                        }
+                    }
+                    else -> items(rows, key = { it.name }) { entry ->
+                        FileRow(
+                            entry = entry,
+                            isSelected = entry.name in selectedNames,
+                            multiSelectActive = selectedNames.isNotEmpty(),
+                            actionsEnabled = canAct && !locked,
+                            onToggleSelect = { onToggleSelect(entry) },
+                            onNavigate = { onNavigate(entry) },
+                            onAction = { onAction(entry) },
+                        )
                     }
                 }
             }
@@ -1394,166 +1323,162 @@ private fun PartitionChoiceRow(
     sizeOf: (PartitionTab) -> String?,
     onSelect: (String) -> Unit,
 ) {
-    var sheetOpen by remember { mutableStateOf(false) }
-    val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == id } }
-    val label = stringResource(R.string.files_current_partition)
-    val sheetTitle = stringResource(R.string.files_select_partition)
+    var expanded by remember { mutableStateOf(false) }
+    val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == selectedId } }
     val noneSelectedLabel = stringResource(R.string.files_select_partition)
     val radioGroupLabel = stringResource(R.string.files_partition_radio_group)
-    // No selection must stay choosable even with a single partition; otherwise the
-    // false first() target is gone and the user cannot recover.
+    val expandDescription = stringResource(
+        if (expanded) R.string.files_partition_collapse else R.string.files_partition_expand,
+    )
     val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
+    val rowEnabled = enabled && selectable
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    enabled = enabled && selectable,
-                    onClickLabel = if (selected == null) noneSelectedLabel else label,
-                    role = Role.Button,
-                ) { sheetOpen = true }
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = selected?.let(::partitionDisplayName) ?: noneSelectedLabel,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = selected?.filesystemLabel?.ifEmpty { "—" } ?: "—",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                    )
-                }
-                val selectedUsage = if (selected != null) {
-                    filesystemUsageText(usageOf(selected), phaseOf(selected))
-                } else {
-                    null
-                }
-                if (selectedUsage != null) {
-                    Text(
-                        text = selectedUsage,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            WriteAccessBadge(writeAccess)
-            if (selectable) {
-                GlyphIcon(
-                    glyph = Glyph.ChevronDown,
-                    size = 20.dp,
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        }
-    }
-    if (sheetOpen && selectable) {
-        ModalBottomSheet(
-            onDismissRequest = { sheetOpen = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ) {
-            Text(
-                text = sheetTitle,
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-            )
-            Column(
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .selectableGroup()
-                    .semantics { contentDescription = radioGroupLabel }
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 16.dp),
+                    .clickable(
+                        enabled = rowEnabled,
+                        onClickLabel = expandDescription,
+                        role = Role.Button,
+                        onClick = { expanded = !expanded },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                partitions.forEach { partition ->
-                    // Nullable selectedId: no radio is active until a partition is chosen.
-                    val isSelected = selectedId != null && partition.id == selectedId
-                    val sizeLabel = sizeOf(partition)
-                    val usageLabel = filesystemUsageText(usageOf(partition), phaseOf(partition))
-                    ListItem(
-                        headlineContent = {
-                            Text(
-                                text = partitionDisplayName(partition),
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                softWrap = false,
-                            )
-                        },
-                        supportingContent = if (sizeLabel == null && usageLabel == null) {
-                            null
-                        } else {
-                            {
-                                Column {
-                                    if (sizeLabel != null) {
-                                        Text(
-                                            text = sizeLabel,
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                fontFamily = FontFamily.Monospace,
-                                                fontFeatureSettings = "tnum",
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            softWrap = false,
-                                        )
-                                    }
-                                    if (usageLabel != null) {
-                                        Text(
-                                            text = usageLabel,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            softWrap = false,
-                                        )
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = selected?.let(::partitionDisplayName) ?: noneSelectedLabel,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = selected?.filesystemLabel?.ifEmpty { "—" } ?: "—",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    selected?.let { filesystemUsageText(usageOf(it), phaseOf(it)) }?.let { usage ->
+                        Text(
+                            text = usage,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                WriteAccessBadge(writeAccess)
+                if (selectable) {
+                    IconButton(
+                        onClick = { expanded = !expanded },
+                        enabled = rowEnabled,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = expandDescription },
+                    ) {
+                        GlyphIcon(
+                            glyph = if (expanded) Glyph.ChevronUp else Glyph.ChevronDown,
+                            size = 20.dp,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+            if (expanded && rowEnabled) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
+                        .selectableGroup()
+                        .semantics { contentDescription = radioGroupLabel }
+                        .padding(bottom = 8.dp),
+                ) {
+                    partitions.forEach { partition ->
+                        val isSelected = selectedId != null && partition.id == selectedId
+                        val sizeLabel = sizeOf(partition)
+                        val usageLabel = filesystemUsageText(usageOf(partition), phaseOf(partition))
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    text = partitionDisplayName(partition),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            supportingContent = if (sizeLabel == null && usageLabel == null) null else {
+                                {
+                                    Column {
+                                        sizeLabel?.let {
+                                            Text(
+                                                text = it,
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontFeatureSettings = "tnum",
+                                                ),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        usageLabel?.let {
+                                            Text(
+                                                text = it,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        leadingContent = {
-                            // Visual only: the row owns the single selectable Role.RadioButton.
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = null,
-                            )
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .selectable(
-                                selected = isSelected,
-                                role = Role.RadioButton,
-                                onClick = {
-                                    sheetOpen = false
-                                    onSelect(partition.id)
+                            },
+                            leadingContent = { RadioButton(selected = isSelected, onClick = null) },
+                            colors = ListItemDefaults.colors(
+                                containerColor = if (isSelected) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    Color.Transparent
                                 },
+                                headlineColor = MaterialTheme.colorScheme.onSurface,
+                                supportingColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             ),
-                    )
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .selectable(
+                                    selected = isSelected,
+                                    role = Role.RadioButton,
+                                    onClick = {
+                                        expanded = false
+                                        onSelect(partition.id)
+                                    },
+                                ),
+                        )
+                    }
                 }
             }
         }
@@ -1902,44 +1827,59 @@ private fun FileActionSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        // Same plane as the screen's dialogs and menu; the default surfaceContainerLow
-        // sank the sheet below the card it was opened from.
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 6.dp,
+        modifier = Modifier.imePadding(),
     ) {
-        ListItem(
-            headlineContent = { Text(entry.name) },
-            supportingContent = {
-                Text(
-                    DeviceIdentity.formatCapacity(entry.sizeBytes),
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
-                    ),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState())
+                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(28.dp)),
+        ) {
+            ListItem(
+                headlineContent = {
+                    Text(entry.name, color = MaterialTheme.colorScheme.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                },
+                supportingContent = {
+                    Text(
+                        DeviceIdentity.formatCapacity(entry.sizeBytes),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
+                    )
+                },
+                colors = ListItemDefaults.colors(
+                    containerColor = Color.Transparent,
+                    headlineColor = MaterialTheme.colorScheme.onSurface,
+                    supportingColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+            )
+            if (!entry.isDirectory) {
+                sheetActionRow(
+                    label = stringResource(R.string.files_save_to_phone),
+                    glyph = Glyph.Download,
+                    enabled = canDownload,
+                    onClick = onDownload,
                 )
-            },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        )
-        if (!entry.isDirectory) {
+            }
             sheetActionRow(
-                label = stringResource(R.string.files_save_to_phone),
-                glyph = Glyph.Download,
-                enabled = canDownload,
-                onClick = onDownload,
+                label = stringResource(R.string.files_rename),
+                glyph = Glyph.Pencil,
+                enabled = canWrite,
+                onClick = onRename,
+            )
+            sheetActionRow(
+                label = stringResource(R.string.action_delete),
+                glyph = Glyph.Trash,
+                enabled = canWrite,
+                onClick = onDelete,
             )
         }
-        sheetActionRow(
-            label = stringResource(R.string.files_rename),
-            glyph = Glyph.Pencil,
-            enabled = canWrite,
-            onClick = onRename,
-        )
-        sheetActionRow(
-            label = stringResource(R.string.action_delete),
-            glyph = Glyph.Trash,
-            enabled = canWrite,
-            onClick = onDelete,
-        )
-
     }
 }
 

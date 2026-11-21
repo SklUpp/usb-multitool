@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- A11y name for the Files partition radio group inside the bottom sheet. -->
+    <!-- A11y name for the Files partition radio group. -->
     <string name="files_partition_radio_group">Доступные разделы</string>
 </resources>

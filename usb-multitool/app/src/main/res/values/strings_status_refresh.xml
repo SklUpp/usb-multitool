@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Permanent status block: Status: &lt;operation&gt; — &lt;state&gt;. -->
+    <!-- Permanent status block one-liner: Status: &lt;operation&gt; — &lt;state&gt;. -->
     <string name="shell_status_headline">Status: %1$s — %2$s</string>
+    <!-- Status dialog body line 1 is operation name; line 2 is compact real status/output. -->
 </resources>

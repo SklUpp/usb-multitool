@@ -461,6 +461,13 @@ internal object VentoyTransitions {
                     ventoyGlobalSettings = intent.settings,
                     ventoySettingsSource = intent.source,
                     ventoySettingsSourceLoading = false,
+                    // Host posts live geometry when it rebinds after install/reprobe.
+                    ventoySettingsSourcePartitionId =
+                        intent.partitionId ?: state.ventoySettingsSourcePartitionId,
+                    ventoySettingsSourceStartLba =
+                        intent.partitionStartLba ?: state.ventoySettingsSourceStartLba,
+                    ventoySettingsSourceSectorCount =
+                        intent.partitionSectorCount ?: state.ventoySettingsSourceSectorCount,
                 ).let { nextState ->
                     val loaded = intent.settings
                     if (loaded is VentoyGlobalSettings.ReadError && !loaded.damagedLayout) {
@@ -513,8 +520,24 @@ internal object VentoyTransitions {
         when {
             !state.actionsEnabled ->
                 ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
-            !state.settingsSourceGeometryMatches() ->
-                ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+            !state.settingsSourceGeometryMatches() -> {
+                // After install/reprobe the retained pins can lag the live part1. For the
+                // Default stick path, rebind and apply against the live geometry instead of
+                // locking the user into SettingsSourceStale. Document/UsbFile keep the pin
+                // fence so a mismatched stick cannot be overwritten by accident.
+                val live = state.ventoyDataPartition()
+                if (state.ventoySettingsSource.isDefaultPath() && live != null) {
+                    emitApplyVentoyControls(
+                        state.copy(
+                            ventoySettingsSourcePartitionId = live.id,
+                            ventoySettingsSourceStartLba = live.startLba,
+                            ventoySettingsSourceSectorCount = live.sectorCount,
+                        ),
+                    )
+                } else {
+                    ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.SettingsSourceStale)))
+                }
+            }
             !state.ventoySettingsSource.isDefaultPath() &&
                 state.ventoySettingsSource !is VentoySettingsSource.Document &&
                 state.ventoyGlobalSettings !is VentoyGlobalSettings.Present &&
@@ -526,36 +549,26 @@ internal object VentoyTransitions {
                     state.ventoyGlobalSettings is VentoyGlobalSettings.Empty) ->
                 // A validated phone or USB JSON is an import source. Apply copies its whole
                 // document to the stick's standard config; pending rows remain optional edits.
-                ReduceResult(
-                    state,
-                    effects = listOf(
-                        UiEffect.ApplyVentoyControls(
-                            settings = state.pendingVentoyControls,
-                            source = state.ventoySettingsSource,
-                            identity = state.ventoySettingsSourceIdentity,
-                            attachGeneration = state.ventoySettingsSourceAttachGeneration,
-                            partitionId = state.ventoySettingsSourcePartitionId ?: state.ventoyDataPartition()?.id,
-                            partitionStartLba = state.ventoySettingsSourceStartLba ?: state.ventoyDataPartition()?.startLba,
-                            partitionSectorCount = state.ventoySettingsSourceSectorCount ?: state.ventoyDataPartition()?.sectorCount,
-                        )
-                    ),
-                )
+                emitApplyVentoyControls(state)
             state.pendingVentoyControls.isEmpty() ->
                 ReduceResult(state.withStatus(UiMessage.Raw("No Ventoy setting changes to apply")))
             else ->
-                ReduceResult(
-                    state,
-                    effects = listOf(
-                        UiEffect.ApplyVentoyControls(
-                            settings = state.pendingVentoyControls,
-                            source = state.ventoySettingsSource,
-                            identity = state.ventoySettingsSourceIdentity,
-                            attachGeneration = state.ventoySettingsSourceAttachGeneration,
-                            partitionId = state.ventoySettingsSourcePartitionId ?: state.ventoyDataPartition()?.id,
-                            partitionStartLba = state.ventoySettingsSourceStartLba ?: state.ventoyDataPartition()?.startLba,
-                            partitionSectorCount = state.ventoySettingsSourceSectorCount ?: state.ventoyDataPartition()?.sectorCount,
-                        )
-                    ),
-                )
+                emitApplyVentoyControls(state)
         }
+
+    private fun emitApplyVentoyControls(state: AppUiState): ReduceResult =
+        ReduceResult(
+            state,
+            effects = listOf(
+                UiEffect.ApplyVentoyControls(
+                    settings = state.pendingVentoyControls,
+                    source = state.ventoySettingsSource,
+                    identity = state.ventoySettingsSourceIdentity,
+                    attachGeneration = state.ventoySettingsSourceAttachGeneration,
+                    partitionId = state.ventoySettingsSourcePartitionId ?: state.ventoyDataPartition()?.id,
+                    partitionStartLba = state.ventoySettingsSourceStartLba ?: state.ventoyDataPartition()?.startLba,
+                    partitionSectorCount = state.ventoySettingsSourceSectorCount ?: state.ventoyDataPartition()?.sectorCount,
+                ),
+            ),
+        )
 }

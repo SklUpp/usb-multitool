@@ -168,6 +168,11 @@ internal object OperationTransitions {
             diskLayoutConfirmation = null,
             pendingAutounattendGeneration = null,
             ventoyGlobalSettings = null,
+            // Drop stale geometry pins so the next Default/UsbFile load rebinds to live
+            // part1. Keep source type and staged/unknown pending rows intact.
+            ventoySettingsSourcePartitionId = null,
+            ventoySettingsSourceStartLba = null,
+            ventoySettingsSourceSectorCount = null,
             ventoySettingsSourceLoading = false,
             ventoyFolderPath = "/",
             ventoyFolders = null,
