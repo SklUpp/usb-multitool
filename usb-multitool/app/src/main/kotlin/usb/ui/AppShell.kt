@@ -46,6 +46,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -398,7 +399,7 @@ fun AppShell(
                     if (!panels.journalScreenOpen && !pickOpen) {
                         NavigationBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            tonalElevation = 0.dp,
+                            tonalElevation = 3.dp,
                         ) {
                             PrimaryShellTabs.forEach { tab ->
                                 // Reducer also refuses the switch; the disabled state names it
@@ -689,7 +690,7 @@ fun AppShell(
                     containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                     textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    shape = RoundedCornerShape(28.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     title = { Text(stringResource(R.string.status_overwrite_title)) },
                     text = {
                         Text(stringResource(R.string.status_link_exists, candidate.substringAfterLast('/')))
@@ -738,7 +739,7 @@ fun AppShell(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                 titleContentColor = MaterialTheme.colorScheme.onSurface,
                 textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                shape = RoundedCornerShape(28.dp),
+                shape = MaterialTheme.shapes.extraLarge,
                 title = {
                     Text(
                         text = confirmationTitle(confirmation),
@@ -1318,7 +1319,7 @@ private fun OperationStatusLine(
             )
             .heightIn(min = 48.dp),
         color = containerColor,
-        shape = RoundedCornerShape(8.dp),
+        shape = MaterialTheme.shapes.small,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
@@ -1414,7 +1415,7 @@ private fun StatusDialog(
     val dialogContainer = MaterialTheme.colorScheme.surfaceContainerHigh
     val dialogTitleColor = MaterialTheme.colorScheme.onSurface
     val dialogTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val dialogShape = RoundedCornerShape(28.dp)
+    val dialogShape = MaterialTheme.shapes.extraLarge
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = dialogContainer,
@@ -1455,7 +1456,7 @@ private fun StatusDialog(
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     contentColor = MaterialTheme.colorScheme.onSurface,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.small,
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
                     modifier = Modifier.fillMaxWidth(),
@@ -1757,7 +1758,7 @@ private fun LogScreen(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            shape = RoundedCornerShape(28.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             title = { Text(stringResource(R.string.log_copy_all)) },
             text = {
                 Column(
@@ -1984,7 +1985,7 @@ internal fun SectionCard(
     // context provided by AppShell, so its configuration carries the chosen language.
     val locale = LocalResources.current.configuration.locales[0]
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = if (danger) {
             BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
@@ -2289,10 +2290,9 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
     if (showInfo) {
         ModalBottomSheet(
             onDismissRequest = { showInfo = false },
-            // High (not Low/Container): kills lavender baseline and lifts sheet off bg.
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 0.dp,
+            tonalElevation = 1.dp,
         ) {
             // Single scroll for title + body + close, so the close action is never
             // clipped on short screens or at large font scales; one close only.
@@ -2333,9 +2333,8 @@ internal fun Badge(
     content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = CircleShape,
         color = container,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)),
     ) {
         Text(
             text = text,

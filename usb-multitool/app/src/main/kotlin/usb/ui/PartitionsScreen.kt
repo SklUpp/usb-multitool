@@ -19,7 +19,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -260,11 +259,11 @@ fun PartitionsScreen(
 
         AlertDialog(
             onDismissRequest = { createRegion = null },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             tonalElevation = 6.dp,
-            shape = RoundedCornerShape(28.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             title = { Text(stringResource(R.string.partitions_create_title)) },
             text = {
                 Column(
@@ -567,11 +566,11 @@ fun PartitionsScreen(
         val nameOk = newName.isNotEmpty() && PartitionName.problem(newName) == null
         AlertDialog(
             onDismissRequest = { renameTargetId = null; renameBinding = null },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             tonalElevation = 6.dp,
-            shape = RoundedCornerShape(28.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             title = { Text(stringResource(R.string.partitions_rename_title)) },
             text = {
                 OutlinedTextField(
@@ -623,11 +622,11 @@ fun PartitionsScreen(
             VolumeLabel.problem(newLabel, labelFs) == null
         AlertDialog(
             onDismissRequest = { labelTargetId = null; labelBinding = null },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             tonalElevation = 6.dp,
-            shape = RoundedCornerShape(28.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             title = { Text(stringResource(R.string.partitions_rename_label_title)) },
             text = {
                 OutlinedTextField(
@@ -699,8 +698,8 @@ fun PartitionsScreen(
             onDismissRequest = { partitionPickerOpen = false },
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 3.dp,
-            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 1.dp,
+            shape = MaterialTheme.shapes.extraLarge,
         ) {
             Column(
                 modifier = Modifier
@@ -944,12 +943,8 @@ fun PartitionsScreen(
                                 targetName,
                             )
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = MaterialTheme.shapes.small,
                                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                border = BorderStroke(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
-                                ),
                                 modifier = Modifier
                                     .wrapContentWidth()
                                     .heightIn(min = 48.dp)
@@ -980,7 +975,7 @@ fun PartitionsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                     Surface(
-                                        shape = RoundedCornerShape(8.dp),
+                                        shape = MaterialTheme.shapes.extraSmall,
                                         color = MaterialTheme.colorScheme.errorContainer,
                                     ) {
                                         Text(
@@ -1131,11 +1126,16 @@ fun PartitionsScreen(
                         val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
                         val rowSpace = state.filesystemSpace(partition)
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.small,
                             color = if (isSelected) {
                                 MaterialTheme.colorScheme.secondaryContainer
                             } else {
                                 Color.Transparent
+                            },
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
                             },
                             shadowElevation = 0.dp,
                             modifier = Modifier
@@ -1197,7 +1197,11 @@ fun PartitionsScreen(
                                         fontFamily = FontFamily.Monospace,
                                         fontFeatureSettings = "tnum",
                                     ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
                                 )
                                 val rowStart = partition.startLba
                                 val rowCount = partition.sectorCount
@@ -1225,7 +1229,11 @@ fun PartitionsScreen(
                                             fontFamily = FontFamily.Monospace,
                                             fontFeatureSettings = "tnum",
                                         ),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
                                     )
                                 }
                             }
@@ -1305,11 +1313,11 @@ fun PartitionsScreen(
                     !state.partitionTableDamaged
                 AlertDialog(
                     onDismissRequest = { onIntent(UiIntent.DismissEfiWriteConfirmation) },
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                     textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     tonalElevation = 6.dp,
-                    shape = RoundedCornerShape(28.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     title = { Text(stringResource(R.string.efi_confirm_title)) },
                     text = {
                         Text(
@@ -1378,11 +1386,11 @@ fun PartitionsScreen(
                 }
                 AlertDialog(
                     onDismissRequest = { schemeChangePrompt = null },
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                     textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     tonalElevation = 6.dp,
-                    shape = RoundedCornerShape(28.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     title = {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1687,8 +1695,8 @@ private fun SelectedPartitionCard(
                 onDismissRequest = { onFilesystemMenu(null) },
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                tonalElevation = 3.dp,
-                shape = RoundedCornerShape(28.dp),
+                tonalElevation = 1.dp,
+                shape = MaterialTheme.shapes.extraLarge,
             ) {
                 Column(
                     modifier = Modifier
@@ -1784,7 +1792,11 @@ private fun FactRow(
             .heightIn(min = if (onClick != null) 48.dp else 44.dp)
             .then(
                 if (onClick != null) {
-                    Modifier.clickable(enabled = enabled, onClick = onClick)
+                    Modifier.clickable(
+                        enabled = enabled,
+                        role = Role.Button,
+                        onClick = onClick,
+                    )
                 } else {
                     Modifier
                 },
@@ -1887,8 +1899,8 @@ private fun RawWriteSection(
                         onDismissRequest = { sourceSheetOpen = false },
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         contentColor = MaterialTheme.colorScheme.onSurface,
-                        tonalElevation = 3.dp,
-                        shape = RoundedCornerShape(28.dp),
+                        tonalElevation = 1.dp,
+                        shape = MaterialTheme.shapes.extraLarge,
                     ) {
                         Column(
                             modifier = Modifier

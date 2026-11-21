@@ -35,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
@@ -251,7 +252,7 @@ fun FilesScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.tertiaryContainer,
                 modifier = Modifier.fillMaxWidth().animateContentSize(),
             ) {
@@ -294,7 +295,7 @@ fun FilesScreen(
                 // can be retained while the volume refuses to remount.
                 if (systemBlocked) {
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = MaterialTheme.shapes.small,
                         color = MaterialTheme.colorScheme.tertiaryContainer,
                         modifier = Modifier.fillMaxWidth().animateContentSize(),
                     ) {
@@ -451,8 +452,7 @@ fun FilesScreen(
     if (showNewFolderDialog) {
         AlertDialog(
             onDismissRequest = { showNewFolderDialog = false; newFolderName = "" },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -484,7 +484,7 @@ fun FilesScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showNewFolderDialog = false; newFolderName = "" }) {
-                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -494,8 +494,7 @@ fun FilesScreen(
         val binding = renameBinding
         AlertDialog(
             onDismissRequest = { renameTarget = null; renameBinding = null },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -526,7 +525,7 @@ fun FilesScreen(
             },
             dismissButton = {
                 TextButton(onClick = { renameTarget = null; renameBinding = null }) {
-                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -544,8 +543,7 @@ fun FilesScreen(
         }
         AlertDialog(
             onDismissRequest = { pendingDeleteSelection = null },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             iconContentColor = MaterialTheme.colorScheme.error,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -562,7 +560,7 @@ fun FilesScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteSelection = null }) {
-                    Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.action_cancel))
                 }
             },
         )
@@ -575,8 +573,7 @@ fun FilesScreen(
             onDismissRequest = {
                 onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Cancel))
             },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             iconContentColor = MaterialTheme.colorScheme.primary,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -596,18 +593,18 @@ fun FilesScreen(
                 Column(horizontalAlignment = Alignment.End) {
                     TextButton(onClick = {
                         onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Skip))
-                    }) { Text(stringResource(R.string.action_skip), color = MaterialTheme.colorScheme.primary) }
+                    }) { Text(stringResource(R.string.action_skip)) }
                     if (replaceEnabled) {
                         TextButton(onClick = {
                             onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.ReplaceFile))
-                        }) { Text(stringResource(R.string.import_overwrite_action), color = MaterialTheme.colorScheme.primary) }
+                        }) { Text(stringResource(R.string.import_overwrite_action)) }
                     }
                 }
             },
             dismissButton = {
                 TextButton(onClick = {
                     onIntent(UiIntent.ResolveFilesBatchConflict(FilesConflictDecision.Cancel))
-                }) { Text(stringResource(R.string.action_cancel), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     }
@@ -1173,7 +1170,7 @@ private fun FolderCard(
             }
         }
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
@@ -1280,7 +1277,7 @@ private fun FolderSubblock(
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -1628,11 +1625,12 @@ internal fun PartitionDropdown(
             modifier = Modifier.heightIn(max = 360.dp),
         ) {
             partitions.forEach { partition ->
+                val isSelected = partition.id == selectedId
                 DropdownMenuItem(
                     text = {
                         PartitionOptionRow(
                             partition = partition,
-                            selected = partition.id == selectedId,
+                            selected = isSelected,
                             access = writeAccessOf(partition),
                             usage = filesystemUsageText(usageOf(partition), phaseOf(partition)),
                         )
@@ -1641,8 +1639,21 @@ internal fun PartitionDropdown(
                         expanded = false
                         onSelect(partition.id)
                     },
+                    trailingIcon = if (isSelected) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    modifier = Modifier.heightIn(min = 48.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics { selected = isSelected },
                 )
             }
         }
@@ -1661,7 +1672,6 @@ private fun PartitionOptionRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        RadioButton(selected = selected, onClick = null)
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1695,7 +1705,7 @@ private fun PartitionOptionRow(
 }
 
 /**
- * Compact write chip: only `RO` or `RW` on one neutral container with a hairline border.
+ * Compact write chip: only `RO` or `RW` on one neutral tonal container.
  * Tone from [writeAccessTone]: RW primary, RO theme-aware amber. Error stays reserved for
  * failures and destructive actions. Unknown renders no chip; the long factual description
  * remains the a11y label.
@@ -1715,19 +1725,11 @@ private fun WriteAccessBadge(access: PartitionWriteAccess) {
         PartitionWriteAccess.Unknown -> return
     }
     val content = writeAccessTone(readWrite = access == PartitionWriteAccess.ReadWrite)
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)),
-        modifier = Modifier.clearAndSetSemantics { contentDescription = description },
-    ) {
-        Text(
+    Box(modifier = Modifier.clearAndSetSemantics { contentDescription = description }) {
+        Badge(
             text = label,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = content,
-            maxLines = 1,
+            container = MaterialTheme.colorScheme.surfaceContainerHighest,
+            content = content,
         )
     }
 }
@@ -1749,27 +1751,27 @@ private fun FileRow(
         else -> stringResource(R.string.files_open_folder)
     }
     val longClickLabel = stringResource(R.string.files_select_file)
-    val contentColor = if (actionsEnabled) {
-        MaterialTheme.colorScheme.onSurface
-    } else {
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    val contentColor = when {
+        !actionsEnabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
     }
-    val supportingColor = if (actionsEnabled) {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    val supportingColor = when {
+        !actionsEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         color = if (isSelected) {
-            MaterialTheme.colorScheme.surfaceContainerHighest
+            MaterialTheme.colorScheme.secondaryContainer
         } else {
             Color.Transparent
         },
-        border = if (isSelected) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface)
+        contentColor = if (isSelected) {
+            MaterialTheme.colorScheme.onSecondaryContainer
         } else {
-            null
+            MaterialTheme.colorScheme.onSurface
         },
         modifier = Modifier
             .fillMaxWidth()
@@ -1872,27 +1874,27 @@ private fun FilesPickRow(
         stringResource(R.string.files_select_file)
     }
     val longClickLabel = stringResource(R.string.files_select_file)
-    val contentColor = if (actionsEnabled) {
-        MaterialTheme.colorScheme.onSurface
-    } else {
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    val contentColor = when {
+        !actionsEnabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
     }
-    val supportingColor = if (actionsEnabled) {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    val supportingColor = when {
+        !actionsEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         color = if (isSelected) {
-            MaterialTheme.colorScheme.surfaceContainerHighest
+            MaterialTheme.colorScheme.secondaryContainer
         } else {
             Color.Transparent
         },
-        border = if (isSelected) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface)
+        contentColor = if (isSelected) {
+            MaterialTheme.colorScheme.onSecondaryContainer
         } else {
-            null
+            MaterialTheme.colorScheme.onSurface
         },
         modifier = modifier
             .fillMaxWidth()
@@ -2067,9 +2069,9 @@ private fun FileActionSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        tonalElevation = 6.dp,
+        tonalElevation = 1.dp,
         modifier = Modifier.imePadding(),
     ) {
         Column(

@@ -8,8 +8,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -658,7 +656,7 @@ private fun RefreshingIcon(busy: Boolean) {
             modifier = Modifier
                 .size(22.dp)
                 .rotate(rotation),
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            tint = MaterialTheme.colorScheme.primary,
         )
     } else {
         Icon(
@@ -794,7 +792,8 @@ private fun WindowsImageBlock(
     if (imageSourcePrompt) {
         ModalBottomSheet(
             onDismissRequest = { imageSourcePrompt = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = 1.dp,
         ) {
             Text(
                 text = chooseDescription,
@@ -895,7 +894,8 @@ internal fun ImportFolderDialog(
         }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 1.dp,
     ) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -967,7 +967,7 @@ internal fun ImportOverwriteDialog(
         properties = DialogProperties(usePlatformDefaultWidth = true),
     ) {
         Surface(
-            shape = RoundedCornerShape(28.dp),
+            shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 0.dp,

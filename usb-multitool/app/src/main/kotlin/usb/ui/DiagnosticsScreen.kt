@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -187,7 +186,8 @@ fun DiagnosticsScreen(
                     val openSettingsLabel =
                         stringResource(R.string.diagnostics_backup_open_settings)
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         shape = MaterialTheme.shapes.small,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -209,7 +209,10 @@ fun DiagnosticsScreen(
                                 onClick = onOpenBackupSettings,
                                 modifier = Modifier.heightIn(min = 48.dp),
                             ) {
-                                Text(openSettingsLabel)
+                                Text(
+                                    text = openSettingsLabel,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
                             }
                         }
                     }
@@ -406,8 +409,9 @@ fun DiagnosticsScreen(
 
         if (usbPresent) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
@@ -433,19 +437,19 @@ fun DiagnosticsScreen(
                         text = stringResource(R.string.diagnostics_danger_title),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.weight(1f),
                     )
                     GlyphIcon(
                         glyph = if (dangerExpanded) Glyph.ChevronUp else Glyph.ChevronDown,
-                        tint = MaterialTheme.colorScheme.error,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
                         size = 22.dp,
                     )
                 }
                 Text(
                     text = stringResource(R.string.diagnostics_danger_body),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
                 )
                 if (dangerExpanded) {
                     Button(
@@ -511,7 +515,7 @@ private fun DiagTile(
     val container = when {
         !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
         highlighted -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh
     }
     val content = if (highlighted) {
         MaterialTheme.colorScheme.onPrimaryContainer
@@ -522,7 +526,7 @@ private fun DiagTile(
     // labels are faded together, matching the board's .dis rule.
     val contentAlpha = if (enabled) 1f else 0.38f
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.medium,
         color = container,
         modifier = modifier
             .heightIn(min = 84.dp)
@@ -562,7 +566,7 @@ private fun DiagTile(
                     text = hint,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (highlighted) {
-                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },

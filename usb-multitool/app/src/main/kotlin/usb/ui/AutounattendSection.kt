@@ -1,7 +1,6 @@
 package usb.ui
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.BorderStroke
 import android.content.res.Resources
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -548,7 +546,8 @@ internal fun AutounattendSection(
     if (templateSourcePrompt) {
         ModalBottomSheet(
             onDismissRequest = { templateSourcePrompt = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = 1.dp,
         ) {
             Text(
                 text = stringResource(R.string.windows_template_choose_source),
@@ -751,7 +750,7 @@ internal fun GlobalSettingsCard(
         }
         if (settings is VentoyGlobalSettings.ReadError) {
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.fillMaxWidth(),
@@ -1027,7 +1026,6 @@ private fun GlobalSettingsEditorDialog(
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 6.dp,
         ) {
             Scaffold(
                 topBar = {
@@ -1209,7 +1207,6 @@ private fun AutounattendRawEditorDialog(
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 6.dp,
         ) {
             Scaffold(
                 topBar = {
@@ -1394,7 +1391,8 @@ private fun SettingsSourceDialog(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 1.dp,
     ) {
         Text(
             text = stringResource(R.string.settings_source_choose),
@@ -1789,7 +1787,7 @@ private fun AddParameterDialog(
     val catalogKeys = catalog?.keys.orEmpty()
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 6.dp,
         title = { Text(stringResource(R.string.wave4_add_param_title)) },
         text = {

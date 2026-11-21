@@ -1,6 +1,6 @@
 package usb.ui
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +21,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -32,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -146,7 +146,7 @@ private fun LanguageSettingRow(language: AppLanguage, onIntent: (UiIntent) -> Un
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier.widthIn(min = 168.dp, max = 320.dp),
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 3.dp,
         ) {
             AppLanguage.entries.forEach { option ->
@@ -164,10 +164,10 @@ private fun LanguageSettingRow(language: AppLanguage, onIntent: (UiIntent) -> Un
                     modifier = Modifier.heightIn(min = 48.dp),
                     trailingIcon = if (option == language) {
                         {
-                            Text(
-                                text = "✓",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                            GlyphIcon(
+                                glyph = Glyph.Check,
+                                size = 20.dp,
+                                tint = MaterialTheme.colorScheme.primary,
                             )
                         }
                     } else {
@@ -233,33 +233,30 @@ private fun SettingsBackups(state: AppUiState, onPickBackupFolder: () -> Unit) {
 
 @Composable
 private fun SettingRow(label: String, value: String, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .semantics { contentDescription = if (value.isBlank()) label else "$label: $value" },
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = if (value.isBlank()) label else "$label: $value" }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.Start,
+            softWrap = true,
+        )
+        if (value.isNotBlank()) {
             Text(
-                text = label,
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Start,
+                text = value,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
                 softWrap = true,
+                modifier = Modifier.weight(1f, fill = false),
             )
-            if (value.isNotBlank()) {
-                Text(
-                    text = value,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.End,
-                    softWrap = true,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-            }
         }
     }
 }
