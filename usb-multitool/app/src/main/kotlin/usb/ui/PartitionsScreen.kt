@@ -700,13 +700,13 @@ fun PartitionsScreen(
     val screenScroll = rememberScrollState()
     val latestState by rememberUpdatedState(state)
     var viewportTop by remember { mutableFloatStateOf(0f) }
-    var selectorBottomWindow by remember(state.selectedPartitionId) {
+    var layoutBlockBottomWindow by remember(state.selectedPartitionId) {
         mutableFloatStateOf(Float.POSITIVE_INFINITY)
     }
-    // The pinned copy is a second rendering only while the layout selector is above
-    // the viewport; at rest the dropdown owns the only visible row.
+    // The pinned copy appears only after the whole Layout block has scrolled above
+    // the viewport; the block itself still owns the selector while visible.
     val pinnedVisible =
-        selected != null && selectorBottomWindow <= viewportTop
+        selected != null && layoutBlockBottomWindow <= viewportTop
 
     LaunchedEffect(
         state.device,
@@ -733,6 +733,10 @@ fun PartitionsScreen(
         ) {
             SectionCard(
                 title = stringResource(R.string.partitions_layout_title),
+                modifier = Modifier.onGloballyPositioned { coordinates ->
+                    layoutBlockBottomWindow =
+                        coordinates.positionInWindow().y + coordinates.size.height
+                },
                 titleColor = MaterialTheme.colorScheme.onSurface,
                 trailing = {
                     Row(
@@ -951,12 +955,7 @@ fun PartitionsScreen(
 
                 CancelOperationButton(state = state, onIntent = onIntent)
 
-                Box(
-                    modifier = Modifier.onGloballyPositioned { coordinates ->
-                        selectorBottomWindow =
-                            coordinates.positionInWindow().y + coordinates.size.height
-                    },
-                ) {
+                Box {
                     PartitionDropdown(
                         partitions = orderedPartitions,
                         selectedId = (selected ?: orderedPartitions.firstOrNull())?.id,
