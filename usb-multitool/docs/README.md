@@ -1,43 +1,48 @@
-# Документация проекта
+# USB Multitool
 
-Единое место: все проектные документы лежат в `docs/superpowers/specs/` плоским
-списком, имя файла начинается с даты. Отдельных вложенных каталогов для волн
-нет — новая волна добавляет файлы с той же схемой имени.
+Android-приложение для работы с внешними USB-накопителями без root: просмотр
+диска и разделов, создание и изменение MBR/GPT, файловые операции на
+FAT/exFAT/NTFS/ext4, запись raw-образов, установка Ventoy и подготовка
+Windows-носителя, rescue/backup и диагностика.
 
-## Требования
+## Платформа
 
-| Файл | Содержание |
-|---|---|
-| [2026-11-14-consolidated-requirements.md](superpowers/specs/2026-11-14-consolidated-requirements.md) | Свод первоначальных требований и согласованных решений |
-| [2026-11-14-user-notes-originals.md](superpowers/specs/2026-11-14-user-notes-originals.md) | Исходные заметки пользователя без правок |
-| [2026-11-19-wave3-README.md](superpowers/specs/2026-11-19-wave3-README.md) | Волна 3: индекс по блокам и правила Material 3 |
-| [2026-11-19-wave3-ventoy.md](superpowers/specs/2026-11-19-wave3-ventoy.md) | Ventoy: «Обновить», кнопка-иконка, SAF настроек |
-| [2026-11-19-wave3-files.md](superpowers/specs/2026-11-19-wave3-files.md) | Файлы: иконки, строка пути, RO/RW, меню, отступ |
-| [2026-11-19-wave3-shell-status.md](superpowers/specs/2026-11-19-wave3-shell-status.md) | Статус, центральные детали, формат логов |
-| [2026-11-19-wave3-partitions.md](superpowers/specs/2026-11-19-wave3-partitions.md) | Разделы: счётчик, «Используется», строка раздела |
-| [2026-11-19-wave3-round2-review-decisions.md](superpowers/specs/2026-11-19-wave3-round2-review-decisions.md) | Второе ревью: что применено, что отклонено и почему |
+- `minSdk 28` (Android 9), `targetSdk 36`, только `arm64-v8a`.
+- Нужен USB host/OTG и разрешение Android на устройство.
+- Запись идёт через USB Bulk-Only Transport (BOT) и SCSI; прямого доступа к
+  `/dev/block` и root нет.
+- Файловые системы монтируются собственными JNI-движками; FUSE не нужен.
+- Версия приложения: `0.1.0`, лицензия GPL-3.0-or-later.
 
-## Устройство и архитектура
+## Документы
 
 | Файл | Содержание |
 |---|---|
-| [2026-11-01-android-usb-multitool-design.md](superpowers/specs/2026-11-01-android-usb-multitool-design.md) | Общий дизайн приложения |
-| [2026-11-14-usb-interaction-state-model.md](superpowers/specs/2026-11-14-usb-interaction-state-model.md) | Модель состояний USB-взаимодействия |
-| [2026-11-12-architecture-refactor-plan.md](superpowers/specs/2026-11-12-architecture-refactor-plan.md) | План архитектурной декомпозиции |
+| [architecture.md](architecture.md) | Слои приложения, владение состоянием, USB-сессия, операции |
+| [storage.md](storage.md) | BOT/SCSI, claim/fencing, разделы, GPT/MBR, raw, SAF |
+| [filesystems.md](filesystems.md) | FAT/exFAT, NTFS, ext4: возможности, лимиты, ошибки |
+| [ui.md](ui.md) | Экраны, MD3, полоса разделов, RangeSlider и MiB-поля |
+| [build-test-release.md](build-test-release.md) | Сборка, native-движки, тесты, CI, APK |
+| [progress.md](progress.md) | Проверенный срез, APK и ограничения проверки |
 
-## История и доказательства
+## Быстрый старт
 
-| Файл | Содержание |
-|---|---|
-| [2026-11-14-project-progress.md](superpowers/specs/2026-11-14-project-progress.md) | Таблица срезов, CI-запуски, APK и ограничения проверок |
-| [2026-11-20-code-audit.md](superpowers/specs/2026-11-20-code-audit.md) | Аудит 2026-11-20: находки P1-P3, что исправлено и что осталось |
-| [2026-11-21-ui-audit-findings.md](superpowers/specs/2026-11-21-ui-audit-findings.md) | UI-аудит 2026-11-21: исправленное, оставшиеся дефекты и конфликты требований |
+```bash
+cd usb-multitool
+./gradlew :app:compileDebugKotlin
+./gradlew :app:testDebugUnitTest
+```
 
-## Правила ведения
+Полная сборка с движками и CI-эквивалент — в
+[build-test-release.md](build-test-release.md). Тяжёлую сборку APK запускать в
+GitHub Actions, не на телефоне.
 
-- Документ описывает требование или проверенное состояние, а не намерение:
-  незавершённое помечается как «не проверено» или «в работе».
-- Одна волна требований — один набор файлов с общим префиксом даты и слова
-  `waveN`; правки старых волн не переписывают историю, а добавляют новый файл.
-- Ссылки между документами относительные, имена файлов не переименовываются
-  без обновления индекса.
+## Границы
+
+- Устройство должно быть смонтировано эксклюзивно; приложение не работает с
+  чужими смонтированными томами и не пытается обойти Android USB permission.
+- Операции, меняющие таблицу разделов или содержимое диска, требуют
+  подтверждения и рассчитаны на выбранный диск; геометрия проверяется до
+  записи.
+- Визуальные, TalkBack/IME и физические USB/SAF/Ventoy-сценарии требуют
+  проверки на устройстве; см. [progress.md](progress.md).
