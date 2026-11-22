@@ -1436,41 +1436,43 @@ private fun SelectedPartitionCard(
                     Column(modifier = Modifier.selectableGroup()) {
                         FormatCatalog.supportedFormatIds().forEach { formatId ->
                             val formatSelected = formatChoice == formatId
-                            ListItem(
-                                headlineContent = {
-                                    Text(FormatCatalog.label(formatId))
+                            PopupChoiceBlock(
+                                selected = formatSelected,
+                                enabled = state.actionsEnabled,
+                                role = Role.RadioButton,
+                                onClick = {
+                                    onFilesystemMenu(null)
+                                    if (formatTarget.matches(latestState)) {
+                                        formatChoice = formatId
+                                        onIntent(
+                                            UiIntent.SelectFormatFilesystem(formatId),
+                                        )
+                                        onIntent(
+                                            UiIntent.RequestDestructive(
+                                                DestructiveAction.FORMAT_PARTITION,
+                                            ),
+                                        )
+                                    }
                                 },
-                                supportingContent = {
-                                    Text(formatDescription(formatId))
-                                },
-                                leadingContent = {
-                                    RadioButton(
-                                        selected = formatSelected,
-                                        onClick = null,
-                                    )
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 48.dp)
-                                    .selectable(
-                                        selected = formatSelected,
-                                        role = Role.RadioButton,
-                                        onClick = {
-                                            onFilesystemMenu(null)
-                                            if (formatTarget.matches(latestState)) {
-                                                formatChoice = formatId
-                                                onIntent(
-                                                    UiIntent.SelectFormatFilesystem(formatId),
-                                                )
-                                                onIntent(
-                                                    UiIntent.RequestDestructive(
-                                                        DestructiveAction.FORMAT_PARTITION,
-                                                    ),
-                                                )
-                                            }
-                                        },
+                            ) {
+                                ListItem(
+                                    headlineContent = {
+                                        Text(FormatCatalog.label(formatId))
+                                    },
+                                    supportingContent = {
+                                        Text(formatDescription(formatId))
+                                    },
+                                    leadingContent = {
+                                        RadioButton(
+                                            selected = formatSelected,
+                                            onClick = null,
+                                        )
+                                    },
+                                    colors = ListItemDefaults.colors(
+                                        containerColor = Color.Transparent,
                                     ),
-                            )
+                                )
+                            }
                         }
                     }
                 }
@@ -1643,37 +1645,39 @@ private fun RawWriteSection(
                                 style = MaterialTheme.typography.titleLarge,
                                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                             )
-                            ListItem(
-                                headlineContent = {
-                                    Text(stringResource(R.string.partitions_raw_source_phone))
+                            PopupChoiceBlock(
+                                onClick = {
+                                    sourceSheetOpen = false
+                                    onPickImage()
                                 },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 48.dp)
-                                    .clickable {
-                                        sourceSheetOpen = false
-                                        onPickImage()
+                            ) {
+                                ListItem(
+                                    headlineContent = {
+                                        Text(stringResource(R.string.partitions_raw_source_phone))
                                     },
-                            )
-                            ListItem(
-                                headlineContent = {
-                                    Text(stringResource(R.string.partitions_raw_source_stick))
+                                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                )
+                            }
+                            PopupChoiceBlock(
+                                onClick = {
+                                    sourceSheetOpen = false
+                                    onIntent(
+                                        UiIntent.BeginFilesPick(
+                                            purpose = FilesPickPurpose.RawSource,
+                                            returnTab = ShellTab.Partitions,
+                                            target = FilesPickTarget.File,
+                                            partitionId = state.selectedPartitionId,
+                                        ),
+                                    )
                                 },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 48.dp)
-                                    .clickable {
-                                        sourceSheetOpen = false
-                                        onIntent(
-                                            UiIntent.BeginFilesPick(
-                                                purpose = FilesPickPurpose.RawSource,
-                                                returnTab = ShellTab.Partitions,
-                                                target = FilesPickTarget.File,
-                                                partitionId = state.selectedPartitionId,
-                                            ),
-                                        )
+                            ) {
+                                ListItem(
+                                    headlineContent = {
+                                        Text(stringResource(R.string.partitions_raw_source_stick))
                                     },
-                            )
+                                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                )
+                            }
                         }
                     }
                 }

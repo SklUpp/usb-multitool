@@ -892,20 +892,29 @@ internal fun ImportFolderDialog(
                 items(items = listed, key = { it }) { folder ->
                     val name = usb.ventoy.folderName(folder)
                     val openLabel = stringResource(R.string.import_folder_open, name)
-                    ListItem(
-                        headlineContent = { Text(text = "$name/", style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), maxLines = 1, overflow = TextOverflow.StartEllipsis, softWrap = false) },
-                        leadingContent = {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_file_folder),
-                                contentDescription = null,
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = { onEnter(folder) }, enabled = !blocked).clearAndSetSemantics { contentDescription = openLabel },
-                    )
+                    PopupChoiceBlock(enabled = !blocked, onClick = { onEnter(folder) }) {
+                        ListItem(
+                            headlineContent = { Text(text = "$name/", style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), maxLines = 1, overflow = TextOverflow.StartEllipsis, softWrap = false) },
+                            leadingContent = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_file_folder),
+                                    contentDescription = null,
+                                )
+                            },
+                            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                            modifier = Modifier.clearAndSetSemantics { contentDescription = openLabel },
+                        )
+                    }
                 }
             }
         }
-        ListItem(headlineContent = { Text(stringResource(R.string.import_folder_use)) }, supportingContent = { Text(text = stringResource(R.string.import_destination_line, currentPath), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), softWrap = true) }, modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, enabled = trusted && !blocked, onClick = { onPick(currentPath) }))
+        PopupChoiceBlock(enabled = trusted && !blocked, onClick = { onPick(currentPath) }) {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.import_folder_use)) },
+                supportingContent = { Text(text = stringResource(R.string.import_destination_line, currentPath), style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace), softWrap = true) },
+                colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+            )
+        }
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (parent != null) {
                 TextButton(onClick = onUp, enabled = !blocked) { Text(stringResource(R.string.import_folder_up)) }

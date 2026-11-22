@@ -467,11 +467,37 @@ internal fun AutounattendSection(
                 if (candidates?.truncated == true) Text(stringResource(R.string.unattend_truncated), modifier = Modifier.padding(horizontal = 24.dp))
                 candidates?.error?.let { Text(stringResource(R.string.raw_stick_incomplete), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp)) }
                 candidates?.images.orEmpty().forEach { image ->
-                    Row(Modifier.fillMaxWidth().clickable { if (image.problem == null && !image.bound) selected = if (image.imagePath in selected) selected - image.imagePath else selected + image.imagePath }, verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = image.imagePath in selected, onCheckedChange = null, enabled = image.problem == null && !image.bound)
-                        Column(Modifier.padding(8.dp)) {
-                            Text(image.imagePath)
-                            image.problem?.let { Text(stringResource(bindProblemText(it)), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+                    val selectable = image.problem == null && !image.bound
+                    val checked = image.imagePath in selected
+                    PopupChoiceBlock(
+                        selected = checked,
+                        enabled = selectable,
+                        role = Role.Checkbox,
+                        onClick = {
+                            if (selectable) {
+                                selected = if (checked) {
+                                    selected - image.imagePath
+                                } else {
+                                    selected + image.imagePath
+                                }
+                            }
+                        },
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = checked, onCheckedChange = null, enabled = selectable)
+                            Column(Modifier.padding(8.dp)) {
+                                Text(image.imagePath)
+                                image.problem?.let {
+                                    Text(
+                                        stringResource(bindProblemText(it)),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -2189,26 +2215,18 @@ private fun OfficialControlKeyPickerDialog(
                     ) { def ->
                         val alreadySet = def.key in existingKeys
                         val selectedRow = selectedKey == def.key
+                        PopupChoiceBlock(
+                            selected = selectedRow,
+                            enabled = state.actionsEnabled && !alreadySet,
+                            onClick = {
+                                selectedKey = def.key
+                                value = ""
+                                problem = null
+                            },
+                        ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(MaterialTheme.shapes.small)
-                                .background(
-                                    if (selectedRow) {
-                                        MaterialTheme.colorScheme.secondaryContainer
-                                    } else {
-                                        Color.Transparent
-                                    },
-                                )
-                                .clickable(
-                                    enabled = state.actionsEnabled && !alreadySet,
-                                    role = Role.Button,
-                                    onClick = {
-                                        selectedKey = def.key
-                                        value = ""
-                                        problem = null
-                                    },
-                                )
                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                                 .heightIn(min = 48.dp),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -2263,6 +2281,7 @@ private fun OfficialControlKeyPickerDialog(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
+                        }
                         }
                     }
                     val selectedDef = selected

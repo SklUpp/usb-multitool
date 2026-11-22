@@ -2144,21 +2144,19 @@ private fun sheetActionRow(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    // Disabled dims only this row's text and icon (onSurface 0.38); the row itself stays
-    // transparent so the sheet keeps one continuous surface with no grey plate.
+    // Disabled dims only this row's text and icon; each action is a rounded plate.
     val contentColor =
         if (enabled) {
             LocalContentColor.current
         } else {
             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
         }
-    ListItem(
-        headlineContent = { Text(label, color = contentColor) },
-        leadingContent = { GlyphIcon(glyph, size = 22.dp, tint = contentColor) },
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(role = Role.Button, enabled = enabled, onClick = onClick)
-            .semantics { if (!enabled) disabled() },
-    )
+    PopupChoiceBlock(enabled = enabled, onClick = onClick) {
+        ListItem(
+            headlineContent = { Text(label, color = contentColor) },
+            leadingContent = { GlyphIcon(glyph, size = 22.dp, tint = contentColor) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.semantics { if (!enabled) disabled() },
+        )
+    }
 }
