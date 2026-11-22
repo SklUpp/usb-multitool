@@ -1,6 +1,6 @@
 package usb.ui
 
-import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
 import android.content.res.Resources
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,7 +15,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.toggleable
@@ -1081,7 +1085,7 @@ private fun GlobalSettingsEditorDialog(
                         modifier = Modifier
                             .weight(1f, fill = true)
                             .verticalScroll(rememberScrollState())
-                            .animateContentSize(),
+                            .imePadding(),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
@@ -2129,20 +2133,13 @@ private fun OfficialControlKeyPickerDialog(
     var value by remember { mutableStateOf("") }
     var problem by remember { mutableStateOf<String?>(null) }
     val resources = LocalContext.current.resources
-    val problemRequester = remember { BringIntoViewRequester() }
-    val catalogWarningRequester = remember { BringIntoViewRequester() }
-    val valueRequester = remember { BringIntoViewRequester() }
+    val listState = rememberLazyListState()
     val selected = defs.firstOrNull { it.key == selectedKey }
-    LaunchedEffect(problem) {
-        if (problem != null) problemRequester.bringIntoView()
-    }
-    LaunchedEffect(state.ventoyControlKeyCatalogError) {
-        if (state.ventoyControlKeyCatalogError != null) {
-            catalogWarningRequester.bringIntoView()
-        }
-    }
+    val valueEditorIndex = defs.size
     LaunchedEffect(selectedKey) {
-        if (selectedKey != null) valueRequester.bringIntoView()
+        if (selectedKey != null) {
+            listState.animateScrollToItem(valueEditorIndex)
+        }
     }
     LaunchedEffect(defs) {
         if (selectedKey != null && defs.none { it.key == selectedKey }) {
@@ -2159,8 +2156,7 @@ private fun OfficialControlKeyPickerDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 560.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .heightIn(max = 560.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
@@ -2198,7 +2194,6 @@ private fun OfficialControlKeyPickerDialog(
                             ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.bringIntoViewRequester(catalogWarningRequester),
                         )
                         if (defs.isNotEmpty()) {
                             Text(
@@ -2239,120 +2234,153 @@ private fun OfficialControlKeyPickerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                defs.forEach { def ->
-                    val alreadySet = def.key in existingKeys
-                    ListItem(
-                        headlineContent = {
-                            Text(
-                                text = def.key,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        supportingContent = {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    text = kindLabel(def.kind),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(
+                        items = defs,
+                        key = { it.key },
+                        contentType = { "control-key" },
+                    ) { def ->
+                        val alreadySet = def.key in existingKeys
+                        val selectedRow = selectedKey == def.key
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (selectedRow) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    } else {
+                                        Color.Transparent
+                                    },
                                 )
-                                ventoyKeyShortDescription(def.key)?.let { description ->
+                                .clickable(
+                                    enabled = state.actionsEnabled && !alreadySet,
+                                    role = Role.Button,
+                                    onClick = {
+                                        selectedKey = def.key
+                                        value = ""
+                                        problem = null
+                                    },
+                                )
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .heightIn(min = 48.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = def.key,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (alreadySet) {
                                     Text(
-                                        text = description,
+                                        text = stringResource(R.string.wave4_catalog_already_set),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
-                        },
-                        trailingContent = if (alreadySet) {
-                            {
+                            Text(
+                                text = if (def.allowed.isNotEmpty()) {
+                                    def.allowed.joinToString()
+                                } else {
+                                    kindLabel(def.kind)
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = if (def.allowed.isNotEmpty()) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            ventoyKeyShortDescription(def.key)?.let { description ->
                                 Text(
-                                    text = stringResource(R.string.wave4_catalog_already_set),
+                                    text = description,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        } else {
-                            null
-                        },
-                        colors = ListItemDefaults.colors(
-                            containerColor = if (selectedKey == def.key) {
-                                MaterialTheme.colorScheme.secondaryContainer
-                            } else {
-                                Color.Transparent
-                            },
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable(
-                                enabled = state.actionsEnabled && !alreadySet,
-                                role = Role.Button,
-                                onClick = {
-                                    selectedKey = def.key
-                                    value = ""
-                                    problem = null
-                                },
-                            )
-                            .heightIn(min = 48.dp),
-                    )
-                }
-                selected?.let { def ->
-                    Text(
-                        text = stringResource(R.string.wave4_catalog_value_title, def.key),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.bringIntoViewRequester(valueRequester),
-                    )
-                    if (def.allowed.isNotEmpty()) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            def.allowed.forEach { option ->
-                                FilterChip(
-                                    selected = value == option,
-                                    onClick = {
-                                        value = option
-                                        problem = null
-                                    },
-                                    enabled = state.actionsEnabled,
-                                    label = { Text(option) },
-                                    modifier = Modifier.heightIn(min = 48.dp),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
-                    } else {
-                        OutlinedTextField(
-                            value = value,
-                            onValueChange = {
-                                value = it
-                                problem = null
-                            },
-                            label = { Text(stringResource(R.string.settings_value_label)) },
-                            singleLine = true,
-                            enabled = state.actionsEnabled,
-                            keyboardOptions = if (def.kind == VentoyControlKeyKind.INTEGER) {
-                                KeyboardOptions(keyboardType = KeyboardType.Number)
-                            } else {
-                                KeyboardOptions.Default
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                    }
+                    val selectedDef = selected
+                    if (selectedDef != null) {
+                        item(key = "value-editor") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.wave4_catalog_value_title,
+                                        selectedDef.key,
+                                    ),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                if (selectedDef.allowed.isNotEmpty()) {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        selectedDef.allowed.forEach { option ->
+                                            FilterChip(
+                                                selected = value == option,
+                                                onClick = {
+                                                    value = option
+                                                    problem = null
+                                                },
+                                                enabled = state.actionsEnabled,
+                                                label = { Text(option) },
+                                                modifier = Modifier.heightIn(min = 48.dp),
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    OutlinedTextField(
+                                        value = value,
+                                        onValueChange = {
+                                            value = it
+                                            problem = null
+                                        },
+                                        label = { Text(stringResource(R.string.settings_value_label)) },
+                                        singleLine = true,
+                                        enabled = state.actionsEnabled,
+                                        keyboardOptions = if (selectedDef.kind == VentoyControlKeyKind.INTEGER) {
+                                            KeyboardOptions(keyboardType = KeyboardType.Number)
+                                        } else {
+                                            KeyboardOptions.Default
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-                problem?.let {
+                problem?.let { message ->
                     Text(
-                        text = it,
+                        text = message,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.bringIntoViewRequester(problemRequester),
                     )
                 }
             }
