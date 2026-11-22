@@ -440,7 +440,7 @@
     <string name="diagnostics_gpt_partitions">Partitions in backup: %1$s</string>
     <string name="diagnostics_gpt_valid">Headers, entry CRCs and partition bounds validate.</string>
     <string name="diagnostics_pick_image_folder">Choose folder</string>
-    <string name="diagnostics_restore_image">Restore image</string>
+    <string name="diagnostics_restore_image">Restore image and map</string>
     <string name="diagnostics_restore_files_title">Selected restore files</string>
     <string name="diagnostics_restore_map_missing">No rescue map (.map) found in the selected folder</string>
     <string name="diagnostics_no_gpt_file">No GPT file selected</string>

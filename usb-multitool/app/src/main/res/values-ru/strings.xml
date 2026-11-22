@@ -441,7 +441,7 @@
     <string name="diagnostics_gpt_partitions">Разделов в копии: %1$s</string>
     <string name="diagnostics_gpt_valid">Заголовки, CRC таблиц и границы разделов проверены.</string>
     <string name="diagnostics_pick_image_folder">Выбрать папку</string>
-    <string name="diagnostics_restore_image">Восстановить образ</string>
+    <string name="diagnostics_restore_image">Восстановить образ и карту</string>
     <string name="diagnostics_restore_files_title">Выбранные файлы восстановления</string>
     <string name="diagnostics_restore_map_missing">В выбранной папке нет карты восстановления (.map)</string>
     <string name="diagnostics_no_gpt_file">Файл GPT не выбран</string>
