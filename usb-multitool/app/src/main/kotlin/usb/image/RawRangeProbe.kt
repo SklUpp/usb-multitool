@@ -26,6 +26,8 @@ data class RangeProbeResult(
     val diskSectorCount: ULong,
     val sectorSize: Int,
     val sampledSectors: List<ULong>,
+    /** How many of [sampledSectors] contained a non-zero byte; evidence, not a guess. */
+    val dataSectors: Int = 0,
     val attachment: RangeProbeAttachment? = null,
     /** Echo of the caller's probe request; stale ids must be discarded by the host. */
     val requestId: Long = 0L,
@@ -103,7 +105,7 @@ object RangeProbe {
         }
         val buffer = ByteBuffer.allocate(sectorSize)
         val classified = mutableListOf<ULong>()
-        var sawData = false
+        var dataSectors = 0
         for (lba in sampled) {
             buffer.clear()
             try {
@@ -122,19 +124,19 @@ object RangeProbe {
             }
             classified += lba
             val data = buffer.array()
-            for (byte in data) {
-                if (byte != 0.toByte()) {
-                    sawData = true
-                    break
-                }
-            }
+            if (data.any { it != 0.toByte() }) dataSectors++
         }
         return RangeProbeResult(
-            finding = if (sawData) RangeProbeFinding.DataPresent else RangeProbeFinding.NoDataInSamples,
+            finding = if (dataSectors > 0) {
+                RangeProbeFinding.DataPresent
+            } else {
+                RangeProbeFinding.NoDataInSamples
+            },
             range = range,
             diskSectorCount = disk.sectorCount,
             sectorSize = sectorSize,
             sampledSectors = classified,
+            dataSectors = dataSectors,
             attachment = attachment,
             requestId = requestId,
         )

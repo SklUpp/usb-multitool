@@ -1484,9 +1484,11 @@ object UiReducer {
                 val selected = when {
                     probingRetain -> state.selectedPartitionId?.takeIf { id ->
                         partitions.any { it.id == id }
-                    }
+                    } ?: partitions.firstOrNull()?.id
                     initialSelection -> partitions.firstOrNull()?.id
-                    sameStick -> retainedSelection
+                    // A vanished or re-geometried target must not leave Files with no
+                    // selectable partition: fall back to the first live one.
+                    sameStick -> retainedSelection ?: partitions.firstOrNull()?.id
                     else -> null
                 }
                 // Ventoy/XML is scoped to the current attachment.

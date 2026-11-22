@@ -306,6 +306,7 @@
     <string name="partitions_raw_write_title">Посекторная запись файла</string>
     <string name="raw_write_geometry_unavailable">Геометрия диска недоступна: валидация диапазона невозможна, запись заблокирована.</string>
     <string name="raw_write_start_label">Начальный LBA</string>
+    <string name="raw_write_start_aligned">Начало будет выровнено до LBA %1$d.</string>
     <string name="raw_write_end_and_size">Конечный LBA %1$d, будет записано %2$s</string>
     <string name="raw_write_problem_empty">Диапазон пуст.</string>
     <string name="raw_write_problem_beyond_disk">Образ выходит за пределы диска. Укажите меньший начальный LBA.</string>
@@ -324,8 +325,8 @@
     <string name="raw_write_warning_unaligned">Начальный LBA %1$d не выровнен по %2$d секторам.</string>
     <string name="raw_write_warning_scheme">Разметка не подтверждена: проверка защиты разделов отключена.</string>
     <string name="raw_probe_action">Проверить диапазон на данные</string>
-    <string name="raw_probe_data_present">В выбранном диапазоне найдены данные.</string>
-    <string name="raw_probe_no_data_sampled">В контрольных секторах данных нет (выборочная проверка).</string>
+    <string name="raw_probe_data_present">Данные найдены в %1$d из %2$d проверенных секторов.</string>
+    <string name="raw_probe_no_data_sampled">Все %1$d проверенных секторов пусты.</string>
     <string name="raw_probe_unknown">Наличие данных проверить не удалось.</string>
     <string name="raw_readback_verified">Проверено обратным чтением.</string>
     <string name="raw_readback_verified_partial">Верификация пройдена: записанные данные проверены, диапазон записан частично (%1$d байт).</string>

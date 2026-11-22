@@ -244,11 +244,9 @@ fun AppShell(
     onRequestBatchDownload: (FilesBatchSelection) -> Unit = {},
     /** Opens OpenMultipleDocuments into the pinned current Files directory. */
     onRequestBatchUpload: () -> Unit = {},
-    onPickBackup: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
-    onPickRestoreFolder: () -> Unit = {},
     /** Live SAF grant predicate for Diagnostics create gates; Activity owns the check. */
     backupFolderGrantValid: () -> Boolean,
     /** Writes the redacted on-device trace to a user-chosen document (SAF). */
@@ -745,11 +743,9 @@ fun AppShell(
                                     state = state,
                                     onIntent = onIntent,
                                     modifier = Modifier.fillMaxSize(),
-                                    onPickBackup = onPickBackup,
                                     onPickBackupFolder = onPickBackupFolder,
                                     onStartRescueBackup = onStartRescueBackup,
                                     onCreateGptCopy = onCreateGptCopy,
-                                    onPickRestoreFolder = onPickRestoreFolder,
                                     onOpenBackupSettings = {
                                         settingsReturnTab = ShellTab.Diagnostics.name
                                         onIntent(UiIntent.SelectTab(ShellTab.Settings))

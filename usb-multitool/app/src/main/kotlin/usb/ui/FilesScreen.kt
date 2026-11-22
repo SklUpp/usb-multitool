@@ -1389,9 +1389,7 @@ private fun FolderSubblock(
                         OutlinedTextField(
                             value = filter,
                             onValueChange = onFilterChange,
-                            placeholder = { Text(stringResource(R.string.files_filter_hint)) },
                             singleLine = true,
-                            leadingIcon = { GlyphIcon(Glyph.Search, size = 18.dp) },
                             trailingIcon = if (filter.isNotEmpty()) {
                                 {
                                     IconButton(
@@ -1536,10 +1534,12 @@ internal fun PartitionDropdown(
     enabled: Boolean,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
+    showLba: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == id } }
-    val selectable = partitions.isNotEmpty() && (partitions.size > 1 || selected == null)
+        ?: partitions.firstOrNull()
+    val selectable = partitions.isNotEmpty()
     val rowEnabled = enabled && selectable
     LaunchedEffect(rowEnabled) {
         if (!rowEnabled) expanded = false
@@ -1584,6 +1584,7 @@ internal fun PartitionDropdown(
                                     sectorSize,
                                 ),
                             ),
+                            showLba = showLba,
                         )
                     },
                     onClick = {
@@ -1617,6 +1618,7 @@ private fun PartitionOptionRow(
     selected: Boolean,
     access: PartitionWriteAccess,
     usage: String?,
+    showLba: Boolean,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1644,6 +1646,9 @@ private fun PartitionOptionRow(
                 if (partition.displayEfi) {
                     Badge(text = stringResource(R.string.partitions_badge_efi))
                 }
+                if (partition.displayBootable) {
+                    Badge(text = stringResource(R.string.partitions_badge_boot))
+                }
                 usage?.let {
                     Text(
                         text = it,
@@ -1656,19 +1661,21 @@ private fun PartitionOptionRow(
                     )
                 }
             }
-            lbaRangeLabel(
-                start = partition.startLba,
-                count = partition.sectorCount,
-                templateId = R.string.partitions_info_lba_range_value,
-            )?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (showLba) {
+                lbaRangeLabel(
+                    start = partition.startLba,
+                    count = partition.sectorCount,
+                    templateId = R.string.partitions_info_lba_range_value,
+                )?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         WriteAccessBadge(access)

@@ -140,4 +140,16 @@ class PartitionRangeMathTest {
         assertNull(PartitionRangeMath.nearestMagnet(1050f, 4096UL, snapPoints, 10f))
         assertNull(PartitionRangeMath.nearestMagnet(1020f, 4096UL, snapPoints, 0f))
     }
+
+    @Test
+    fun alignUpRoundsOnlyWhenNeededAndNeverWraps() {
+        assertEquals(8UL, PartitionRangeMath.alignUp(1UL, 8UL))
+        assertEquals(8UL, PartitionRangeMath.alignUp(8UL, 8UL))
+        assertEquals(16UL, PartitionRangeMath.alignUp(9UL, 8UL))
+        assertEquals(7UL, PartitionRangeMath.alignUp(7UL, 1UL))
+        assertEquals(
+            ULong.MAX_VALUE,
+            PartitionRangeMath.alignUp(ULong.MAX_VALUE, 8UL),
+        )
+    }
 }

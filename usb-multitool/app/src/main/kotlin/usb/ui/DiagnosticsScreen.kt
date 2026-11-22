@@ -102,12 +102,10 @@ fun DiagnosticsScreen(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
-    onPickBackup: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
     onOpenBackupSettings: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
-    onPickRestoreFolder: () -> Unit = {},
     /** Live persisted-grant check from the shell; required so a stale snapshot cannot ship. */
     backupFolderGrantValid: () -> Boolean,
 ) {
@@ -215,7 +213,8 @@ fun DiagnosticsScreen(
             },
         ) {
             val backupFolderReady = state.backupFolderUsable
-            val restoreFolderLabel = stringResource(R.string.diagnostics_pick_image_folder)
+            val chooseFolderLabel =
+                stringResource(R.string.diagnostics_backup_choose_folder)
             val folderStatusText = when {
                 state.backupFolderUri == null ->
                     stringResource(R.string.diagnostics_backup_folder_none)
@@ -230,24 +229,40 @@ fun DiagnosticsScreen(
                 else ->
                     MaterialTheme.colorScheme.onSurface
             }
-            Column(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = stringResource(R.string.diagnostics_backup_folder),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = folderStatusText,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = folderStatusColor,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (!backupFolderReady) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.diagnostics_backup_folder),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = folderStatusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = folderStatusColor,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                FilledTonalIconButton(
+                    onClick = onPickBackupFolder,
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier.semantics {
+                        contentDescription = chooseFolderLabel
+                    },
+                ) {
+                    GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                }
+            }
+            if (!backupFolderReady) {
                     // Folder choice lives in Settings; create actions stay blocked until a
                     // usable tree is available. Restore/wipe keep their own paths.
                     val noticeText = stringResource(
@@ -259,8 +274,6 @@ fun DiagnosticsScreen(
                     )
                     val openSettingsLabel =
                         stringResource(R.string.diagnostics_backup_open_settings)
-                    val chooseFolderLabel =
-                        stringResource(R.string.diagnostics_backup_choose_folder)
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -281,14 +294,6 @@ fun DiagnosticsScreen(
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.weight(1f),
                             )
-                            FilledTonalIconButton(
-                                onClick = onPickBackupFolder,
-                                modifier = Modifier.semantics {
-                                    contentDescription = chooseFolderLabel
-                                },
-                            ) {
-                                GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
-                            }
                             TextButton(
                                 onClick = onOpenBackupSettings,
                                 modifier = Modifier.heightIn(min = 48.dp),
@@ -301,12 +306,21 @@ fun DiagnosticsScreen(
                         }
                     }
                 }
-            }
 
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_rescue_backup),
                 hint = stringResource(R.string.diagnostics_rescue_backup_hint),
             )
+            val rescueImage = state.rescueImageInspection
+                ?.takeIf { it.uri == state.rescueImageUri }
+            val rescueMap = state.rescueMapInspection
+                ?.takeIf { it.uri == state.rescueMapUri }
+            val rescueReady = state.rescueImageUri != null &&
+                state.rescueMapUri != null &&
+                rescueImage != null &&
+                rescueMap != null &&
+                rescueMap.error == null &&
+                rescueMap.summary?.sectorSize != null
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -326,41 +340,26 @@ fun DiagnosticsScreen(
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
-                FilledTonalButton(
-                    onClick = onPickRestoreFolder,
-                    enabled = state.actionsEnabled,
+                Button(
+                    onClick = {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+                    },
+                    enabled = state.actionsEnabled && rescueReady,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
                 ) {
                     GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = stringResource(R.string.diagnostics_pick_image_folder),
+                        text = stringResource(R.string.diagnostics_restore_image),
                         style = MaterialTheme.typography.labelMedium,
                     )
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.diagnostics_restore_files_title),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                FilledTonalIconButton(
-                    onClick = onPickRestoreFolder,
-                    enabled = state.actionsEnabled,
-                    modifier = Modifier.semantics {
-                        contentDescription = restoreFolderLabel
-                    },
-                ) {
-                    GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
                 }
             }
             if (state.rescueImageUri != null || state.rescueMapUri != null) {
@@ -373,83 +372,63 @@ fun DiagnosticsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-            if (state.rescueImageUri != null) {
-                Text(
-                    text = restorePathText(
-                        state.rescueImageUri,
-                        state.rescueImageInspection?.displayName,
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                InspectionText(
-                    rescueImageInspectionLines(
-                        state.rescueImageInspection?.takeIf { it.uri == state.rescueImageUri },
-                    ),
-                )
-            }
-            if (state.rescueImageUri != null && state.rescueMapUri == null) {
-                Text(
-                    text = stringResource(R.string.diagnostics_restore_map_missing),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            if (state.rescueMapUri != null) {
-                Text(
-                    text = restorePathText(
-                        state.rescueMapUri,
-                        state.rescueMapInspection?.displayName,
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                InspectionText(
-                    rescueMapInspectionLines(
-                        state.rescueMapInspection?.takeIf { it.uri == state.rescueMapUri },
-                    ),
-                )
-            }
+                        if (state.rescueImageUri != null) {
+                            Text(
+                                text = restorePathText(
+                                    state.rescueImageUri,
+                                    state.rescueImageInspection?.displayName,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            InspectionText(
+                                rescueImageInspectionLines(
+                                    state.rescueImageInspection?.takeIf {
+                                        it.uri == state.rescueImageUri
+                                    },
+                                ),
+                            )
+                        }
+                        if (state.rescueImageUri != null && state.rescueMapUri == null) {
+                            Text(
+                                text = stringResource(R.string.diagnostics_restore_map_missing),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (state.rescueMapUri != null) {
+                            Text(
+                                text = restorePathText(
+                                    state.rescueMapUri,
+                                    state.rescueMapInspection?.displayName,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            InspectionText(
+                                rescueMapInspectionLines(
+                                    state.rescueMapInspection?.takeIf {
+                                        it.uri == state.rescueMapUri
+                                    },
+                                ),
+                            )
+                        }
                     }
                 }
-            }
-
-            val rescueImage = state.rescueImageInspection
-                ?.takeIf { it.uri == state.rescueImageUri }
-            val rescueMap = state.rescueMapInspection
-                ?.takeIf { it.uri == state.rescueMapUri }
-            val rescueReady = state.rescueImageUri != null &&
-                state.rescueMapUri != null &&
-                rescueImage != null &&
-                rescueMap != null &&
-                rescueMap.error == null &&
-                rescueMap.summary?.sectorSize != null
-            Button(
-                onClick = {
-                    onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
-                },
-                enabled = state.actionsEnabled && rescueReady,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-            ) {
-                GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.diagnostics_restore_image))
             }
 
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_gpt_copy),
                 hint = stringResource(R.string.diagnostics_gpt_copy_hint),
             )
+            val gptRestoreReady = state.backupUri != null &&
+                state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
+                    it.error == null && it.summary != null
+                } == true
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -469,57 +448,55 @@ fun DiagnosticsScreen(
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
-                FilledTonalButton(
-                    onClick = onPickBackup,
-                    enabled = state.actionsEnabled,
+                Button(
+                    onClick = {
+                        onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
+                    },
+                    enabled = state.actionsEnabled && gptRestoreReady,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
                 ) {
                     GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = stringResource(R.string.diagnostics_pick_gpt_file),
+                        text = stringResource(R.string.diagnostics_restore_gpt),
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
             }
             if (state.backupUri != null) {
-                Text(
-                    text = restorePathText(
-                        state.backupUri,
-                        state.backupInspection?.displayName,
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                InspectionText(
-                    gptBackupInspectionLines(
-                        state.backupInspection?.takeIf { it.uri == state.backupUri },
-                    ),
-                )
-            }
-            val gptRestoreReady = state.backupUri != null &&
-                state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
-                    it.error == null && it.summary != null
-                } == true
-            Button(
-                onClick = {
-                    onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
-                },
-                enabled = state.actionsEnabled && gptRestoreReady,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-            ) {
-                GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.diagnostics_restore_gpt))
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = restorePathText(
+                                state.backupUri,
+                                state.backupInspection?.displayName,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        InspectionText(
+                            gptBackupInspectionLines(
+                                state.backupInspection?.takeIf { it.uri == state.backupUri },
+                            ),
+                        )
+                    }
+                }
             }
             // Live backup-GPT repair: RequestDestructive(GPT_REPAIR), never GPT_RESTORE.
             // Same UI guards as the former Partitions repair card: actionsEnabled and a

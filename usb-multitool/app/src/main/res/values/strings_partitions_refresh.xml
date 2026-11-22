@@ -14,6 +14,8 @@
     <string name="partitions_scheme_arrow">→</string>
     <!-- Localized EFI badge text (same glyph in every locale). -->
     <string name="partitions_badge_efi">EFI</string>
+    <!-- Critical boot-role badge shared by Files and Partitions lists. -->
+    <string name="partitions_badge_boot">BOOT</string>
     <!-- Compact caption under the EFI write control. -->
     <string name="partitions_efi_ro_caption">Permission applies only to this partition and connection; reconnecting clears it.</string>
     <!-- Sticky / sheet expand control. -->

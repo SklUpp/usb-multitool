@@ -181,6 +181,11 @@ private fun <T> fingerprintOrNull(block: () -> T): T? = try {
 private const val WINDOWS_IMPORT_PREFS = "usb.multitool.windows_import"
 private const val WINDOWS_IMPORT_NEXT_CODE_KEY = "next_request_code"
 
+/** GPT critical backups in the shared backup folder use this deterministic prefix. */
+private fun isGptBackupName(name: String): Boolean =
+    name.startsWith("gpt-critical-", ignoreCase = true) &&
+        name.endsWith(".bin", ignoreCase = true)
+
 /** Durable high-water storage; allocation itself is serialized in [WindowsImportRequestCodes]. */
 private class SharedPreferencesRequestCodeStorage(
     private val prefs: SharedPreferences,
@@ -601,6 +606,11 @@ class MainViewModel(
         onIntent(UiIntent.SetBackupFolder(uri.toString(), name, usable))
         trace.log("picker.backup_folder", "uri" to uri.toString(), "usable" to usable)
         onIntent(UiIntent.AppendLog(logLine("Backup folder: ${name ?: "unnamed"}")))
+        if (usable) {
+            // One folder drives both backup and restore; refresh its paired artifacts.
+            onRescueArchiveFolderPicked(uri, quiet = true)
+            scanGptBackupInFolder(uri)
+        }
         return usable
     }
 
@@ -2272,6 +2282,32 @@ class MainViewModel(
         }
     }
 
+    /** Newest GPT critical backup in the shared folder, or clear the stale selection. */
+    private fun scanGptBackupInFolder(folderUri: Uri) {
+        val resolver = getApplication<Application>().contentResolver
+        scope.launch(Dispatchers.IO) {
+            val entries = runCatching {
+                SafBackupFolder(resolver, folderUri).listRootFiles()
+            }.getOrNull() ?: return@launch
+            val candidate = entries
+                .filter { !it.isDirectory && isGptBackupName(it.name) }
+                .maxByOrNull { it.name }
+            withContext(Dispatchers.Main.immediate) {
+                if (candidate == null) {
+                    onIntent(
+                        UiIntent.SetBackupFile(
+                            uri = null,
+                            inspection = null,
+                            requestId = gptPickGeneration.incrementAndGet(),
+                        ),
+                    )
+                } else {
+                    onGptBackupPicked(candidate.uri)
+                }
+            }
+        }
+    }
+
     private fun classifyRescueImage(
         resolver: ContentResolver,
         uri: Uri,
@@ -2296,13 +2332,13 @@ class MainViewModel(
      * older result. On success the existing destructive confirmation opens with the same
      * inspection types as the old per-file pickers.
      */
-    fun onRescueArchiveFolderPicked(uri: Uri) {
+    fun onRescueArchiveFolderPicked(uri: Uri, quiet: Boolean = false) {
         trace.log("picker.rescue_folder", "uri" to uri.toString())
-        onIntent(UiIntent.AppendLog(logLine("Restore folder picked")))
+        if (!quiet) onIntent(UiIntent.AppendLog(logLine("Restore folder picked")))
         val generation = rescueArchivePickGeneration.incrementAndGet()
         val expectedAttachGeneration = state.device?.attachGeneration
         val resolver = getApplication<Application>().contentResolver
-        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
+        if (!quiet) onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
         scope.launch(Dispatchers.IO) {
             var invalid: BackupArchive.Selection.Invalid? = null
             var imageUri: String? = null
@@ -2320,7 +2356,10 @@ class MainViewModel(
                         sizeBytes = it.sizeBytes,
                     )
                 }
-                when (val selection = BackupArchive.select(entries)) {
+                // The shared folder may also hold GPT critical backups; they are not
+                // part of the image+map pair and must not reject it as unexpected.
+                val restoreEntries = entries.filterNot { isGptBackupName(it.name) }
+                when (val selection = BackupArchive.select(restoreEntries)) {
                     is BackupArchive.Selection.Invalid -> invalid = selection
                     is BackupArchive.Selection.Ready -> {
                         val pair = selection.pair
@@ -2446,18 +2485,23 @@ class MainViewModel(
                     onIntent(UiIntent.SetRescueArchiveTree(null))
                     onIntent(UiIntent.SetRescueImage(null, null, generation))
                     onIntent(UiIntent.SetRescueMap(null, null, generation))
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(UiMessageKey.ArchiveUnreadable, listOf(rejection)),
-                        ),
-                    )
+                    if (!quiet) {
+                        onIntent(
+                            UiIntent.Status(
+                                UiMessage.Key(
+                                    UiMessageKey.ArchiveUnreadable,
+                                    listOf(rejection),
+                                ),
+                            ),
+                        )
+                    }
                     return@withContext
                 }
                 invalid?.let {
                     onIntent(UiIntent.SetRescueArchiveTree(null))
                     onIntent(UiIntent.SetRescueImage(null, null, generation))
                     onIntent(UiIntent.SetRescueMap(null, null, generation))
-                    onIntent(UiIntent.Status(UiReducer.archiveInvalidMessage(it)))
+                    if (!quiet) onIntent(UiIntent.Status(UiReducer.archiveInvalidMessage(it)))
                     return@withContext
                 }
                 onIntent(UiIntent.SetRescueArchiveTree(uri.toString()))
@@ -7294,17 +7338,6 @@ class MainActivity : ComponentActivity() {
         viewModel.onSafImagePicked(uri)
     }
 
-    /** SAF file chosen for the next GPT critical-sector restore. */
-    private val gptBackupPickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri: Uri? ->
-        if (uri == null) return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        viewModel.onGptBackupPicked(uri)
-    }
-
     /**
      * SAF document chosen as read-only Ventoy settings import input; Apply writes USB target.
      *
@@ -7452,20 +7485,6 @@ class MainActivity : ComponentActivity() {
                 UsbPermissionPolicy.key(it.deviceId, it.deviceName) == pinnedKey &&
                     MassStorageDiscovery.findBotInterface(it) != null
             }
-    }
-
-    /** Folder containing exactly one image and its map; read-only for the restore. */
-    private val rescueArchiveFolderPicker = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
-    ) { uri: Uri? ->
-        if (uri == null) return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
-            )
-        }
-        viewModel.onRescueArchiveFolderPicked(uri)
     }
 
     /**
@@ -8112,9 +8131,6 @@ class MainActivity : ComponentActivity() {
                     // Any name and MIME type: the engine validates the JSON, not the label.
                     ventoySettingsPickerLauncher.launch(arrayOf("*/*"))
                 },
-                onPickBackup = {
-                    gptBackupPickerLauncher.launch(arrayOf("*/*"))
-                },
                 onPickBackupFolder = {
                     openBackupFolderPicker(BackupFolderAction.ChangeFolder)
                 },
@@ -8123,9 +8139,6 @@ class MainActivity : ComponentActivity() {
                 },
                 onCreateGptCopy = {
                     viewModel.startCreateWithBackupFolder(BackupFolderAction.GptCopy)
-                },
-                onPickRestoreFolder = {
-                    rescueArchiveFolderPicker.launch(null)
                 },
                 // Live persisted-grant check for the Diagnostics create buttons; the write
                 // path still re-verifies it in requireBackupFolder() before opening the disk.

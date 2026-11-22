@@ -9,8 +9,10 @@ import usb.partition.TableScheme
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -71,6 +73,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -92,8 +95,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import usb.image.RangeProbeAttachment
 import usb.image.RangeProbeFinding
@@ -103,6 +108,9 @@ import usb.partition.RawRangeProblem
 import usb.partition.RawRangeWarning
 import usb.partition.RawWritePlan
 import usb.multitool.R
+
+/** Small pull toward MiB/partition boundaries; the slider still steps whole MiB. */
+private const val MAGNET_THRESHOLD_MIB = 0.8f
 
 /**
  * Partitions tab: layout strip + list, sticky selector, selected facts, compact
@@ -317,6 +325,19 @@ fun PartitionsScreen(
                         val maxMibFloat = availableMib.toFloat()
                         val safeStart = sliderStart.toFloat()
                         val safeEnd = sliderEnd.toFloat()
+                        val magnetPoints = remember(availableMib, mibSectors, state.partitions) {
+                            PartitionRangeMath.snapPoints(
+                                availableMib = availableMib,
+                                firstAligned = regionBase,
+                                sectorsPerMib = mibSectors,
+                                otherPartitionSizesMib = state.partitions.mapNotNull { part ->
+                                    part.sectorCount?.div(mibSectors)?.takeIf { it > 0UL }
+                                },
+                            )
+                        }
+                        val magnetHaptic = LocalHapticFeedback.current
+                        var lastStartMagnet by remember { mutableStateOf<ULong?>(null) }
+                        var lastEndMagnet by remember { mutableStateOf<ULong?>(null) }
                         val startLba = regionBase + sliderStart * mibSectors
                         val endLba = (regionBase + sliderEnd * mibSectors).let {
                             if (it > regionBase) it - 1UL else it
@@ -334,16 +355,45 @@ fun PartitionsScreen(
                             RangeSlider(
                                 value = safeStart..safeEnd,
                                 onValueChange = { range ->
-                                    // Predictable whole-MiB steps only; no snapping to
-                                    // arbitrary partition sizes or hidden magnets.
+                                    // Whole MiB first; a small magnet only for live region
+                                    // boundaries and existing partition sizes, with haptics
+                                    // as the signal that the thumb was pulled.
+                                    val startMagnet = PartitionRangeMath.nearestMagnet(
+                                        position = range.start,
+                                        maxMib = availableMib,
+                                        snapPoints = magnetPoints,
+                                        thresholdMib = MAGNET_THRESHOLD_MIB,
+                                    )
+                                    val endMagnet = PartitionRangeMath.nearestMagnet(
+                                        position = range.endInclusive,
+                                        maxMib = availableMib,
+                                        snapPoints = magnetPoints,
+                                        thresholdMib = MAGNET_THRESHOLD_MIB,
+                                    )
+                                    if (startMagnet != null && startMagnet != lastStartMagnet) {
+                                        magnetHaptic.performHapticFeedback(
+                                            HapticFeedbackType.TextHandleMove,
+                                        )
+                                    }
+                                    if (endMagnet != null && endMagnet != lastEndMagnet) {
+                                        magnetHaptic.performHapticFeedback(
+                                            HapticFeedbackType.TextHandleMove,
+                                        )
+                                    }
+                                    lastStartMagnet = startMagnet
+                                    lastEndMagnet = endMagnet
                                     val snapStart =
-                                        PartitionRangeMath.snapToMib(range.start, availableMib)
-                                            .coerceAtMost(
-                                                if (availableMib > 1UL) availableMib - 1UL else 0UL,
-                                            )
+                                        (startMagnet ?: PartitionRangeMath.snapToMib(
+                                            range.start,
+                                            availableMib,
+                                        )).coerceAtMost(
+                                            if (availableMib > 1UL) availableMib - 1UL else 0UL,
+                                        )
                                     val snapEnd =
-                                        PartitionRangeMath.snapToMib(range.endInclusive, availableMib)
-                                            .coerceAtLeast(snapStart + 1UL)
+                                        (endMagnet ?: PartitionRangeMath.snapToMib(
+                                            range.endInclusive,
+                                            availableMib,
+                                        )).coerceAtLeast(snapStart + 1UL)
                                             .coerceAtMost(availableMib)
                                     val selection = PartitionRangeMath.sectorsFor(
                                         firstAligned = regionBase,
@@ -640,13 +690,13 @@ fun PartitionsScreen(
     val screenScroll = rememberScrollState()
     val latestState by rememberUpdatedState(state)
     var viewportTop by remember { mutableFloatStateOf(0f) }
-    var selectedRowBottomWindow by remember(state.selectedPartitionId) {
+    var selectorBottomWindow by remember(state.selectedPartitionId) {
         mutableFloatStateOf(Float.POSITIVE_INFINITY)
     }
-    // The pinned copy is a second rendering only while the real row is above the
-    // viewport; at rest the list owns the only visible row.
+    // The pinned copy is a second rendering only while the layout selector is above
+    // the viewport; at rest the dropdown owns the only visible row.
     val pinnedVisible =
-        selected != null && selectedRowBottomWindow <= viewportTop
+        selected != null && selectorBottomWindow <= viewportTop
 
     LaunchedEffect(
         state.device,
@@ -869,28 +919,23 @@ fun PartitionsScreen(
 
                 CancelOperationButton(state = state, onIntent = onIntent)
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .selectableGroup(),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                Box(
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        selectorBottomWindow =
+                            coordinates.positionInWindow().y + coordinates.size.height
+                    },
                 ) {
-                    orderedPartitions.forEach { partition ->
-                        val trackPosition = partition.id == state.selectedPartitionId
-                        PartitionListRow(
-                            state = state,
-                            partition = partition,
-                            onSelect = { onIntent(UiIntent.SelectPartition(it)) },
-                            modifier = if (trackPosition) {
-                                Modifier.onGloballyPositioned { coordinates ->
-                                    selectedRowBottomWindow =
-                                        coordinates.positionInWindow().y + coordinates.size.height
-                                }
-                            } else {
-                                Modifier
-                            },
-                        )
-                    }
+                    PartitionDropdown(
+                        partitions = orderedPartitions,
+                        selectedId = (selected ?: orderedPartitions.firstOrNull())?.id,
+                        writeAccessOf = state::partitionWriteAccess,
+                        usageOf = state::partitionUsageSnapshot,
+                        phaseOf = state::partitionUsagePhase,
+                        sectorSize = state.diskSectorSize,
+                        enabled = state.actionsEnabled,
+                        onSelect = { onIntent(UiIntent.SelectPartition(it)) },
+                        showLba = true,
+                    )
                 }
                 FilledTonalButton(
                     onClick = {
@@ -1004,17 +1049,21 @@ fun PartitionsScreen(
         }
         androidx.compose.animation.AnimatedVisibility(
             visible = pinnedVisible,
-            enter = fadeIn(tween(140)) + slideInVertically(tween(220)) { -it },
-            exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { -it },
+            enter = fadeIn(tween(140)) + expandVertically(tween(220), expandFrom = Alignment.Top) +
+                slideInVertically(tween(220)) { -it / 3 },
+            exit = fadeOut(tween(120)) +
+                shrinkVertically(tween(160), shrinkTowards = Alignment.Top) +
+                slideOutVertically(tween(160)) { -it / 3 },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(2f),
         ) {
             selected?.let { live ->
                 Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 1.dp,
-                    shadowElevation = 2.dp,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = MaterialTheme.shapes.small,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 1.dp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp),
@@ -1087,6 +1136,9 @@ private fun PartitionListRow(
                 }
                 if (partition.displayEfi) {
                     Badge(text = stringResource(R.string.partitions_badge_efi))
+                }
+                if (partition.displayBootable) {
+                    Badge(text = stringResource(R.string.partitions_badge_boot))
                 }
             }
         },
@@ -1611,7 +1663,7 @@ private fun RawWriteSection(
                         )
                         (state.stagedRawImagePath ?: state.imageUri)?.let { path ->
                             Text(
-                                text = path,
+                                text = normalizedRestorePath(path),
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     fontFamily = FontFamily.Monospace,
                                 ),
@@ -1705,13 +1757,38 @@ private fun RawWriteSection(
                     state.imageUri,
                     state.stagedRawImagePath,
                 ) { mutableStateOf("0") }
+                val rawAlignSectors = mibAlignSectors(state.diskSectorSize) ?: 1UL
+                val typedCustomStart = customStart.trim().toULongOrNull()
+                val alignedCustomStart = typedCustomStart?.let { value ->
+                    PartitionRangeMath.alignUp(value, rawAlignSectors)
+                }
                 if (rawTargetMode == RawTargetMode.Custom) {
                     OutlinedTextField(
                         value = customStart,
                         onValueChange = { customStart = it.filter { ch -> ch.isDigit() } },
                         label = { Text(stringResource(R.string.raw_write_start_label)) },
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                alignedCustomStart?.let { customStart = it.toString() }
+                            },
+                        ),
+                        supportingText = alignedCustomStart
+                            ?.takeIf { it != typedCustomStart }
+                            ?.let { aligned ->
+                                {
+                                    Text(
+                                        stringResource(
+                                            R.string.raw_write_start_aligned,
+                                            aligned.toLong(),
+                                        ),
+                                    )
+                                }
+                            },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1722,7 +1799,7 @@ private fun RawWriteSection(
                     val draftStart: ULong? = when (rawTargetMode) {
                         RawTargetMode.WholeDisk -> 0UL
                         RawTargetMode.Partition -> selected?.startLba
-                        RawTargetMode.Custom -> customStart.trim().toULongOrNull()
+                        RawTargetMode.Custom -> alignedCustomStart
                     }
                     val plan = draftStart?.let {
                         RawRangePlan.planFromSourceSize(it, sourceBytes, geometry)
@@ -1971,13 +2048,19 @@ private fun RawWriteSection(
                     }
                     if (probeFresh && probe != null) {
                         Text(
-                            text = stringResource(
-                                when (probe.finding) {
-                                    RangeProbeFinding.DataPresent -> R.string.raw_probe_data_present
-                                    RangeProbeFinding.NoDataInSamples -> R.string.raw_probe_no_data_sampled
-                                    RangeProbeFinding.Unknown -> R.string.raw_probe_unknown
-                                },
-                            ),
+                            text = when (probe.finding) {
+                                RangeProbeFinding.DataPresent -> stringResource(
+                                    R.string.raw_probe_data_present,
+                                    probe.dataSectors,
+                                    probe.sampledSectors.size,
+                                )
+                                RangeProbeFinding.NoDataInSamples -> stringResource(
+                                    R.string.raw_probe_no_data_sampled,
+                                    probe.sampledSectors.size,
+                                )
+                                RangeProbeFinding.Unknown ->
+                                    stringResource(R.string.raw_probe_unknown)
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2213,6 +2296,26 @@ private fun PartitionSelectStrip(
         val contentWidth = widths.fold(0.dp) { total, width -> total + width }
             .coerceAtLeast(maxWidth)
         val stripScroll = rememberScrollState()
+        val density = LocalDensity.current
+        LaunchedEffect(
+            state.selectedPartitionId,
+            widths,
+            contentWidth,
+            maxWidth,
+            stripScroll.maxValue,
+        ) {
+            val index = segments.indexOfFirst {
+                it.partition?.id == state.selectedPartitionId
+            }
+            if (index >= 0 && contentWidth > maxWidth) {
+                val before = widths.take(index).fold(0.dp) { total, width -> total + width }
+                val center = before + widths[index] / 2
+                val target = with(density) {
+                    (center - maxWidth / 2).toPx().toInt()
+                }
+                stripScroll.animateScrollTo(target.coerceIn(0, stripScroll.maxValue))
+            }
+        }
         Row(
             modifier = Modifier
                 .then(

@@ -16,6 +16,8 @@
     <string name="partitions_scheme_arrow">→</string>
     <!-- Текст бейджа EFI. -->
     <string name="partitions_badge_efi">EFI</string>
+    <!-- Критическая загрузочная роль: общий бейдж Files/Partitions. -->
+    <string name="partitions_badge_boot">BOOT</string>
     <!-- Компактная подпись под переключателем записи. -->
     <string name="partitions_efi_ro_caption">Разрешение действует только для этого раздела и подключения; при переподключении сбрасывается.</string>
     <!-- a11y кнопки раскрытия sticky. -->

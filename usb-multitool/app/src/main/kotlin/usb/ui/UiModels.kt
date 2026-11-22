@@ -2016,6 +2016,15 @@ object PartitionRangeMath {
         }.distinct()
     }
 
+    /** Smallest multiple of [step] at or above [value]; overflow keeps [value]. */
+    fun alignUp(value: ULong, step: ULong): ULong {
+        if (step <= 1UL) return value
+        val remainder = value % step
+        if (remainder == 0UL) return value
+        val add = step - remainder
+        return if (value > ULong.MAX_VALUE - add) value else value + add
+    }
+
     /** Snap a slider position to a whole MiB, clamped to [0, maxMib]. */
     fun snapToMib(position: Float, maxMib: ULong): ULong {
         if (maxMib == 0UL || position.isNaN()) return 0UL

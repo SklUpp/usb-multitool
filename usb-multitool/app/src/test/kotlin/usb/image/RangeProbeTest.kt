@@ -18,6 +18,7 @@ class RangeProbeTest {
         val disk = RecordingDisk(sectorCount = 100UL, sectorSize = 512)
         val result = RangeProbe.sample(disk, RawWriteRange(0UL, 100UL))
         assertEquals(RangeProbeFinding.NoDataInSamples, result.finding)
+        assertEquals(0, result.dataSectors)
         assertTrue(result.sampledSectors.size <= RangeProbe.MAX_SAMPLES)
         assertEquals(0UL, result.sampledSectors.first())
         assertEquals(99UL, result.sampledSectors.last())
@@ -27,6 +28,7 @@ class RangeProbeTest {
         val disk = diskWithData(sector = 57UL)
         val result = RangeProbe.sample(disk, RawWriteRange(0UL, 100UL))
         assertEquals(RangeProbeFinding.DataPresent, result.finding)
+        assertEquals(1, result.dataSectors)
     }
 
     @Test fun samplerIsDeterministicAndCoversFirstAndLast() {

@@ -306,6 +306,7 @@
     <string name="partitions_raw_write_title">Sector-by-sector file write</string>
     <string name="raw_write_geometry_unavailable">Disk geometry unavailable: range validation impossible, write blocked.</string>
     <string name="raw_write_start_label">Start LBA</string>
+    <string name="raw_write_start_aligned">Start will be aligned to LBA %1$d.</string>
     <string name="raw_write_end_and_size">End LBA %1$d, writes %2$s</string>
     <string name="raw_write_problem_empty">The range is empty.</string>
     <string name="raw_write_problem_beyond_disk">Image exceeds disk bounds. Choose an earlier start LBA.</string>
@@ -324,8 +325,8 @@
     <string name="raw_write_warning_unaligned">Start LBA %1$d is not aligned to %2$d sectors.</string>
     <string name="raw_write_warning_scheme">Partition layout unconfirmed: partition protection disabled.</string>
     <string name="raw_probe_action">Check the range for data</string>
-    <string name="raw_probe_data_present">Data found in the chosen range.</string>
-    <string name="raw_probe_no_data_sampled">Sampled sectors contain no data (partial check).</string>
+    <string name="raw_probe_data_present">Data found in %1$d of %2$d sampled sectors.</string>
+    <string name="raw_probe_no_data_sampled">All %1$d sampled sectors are empty.</string>
     <string name="raw_probe_unknown">Presence of data could not be checked.</string>
     <string name="raw_readback_verified">Verified by readback.</string>
     <string name="raw_readback_verified_partial">Readback verified: written data matches, range partially written (%1$d bytes).</string>
