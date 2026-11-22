@@ -1515,55 +1515,6 @@ private fun EditablePairRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SettingsSourceDialog(
-    onStick: () -> Unit,
-    onPhone: () -> Unit,
-    onDismiss: () -> Unit,
-    stickEnabled: Boolean = true,
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 1.dp,
-    ) {
-        Text(
-            text = stringResource(R.string.settings_source_choose),
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-        )
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.settings_source_choose_stick)) },
-            supportingContent = if (stickEnabled) {
-                null
-            } else {
-                { Text(stringResource(R.string.ventoy_pick_stick_unavailable)) }
-            },
-            leadingContent = {
-                Icon(
-                    painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
-                    contentDescription = null,
-                )
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(role = Role.Button, enabled = stickEnabled, onClick = onStick),
-        )
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.settings_source_choose_phone)) },
-            leadingContent = {
-                Icon(
-                    painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
-                    contentDescription = null,
-                )
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(role = Role.Button, onClick = onPhone),
-        )
-    }
-}
 /** Short, localized semantics for every key bundled with the pinned Ventoy release. */
 @Composable
 private fun ventoyKeyShortDescription(key: String): String? = when (key) {
