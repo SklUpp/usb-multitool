@@ -5,12 +5,12 @@
 
 ## Последняя проверка
 
-- CI `45039597460` (`003355b`): `verify` и `fatfs-host` — success;
-  1897 unit tests, APK, 16 KB alignment, lint и Kotlin compile прошли.
-- APK artifact `app-debug-apk` (id `14761013003`), локально
-  `/data/data/com.termux/files/home/apk-003355b/app-debug.apk`,
+- CI `45042535766` (`e930753`): `verify` и `fatfs-host` — success;
+  unit tests, APK, 16 KB alignment, lint и Kotlin compile прошли.
+- APK artifact `app-debug-apk` (id `14763095373`), локально
+  `/data/data/com.termux/files/home/apk-e930753/app-debug.apk`,
   `87 054 099` байт, SHA-256
-  `6df0795e44112cb3d5f950d9dd9ae40117507b06dadde9d98a17a8f87b6d563a`.
+  `b56a2e89b242af6fd0d4568497c8a68c15a7328d8da3628d96cad0e870fd0438`.
   `unzip -t` и `aapt2 dump badging` — без ошибок; package
   `usb.multitool 0.1.0`, minSdk 28, target 36.
 - Локально до CI: Kotlin compile — success; targeted JVM
@@ -20,9 +20,10 @@
 
 ## Текущий срез
 
-- Ветка: `feature/android-usb-multitool`, HEAD `003355b`; SMART —
+- Ветка: `feature/android-usb-multitool`, HEAD `e930753`; SMART —
   `f504ddf`, raw-write и разделы — `b85755f`, единый picker/format —
-  `065bc83`, Windows/Ventoy — `6798692`, недостающие RU-строки — `003355b`.
+  `065bc83`, Windows/Ventoy — `6798692`, недостающие RU-строки — `003355b`,
+  скруглённые блоки выбора в popup — `e930753`.
 - Последняя волна: SMART diagnostics; UI-полировка (IME, сортировка Files,
   прогресс, переходы, haptics, read-only Settings/Diagnostics), общий JNI
   thread-attach helper, FAT streaming с retry close/pending unlink и
@@ -87,6 +88,10 @@
 - Формат раздела: имя раздела в заголовке, текущая ФС выбрана по умолчанию,
   пояснение EFI перенесено в справку. Диалоги, которые не должны хранить
   состояние, закрываются/очищаются при смене флешки.
+- Пункты выбора в нижних листах и диалогах оформлены скруглёнными блоками:
+  источник файла, формат, raw-источник, добавление образов, официальные
+  ключи, папки и файловые действия. Выбранный пункт подсвечивается
+  `secondaryContainer`.
 - Файлы: сортировка «папки сверху, затем A–Z без учёта регистра» уже была;
   добавлены кликабельные breadcrumbs с горизонтальной прокруткой вместо
   кнопки «Вверх» (обычный проводник и picker). Локальный фильтр по имени —
