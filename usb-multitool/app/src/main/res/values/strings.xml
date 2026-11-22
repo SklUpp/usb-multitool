@@ -385,7 +385,7 @@
     <string name="ventoy_download_warning_cancel">Cancel</string>
     <string name="ventoy_download_unconfirmed">Release %1$s downloaded, but cache directory is not yet synced to disk.</string>
     <string name="ventoy_download_recovered">%1$s was not saved; stored %2$s remains available.</string>
-    <string name="ventoy_promotion_unconfirmed">Failed to persist release %1$s: directory state unconfirmed by filesystem.</string>
+    <string name="ventoy_promotion_unconfirmed">Failed to persist release %1$s: filesystem did not confirm the directory; stored release remains %2$s.</string>
     <string name="ventoy_download_unknown">Release state after %1$s unconfirmed. Re-check status before installing.</string>
     <string name="diagnostics_self_test">Self-test</string>
     <string name="diagnostics_self_test_hint">SCSI, GPT, FS</string>

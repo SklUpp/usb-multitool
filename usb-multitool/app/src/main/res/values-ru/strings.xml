@@ -386,7 +386,7 @@
     <string name="ventoy_download_recovered">%1$s не сохранён; доступен сохранённый %2$s.</string>
     <string name="ventoy_download_unconfirmed">Релиз %1$s загружен, но каталог кэша не синхронизирован с диском.</string>
     <string name="ventoy_download_unknown">Состояние релиза после %1$s не подтверждено. Проверьте статус перед установкой.</string>
-    <string name="ventoy_promotion_unconfirmed">Сбой фиксации релиза %1$s: целевой каталог не подтвержден файловой системой.</string>
+    <string name="ventoy_promotion_unconfirmed">Сбой фиксации релиза %1$s: ФС не подтвердила каталог; сохранённым остаётся %2$s.</string>
     <string name="ventoy_update">Обновить</string>
     <string name="diagnostics_self_test">Самотест</string>
     <string name="diagnostics_self_test_hint">SCSI, GPT, ФС</string>

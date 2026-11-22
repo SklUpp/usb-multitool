@@ -2,6 +2,7 @@ package usb.ui
 
 import android.net.Uri
 import android.provider.DocumentsContract
+import java.net.URLDecoder
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,7 +64,22 @@ internal fun normalizedRestorePath(uri: String): String {
 
 /** Pure segment normalizer shared by restore display and tests. */
 internal fun normalizeDocumentPath(raw: String): String {
-    val segments = raw.replace('\\', '/').split('/')
+    var source = runCatching {
+        // Keep literal '+' intact; SAF document ids use percent escapes only.
+        URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8")
+    }.getOrDefault(raw).replace('\\', '/')
+    val providerMarker = listOf("/document/", "document/", "/tree/", "tree/")
+        .firstOrNull { source.contains(it) }
+    if (providerMarker != null) {
+        source = source.substringAfter(providerMarker)
+    }
+    // Drop a SAF volume prefix such as primary:, home: or raw:.
+    val firstSlash = source.indexOf('/')
+    val colon = source.indexOf(':')
+    if (colon >= 0 && (firstSlash < 0 || colon < firstSlash)) {
+        source = source.substring(colon + 1)
+    }
+    val segments = source.split('/')
     val normalized = ArrayList<String>(segments.size)
     for (segment in segments) {
         when (segment) {
@@ -73,6 +89,12 @@ internal fun normalizeDocumentPath(raw: String): String {
         }
     }
     return if (normalized.isEmpty()) "/" else "/" + normalized.joinToString("/")
+}
+
+/** One line: canonical path and filename, with no provider/volume prefix. */
+private fun restorePathText(uri: String?, fallback: String?): String {
+    val path = uri?.let(::normalizedRestorePath)
+    return if (path != null && path != "/") path else fallback.orEmpty()
 }
 
 @Composable
@@ -337,12 +359,10 @@ fun DiagnosticsScreen(
                         )
             if (state.rescueImageUri != null) {
                 Text(
-                    text = stringResource(
-                        R.string.diagnostics_image_named,
-                        state.rescueImageInspection?.displayName
-                            ?: state.rescueImageUri?.let(::normalizedRestorePath)
-                                ?.substringAfterLast('/').orEmpty(),
-                    ) + "\n" + state.rescueImageUri?.let(::normalizedRestorePath).orEmpty(),
+                    text = restorePathText(
+                        state.rescueImageUri,
+                        state.rescueImageInspection?.displayName,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 3,
@@ -363,12 +383,10 @@ fun DiagnosticsScreen(
             }
             if (state.rescueMapUri != null) {
                 Text(
-                    text = stringResource(
-                        R.string.diagnostics_map_named,
-                        state.rescueMapInspection?.displayName
-                            ?: state.rescueMapUri?.let(::normalizedRestorePath)
-                                ?.substringAfterLast('/').orEmpty(),
-                    ) + "\n" + state.rescueMapUri?.let(::normalizedRestorePath).orEmpty(),
+                    text = restorePathText(
+                        state.rescueMapUri,
+                        state.rescueMapInspection?.displayName,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 3,
@@ -452,12 +470,10 @@ fun DiagnosticsScreen(
             }
             if (state.backupUri != null) {
                 Text(
-                    text = stringResource(
-                        R.string.diagnostics_backup_file_named,
-                        state.backupInspection?.displayName
-                            ?: state.backupUri?.let(::normalizedRestorePath)
-                                ?.substringAfterLast('/').orEmpty(),
-                    ) + "\n" + state.backupUri?.let(::normalizedRestorePath).orEmpty(),
+                    text = restorePathText(
+                        state.backupUri,
+                        state.backupInspection?.displayName,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                 )
