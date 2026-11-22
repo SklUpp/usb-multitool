@@ -16,6 +16,8 @@
   длину; per-sector `NewByteArray` больше не создаётся.
 - Операции: probe, label, space, list, stat, mkdir, delete, rename, read, write,
   sync. Write одним вызовом ≤8 MiB; planned size проверяется до open.
+- Последовательные write-чанки держат один `FIL` открытым до sync/umount/смены
+  файла; `f_lseek` не повторяется на каждом чанке.
 - `create=true` у FAT — CREATE_ALWAYS и **truncate даже при offset != 0**;
   exclusive create при существующем файле не меняет его.
 - Короткая запись/failed close возвращает ошибку; created-only файл удаляется,

@@ -88,7 +88,8 @@ int fat_engine_rename(uint64_t volume, const char *from, const char *to);
 
 int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 			 void *buf, size_t len, size_t *out_read);
-/* Rejects size > filesystem limit before creating destination. */
+/* Rejects size > filesystem limit before creating destination. Sequential
+ * offset calls keep one FIL open; fat_engine_sync/umount/delete/rename flush it. */
 int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
                           const void *buf, size_t len, size_t *out_written,
                           uint64_t planned_total_size, int create_mode);

@@ -35,6 +35,23 @@ static BYTE g_next_pdrv;
 static pthread_mutex_t g_vols_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_fat_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+ * Sequential chunk writes keep one FIL open. Reopening per chunk made every
+ * f_lseek walk the FAT from the first cluster, turning a linear transfer into
+ * O(N^2) USB reads. The mutex serializes the session; sync/close/structure
+ * changes flush or abort it before another operation can see the file.
+ */
+typedef struct {
+	int active;
+	uint64_t volume;
+	FIL fil;
+	char full[1024];
+	uint64_t offset;
+	int exclusive_new;
+} FatWriteSession;
+
+static FatWriteSession g_write;
+
 static int map_fr(FRESULT fr)
 {
 	return (int)fr; /* FR_OK == 0; non-zero = error */
@@ -71,6 +88,47 @@ static int vol_needs_flush(const FatVolume *v)
 static void vol_note_fr(FatVolume *v, FRESULT fr)
 {
 	if (fr == FR_DISK_ERR) v->barrier_pending = 1;
+}
+
+static FRESULT close_write_session_locked(void)
+{
+	FRESULT fr;
+
+	if (!g_write.active) return FR_OK;
+	fr = f_close(&g_write.fil);
+	g_write.active = 0;
+	return fr;
+}
+
+static int close_write_session_for_volume_locked(uint64_t volume)
+{
+	FRESULT fr;
+
+	if (!g_write.active || g_write.volume != volume) return 0;
+	fr = close_write_session_locked();
+	if (fr != FR_OK) {
+		FatVolume *v = vol_from(volume);
+		if (v) vol_note_fr(v, fr);
+		return map_fr(fr);
+	}
+	return 0;
+}
+
+static int abort_write_session_locked(FatVolume *v, FRESULT failure)
+{
+	FRESULT close_fr;
+	FRESULT unlink_fr = FR_OK;
+	int exclusive;
+
+	if (!g_write.active) return map_fr(failure);
+	exclusive = g_write.exclusive_new;
+	close_fr = f_close(&g_write.fil);
+	g_write.active = 0;
+	if (failure == FR_OK) failure = close_fr;
+	if (exclusive) unlink_fr = f_unlink(g_write.full);
+	if (close_fr == FR_DISK_ERR || unlink_fr == FR_DISK_ERR) vol_note_fr(v, FR_DISK_ERR);
+	if (exclusive && unlink_fr != FR_OK) return FAT_ENGINE_CLEANUP_FAILED;
+	return map_fr(failure);
 }
 
 /* Build "N:/path". Returns 0, or FR_INVALID_NAME when the result would not fit
@@ -188,6 +246,13 @@ int fat_engine_umount(uint64_t volume)
 	if (!v) return (int)FR_INVALID_OBJECT;
 	pthread_mutex_lock(&g_fat_mu);
 	pthread_mutex_lock(&g_vols_mu);
+	if (g_write.active && g_write.volume == volume) {
+		FRESULT close_fr = close_write_session_locked();
+		if (close_fr != FR_OK) {
+			vol_note_fr(v, close_fr);
+			rc = map_fr(close_fr);
+		}
+	}
 	bh = v->block_handle;
 	/* Flush only when the medium may be missing state: f_mount(NULL,*,0) drops
 	 * the volume object without calling sync_fs, but a clean read-only volume
@@ -196,8 +261,9 @@ int fat_engine_umount(uint64_t volume)
 	 * Teardown below always runs; only the first error is kept (later errors
 	 * cannot be retried once the drive is unbound). */
 	if (vol_needs_flush(v)) {
-		rc = (int)f_sync_volume(&v->fs);
-		if (rc != 0) (void)usb_block_sync(bh); /* sync_fs may have aborted before CTRL_SYNC */
+		int sync_rc = (int)f_sync_volume(&v->fs);
+		if (sync_rc != 0) (void)usb_block_sync(bh); /* sync_fs may have aborted before CTRL_SYNC */
+		if (rc == 0) rc = sync_rc;
 	}
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	fr = f_mount(NULL, path, 0);
@@ -213,13 +279,20 @@ int fat_engine_sync(uint64_t volume)
 {
 	FatVolume *v;
 	uint64_t bh;
-	int rc;
+	int rc = 0;
 
 	pthread_mutex_lock(&g_fat_mu);
 	v = vol_from(volume);
 	if (!v) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_OBJECT;
+	}
+	if (g_write.active && g_write.volume == volume) {
+		FRESULT close_fr = close_write_session_locked();
+		if (close_fr != FR_OK) {
+			vol_note_fr(v, close_fr);
+			rc = map_fr(close_fr);
+		}
 	}
 	bh = v->block_handle;
 	/* No pending state -> no I/O. A read-only browse may have set the advisory
@@ -230,14 +303,17 @@ int fat_engine_sync(uint64_t volume)
 	 * confirmed; on failure it stays pending for the next call. */
 	if (!vol_needs_flush(v)) {
 		pthread_mutex_unlock(&g_fat_mu);
-		return 0;
+		return rc;
 	}
-	rc = (int)f_sync_volume(&v->fs);
-	if (rc != 0) {
-		v->barrier_pending = 1;
-		(void)usb_block_sync(bh); /* best effort when sync_fs aborted early */
-	} else {
-		v->barrier_pending = 0;
+	{
+		int sync_rc = (int)f_sync_volume(&v->fs);
+		if (sync_rc != 0) {
+			v->barrier_pending = 1;
+			(void)usb_block_sync(bh); /* best effort when sync_fs aborted early */
+			if (rc == 0) rc = sync_rc;
+		} else {
+			v->barrier_pending = 0;
+		}
 	}
 	pthread_mutex_unlock(&g_fat_mu);
 	return rc;
@@ -395,6 +471,7 @@ int fat_engine_mkdir(uint64_t volume, const char *path)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
 	}
+	(void)close_write_session_for_volume_locked(volume);
 	if ((fr = (FRESULT)make_path(full, sizeof(full), v->pdrv, path)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
@@ -418,6 +495,7 @@ int fat_engine_delete(uint64_t volume, const char *path)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
 	}
+	(void)close_write_session_for_volume_locked(volume);
 	if ((fr = (FRESULT)make_path(full, sizeof(full), v->pdrv, path)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
@@ -441,6 +519,7 @@ int fat_engine_rename(uint64_t volume, const char *from, const char *to)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
 	}
+	(void)close_write_session_for_volume_locked(volume);
 	if ((fr = (FRESULT)make_path(a, sizeof(a), v->pdrv, from)) != FR_OK ||
 	    (fr = (FRESULT)make_path(b, sizeof(b), v->pdrv, to)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
@@ -502,7 +581,6 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 			  uint64_t planned_total_size, int create_mode)
 {
 	FatVolume *v;
-	FIL fil;
 	char full[1024];
 	FRESULT fr;
 	UINT bw = 0;
@@ -529,55 +607,59 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
 	}
-	if (create_mode == 2) {
-		mode = FA_WRITE | FA_CREATE_NEW;
-		exclusive_new = 1;
-	} else if (create_mode) {
-		mode = FA_WRITE | FA_CREATE_ALWAYS;
-	} else {
-		mode = FA_WRITE | FA_OPEN_EXISTING;
+	if (g_write.active &&
+	    (g_write.volume != volume || strcmp(g_write.full, full) != 0 ||
+	     g_write.offset != offset)) {
+		FRESULT close_fr = close_write_session_locked();
+		if (close_fr != FR_OK) {
+			vol_note_fr(v, close_fr);
+			pthread_mutex_unlock(&g_fat_mu);
+			return map_fr(close_fr);
+		}
 	}
-	v->mutated = 1;
-	fr = f_open(&fil, full, mode);
-	if (fr != FR_OK) {
-		vol_note_fr(v, fr);
-		pthread_mutex_unlock(&g_fat_mu);
-		return map_fr(fr);
-	}
-	if (offset > 0) {
-		fr = f_lseek(&fil, (FSIZE_t)offset);
+	if (!g_write.active) {
+		if (create_mode == 2) {
+			mode = FA_WRITE | FA_CREATE_NEW;
+			exclusive_new = 1;
+		} else if (create_mode) {
+			mode = FA_WRITE | FA_CREATE_ALWAYS;
+		} else {
+			mode = FA_WRITE | FA_OPEN_EXISTING;
+		}
+		v->mutated = 1;
+		fr = f_open(&g_write.fil, full, mode);
 		if (fr != FR_OK) {
-			f_close(&fil);
-			if (exclusive_new) {
-				FRESULT unlink_fr = f_unlink(full);
-				vol_note_fr(v, fr);
-				pthread_mutex_unlock(&g_fat_mu);
-				return unlink_fr == FR_OK ? map_fr(fr) : FAT_ENGINE_CLEANUP_FAILED;
-			}
 			vol_note_fr(v, fr);
 			pthread_mutex_unlock(&g_fat_mu);
 			return map_fr(fr);
 		}
+		g_write.active = 1;
+		g_write.volume = volume;
+		g_write.offset = offset;
+		g_write.exclusive_new = exclusive_new;
+		memcpy(g_write.full, full, strlen(full) + 1);
+		if (offset > 0) {
+			fr = f_lseek(&g_write.fil, (FSIZE_t)offset);
+			if (fr != FR_OK) {
+				int rc = abort_write_session_locked(v, fr);
+				pthread_mutex_unlock(&g_fat_mu);
+				return rc;
+			}
+		}
 	}
-	if (len > 0) fr = f_write(&fil, buf, (UINT)len, &bw);
-	if (fr == FR_OK) fr = f_sync(&fil);
-	{
-		FRESULT close_fr = f_close(&fil);
-		if (fr == FR_OK) fr = close_fr;
-	}
+	if (len > 0) fr = f_write(&g_write.fil, buf, (UINT)len, &bw);
 	if (fr != FR_OK || (len > 0 && bw < len)) {
-		FRESULT unlink_fr = FR_OK;
-		if (exclusive_new) unlink_fr = f_unlink(full);
+		FRESULT failure = fr != FR_OK ? fr : FR_DISK_ERR;
+		int rc = abort_write_session_locked(v, failure);
 		*out_written = 0;
-		vol_note_fr(v, fr == FR_OK ? FR_DISK_ERR : fr);
 		pthread_mutex_unlock(&g_fat_mu);
-		if (exclusive_new && unlink_fr != FR_OK) return FAT_ENGINE_CLEANUP_FAILED;
-		return (fr == FR_OK && bw < len) ? (int)FR_DISK_ERR : map_fr(fr);
+		return rc;
 	}
+	g_write.offset = offset + (uint64_t)bw;
 	*out_written = (size_t)bw;
-	vol_note_fr(v, fr);
+	vol_note_fr(v, FR_OK);
 	pthread_mutex_unlock(&g_fat_mu);
-	return map_fr(fr);
+	return 0;
 }
 
 int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector_count,
@@ -599,6 +681,7 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 	}
 
 	pthread_mutex_lock(&g_fat_mu);
+	(void)close_write_session_locked();
 	pthread_mutex_lock(&g_vols_mu);
 	v = alloc_vol_locked();
 	if (!v) {

@@ -74,6 +74,9 @@ jobs:
       - name: Host EXT (lwext4) test
         run: ./scripts/run-ext-host-test.sh
 
+      - name: Host FAT streaming test
+        run: ./scripts/run-fat-host-test.sh
+
       - name: Host usb_block registry test
         run: ./scripts/run-usb-block-host-test.sh
 

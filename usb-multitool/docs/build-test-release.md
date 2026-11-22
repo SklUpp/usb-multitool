@@ -100,8 +100,9 @@ APK не подписывается release-ключом и предназнач
   raw source/writer/staging, FatFs/NTFS/EXT/exFAT contracts, files operations,
   SAF ownership, Ventoy layout/settings/autounattend, diagnostics/rescue,
   reducer/transitions/string parity.
-- FatFs host: >256 entries, short write, format over content, 765-byte UTF-8
-  LFN, path overflow preserves neighbor, teardown/sync barriers.
+- FatFs host: >256 entries, short write, sequential streaming with one open
+  `FIL`, failed-chunk cleanup, format over content, 765-byte UTF-8 LFN, path
+  overflow preserves neighbor, teardown/sync barriers.
 - NTFS host: mount, usage bounds, dirty flag, write/read/truncate/append,
   exclusive create, sync/close, long name/parent guards.
 - EXT host: mkfs → mount → CRUD, dirty refuse, failed-umount teardown, UTF-8
