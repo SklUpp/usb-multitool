@@ -25,6 +25,9 @@
     <string name="msg_trace_export_failed">Не удалось записать файл трассировки.</string>
 
     <string name="files_empty_folder">Папка пуста</string>
+    <string name="files_filter_hint">Фильтр по имени</string>
+    <string name="files_filter_empty">Нет совпадений</string>
+    <string name="files_breadcrumb_root">USB</string>
     <string name="files_listing">Читаю папку…</string>
 
     <string name="efi_section_title">Защита EFI</string>

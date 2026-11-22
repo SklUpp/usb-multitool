@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
@@ -314,7 +315,7 @@ fun FilesScreen(
                 },
                 onClearSelection = { selectedNames = emptySet() },
                 onRefresh = { onIntent(UiIntent.RefreshFiles) },
-                onNavigateUp = { onIntent(UiIntent.NavigateUp) },
+                onOpenPath = { path -> onIntent(UiIntent.OpenDirectory(path)) },
                 onNewFolder = {
                     val device = state.device
                     val partition = state.selectedPartition()
@@ -705,7 +706,6 @@ private fun FilesPickScreen(
     val ventoyDataPartitionId = state.ventoyDataPartition()?.id
     val canAct = state.actionsEnabled && partition != null
     val copying = state.operation?.takeIf { it.title is OperationTitle.ImportTarget }
-    val upDescription = stringResource(R.string.files_up)
     val hint = stringResource(
         if (mode.target == FilesPickTarget.Folder) {
             R.string.files_pick_folder_hint
@@ -820,24 +820,11 @@ private fun FilesPickScreen(
                 SectionCard(
                     title = stringResource(R.string.files_section_folder),
                     titleColor = MaterialTheme.colorScheme.onSurface,
-                    trailing = {
-                        IconButton(
-                            onClick = { onIntent(UiIntent.NavigateUp) },
-                            enabled = canAct && target.path != "/" && !state.isRunning,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .semantics { contentDescription = upDescription },
-                        ) {
-                            GlyphIcon(Glyph.ArrowUp, size = 22.dp)
-                        }
-                    },
                 ) {
-                    // Full path, wrapped without a line cap: the deepest folder must remain
-                    // identifiable and must not be silently start-ellipsized.
-                    Text(
-                        text = folderPathLabel(target.path),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    FolderBreadcrumbs(
+                        path = target.path,
+                        enabled = canAct && !state.isRunning,
+                        onOpen = { path -> onIntent(UiIntent.OpenDirectory(path)) },
                     )
                     Text(
                         text = hint,
@@ -1138,7 +1125,7 @@ private fun FolderCard(
     onNavigate: (FileEntry) -> Unit,
     onClearSelection: () -> Unit,
     onRefresh: () -> Unit,
-    onNavigateUp: () -> Unit,
+    onOpenPath: (String) -> Unit,
     onNewFolder: () -> Unit,
     onSaveToPhone: () -> Unit,
     onRename: () -> Unit,
@@ -1163,6 +1150,17 @@ private fun FolderCard(
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
                 .thenBy { it.name },
         )
+    }
+    var fileFilter by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf("") }
+    val visibleRows = if (fileFilter.isBlank()) {
+        rows
+    } else {
+        rows.filter { it.name.contains(fileFilter.trim(), ignoreCase = true) }
     }
     val rowsState = state.filesListingState.name
     val rowsError = state.filesError
@@ -1218,13 +1216,15 @@ private fun FolderCard(
             ) {
                 item(key = "folder-subblock") {
                     FolderSubblock(
+                        path = state.currentPath,
                         pathLabel = folderPathLabel(state.currentPath),
-                        canNavigateUp = canAct && state.currentPath != "/" && !locked,
                         canAct = canAct && !locked,
                         canWrite = canWrite && !locked,
-                        onNavigateUp = onNavigateUp,
+                        onOpenPath = onOpenPath,
                         onRefresh = onRefresh,
                         onNewFolder = onNewFolder,
+                        filter = fileFilter,
+                        onFilterChange = { fileFilter = it },
                         isLoading = isLoading,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     )
@@ -1259,7 +1259,13 @@ private fun FolderCard(
                             modifier = Modifier.padding(16.dp),
                         )
                     }
-                    rows.isEmpty() -> item(key = "empty") {
+                    visibleRows.isEmpty() && rows.isNotEmpty() -> item(key = "filter-empty") {
+                        EmptyHint(
+                            stringResource(R.string.files_filter_empty),
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                    visibleRows.isEmpty() -> item(key = "empty") {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1272,7 +1278,7 @@ private fun FolderCard(
                             )
                         }
                     }
-                    else -> items(rows, key = { it.name }) { entry ->
+                    else -> items(visibleRows, key = { it.name }) { entry ->
                         FileRow(
                             entry = entry,
                             isSelected = entry.name in selectedNames,
@@ -1293,17 +1299,18 @@ private fun FolderCard(
  * selection row above and the per-row bottom sheet, never in this toolbar. */
 @Composable
 private fun FolderSubblock(
+    path: String,
     pathLabel: String,
-    canNavigateUp: Boolean,
     canAct: Boolean,
     canWrite: Boolean,
-    onNavigateUp: () -> Unit,
+    onOpenPath: (String) -> Unit,
     onRefresh: () -> Unit,
     onNewFolder: () -> Unit,
+    filter: String,
+    onFilterChange: (String) -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val upDescription = stringResource(R.string.files_up)
     val refreshDescription = stringResource(R.string.unattend_refresh)
     val newFolderDescription = stringResource(R.string.files_create_folder)
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
@@ -1313,54 +1320,97 @@ private fun FolderSubblock(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = onNavigateUp,
-                enabled = canNavigateUp,
-                modifier = Modifier
-                    .size(48.dp)
-                    .semantics { contentDescription = upDescription },
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                GlyphIcon(glyph = Glyph.ArrowUp, size = 22.dp)
-            }
-            Text(
-                text = pathLabel,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp)
-                    .semantics { contentDescription = pathA11y },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (isLoading) {
-                IconButton(
-                    onClick = onRefresh,
+                FolderBreadcrumbs(
+                    path = path,
                     enabled = canAct,
+                    onOpen = onOpenPath,
                     modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = refreshDescription },
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        .weight(1f)
+                        .semantics { contentDescription = pathA11y },
+                )
+                if (isLoading) {
+                    IconButton(
+                        onClick = onRefresh,
+                        enabled = canAct,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = refreshDescription },
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    FolderActionButton(
+                        glyph = Glyph.Refresh,
+                        description = refreshDescription,
+                        enabled = canAct,
+                        onClick = onRefresh,
+                    )
                 }
-            } else {
                 FolderActionButton(
-                    glyph = Glyph.Refresh,
-                    description = refreshDescription,
-                    enabled = canAct,
-                    onClick = onRefresh,
+                    glyph = Glyph.FolderPlus,
+                    description = newFolderDescription,
+                    enabled = canWrite,
+                    onClick = onNewFolder,
                 )
             }
-            FolderActionButton(
-                glyph = Glyph.FolderPlus,
-                description = newFolderDescription,
-                enabled = canWrite,
-                onClick = onNewFolder,
+            OutlinedTextField(
+                value = filter,
+                onValueChange = onFilterChange,
+                label = { Text(stringResource(R.string.files_filter_hint)) },
+                singleLine = true,
+                enabled = canAct,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+                    .padding(bottom = 8.dp),
             )
+        }
+    }
+}
+
+/** Clickable path segments in one horizontally scrollable row; replaces the old Up button. */
+@Composable
+private fun FolderBreadcrumbs(
+    path: String,
+    enabled: Boolean,
+    onOpen: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rootLabel = stringResource(R.string.files_breadcrumb_root)
+    val parts = path.trim('/').split('/').filter { it.isNotBlank() }
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = { onOpen("/") },
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
+            Text(rootLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        var current = ""
+        parts.forEach { part ->
+            current = if (current.isEmpty()) "/$part" else "$current/$part"
+            Text(
+                text = "/",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = { onOpen(current) },
+                enabled = enabled,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(part, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }

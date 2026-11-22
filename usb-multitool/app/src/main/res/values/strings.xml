@@ -25,6 +25,9 @@
     <string name="msg_trace_export_failed">Could not write the trace file.</string>
 
     <string name="files_empty_folder">Folder is empty</string>
+    <string name="files_filter_hint">Filter by name</string>
+    <string name="files_filter_empty">No matching files</string>
+    <string name="files_breadcrumb_root">USB</string>
     <string name="files_listing">Reading the folder…</string>
 
     <string name="efi_section_title">EFI protection</string>

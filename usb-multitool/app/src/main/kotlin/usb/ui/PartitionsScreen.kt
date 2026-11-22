@@ -2262,7 +2262,44 @@ private fun PartitionSelectStrip(
                             },
                         )
                         .semantics { contentDescription = description },
-                )
+                ) {
+                    val fraction =
+                        segmentSpan(segment).toDouble() / diskSectorCount.toDouble()
+                    if (partition != null && fraction >= 0.10 && widths[index] >= 64.dp) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 4.dp),
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                text = partition.name.ifBlank { partition.id },
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (partition.filesystemLabel.isNotEmpty()) {
+                                Text(
+                                    text = partition.filesystemLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

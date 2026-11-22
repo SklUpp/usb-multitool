@@ -13,6 +13,7 @@ import androidx.compose.animation.togetherWith
 import android.provider.Settings
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -61,6 +63,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Shapes
@@ -307,6 +312,7 @@ fun AppShell(
         }
         // Strip opens the status dialog; picker ownership still forces it closed.
         var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
+        val compactHeight = LocalConfiguration.current.screenHeightDp < 480
         // Terminal results get one short snackbar in addition to the permanent block;
         // status spam while running stays out (the block is the only live surface).
         val shellSnackbar = remember { SnackbarHostState() }
@@ -424,6 +430,15 @@ fun AppShell(
             ),
             snackbarHost = { SnackbarHost(shellSnackbar) },
             bottomBar = {
+                if (compactHeight) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+                            ),
+                    )
+                } else {
                 Column(
                     modifier = Modifier
                         .then(
@@ -483,14 +498,58 @@ fun AppShell(
                         }
                     }
                 }
+                }
             },
         ) { padding ->
-            Box(
+            Row(
                 modifier = Modifier
                     .padding(padding)
                     .consumeWindowInsets(padding)
                     .fillMaxSize(),
             ) {
+                if (compactHeight && !panels.journalScreenOpen && !pickOpen) {
+                    NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.fillMaxHeight(),
+                    ) {
+                        PrimaryShellTabs.forEach { tab ->
+                            val readOnlyScreen = state.tab == ShellTab.Settings ||
+                                state.tab == ShellTab.Diagnostics
+                            val readOnlyReturn = ShellTabPersistence.decode(
+                                operationOriginTab ?: lastWorkTab,
+                            )
+                            val switchBlocked = tab != state.tab &&
+                                tab != ShellTab.Diagnostics &&
+                                !(readOnlyScreen && tab == readOnlyReturn) &&
+                                operationLocked
+                            NavigationRailItem(
+                                selected = state.tab == tab,
+                                onClick = { onIntent(UiIntent.SelectTab(tab)) },
+                                enabled = !switchBlocked,
+                                icon = { TabIcon(tab) },
+                                label = {
+                                    Text(
+                                        text = tab.title(),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                colors = NavigationRailItemDefaults.colors(
+                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            )
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize(),
+                ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     // Header and status block share the 12 dp side rhythm. Settings owns
                     // a single standard TopAppBar (with back) and hides both; the journal
@@ -737,6 +796,7 @@ fun AppShell(
                 }
                 }
             }
+        }
         }
         }
 
