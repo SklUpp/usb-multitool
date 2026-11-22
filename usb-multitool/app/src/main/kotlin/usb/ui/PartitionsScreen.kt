@@ -1238,7 +1238,7 @@ private fun SelectedPartitionCard(
             value = selected.name.ifBlank { "—" },
             enabled = renameEnabled,
             interactive = namesSupported,
-            onClick = if (namesSupported) {{ onRename(selected) }} else null,
+            onClick = if (namesSupported) { { onRename(selected) } } else null,
         )
         val labelFs = selected.filesystemId
         val labelSupported = labelFs != null && FormatCatalog.supportsVolumeLabelRename(labelFs)
@@ -1249,7 +1249,7 @@ private fun SelectedPartitionCard(
             value = selected.volumeLabel?.ifBlank { "—" } ?: "—",
             enabled = labelEnabled,
             interactive = labelSupported,
-            onClick = if (labelSupported) {{ onLabel(selected) }} else null,
+            onClick = if (labelSupported) { { onLabel(selected) } } else null,
         )
         if (labelFs == FilesystemId.EXT) {
             Text(
@@ -2152,6 +2152,11 @@ private data class StripSegment(
     val gapStart: ULong? = null,
     val gapSectorCount: ULong? = null,
 )
+
+private data class StripGeometry(
+    val valid: Boolean,
+    val segments: List<StripSegment>,
+)
 private fun segmentStart(segment: StripSegment): ULong =
     segment.partition?.startLba ?: segment.free?.startLba ?: segment.gapStart ?: 0UL
 
@@ -2170,38 +2175,44 @@ private fun PartitionSelectStrip(
     onSelectPartition: (String) -> Unit,
     onSelectFree: (FreeRegionUi) -> Unit,
 ) {
-    val partitions = state.partitions
-        .filter { (it.sectorCount ?: 0uL) > 0uL }
-        .sortedWith(compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id })
     val diskSectorCount = state.device?.capacityBytes
         ?.div(state.diskSectorSize.coerceAtLeast(1).toULong())
         ?.takeIf { it > 0UL }
         ?: return
-    val sourceSegments = buildList {
-        partitions.forEach { add(StripSegment(partition = it)) }
-        state.freeRegions.filter { it.sectorCount > 0UL }.forEach { add(StripSegment(free = it)) }
-    }.sortedWith(compareBy { segmentStart(it) })
-    val geometryValid = sourceSegments.zipWithNext().all { (a, b) ->
-        segmentEnd(a) >= segmentStart(a) && segmentEnd(a) <= segmentStart(b)
-    } && sourceSegments.all {
-        segmentStart(it) <= diskSectorCount && segmentEnd(it) >= segmentStart(it) &&
-            segmentEnd(it) <= diskSectorCount
-    }
-    val segments = if (geometryValid) {
-        buildList {
-            var cursor = 0UL
-            sourceSegments.forEach { segment ->
-                val start = segmentStart(segment)
-                if (start > cursor) add(StripSegment(gapStart = cursor, gapSectorCount = start - cursor))
-                add(segment)
-                cursor = segmentEnd(segment)
-            }
-            if (diskSectorCount > cursor) {
-                add(StripSegment(gapStart = cursor, gapSectorCount = diskSectorCount - cursor))
-            }
+    val geometry = remember(state.partitions, state.freeRegions, diskSectorCount) {
+        val partitions = state.partitions
+            .filter { (it.sectorCount ?: 0uL) > 0uL }
+            .sortedWith(compareBy<PartitionTab> { it.startLba ?: ULong.MAX_VALUE }.thenBy { it.id })
+        val sourceSegments = buildList {
+            partitions.forEach { add(StripSegment(partition = it)) }
+            state.freeRegions.filter { it.sectorCount > 0UL }.forEach { add(StripSegment(free = it)) }
+        }.sortedWith(compareBy { segmentStart(it) })
+        val valid = sourceSegments.zipWithNext().all { (a, b) ->
+            segmentEnd(a) >= segmentStart(a) && segmentEnd(a) <= segmentStart(b)
+        } && sourceSegments.all {
+            segmentStart(it) <= diskSectorCount && segmentEnd(it) >= segmentStart(it) &&
+                segmentEnd(it) <= diskSectorCount
         }
-    } else emptyList()
-    if (!geometryValid) {
+        val segments = if (valid) {
+            buildList {
+                var cursor = 0UL
+                sourceSegments.forEach { segment ->
+                    val start = segmentStart(segment)
+                    if (start > cursor) {
+                        add(StripSegment(gapStart = cursor, gapSectorCount = start - cursor))
+                    }
+                    add(segment)
+                    cursor = segmentEnd(segment)
+                }
+                if (diskSectorCount > cursor) {
+                    add(StripSegment(gapStart = cursor, gapSectorCount = diskSectorCount - cursor))
+                }
+            }
+        } else emptyList()
+        StripGeometry(valid, segments)
+    }
+    val segments = geometry.segments
+    if (!geometry.valid) {
         Text(
             text = stringResource(R.string.partitions_strip_geometry_unavailable),
             style = MaterialTheme.typography.labelSmall,

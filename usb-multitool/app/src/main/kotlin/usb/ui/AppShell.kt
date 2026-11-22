@@ -280,7 +280,11 @@ fun AppShell(
         // status spam while running stays out (the block is the only live surface).
         val shellSnackbar = remember { SnackbarHostState() }
         var snackbarToken by rememberSaveable { mutableStateOf<Long?>(null) }
-        val shellFacts = operationStatusFacts(state)
+        val shellFacts = if (state.operation?.state?.isTerminal() == true) {
+            operationStatusFacts(state)
+        } else {
+            null
+        }
         val snackbarText = shellFacts?.let { fact ->
             listOfNotNull(fact.name, fact.result ?: fact.state).joinToString(", ")
         } ?: state.statusMessage?.localized()
