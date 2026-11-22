@@ -957,14 +957,17 @@ class MainViewModel(
                                 capacityBytes = confirmed.identity.capacityBytes,
                             )
                             if (action == DestructiveAction.RESCUE_RESTORE) {
+                                // Without a stable serial, RescueRestorePrep discards any
+                                // inherited resume progress and rewrites every sector. Only
+                                // compare serials when the confirmed stick exposed one.
                                 val serial = uiState.device?.serialNumber?.trim().orEmpty()
-                                require(serial.isNotEmpty()) {
-                                    "USB serial unavailable; refuse rescue restore without stable identity"
-                                }
-                                val liveSerial =
-                                    runCatching { dev.serialNumber?.trim().orEmpty() }.getOrNull().orEmpty()
-                                require(liveSerial.isNotEmpty() && liveSerial == serial) {
-                                    "live USB serial '$liveSerial' does not match confirmed serial '$serial'"
+                                if (serial.isNotEmpty()) {
+                                    val liveSerial = runCatching {
+                                        dev.serialNumber?.trim().orEmpty()
+                                    }.getOrNull().orEmpty()
+                                    require(liveSerial.isNotEmpty() && liveSerial == serial) {
+                                        "live USB serial '$liveSerial' does not match confirmed serial '$serial'"
+                                    }
                                 }
                             }
                             val table = runCatching { PartitionTable.read(disk) }.getOrNull()
@@ -1281,6 +1284,11 @@ class MainViewModel(
                                         "GPT backup URI changed after confirmation"
                                     }
                                     val blob = readBackupBlob(uri, GptCriticalBackup.MAX_BLOB_BYTES)
+                                    confirmed.gptBackupInspection?.sha256?.let { expected ->
+                                        require(usb.ui.RestoreSourceInspector.sha256(blob) == expected) {
+                                            "GPT backup source changed after confirmation"
+                                        }
+                                    }
                                     bytesTotal = blob.size.toLong()
                                     val restored = GptCriticalBackup.restore(
                                         disk = disk,
@@ -1308,9 +1316,17 @@ class MainViewModel(
                                         mapUri,
                                         maxChars = RescueMap.MAX_ENCODED_CHARS,
                                     )
+                                    confirmed.rescueMapInspection?.sha256?.let { expected ->
+                                        require(usb.ui.RestoreSourceInspector.sha256Text(mapText) == expected) {
+                                            "rescue map changed after confirmation"
+                                        }
+                                    }
                                     val loaded = RescueMap.decode(mapText)
                                     val liveId = identity
-                                    if (loaded.sectorSize != null && loaded.sectorSize != disk.sectorSize) {
+                                    require(loaded.sectorSize != null) {
+                                        "rescue map has no sector-size header; refusing to guess"
+                                    }
+                                    if (loaded.sectorSize != disk.sectorSize) {
                                         throw IllegalStateException(
                                             "rescue map sectorSize ${loaded.sectorSize} != disk ${disk.sectorSize}",
                                         )
@@ -1339,16 +1355,50 @@ class MainViewModel(
                                     }
                                     val expected = (restoreMap.sectorCount * disk.sectorSize.toULong()).toLong()
                                     bytesTotal = expected
+                                    val resolver = getApplication<Application>().contentResolver
+                                    val liveImage = contentInfo(resolver, Uri.parse(imageUri))
+                                    confirmed.rescueImageInspection?.sizeBytes?.let { expected ->
+                                        require(liveImage.second == expected) {
+                                            "rescue image size changed after confirmation"
+                                        }
+                                    }
+                                    confirmed.rescueImageInspection?.lastModified?.let { expected ->
+                                        require(contentLastModified(resolver, Uri.parse(imageUri)) == expected) {
+                                            "rescue image changed after confirmation"
+                                        }
+                                    }
                                     val source =
                                         ImageSource.fromContentUri(
                                             Uri.parse(imageUri),
-                                            getApplication<Application>().contentResolver,
+                                            resolver,
                                         )
+                                    val imageName = confirmed.rescueImageName
+                                        ?: imageUri.substringAfterLast('/')
+                                    val imageStem = imageName.substringBeforeLast('.')
+                                        .ifBlank { "rescue" }
+                                    val checkpointFolder = confirmed.rescueArchiveTreeUri?.let { tree ->
+                                        runCatching {
+                                            usb.saf.SafBackupFolder(
+                                                getApplication<Application>().contentResolver,
+                                                Uri.parse(tree),
+                                            )
+                                        }.getOrNull()
+                                    }
+                                    val checkpointPublisher = checkpointFolder?.checkpointPublisher(
+                                        baseName = "$imageStem.map",
+                                        startGeneration = (System.currentTimeMillis() / 1000L)
+                                            .toInt()
+                                            .coerceAtLeast(1),
+                                    )
                                     val checkpointFile =
-                                        File(
-                                            backupDirectory(),
-                                            "rescue-restore-${timestamp()}-${System.nanoTime()}.map",
-                                        )
+                                        if (checkpointPublisher == null) {
+                                            File(
+                                                backupDirectory(),
+                                                "rescue-restore-${timestamp()}-${System.nanoTime()}.map",
+                                            )
+                                        } else {
+                                            null
+                                        }
                                     val rescueResult = RescueOperations.restore(
                                         source = source,
                                         disk = disk,
@@ -1356,15 +1406,54 @@ class MainViewModel(
                                         identity = liveId,
                                         confirmation = confirmation,
                                         checkpointFile = checkpointFile,
+                                        checkpoint = checkpointPublisher?.let { publisher ->
+                                            { mapToSave -> publisher.publish(mapToSave) }
+                                        },
                                         operation = this,
                                     )
+                                    if (!rescueResult.partial && checkpointFile != null) {
+                                        runCatching { checkpointFile.delete() }
+                                    }
+                                    if (rescueResult.partial && checkpointPublisher != null) {
+                                        val latest = checkpointPublisher.latestDocument
+                                        if (latest != null) {
+                                            val latestUri = Uri.parse(latest)
+                                            val latestText = runCatching {
+                                                checkpointFolder.readText(
+                                                    latestUri,
+                                                    RescueMap.MAX_ENCODED_CHARS,
+                                                )
+                                            }.getOrNull()
+                                            val inspection = latestText?.let {
+                                                usb.ui.RestoreSourceInspector.inspectMap(
+                                                    uri = latest,
+                                                    name = latestUri.lastPathSegment,
+                                                    sizeBytes = null,
+                                                    text = it,
+                                                )
+                                            }
+                                            if (inspection != null) {
+                                                onIntent(
+                                                    UiIntent.SetRescueMap(
+                                                        latest,
+                                                        inspection,
+                                                        uiState.rescueMapSelectionGeneration + 1,
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                    }
+                                    val checkpointLabel =
+                                        checkpointPublisher?.latestDocument?.substringAfterLast('/')
+                                            ?: checkpointFile?.name
+                                            ?: "none"
                                     result =
                                         "Rescue restore: " +
                                             "${restoreMap.copied.sumOf { it.last - it.first + 1UL }} copied, " +
                                             "${restoreMap.failed.sumOf { it.last - it.first + 1UL }} failed of " +
                                             "${restoreMap.sectorCount} sectors" +
-                                            if (restoreMap.partial) {
-                                                " (partial — checkpoint ${checkpointFile.name})"
+                                            if (rescueResult.partial) {
+                                                " (partial — checkpoint $checkpointLabel)"
                                             } else {
                                                 ""
                                             } +
@@ -2131,6 +2220,7 @@ class MainViewModel(
         val target = uri.toString()
         trace.log("picker.gpt_backup", "uri" to target)
         val generation = gptPickGeneration.incrementAndGet()
+        val expectedAttachGeneration = state.device?.attachGeneration
         val resolver = getApplication<Application>().contentResolver
         val diskSectorSize =
             state.diskSectorSize.takeIf { state.presence == DevicePresence.Ready && state.device != null }
@@ -2158,17 +2248,12 @@ class MainViewModel(
                 }
             withContext(Dispatchers.Main.immediate) {
                 if (generation == gptPickGeneration.get()) {
-                    onIntent(UiIntent.AppendLog(logLine("GPT backup picked: ${name ?: "unnamed"}")))
-                    onIntent(UiIntent.SetBackupFile(target, inspection, generation))
-                    if (inspection.error == null &&
-                        inspection.summary != null &&
-                        state.actionsEnabled
-                    ) {
-                        // The chosen file already passed bounded validation: show the
-                        // destructive warning now instead of demanding another tap.
-                        onIntent(
-                            UiIntent.RequestDestructive(usb.ui.DestructiveAction.GPT_RESTORE),
-                        )
+                    if (state.device?.attachGeneration != expectedAttachGeneration) {
+                        onIntent(UiIntent.SetBackupFile(null, null, generation))
+                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+                    } else {
+                        onIntent(UiIntent.AppendLog(logLine("GPT backup picked: ${name ?: "unnamed"}")))
+                        onIntent(UiIntent.SetBackupFile(target, inspection, generation))
                     }
                 }
             }
@@ -2203,6 +2288,7 @@ class MainViewModel(
         trace.log("picker.rescue_folder", "uri" to uri.toString())
         onIntent(UiIntent.AppendLog(logLine("Restore folder picked")))
         val generation = rescueArchivePickGeneration.incrementAndGet()
+        val expectedAttachGeneration = state.device?.attachGeneration
         val resolver = getApplication<Application>().contentResolver
         onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
         scope.launch(Dispatchers.IO) {
@@ -2237,6 +2323,10 @@ class MainViewModel(
                             name = pair.image.name,
                             sizeBytes = pair.image.sizeBytes,
                             format = imageFormat,
+                            lastModified = contentLastModified(
+                                resolver,
+                                Uri.parse(pair.image.uri),
+                            ),
                         )
                         val imageBytes = pair.image.sizeBytes
                         val rejections = mutableListOf<String>()
@@ -2332,8 +2422,16 @@ class MainViewModel(
             }
             withContext(Dispatchers.Main.immediate) {
                 if (generation != rescueArchivePickGeneration.get()) return@withContext
+                if (state.device?.attachGeneration != expectedAttachGeneration) {
+                    onIntent(UiIntent.SetRescueArchiveTree(null))
+                    onIntent(UiIntent.SetRescueImage(null, null, generation))
+                    onIntent(UiIntent.SetRescueMap(null, null, generation))
+                    onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+                    return@withContext
+                }
                 val rejection = failureMessage
                 if (rejection != null) {
+                    onIntent(UiIntent.SetRescueArchiveTree(null))
                     onIntent(UiIntent.SetRescueImage(null, null, generation))
                     onIntent(UiIntent.SetRescueMap(null, null, generation))
                     onIntent(
@@ -2344,18 +2442,15 @@ class MainViewModel(
                     return@withContext
                 }
                 invalid?.let {
+                    onIntent(UiIntent.SetRescueArchiveTree(null))
                     onIntent(UiIntent.SetRescueImage(null, null, generation))
                     onIntent(UiIntent.SetRescueMap(null, null, generation))
                     onIntent(UiIntent.Status(UiReducer.archiveInvalidMessage(it)))
                     return@withContext
                 }
+                onIntent(UiIntent.SetRescueArchiveTree(uri.toString()))
                 onIntent(UiIntent.SetRescueImage(imageUri, imageInspection, generation))
                 onIntent(UiIntent.SetRescueMap(mapUri, mapInspection, generation))
-                if (mapInspection?.error == null && state.actionsEnabled) {
-                    onIntent(
-                        UiIntent.RequestDestructive(usb.ui.DestructiveAction.RESCUE_RESTORE),
-                    )
-                }
             }
         }
     }
@@ -6632,6 +6727,26 @@ class MainViewModel(
             }
         }
     }
+    private fun contentLastModified(resolver: ContentResolver, uri: Uri): Long? =
+        runCatching {
+            resolver.query(
+                uri,
+                arrayOf(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED),
+                null,
+                null,
+                null,
+            )?.use { query ->
+                if (!query.moveToFirst()) {
+                    null
+                } else {
+                    val index = query.getColumnIndex(
+                        android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    )
+                    if (index >= 0 && !query.isNull(index)) query.getLong(index) else null
+                }
+            }
+        }.getOrNull()
+
     private fun contentInfo(resolver: ContentResolver, uri: Uri): Pair<String?, Long?> {
         val columns = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         val cursor = try {

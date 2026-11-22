@@ -688,8 +688,9 @@ fun PartitionsScreen(
     var partitionSelectorHeightPx by remember {
         mutableIntStateOf(initialSelectorHeightPx)
     }
-    val pinnedPartitionSelector = partitionSelectorTop < viewportTop &&
-        partitionListBottom > viewportTop + partitionSelectorHeightPx
+    val pinnedPartitionSelector =
+        partitionSelectorTop + partitionSelectorHeightPx <= viewportTop &&
+            partitionListBottom > viewportTop + partitionSelectorHeightPx
     val latestState by rememberUpdatedState(state)
 
     @Composable

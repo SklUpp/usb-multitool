@@ -236,11 +236,11 @@ class ShellPanelBehaviorTest {
     @Test
     fun progressLineShowsOnlyMeasuredFacts() {
         assertEquals(
-            "42% · 12.3 MiB/s · 3 min",
+            "42%, 12.3 MiB/s, 3 min",
             operationProgressFacts("42%", "12.3 MiB/s", "3 min"),
         )
-        assertEquals("42% · 3 min", operationProgressFacts("42%", null, "3 min"))
-        assertEquals("42% · 12.3 MiB/s", operationProgressFacts("42%", "12.3 MiB/s", null))
+        assertEquals("42%, 3 min", operationProgressFacts("42%", null, "3 min"))
+        assertEquals("42%, 12.3 MiB/s", operationProgressFacts("42%", "12.3 MiB/s", null))
         assertEquals("", operationProgressFacts(null, null, null))
     }
 }

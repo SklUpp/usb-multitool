@@ -234,6 +234,7 @@ enum class UiMessageKey {
     SourceInspectionRejected,
     /** Args = map sector size, disk sector size. */
     RescueMapSectorSizeMismatch,
+    RescueMapSectorSizeUnknown,
     /** Args = map sector count, live disk sector count. */
     RescueMapDiskTooSmall,
     /** Args = actual image bytes, minimum required bytes. */
@@ -433,6 +434,8 @@ data class DestructiveConfirmation(
     /** Full URI snapshotted for RESCUE_RESTORE map. */
     val rescueMapUri: String? = null,
     val rescueMapName: String? = null,
+    /** SAF tree for checkpoint publication; null keeps the app-private fallback. */
+    val rescueArchiveTreeUri: String? = null,
     /** Pre-confirmation facts actually inspected for this GPT backup file. */
     val gptBackupInspection: GptBackupInspection? = null,
     /** Pre-confirmation facts for the selected rescue image (SAF metadata only). */
@@ -515,6 +518,7 @@ data class DestructiveConfirmation(
             rescueImageName: String? = null,
             rescueMapUri: String? = null,
             rescueMapName: String? = null,
+            rescueArchiveTreeUri: String? = null,
             gptBackupInspection: GptBackupInspection? = null,
             rescueImageInspection: RescueImageInspection? = null,
             rescueMapInspection: RescueMapInspection? = null,
@@ -566,6 +570,8 @@ data class DestructiveConfirmation(
                     if (action == DestructiveAction.RESCUE_RESTORE) rescueMapUri else null,
                 rescueMapName =
                     if (action == DestructiveAction.RESCUE_RESTORE) rescueMapName else null,
+                rescueArchiveTreeUri =
+                    if (action == DestructiveAction.RESCUE_RESTORE) rescueArchiveTreeUri else null,
                 gptBackupInspection =
                     if (action == DestructiveAction.GPT_RESTORE) gptBackupInspection else null,
                 rescueImageInspection =
@@ -1609,6 +1615,8 @@ data class AppUiState(
     val rescueMapInspection: RescueMapInspection? = null,
     /** Monotonic id of the newest rescue-map pick; older results are dropped. */
     val rescueMapSelectionGeneration: Long = 0L,
+    /** SAF tree the restore image/map came from; checkpoints are published back here. */
+    val rescueArchiveTreeUri: String? = null,
     /** User-selected target FS for the next Format action (picker). */
     val selectedFormatId: FilesystemId = FilesystemId.FAT,
     /** Theme preference: exactly two states, dark applied by default on first launch. */

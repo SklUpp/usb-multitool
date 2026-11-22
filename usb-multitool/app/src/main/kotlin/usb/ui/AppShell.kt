@@ -463,7 +463,6 @@ fun AppShell(
                         if (!panels.journalScreenOpen) {
                             OperationStatusLine(
                                 state = state,
-                                onIntent = onIntent,
                                 onOpenDetails = { operationDetailsOpen = true },
                             )
                         }
@@ -1294,7 +1293,6 @@ internal fun CancelOperationButton(
 @Composable
 private fun OperationStatusLine(
     state: AppUiState,
-    onIntent: (UiIntent) -> Unit,
     onOpenDetails: () -> Unit,
 ) {
     val facts = operationStatusFacts(state)
@@ -1351,9 +1349,13 @@ private fun OperationStatusLine(
         shadowElevation = 0.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
+            Text(
+                text = titleText,
+                style = MaterialTheme.typography.titleSmall,
+                color = titleColor,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
                     .then(
                         if (running || standaloneMessage) {
                             Modifier.semantics { liveRegion = LiveRegionMode.Polite }
@@ -1361,24 +1363,7 @@ private fun OperationStatusLine(
                             Modifier
                         },
                     ),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = titleText,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = titleColor,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                )
-                if (running) {
-                    CancelOperationButton(
-                        state = state,
-                        onIntent = onIntent,
-                        modifier = Modifier.padding(end = 4.dp),
-                    )
-                }
-            }
+            )
             if (newerStandaloneText != null) {
                 Text(
                     text = newerStandaloneText,

@@ -118,6 +118,8 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_source_inspection_rejected, *args.toTypedArray())
             UiMessageKey.RescueMapSectorSizeMismatch ->
                 stringResource(R.string.msg_rescue_map_sector_size_mismatch, *args.toTypedArray())
+            UiMessageKey.RescueMapSectorSizeUnknown ->
+                stringResource(R.string.msg_rescue_map_sector_size_unknown)
             UiMessageKey.RescueMapDiskTooSmall ->
                 stringResource(R.string.msg_rescue_map_disk_too_small, *args.toTypedArray())
             UiMessageKey.RescueMapImageTooShort ->

@@ -649,6 +649,8 @@ sealed class UiIntent {
         val inspection: RescueImageInspection? = null,
         val requestId: Long = 0L,
     ) : UiIntent()
+    data class SetRescueArchiveTree(val treeUri: String?) : UiIntent()
+
     data class SetRescueMap(
         val uri: String?,
         val inspection: RescueMapInspection? = null,
@@ -2113,6 +2115,12 @@ object UiReducer {
                                     rescueMapName =
                                         if (intent.action == DestructiveAction.RESCUE_RESTORE) {
                                             DestructiveConfirmation.fileLabel(state.rescueMapUri)
+                                        } else {
+                                            null
+                                        },
+                                    rescueArchiveTreeUri =
+                                        if (intent.action == DestructiveAction.RESCUE_RESTORE) {
+                                            state.rescueArchiveTreeUri
                                         } else {
                                             null
                                         },
@@ -4269,6 +4277,8 @@ object UiReducer {
                     )
                 }
 
+            is UiIntent.SetRescueArchiveTree ->
+                ReduceResult(state.copy(rescueArchiveTreeUri = intent.treeUri))
             is UiIntent.SetRescueImage ->
                 RescueBackupTransitions.setRescueImage(state, intent)
             is UiIntent.SetRescueMap ->
@@ -5562,13 +5572,13 @@ object UiReducer {
                 listOf(summary.nonTriedSectors.toString()),
             )
         }
-        summary.sectorSize?.let { mapSectorSize ->
-            if (mapSectorSize != state.diskSectorSize) {
-                return UiMessage.Key(
-                    UiMessageKey.RescueMapSectorSizeMismatch,
-                    listOf(mapSectorSize.toString(), state.diskSectorSize.toString()),
-                )
-            }
+        val mapSectorSize = summary.sectorSize
+            ?: return UiMessage.Key(UiMessageKey.RescueMapSectorSizeUnknown)
+        if (mapSectorSize != state.diskSectorSize) {
+            return UiMessage.Key(
+                UiMessageKey.RescueMapSectorSizeMismatch,
+                listOf(mapSectorSize.toString(), state.diskSectorSize.toString()),
+            )
         }
         liveSectorCount(state)?.let { live ->
             if (summary.sectorCount > live) {

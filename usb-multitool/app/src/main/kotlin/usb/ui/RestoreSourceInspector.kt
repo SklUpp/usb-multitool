@@ -2,6 +2,7 @@ package usb.ui
 
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.security.MessageDigest
 import usb.diagnostics.RescueMap
 import usb.multitool.GptCriticalBackup
 import usb.partition.GptBackup
@@ -22,6 +23,12 @@ object RestoreSourceInspector {
     /** Hard cap before any GPT blob restore; same value as the backup validator. */
     const val MAX_BLOB_BYTES: Int = GptCriticalBackup.MAX_BLOB_BYTES
 
+    fun sha256Text(text: String): String = sha256(text.toByteArray(Charsets.UTF_8))
+
+    fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
     /** Candidate sector sizes when the live device does not report one. */
     private val SECTOR_SIZE_CANDIDATES = intArrayOf(512, 1024, 2048, 4096)
 
@@ -34,8 +41,15 @@ object RestoreSourceInspector {
         name: String?,
         sizeBytes: Long?,
         format: usb.image.ImageFormat? = null,
+        lastModified: Long? = null,
     ): RescueImageInspection =
-        RescueImageInspection(uri = uri, name = name, sizeBytes = sizeBytes, format = format)
+        RescueImageInspection(
+            uri = uri,
+            name = name,
+            sizeBytes = sizeBytes,
+            format = format,
+            lastModified = lastModified,
+        )
 
     fun inspectMap(
         uri: String,
@@ -49,6 +63,7 @@ object RestoreSourceInspector {
                 name = name,
                 sizeBytes = sizeBytes,
                 summary = RescueMap.decode(text).summary(),
+                sha256 = sha256(text.toByteArray(Charsets.UTF_8)),
             )
         } catch (failure: Exception) {
             RescueMapInspection(
@@ -102,6 +117,7 @@ object RestoreSourceInspector {
                             lastUsable = report.primary.lastUsable,
                             originalSectorCount = report.primary.backupLba + 1UL,
                         ),
+                    sha256 = sha256(blob),
                 )
             } catch (failure: Exception) {
                 lastFailure = failure

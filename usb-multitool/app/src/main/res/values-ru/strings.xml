@@ -420,9 +420,12 @@
     <string name="diagnostics_gpt_geometry">Снятый диск: %1$s секторов; используемые LBA %2$s–%3$s</string>
     <string name="diagnostics_gpt_partitions">Разделов в копии: %1$s</string>
     <string name="diagnostics_gpt_valid">Заголовки, CRC таблиц и границы разделов проверены.</string>
-    <string name="diagnostics_restore_image">Восстановить</string>
+    <string name="diagnostics_pick_image_folder">Выбрать папку</string>
+    <string name="diagnostics_restore_image">Восстановить образ</string>
+    <string name="diagnostics_restore_map_missing">В выбранной папке нет карты восстановления (.map)</string>
     <string name="diagnostics_no_gpt_file">Файл GPT не выбран</string>
-    <string name="diagnostics_restore_gpt">Восстановить</string>
+    <string name="diagnostics_pick_gpt_file">Выбрать файл</string>
+    <string name="diagnostics_restore_gpt">Восстановить GPT</string>
     <string name="diagnostics_danger_title">Опасная зона: стирание устройства</string>
     <string name="diagnostics_danger_body">Стирание затирает все сектора нулями без возможности отмены.</string>
     <string name="diagnostics_wipe">Стереть устройство (нули)</string>
@@ -500,6 +503,7 @@
     <string name="msg_archive_unreadable">Не удалось прочитать папку архива: %1$s.</string>
     <string name="msg_source_inspection_rejected">Файл %1$s нельзя использовать: %2$s. Выберите источник заново.</string>
     <string name="msg_rescue_map_sector_size_mismatch">Размер сектора карты %1$s не совпадает с размером сектора диска %2$s.</string>
+    <string name="msg_rescue_map_sector_size_unknown">В карте нет размера сектора; отказываюсь угадывать геометрию диска.</string>
     <string name="msg_rescue_map_disk_too_small">Карта покрывает %1$s секторов; на диске только %2$s.</string>
     <string name="msg_rescue_map_image_geometry_overflow">Произведение числа секторов карты на размер сектора переполняет поддерживаемую длину образа. Восстановление не выполнено.</string>
     <string name="msg_rescue_map_image_too_short">Образ короче: %1$s байт, карте нужно минимум %2$s байт. Восстановление не выполнено.</string>

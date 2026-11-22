@@ -419,9 +419,12 @@
     <string name="diagnostics_gpt_geometry">Captured disk: %1$s sectors; usable LBA %2$s–%3$s</string>
     <string name="diagnostics_gpt_partitions">Partitions in backup: %1$s</string>
     <string name="diagnostics_gpt_valid">Headers, entry CRCs and partition bounds validate.</string>
-    <string name="diagnostics_restore_image">Restore</string>
+    <string name="diagnostics_pick_image_folder">Choose folder</string>
+    <string name="diagnostics_restore_image">Restore image</string>
+    <string name="diagnostics_restore_map_missing">No rescue map (.map) found in the selected folder</string>
     <string name="diagnostics_no_gpt_file">No GPT file selected</string>
-    <string name="diagnostics_restore_gpt">Restore</string>
+    <string name="diagnostics_pick_gpt_file">Choose file</string>
+    <string name="diagnostics_restore_gpt">Restore GPT</string>
     <string name="diagnostics_danger_title">Danger zone: wipe device</string>
     <string name="diagnostics_danger_body">Wiping overwrites every sector with zeros and cannot be undone.</string>
     <string name="diagnostics_wipe">Wipe device (zeros)</string>
@@ -499,6 +502,7 @@
     <string name="msg_archive_unreadable">Cannot read the archive folder: %1$s.</string>
     <string name="msg_source_inspection_rejected">%1$s cannot be used: %2$s. Choose the source again.</string>
     <string name="msg_rescue_map_sector_size_mismatch">Rescue map sector size %1$s does not match the disk sector size %2$s.</string>
+    <string name="msg_rescue_map_sector_size_unknown">Rescue map has no sector-size header; refusing to guess the disk geometry.</string>
     <string name="msg_rescue_map_disk_too_small">Rescue map covers %1$s sectors; the disk has only %2$s.</string>
     <string name="msg_rescue_map_image_geometry_overflow">The rescue map\'s sector count × sector size overflows the supported image length. The pair was not restored.</string>
     <string name="msg_rescue_map_image_too_short">Image is %1$s bytes; the map needs at least %2$s bytes. The pair was not restored.</string>

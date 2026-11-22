@@ -254,7 +254,7 @@ fun DiagnosticsScreen(
                     GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = stringResource(R.string.diagnostics_restore_image),
+                        text = stringResource(R.string.diagnostics_pick_image_folder),
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -275,6 +275,13 @@ fun DiagnosticsScreen(
                     ),
                 )
             }
+            if (state.rescueImageUri != null && state.rescueMapUri == null) {
+                Text(
+                    text = stringResource(R.string.diagnostics_restore_map_missing),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (state.rescueMapUri != null) {
                 Text(
                     text = stringResource(
@@ -290,6 +297,33 @@ fun DiagnosticsScreen(
                         state.rescueMapInspection?.takeIf { it.uri == state.rescueMapUri },
                     ),
                 )
+            }
+            val rescueImage = state.rescueImageInspection
+                ?.takeIf { it.uri == state.rescueImageUri }
+            val rescueMap = state.rescueMapInspection
+                ?.takeIf { it.uri == state.rescueMapUri }
+            val rescueReady = state.rescueImageUri != null &&
+                state.rescueMapUri != null &&
+                rescueImage != null &&
+                rescueMap != null &&
+                rescueMap.error == null &&
+                rescueMap.summary?.sectorSize != null
+            Button(
+                onClick = {
+                    onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+                },
+                enabled = state.actionsEnabled && rescueReady,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+            ) {
+                GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.diagnostics_restore_image))
             }
 
             SubsectionHeader(
@@ -326,7 +360,7 @@ fun DiagnosticsScreen(
                     GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = stringResource(R.string.diagnostics_restore_gpt),
+                        text = stringResource(R.string.diagnostics_pick_gpt_file),
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -346,6 +380,27 @@ fun DiagnosticsScreen(
                         state.backupInspection?.takeIf { it.uri == state.backupUri },
                     ),
                 )
+            }
+            val gptRestoreReady = state.backupUri != null &&
+                state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
+                    it.error == null && it.summary != null
+                } == true
+            Button(
+                onClick = {
+                    onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
+                },
+                enabled = state.actionsEnabled && gptRestoreReady,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+            ) {
+                GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.diagnostics_restore_gpt))
             }
             // Live backup-GPT repair: RequestDestructive(GPT_REPAIR), never GPT_RESTORE.
             // Same UI guards as the former Partitions repair card: actionsEnabled and a

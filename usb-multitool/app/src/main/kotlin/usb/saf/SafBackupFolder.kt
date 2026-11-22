@@ -55,6 +55,14 @@ class SafBackupFolder(
 
     fun displayName(): String? = queryDocument(rootDocumentUri)?.name
 
+    /** Publish rescue restore checkpoints beside the selected image/map. */
+    fun checkpointPublisher(baseName: String, startGeneration: Int = 1): CheckpointPublisher =
+        CheckpointPublisher(
+            store = SafCheckpointStore(this, rootDocumentUri),
+            baseName = baseName,
+            startGeneration = startGeneration,
+        )
+
     /**
      * Provider-reported free space for this tree, or null when it cannot be trusted.
      *

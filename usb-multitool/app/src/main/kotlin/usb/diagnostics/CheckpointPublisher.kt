@@ -53,10 +53,13 @@ class CheckpointPublisher(
     private val store: CheckpointStore,
     private val baseName: String = BackupArchive.MAP_NAME,
     private val keepGenerations: Int = 2,
+    startGeneration: Int = 1,
 ) {
-    private var nextGeneration = 1
+    private var nextGeneration = maxOf(1, startGeneration)
     private val published = ArrayList<Pair<Int, String>>()
     private var lastText: String? = null
+    var latestDocument: String? = null
+        private set
 
     fun publish(map: RescueMap) {
         val text = map.encode()
@@ -69,6 +72,7 @@ class CheckpointPublisher(
             throw IOException("checkpoint $baseName.$generation failed readback")
         }
         lastText = text
+        latestDocument = document
         published.add(0, generation to document)
         trim()
     }
@@ -82,6 +86,7 @@ class CheckpointPublisher(
         if (readBack != text) {
             throw IOException("final map $baseName failed readback")
         }
+        latestDocument = canonical
         // Keep the checkpoint generations (at most keepGenerations) as fallback.
         return canonical
     }

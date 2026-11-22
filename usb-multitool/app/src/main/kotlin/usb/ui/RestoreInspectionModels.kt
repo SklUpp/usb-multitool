@@ -24,6 +24,8 @@ data class RescueImageInspection(
      * permit a stored-size comparison.
      */
     val format: ImageFormat? = null,
+    /** SAF last-modified timestamp; a cheap mutation check before restore. */
+    val lastModified: Long? = null,
 ) {
     val displayName: String
         get() = name?.takeIf { it.isNotBlank() }
@@ -60,6 +62,8 @@ data class RescueMapInspection(
     val name: String? = null,
     val sizeBytes: Long? = null,
     val summary: RescueMapSummary? = null,
+    /** SHA-256 of the inspected map text; restore refuses a changed source. */
+    val sha256: String? = null,
     /** Decode/bounded-read failure; a non-null error blocks the destructive confirmation. */
     val error: String? = null,
 ) {
@@ -87,6 +91,8 @@ data class GptBackupInspection(
     /** SAF source size as reported; the actual bounded read is what validation consumes. */
     val sizeBytes: Long? = null,
     val summary: GptBackupSummary? = null,
+    /** SHA-256 of the inspected blob; restore refuses a changed source. */
+    val sha256: String? = null,
     /** Size/header/CRC failure; a non-null error blocks the destructive confirmation. */
     val error: String? = null,
 ) {

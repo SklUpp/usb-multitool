@@ -24,8 +24,18 @@ internal object OperationTransitions {
         val terminal = progress.state.isTerminal()
         // A write may change free space before its first progress update or fail partially.
         val invalidatesSpace = (begin || terminal) && progress.title.invalidatesFilesListing()
+        val completedAction = (progress.title as? OperationTitle.Destructive)?.action
+        val completedRestore = progress.state == OperationState.Completed &&
+            (completedAction == DestructiveAction.GPT_RESTORE ||
+                completedAction == DestructiveAction.RESCUE_RESTORE)
         val base = state.copy(
             operation = progress,
+            backupUri = if (completedRestore) null else state.backupUri,
+            backupInspection = if (completedRestore) null else state.backupInspection,
+            rescueImageUri = if (completedRestore) null else state.rescueImageUri,
+            rescueImageInspection = if (completedRestore) null else state.rescueImageInspection,
+            rescueMapUri = if (completedRestore) null else state.rescueMapUri,
+            rescueMapInspection = if (completedRestore) null else state.rescueMapInspection,
             // New token/begin only: ticks must keep the scoped log intact.
             operationLogLines = if (begin) emptyList() else state.operationLogLines,
             pendingVentoyControls =
