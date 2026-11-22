@@ -1345,13 +1345,15 @@ private fun FolderSubblock(
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    var wasSearchOpen by remember { mutableStateOf(searchOpen) }
     LaunchedEffect(searchOpen) {
-        if (searchOpen) {
+        if (searchOpen && !wasSearchOpen) {
             focusRequester.requestFocus()
             keyboard?.show()
-        } else {
+        } else if (!searchOpen) {
             keyboard?.hide()
         }
+        wasSearchOpen = searchOpen
     }
 
     Surface(
