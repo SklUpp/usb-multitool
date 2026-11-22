@@ -4319,10 +4319,15 @@ object UiReducer {
                     rescueImageInspection = null,
                     rescueMapUri = null,
                     rescueMapInspection = null,
+                    pendingConfirmation = null,
                 ),
             )
             UiIntent.ResetGptSelection -> ReduceResult(
-                state.copy(backupUri = null, backupInspection = null),
+                state.copy(
+                    backupUri = null,
+                    backupInspection = null,
+                    pendingConfirmation = null,
+                ),
             )
             is UiIntent.SetRescueImage ->
                 RescueBackupTransitions.setRescueImage(state, intent)

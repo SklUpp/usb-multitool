@@ -12,11 +12,14 @@ import usb.fs.FormatCatalog
 import usb.multitool.R
 import usb.ventoy.AutounattendProblem
 
-/** Localized text for authored reducer/status messages. [UiMessage.Raw] is shown as-is. */
+private val providerUriPattern = Regex("content://\\S+")
+
+/** Localized text for authored reducer/status messages. Raw errors never expose SAF URIs. */
 @Composable
 fun UiMessage.localized(): String =
     when (this) {
-        is UiMessage.Raw -> text
+        is UiMessage.Raw ->
+            providerUriPattern.replace(text) { normalizedRestorePath(it.value) }
         is UiMessage.ReadScan -> readScanSummary(outcome)
         is UiMessage.Smart -> smartSummary(outcome)
 

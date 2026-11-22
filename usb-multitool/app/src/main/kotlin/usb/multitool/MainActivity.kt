@@ -186,6 +186,10 @@ private fun isGptBackupName(name: String): Boolean =
     name.startsWith("gpt-critical-", ignoreCase = true) &&
         name.endsWith(".bin", ignoreCase = true)
 
+/** Error text may quote a SAF URI; user-facing status must show the canonical path only. */
+private fun sanitizedProviderText(message: String): String =
+    Regex("content://\\S+").replace(message) { usb.ui.normalizedRestorePath(it.value) }
+
 /** Durable high-water storage; allocation itself is serialized in [WindowsImportRequestCodes]. */
 private class SharedPreferencesRequestCodeStorage(
     private val prefs: SharedPreferences,
@@ -749,6 +753,15 @@ class MainViewModel(
     }
 
     fun onIntent(intent: UiIntent) {
+        // A reset must beat every inspection already in flight, not just the UI fields.
+        when (intent) {
+            UiIntent.ResetRescueSelection -> rescueArchivePickGeneration.incrementAndGet()
+            UiIntent.ResetGptSelection -> {
+                gptPickGeneration.incrementAndGet()
+                backupFolderScanGeneration.incrementAndGet()
+            }
+            else -> Unit
+        }
         val previousTab = state.tab
         if (intent is UiIntent.SetLanguage) {
             languagePrefs.edit().putString(LANGUAGE_KEY, intent.language.name).apply()
@@ -2305,7 +2318,9 @@ class MainViewModel(
                         uri = target,
                         name = name,
                         sizeBytes = size,
-                        error = failure.message ?: failure.javaClass.simpleName,
+                        error = sanitizedProviderText(
+                            failure.message ?: failure.javaClass.simpleName,
+                        ),
                     )
                 }
             withContext(Dispatchers.Main.immediate) {
@@ -2499,7 +2514,9 @@ class MainViewModel(
                                 )
                             } catch (failure: Throwable) {
                                 rejections += "${candidate.name}: " +
-                                    (failure.message ?: failure.javaClass.simpleName)
+                                    sanitizedProviderText(
+                                        failure.message ?: failure.javaClass.simpleName,
+                                    )
                                 continue
                             }
                             val summary = inspection.summary
@@ -2572,7 +2589,9 @@ class MainViewModel(
                     }
                 }
             } catch (failure: Throwable) {
-                failureMessage = failure.message ?: failure.javaClass.simpleName
+                failureMessage = sanitizedProviderText(
+                    failure.message ?: failure.javaClass.simpleName,
+                )
             }
             withContext(Dispatchers.Main.immediate) {
                 if (generation != rescueArchivePickGeneration.get()) return@withContext

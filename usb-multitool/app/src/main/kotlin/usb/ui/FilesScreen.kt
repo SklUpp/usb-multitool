@@ -1,11 +1,12 @@
 package usb.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
@@ -1366,7 +1367,10 @@ private fun FolderSubblock(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
                     androidx.compose.animation.AnimatedVisibility(
                         visible = !searchOpen,
                         enter = fadeIn(),
@@ -1383,8 +1387,8 @@ private fun FolderSubblock(
                     }
                     androidx.compose.animation.AnimatedVisibility(
                         visible = searchOpen,
-                        enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
-                        exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut(),
+                        enter = slideInHorizontally(tween(180)) { it } + fadeIn(),
+                        exit = slideOutHorizontally(tween(160)) { it } + fadeOut(),
                     ) {
                         OutlinedTextField(
                             value = filter,
