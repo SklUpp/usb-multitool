@@ -117,6 +117,219 @@ open class UsbDisk(
         }
     }
 
+    /**
+     * Read-only SAT SMART probe: IDENTIFY DEVICE then SMART READ DATA.
+     * Never writes. Unsupported bridges become [SmartAvailability.Unsupported],
+     * not a session-killing hard failure, unless BOT itself is untrustworthy.
+     */
+    @Synchronized
+    fun readSmartTelemetry(isActive: () -> Boolean = { true }): SmartTelemetry {
+        ensureOpen()
+        if (!isActive()) throw java.util.concurrent.CancellationException("SMART read cancelled")
+        val identifyBuf = ByteBuffer.allocate(ScsiCommand.ATA_SECTOR_BYTES)
+        when (val identifyOutcome = satPioDataIn(ScsiCommand.ataIdentifyDevice(), identifyBuf)) {
+            is SatCommandOutcome.Unsupported ->
+                return SmartTelemetry.unsupported(identifyOutcome.detail)
+            is SatCommandOutcome.Failed ->
+                return SmartTelemetry.unavailable(identifyOutcome.detail)
+            is SatCommandOutcome.Ok -> {
+                identifyBuf.flip()
+                if (identifyBuf.remaining() < ScsiCommand.ATA_SECTOR_BYTES) {
+                    return SmartTelemetry.unavailable(
+                        "IDENTIFY delivered ${identifyBuf.remaining()} bytes",
+                    )
+                }
+                val identify = SmartParser.parseIdentify(identifyBuf)
+                if (identify.smartSupported == false) {
+                    return SmartTelemetry(
+                        availability = SmartAvailability.Unsupported,
+                        identify = identify,
+                        detail = "IDENTIFY reports SMART feature set unsupported",
+                        ataStatus = identifyOutcome.ataStatus,
+                        ataError = identifyOutcome.ataError,
+                    )
+                }
+                if (!isActive()) throw java.util.concurrent.CancellationException("SMART read cancelled")
+
+                val smartBuf = ByteBuffer.allocate(ScsiCommand.ATA_SECTOR_BYTES)
+                when (val smartOutcome = satPioDataIn(ScsiCommand.ataSmartReadData(), smartBuf)) {
+                    is SatCommandOutcome.Unsupported ->
+                        return SmartTelemetry(
+                            availability = SmartAvailability.Unsupported,
+                            identify = identify,
+                            detail = smartOutcome.detail,
+                            ataStatus = smartOutcome.ataStatus,
+                            ataError = smartOutcome.ataError,
+                        )
+                    is SatCommandOutcome.Failed ->
+                        return SmartTelemetry(
+                            availability = SmartAvailability.Unavailable,
+                            identify = identify,
+                            detail = smartOutcome.detail,
+                            ataStatus = smartOutcome.ataStatus,
+                            ataError = smartOutcome.ataError,
+                        )
+                    is SatCommandOutcome.Ok -> {
+                        smartBuf.flip()
+                        if (smartBuf.remaining() < ScsiCommand.ATA_SECTOR_BYTES) {
+                            return SmartTelemetry(
+                                availability = SmartAvailability.Unavailable,
+                                identify = identify,
+                                detail = "SMART READ DATA delivered ${smartBuf.remaining()} bytes",
+                                ataStatus = smartOutcome.ataStatus,
+                                ataError = smartOutcome.ataError,
+                            )
+                        }
+                        val (attributes, checksumOk) = SmartParser.parseSmartAttributes(smartBuf)
+                        return SmartTelemetry(
+                            availability = SmartAvailability.Available,
+                            identify = identify,
+                            attributes = attributes,
+                            checksumOk = checksumOk,
+                            ataStatus = smartOutcome.ataStatus ?: identifyOutcome.ataStatus,
+                            ataError = smartOutcome.ataError ?: identifyOutcome.ataError,
+                            detail = if (checksumOk) {
+                                null
+                            } else {
+                                "SMART attribute page checksum mismatch"
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+
+    /**
+     * SAT PIO Data-In with CK_COND=1. Successful ATA completion may arrive as
+     * CSW FAILED plus ATA Return descriptor; data phase can still fill [buffer].
+     */
+    private fun satPioDataIn(cdb: ScsiCdb, buffer: ByteBuffer): SatCommandOutcome {
+        require(cdb.direction == ScsiDirection.IN)
+        require(cdb.transferLength == ScsiCommand.ATA_SECTOR_BYTES)
+        var uaRetried = false
+        while (true) {
+            buffer.clear()
+            buffer.limit(ScsiCommand.ATA_SECTOR_BYTES)
+            val mark = buffer.position()
+            val result = try {
+                execute(cdb, buffer)
+            } catch (e: DiskException.Disconnected) {
+                throw e
+            } catch (e: DiskException.Closed) {
+                throw e
+            } catch (e: DiskException) {
+                // BOT reset/close already applied by execute helpers for untrusted replies.
+                return SatCommandOutcome.Failed(e.message ?: e.javaClass.simpleName)
+            }
+            val delivered = buffer.position() - mark
+            when (result.status) {
+                CswStatus.PASSED -> {
+                    if (delivered != ScsiCommand.ATA_SECTOR_BYTES || result.residue != 0) {
+                        closeAfterUntrustedReply(
+                            DiskException.IoFailure(
+                                "SAT data mismatch: delivered=$delivered residue=${result.residue}",
+                            ),
+                        )
+                    }
+                    // Some SATLs pass CSW and still expose ATA return via sense.
+                    val senseBytes = requestSenseBytes(64)
+                    val ata = senseBytes?.let { SmartParser.findAtaReturn(it) }
+                    if (ata != null && ata.hasError) {
+                        return SatCommandOutcome.Failed(
+                            detail = "ATA status=0x${ata.status.toString(16)} error=0x${ata.error.toString(16)}",
+                            ataStatus = ata.status,
+                            ataError = ata.error,
+                        )
+                    }
+                    return SatCommandOutcome.Ok(ata?.status, ata?.error)
+                }
+                CswStatus.FAILED -> {
+                    val senseBytes = requestSenseBytes(64)
+                        ?: return SatCommandOutcome.Failed("REQUEST SENSE failed after SAT CSW FAILED")
+                    val parsed = try {
+                        parseSenseBuffer(senseBytes)
+                    } catch (e: IllegalArgumentException) {
+                        return SatCommandOutcome.Failed(e.message ?: "invalid sense")
+                    }
+                    if (parsed.isUnitAttention && !uaRetried) {
+                        uaRetried = true
+                        continue
+                    }
+                    if (parsed.isIllegalRequest) {
+                        return SatCommandOutcome.Unsupported(
+                            detail = parsed.message ?: "ILLEGAL REQUEST",
+                        )
+                    }
+                    val ata = SmartParser.findAtaReturn(senseBytes)
+                    if (ata != null) {
+                        if (ata.hasError) {
+                            return SatCommandOutcome.Failed(
+                                detail = "ATA status=0x${ata.status.toString(16)} error=0x${ata.error.toString(16)}",
+                                ataStatus = ata.status,
+                                ataError = ata.error,
+                            )
+                        }
+                        if (delivered == ScsiCommand.ATA_SECTOR_BYTES && result.residue == 0) {
+                            return SatCommandOutcome.Ok(ata.status, ata.error)
+                        }
+                        closeAfterUntrustedReply(
+                            DiskException.IoFailure(
+                                "ATA OK but delivered $delivered of " +
+                                    "${ScsiCommand.ATA_SECTOR_BYTES} residue=${result.residue}",
+                            ),
+                        )
+                    }
+                    return SatCommandOutcome.Failed(parsed.message ?: "SAT CSW FAILED")
+                }
+                CswStatus.PHASE_ERROR -> {
+                    val failure = DiskException.IoFailure("BOT phase error on SAT command")
+                    resetOrClose(failure)
+                    closeSessionPreserving(failure)
+                    throw failure
+                }
+            }
+        }
+    }
+
+    private fun requestSenseBytes(allocationLength: Int): ByteArray? {
+        val buf = ByteBuffer.allocate(allocationLength)
+        val result = execute(ScsiCommand.requestSense(allocationLength), buf)
+        if (result.status == CswStatus.PHASE_ERROR) {
+            closeAfterUntrustedReply(
+                DiskException.IoFailure("BOT phase error on REQUEST SENSE"),
+            )
+        }
+        if (result.status != CswStatus.PASSED) return null
+        val delivered = buf.position()
+        if (delivered <= 0) return null
+        val out = ByteArray(delivered)
+        buf.flip()
+        buf.get(out)
+        return out
+    }
+
+    private fun parseSenseBuffer(bytes: ByteArray): DiskException.SenseError {
+        val buffer = ByteBuffer.wrap(bytes)
+        return parseSense(buffer)
+    }
+
+    private sealed class SatCommandOutcome {
+        data class Ok(val ataStatus: Int?, val ataError: Int?) : SatCommandOutcome()
+        data class Unsupported(
+            val detail: String?,
+            val ataStatus: Int? = null,
+            val ataError: Int? = null,
+        ) : SatCommandOutcome()
+        data class Failed(
+            val detail: String?,
+            val ataStatus: Int? = null,
+            val ataError: Int? = null,
+        ) : SatCommandOutcome()
+    }
+
+
     @Synchronized
     fun close() {
         closeSession()

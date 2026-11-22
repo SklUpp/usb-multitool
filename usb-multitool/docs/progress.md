@@ -10,7 +10,18 @@
   haptics, read-only Settings/Diagnostics), общий JNI thread-attach helper,
   FAT streaming с retry close/pending unlink и когерентным read-after-write.
 - Кандидаты в SMART/f3probe/persistence/восстановление/TRIM разобраны
-  отдельно: [feature-candidates.md](feature-candidates.md); код не реализован.
+  отдельно: [feature-candidates.md](feature-candidates.md); реализован только
+  SMART, остальные отложены или сняты.
+- Проведён параллельный ресерч внедрения пятью read-only lanes и отдельной
+  проверкой стандартов: [implementation-research.md](implementation-research.md).
+  Итог: SMART — первый кандидат; recovery scan — второй; persistence —
+  условно (выбран file-backed adapter A); f3probe — no-go на non-root Android
+  (нет OS-unmount proof); TRIM — no-go без free-extent owner.
+- SMART: read-only SAT ATA PASS-THROUGH(16), только IDENTIFY DEVICE и SMART
+  READ DATA; descriptor sense, проверка ATA status/error, checksum, коротких
+  data phase и cancellation между командами. UI — действие в Diagnostics,
+  локализованный результат и запись в operation log. Неподдерживаемый мост
+  даёт `Unsupported`, а не закрытие сессии.
 - Версия приложения: `0.1.0` (`versionCode 1`), `minSdk 28`, `targetSdk 36`,
   ABI `arm64-v8a`.
 - UI: Material 3, русский и английский (`values`, `values-ru`).
@@ -54,6 +65,12 @@
   unmount. Финальные вердикты — без подтверждённых дефектов; для трёх редких
   pending-unlink веток добавление отдельных host-инъекций остаётся
   рекомендацией, не блокером.
+- SMART-волна: targeted JVM 92/92, 0 failures — SMART parser/transport,
+  `UsbDiskTest`, `FilesOperationsUploadTest`, `ShellLogBehaviorTest`,
+  `PartitionRangeMathTest`; Kotlin compile — BUILD SUCCESSFUL. Независимое
+  ревью SMART (SCSI/parser, UI/state, tests/safety) подтвердило ошибку
+  checksum-фикстуры, BOT recovery при REQUEST SENSE, DF status и
+  cancellation-разрыв; все подтверждённые пункты исправлены и перепроверены.
 
 ## Не проверено на устройстве
 

@@ -387,6 +387,21 @@
     <string name="diagnostics_self_test_hint">SCSI, GPT, FS</string>
     <string name="diagnostics_read_scan">Read scan</string>
     <string name="diagnostics_read_scan_hint">Bad sectors</string>
+    <string name="diagnostics_smart">SMART</string>
+    <string name="diagnostics_smart_hint">ATA identify</string>
+    <string name="diagnostics_smart_available">available</string>
+    <string name="diagnostics_smart_unsupported">unsupported</string>
+    <string name="diagnostics_smart_unavailable">unavailable</string>
+    <string name="diagnostics_smart_value_absent">absent</string>
+    <string name="diagnostics_smart_checksum_ok">ok</string>
+    <string name="diagnostics_smart_checksum_mismatch">mismatch</string>
+    <string name="diagnostics_smart_model">Model: %1$s</string>
+    <string name="diagnostics_smart_serial">Serial: %1$s</string>
+    <string name="diagnostics_smart_firmware">Firmware: %1$s</string>
+    <string name="diagnostics_smart_attrs">Attributes: %1$d</string>
+    <string name="diagnostics_smart_realloc">Reallocated (id 5): %1$s</string>
+    <string name="diagnostics_smart_checksum">Checksum: %1$s</string>
+
     <string name="diagnostics_rescue_backup">Image + map</string>
     <string name="diagnostics_rescue_backup_hint">Rescue backup</string>
     <string name="diagnostics_gpt_copy">GPT copy</string>
@@ -454,6 +469,9 @@
     <string name="msg_staged_cleared">Staged image cleared.</string>
     <string name="msg_operation_in_progress">An operation is already running.</string>
     <string name="msg_self_test_starting">Running self-test…</string>
+    <string name="msg_smart_read_starting">Reading SMART…</string>
+    <string name="msg_smart_result">SMART %1$s · model %2$s · attrs %3$d · realloc %4$s · checksum %5$s</string>
+
     <string name="msg_invalid_folder_name">Enter a valid folder name.</string>
     <string name="msg_select_entry_to_delete">Select an item to delete.</string>
     <string name="msg_select_file_to_download">Select a file to download.</string>
@@ -601,6 +619,8 @@
     <string name="msg_partition_table_ambiguous">MBR and GPT describe different partitions; repair the table before changing it.</string>
     <string name="op_probe">Probe device</string>
     <string name="op_read_scan">Read scan</string>
+    <string name="op_smart_read">SMART read</string>
+
     <string name="op_rescue_backup">Rescue backup</string>
     <string name="op_gpt_backup">GPT critical backup</string>
     <string name="op_refresh">Refresh partitions</string>

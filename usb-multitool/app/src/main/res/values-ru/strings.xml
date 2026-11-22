@@ -388,6 +388,21 @@
     <string name="diagnostics_self_test_hint">SCSI, GPT, ФС</string>
     <string name="diagnostics_read_scan">Скан чтения</string>
     <string name="diagnostics_read_scan_hint">Битые сектора</string>
+    <string name="diagnostics_smart">SMART</string>
+    <string name="diagnostics_smart_hint">ATA identify</string>
+    <string name="diagnostics_smart_available">доступен</string>
+    <string name="diagnostics_smart_unsupported">не поддерживается</string>
+    <string name="diagnostics_smart_unavailable">недоступен</string>
+    <string name="diagnostics_smart_value_absent">нет</string>
+    <string name="diagnostics_smart_checksum_ok">ок</string>
+    <string name="diagnostics_smart_checksum_mismatch">несовпадение</string>
+    <string name="diagnostics_smart_model">Модель: %1$s</string>
+    <string name="diagnostics_smart_serial">Серийный номер: %1$s</string>
+    <string name="diagnostics_smart_firmware">Прошивка: %1$s</string>
+    <string name="diagnostics_smart_attrs">Атрибуты: %1$d</string>
+    <string name="diagnostics_smart_realloc">Переназначенные (id 5): %1$s</string>
+    <string name="diagnostics_smart_checksum">Контрольная сумма: %1$s</string>
+
     <string name="diagnostics_rescue_backup">Образ + карта</string>
     <string name="diagnostics_rescue_backup_hint">Аварийная копия</string>
     <string name="diagnostics_gpt_copy">Копия GPT</string>
@@ -455,6 +470,9 @@
     <string name="msg_staged_cleared">Подготовленный образ удалён.</string>
     <string name="msg_operation_in_progress">Операция уже выполняется.</string>
     <string name="msg_self_test_starting">Запуск самотеста…</string>
+    <string name="msg_smart_read_starting">Чтение SMART…</string>
+    <string name="msg_smart_result">SMART %1$s · модель %2$s · атрибуты %3$d · переназначенные %4$s · сумма %5$s</string>
+
     <string name="msg_invalid_folder_name">Введите корректное имя папки.</string>
     <string name="msg_select_entry_to_delete">Выберите элемент для удаления.</string>
     <string name="msg_select_file_to_download">Выберите файл для сохранения.</string>
@@ -602,6 +620,8 @@
     <string name="msg_partition_table_ambiguous">MBR и GPT описывают разные разделы; сначала исправьте таблицу.</string>
     <string name="op_probe">Опрос устройства</string>
     <string name="op_read_scan">Скан чтения</string>
+    <string name="op_smart_read">Чтение SMART</string>
+
     <string name="op_rescue_backup">Резервная копия образа</string>
     <string name="op_gpt_backup">Критическая копия GPT</string>
     <string name="op_refresh">Обновление разделов</string>

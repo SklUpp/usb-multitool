@@ -36,6 +36,7 @@ internal object OperationTransitions {
             rescueImageInspection = if (completedRestore) null else state.rescueImageInspection,
             rescueMapUri = if (completedRestore) null else state.rescueMapUri,
             rescueMapInspection = if (completedRestore) null else state.rescueMapInspection,
+            smartResult = progress.smartResult ?: state.smartResult,
             // New token/begin only: ticks must keep the scoped log intact.
             operationLogLines = if (begin) emptyList() else state.operationLogLines,
             pendingVentoyControls =
@@ -79,7 +80,9 @@ internal object OperationTransitions {
                 null
             }
             val completedHasNew =
-                progress.readScanResult != null || progress.resultMessage != null
+                progress.readScanResult != null ||
+                    progress.smartResult != null ||
+                    progress.resultMessage != null
             if (progress.state == OperationState.Completed && !completedHasNew &&
                 carriedPrevious != null
             ) {
@@ -88,17 +91,20 @@ internal object OperationTransitions {
             } else {
                 val message = when (progress.state) {
                     OperationState.Completed ->
-                        progress.readScanResult?.let(UiMessage::ReadScan)
+                        progress.smartResult?.let(UiMessage::Smart)
+                            ?: progress.readScanResult?.let(UiMessage::ReadScan)
                             ?: progress.resultMessage?.let(UiMessage::Raw)
                             ?: carriedPrevious
                             ?: UiMessage.Key(UiMessageKey.Success)
                     OperationState.Cancelled ->
-                        progress.readScanResult?.let(UiMessage::ReadScan)
+                        progress.smartResult?.let(UiMessage::Smart)
+                            ?: progress.readScanResult?.let(UiMessage::ReadScan)
                             ?: UiMessage.Key(UiMessageKey.CancelledStatus)
                     OperationState.Failed -> progress.errorMessage?.let(UiMessage::Raw)
                         ?: UiMessage.Key(UiMessageKey.FailedStatus)
                     OperationState.Partial ->
-                        progress.readScanResult?.let(UiMessage::ReadScan)
+                        progress.smartResult?.let(UiMessage::Smart)
+                            ?: progress.readScanResult?.let(UiMessage::ReadScan)
                             ?: (progress.resultMessage ?: progress.errorMessage)
                                 ?.let(UiMessage::Raw)
                             ?: UiMessage.Key(UiMessageKey.PartialStatus)

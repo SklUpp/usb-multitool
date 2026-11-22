@@ -141,6 +141,10 @@ sealed interface UiMessage {
     /** Structured read-scan outcome; Compose formats via string resources (language-switch safe). */
     data class ReadScan(val outcome: ReadScanOutcome) : UiMessage
 
+    /** Structured SMART probe outcome; Compose formats via string resources. */
+    data class Smart(val outcome: SmartOutcome) : UiMessage
+
+
     /** Typed target-layout rejection; Compose localizes each problem, never `enum.name`. */
     data class InvalidTargetLayout(
         val problems: List<AutounattendProblem>,
@@ -170,6 +174,8 @@ enum class UiMessageKey {
     StagedCleared,
     OperationInProgress,
     SelfTestStarting,
+    SmartReadStarting,
+
     InvalidFolderName,
     SelectEntryToDelete,
     SelectFileToDownload,
@@ -1036,6 +1042,11 @@ sealed interface OperationTitle {
         override val logLabel: String get() = "Read scan"
     }
 
+    data object SmartRead : OperationTitle {
+        override val logLabel: String get() = "SMART read"
+    }
+
+
     data object RescueBackup : OperationTitle {
         override val logLabel: String get() = "Rescue backup"
     }
@@ -1199,6 +1210,12 @@ data class OperationProgress(
      * switch does not leave a frozen EN/RU sentence.
      */
     val readScanResult: ReadScanOutcome? = null,
+    /**
+     * Structured SMART / IDENTIFY facts from the last manual probe.
+     * Null for every other operation. Compose formats via string resources.
+     */
+    val smartResult: SmartOutcome? = null,
+
     val cancelable: Boolean = true,
 ) {
     /**
@@ -1246,6 +1263,50 @@ data class ReadScanOutcome(
             )
     }
 }
+
+/**
+ * UI-facing SMART probe numbers/strings. Never invents temperature/wear/health.
+ * [reallocatedRaw] null means attribute 0x05 absent, not zero.
+ */
+data class SmartOutcome(
+    val availability: usb.device.SmartAvailability,
+    val model: String? = null,
+    val serial: String? = null,
+    val firmware: String? = null,
+    val attributeCount: Int = 0,
+    val reallocatedRaw: Long? = null,
+    val checksumOk: Boolean? = null,
+    val detail: String? = null,
+) {
+    fun toLogLine(): String {
+        val modelPart = model?.let { " model=$it" } ?: ""
+        val realloc = reallocatedRaw?.let { " realloc=$it" } ?: " realloc=absent"
+        val sum = when (checksumOk) {
+            true -> " checksum=ok"
+            false -> " checksum=mismatch"
+            null -> ""
+        }
+        return "SMART ${availability.name.lowercase()}$modelPart attrs=$attributeCount$realloc$sum" +
+            (detail?.let { " ($it)" } ?: "")
+    }
+
+    companion object {
+        fun from(telemetry: usb.device.SmartTelemetry): SmartOutcome {
+            val realloc = telemetry.attributes.firstOrNull { it.id == 0x05 }?.raw
+            return SmartOutcome(
+                availability = telemetry.availability,
+                model = telemetry.identify?.model,
+                serial = telemetry.identify?.serial,
+                firmware = telemetry.identify?.firmware,
+                attributeCount = telemetry.attributes.size,
+                reallocatedRaw = realloc,
+                checksumOk = telemetry.checksumOk,
+                detail = telemetry.detail,
+            )
+        }
+    }
+}
+
 
 
 data class AppUiState(
@@ -1617,6 +1678,12 @@ data class AppUiState(
     val rescueMapSelectionGeneration: Long = 0L,
     /** SAF tree the restore image/map came from; checkpoints are published back here. */
     val rescueArchiveTreeUri: String? = null,
+    /**
+     * Last manual SMART probe for the current attachment. Cleared on detach / other stick.
+     * Never auto-started.
+     */
+    val smartResult: SmartOutcome? = null,
+
     /** User-selected target FS for the next Format action (picker). */
     val selectedFormatId: FilesystemId = FilesystemId.FAT,
     /** Theme preference: exactly two states, dark applied by default on first launch. */

@@ -87,6 +87,8 @@ import usb.ui.FileEntry
 import usb.ui.OperationProgress
 import usb.ui.OperationTitle
 import usb.ui.ReadScanOutcome
+import usb.ui.SmartOutcome
+
 import usb.ui.RestoreSourceInspector
 import usb.ui.readOnlyOperationProgress
 import usb.ui.OperationState
@@ -809,6 +811,7 @@ class MainViewModel(
                     val detail = current.errorMessage
                         ?: current.resultMessage
                         ?: current.readScanResult?.toLogLine()
+                        ?: current.smartResult?.toLogLine()
                     val message = "${current.label}: ${current.state}" +
                         if (detail.isNullOrBlank()) "" else " — $detail"
                     android.util.Log.i("UsbMultitool", message)
@@ -1675,6 +1678,15 @@ class MainViewModel(
                     // UI formats from sink; empty resultMessage avoids frozen language string.
                     ""
                 }
+
+            UiEffect.SmartRead ->
+                submitReadOnlyDiskOperation(OperationTitle.SmartRead) { disk, operation, sink ->
+                    val telemetry = disk.readSmartTelemetry { operation.isActive() }
+                    sink.smartResult = SmartOutcome.from(telemetry)
+                    // UI formats from sink; empty resultMessage avoids frozen language string.
+                    ""
+                }
+
 
             is UiEffect.RangeProbe -> {
                 val start = effect.startLba
@@ -6995,7 +7007,9 @@ class MainViewModel(
      */
     private class ReadOnlySink {
         @Volatile var readScanResult: ReadScanOutcome? = null
+        @Volatile var smartResult: SmartOutcome? = null
     }
+
 
     private fun submitReadOnlyDiskOperation(
         title: OperationTitle,
@@ -7114,6 +7128,7 @@ class MainViewModel(
                                     cancelable = cancelable,
                                     bytesPerSecond = operation.currentBytesPerSecond(),
                                     readScanResult = sink.readScanResult,
+                                    smartResult = sink.smartResult,
                                 ),
                             ),
                         )
@@ -7135,6 +7150,7 @@ class MainViewModel(
                                     cancelable = cancelable,
                                     bytesPerSecond = operation.currentBytesPerSecond(),
                                     readScanResult = sink.readScanResult,
+                                    smartResult = sink.smartResult,
                                 ),
                             ),
                         )

@@ -25,6 +25,7 @@ Windows-носителя, rescue/backup и диагностика.
 | [build-test-release.md](build-test-release.md) | Сборка, native-движки, тесты, CI, APK |
 | [progress.md](progress.md) | Проверенный срез, APK и ограничения проверки |
 | [feature-candidates.md](feature-candidates.md) | Критическая оценка SMART/f3probe/persistence/восстановления/TRIM |
+| [implementation-research.md](implementation-research.md) | Планы внедрения, anchors, оценки объёма, порядок и блокеры |
 | [requirements/2026-11-22-docs-review-candidates.md](requirements/2026-11-22-docs-review-candidates.md) | Требования этой волны: доки, ревью, границы кандидатов |
 
 ## Быстрый старт

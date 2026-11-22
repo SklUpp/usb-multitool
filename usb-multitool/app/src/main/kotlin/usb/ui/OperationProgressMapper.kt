@@ -15,6 +15,7 @@ fun readOnlyOperationProgress(
     cancelable: Boolean,
     bytesPerSecond: Long = 0L,
     readScanResult: ReadScanOutcome? = null,
+    smartResult: SmartOutcome? = null,
 ): OperationProgress = when (outcome) {
     is ServiceOperationState.Failed -> OperationProgress(
         state = OperationState.Failed,
@@ -31,6 +32,7 @@ fun readOnlyOperationProgress(
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
         readScanResult = readScanResult,
+        smartResult = smartResult,
         cancelable = cancelable,
     )
     is ServiceOperationState.Partial -> OperationProgress(
@@ -42,6 +44,7 @@ fun readOnlyOperationProgress(
         resultMessage = resultMessage,
         errorMessage = failureCause?.message ?: failureCause?.javaClass?.simpleName,
         readScanResult = readScanResult,
+        smartResult = smartResult,
         cancelable = cancelable,
     )
     is ServiceOperationState.Queued -> OperationProgress(
@@ -69,6 +72,7 @@ fun readOnlyOperationProgress(
         bytesTotal = bytesTotal,
         resultMessage = resultMessage,
         readScanResult = readScanResult,
+        smartResult = smartResult,
         cancelable = cancelable,
     )
 }

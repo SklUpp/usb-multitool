@@ -83,6 +83,16 @@ open class FakeBotSession(
     private val shortReadBytes: Int? = null,
     private val requestSenseError: DiskException.SenseError? = null,
     private val writeIoFailureAfterData: Boolean = false,
+    private val satIdentifyData: ByteArray? = null,
+    private val satSmartData: ByteArray? = null,
+    private val satIdentifyCswFailedWithAtaOk: Boolean = false,
+    private val satSmartCswFailedWithAtaOk: Boolean = false,
+    private val satUnsupported: Boolean = false,
+    private val satAtaErrorStatus: Int? = null,
+    private val satAtaErrorCode: Int? = null,
+    private val satAtaErrorCommand: Int? = null,
+    private val satDeliveredBytes: Int? = null,
+    private val satSenseDescriptor: Boolean = true,
 ) : BotSession {
     var resetCount: Int = 0
         private set
@@ -94,6 +104,8 @@ open class FakeBotSession(
     private var pendingUnitAttention =
         if (stickyUnitAttention) Int.MAX_VALUE else unitAttentionBeforeSuccess
     private val media = HashMap<ULong, ByteArray>()
+    private var pendingSatSense: ByteArray? = null
+
 
     fun putSector(lba: ULong, data: ByteArray) {
         require(data.size == capacityBlockLength)
@@ -151,6 +163,19 @@ open class FakeBotSession(
             }
             ScsiCommand.OP_REQUEST_SENSE -> {
                 val buf = requireNotNull(data)
+                val start = buf.position()
+                for (i in 0 until cdb.transferLength) {
+                    buf.put(0)
+                }
+                val pending = pendingSatSense
+                if (pending != null) {
+                    pendingSatSense = null
+                    val n = minOf(pending.size, cdb.transferLength)
+                    for (i in 0 until n) {
+                        buf.put(start + i, pending[i])
+                    }
+                    return CswResult(CswStatus.PASSED, 0, 0)
+                }
                 val sense = if (pendingUnitAttention > 0) {
                     if (!stickyUnitAttention) {
                         pendingUnitAttention--
@@ -158,10 +183,6 @@ open class FakeBotSession(
                     DiskException.SenseError(0x70, 0x06, 0x29, 0x00)
                 } else {
                     requestSenseError ?: syncSense ?: DiskException.SenseError(0x70, 0x00, 0x00, 0x00)
-                }
-                val start = buf.position()
-                for (i in 0 until cdb.transferLength) {
-                    buf.put(0)
                 }
                 val descriptor = (sense.responseCode and 0x7F) == 0x72 || (sense.responseCode and 0x7F) == 0x73
                 val response = sense.responseCode and 0x7F
@@ -193,6 +214,7 @@ open class FakeBotSession(
                 }
                 CswResult(CswStatus.PASSED, 0, residue)
             }
+            ScsiCommand.OP_ATA_PASS_THROUGH_16 -> handleAtaPassThrough(cdb, requireNotNull(data))
             else -> CswResult(CswStatus.PASSED, 0, residue)
         }
     }
@@ -282,4 +304,85 @@ open class FakeBotSession(
             lba to blocks
         }
     }
+
+    private fun handleAtaPassThrough(cdb: ScsiCdb, data: ByteBuffer): CswResult {
+        if (satUnsupported) {
+            pendingSatSense = fixedSense(response = 0x70, key = 0x05, asc = 0x20, ascq = 0x00)
+            return CswResult(CswStatus.FAILED, 0, 0)
+        }
+        val command = cdb.bytes[14].toInt() and 0xFF
+        val feature = cdb.bytes[4].toInt() and 0xFF
+        val payload = when {
+            command == 0xEC -> satIdentifyData
+            command == 0xB0 && feature == 0xD0 -> satSmartData
+            else -> null
+        } ?: run {
+            pendingSatSense = fixedSense(response = 0x70, key = 0x05, asc = 0x20, ascq = 0x00)
+            return CswResult(CswStatus.FAILED, 0, 0)
+        }
+        require(payload.size == ScsiCommand.ATA_SECTOR_BYTES)
+        val delivered = satDeliveredBytes ?: ScsiCommand.ATA_SECTOR_BYTES
+        require(delivered in 0..ScsiCommand.ATA_SECTOR_BYTES)
+        val start = data.position()
+        data.put(payload, 0, delivered)
+        check(data.position() - start == delivered)
+        val residue = ScsiCommand.ATA_SECTOR_BYTES - delivered
+
+        val ataStatus = satAtaErrorStatus
+            ?.takeIf { satAtaErrorCommand == null || satAtaErrorCommand == command }
+        val ataError = satAtaErrorCode
+        if (ataStatus != null) {
+            pendingSatSense = ataReturnSense(
+                status = ataStatus,
+                error = ataError ?: 0,
+                illegal = false,
+            )
+            return CswResult(CswStatus.FAILED, 0, residue)
+        }
+
+        val forceFailed = when {
+            command == 0xEC -> satIdentifyCswFailedWithAtaOk
+            else -> satSmartCswFailedWithAtaOk
+        }
+        pendingSatSense = ataReturnSense(status = 0x50, error = 0, illegal = false)
+        return if (forceFailed) {
+            CswResult(CswStatus.FAILED, 0, residue)
+        } else {
+            CswResult(CswStatus.PASSED, 0, residue)
+        }
+    }
+
+    private fun fixedSense(response: Int, key: Int, asc: Int, ascq: Int): ByteArray {
+        val out = ByteArray(18)
+        out[0] = response.toByte()
+        out[2] = key.toByte()
+        out[12] = asc.toByte()
+        out[13] = ascq.toByte()
+        out[7] = 10
+        return out
+    }
+
+    private fun ataReturnSense(status: Int, error: Int, illegal: Boolean): ByteArray {
+        if (!satSenseDescriptor) {
+            return fixedSense(
+                response = 0x70,
+                key = if (illegal) 0x05 else 0x00,
+                asc = if (illegal) 0x20 else 0x00,
+                ascq = 0x00,
+            )
+        }
+        // Descriptor format with ATA Status Return descriptor 0x09, length 0x0C.
+        val out = ByteArray(22)
+        out[0] = 0x72
+        out[1] = if (illegal) 0x05 else 0x00
+        out[2] = if (illegal) 0x20 else 0x00
+        out[3] = 0x00
+        out[7] = 14 // additional sense length covers descriptor
+        out[8] = SmartParser.DESC_ATA_STATUS_RETURN.toByte()
+        out[9] = 0x0C
+        out[11] = error.toByte() // descriptor offset 3
+        out[21] = status.toByte() // descriptor offset 13
+        return out
+    }
+
 }

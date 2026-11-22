@@ -18,6 +18,8 @@ fun UiMessage.localized(): String =
     when (this) {
         is UiMessage.Raw -> text
         is UiMessage.ReadScan -> readScanSummary(outcome)
+        is UiMessage.Smart -> smartSummary(outcome)
+
         is UiMessage.InvalidTargetLayout -> {
             val detail = StringBuilder()
             for ((index, problem) in problems.distinct().withIndex()) {
@@ -53,6 +55,8 @@ fun UiMessage.localized(): String =
             UiMessageKey.StagedCleared -> stringResource(R.string.msg_staged_cleared)
             UiMessageKey.OperationInProgress -> stringResource(R.string.msg_operation_in_progress)
             UiMessageKey.SelfTestStarting -> stringResource(R.string.msg_self_test_starting)
+            UiMessageKey.SmartReadStarting -> stringResource(R.string.msg_smart_read_starting)
+
             UiMessageKey.InvalidFolderName -> stringResource(R.string.msg_invalid_folder_name)
             UiMessageKey.SelectEntryToDelete -> stringResource(R.string.msg_select_entry_to_delete)
             UiMessageKey.SelectFileToDownload -> stringResource(R.string.msg_select_file_to_download)
@@ -262,6 +266,37 @@ fun readScanSummary(outcome: ReadScanOutcome): String {
     )
 }
 
+/** Formats structured SMART probe facts with current Compose locale resources. */
+@Composable
+fun smartSummary(outcome: SmartOutcome): String {
+    val availability = stringResource(
+        when (outcome.availability) {
+            usb.device.SmartAvailability.Available -> R.string.diagnostics_smart_available
+            usb.device.SmartAvailability.Unsupported -> R.string.diagnostics_smart_unsupported
+            usb.device.SmartAvailability.Unavailable -> R.string.diagnostics_smart_unavailable
+        },
+    )
+    val model = outcome.model ?: stringResource(R.string.diagnostics_smart_value_absent)
+    val realloc = outcome.reallocatedRaw?.toString()
+        ?: stringResource(R.string.diagnostics_smart_value_absent)
+    val checksum = when (outcome.checksumOk) {
+        true -> stringResource(R.string.diagnostics_smart_checksum_ok)
+        false -> stringResource(R.string.diagnostics_smart_checksum_mismatch)
+        null -> stringResource(R.string.diagnostics_smart_value_absent)
+    }
+    val base = stringResource(
+        R.string.msg_smart_result,
+        availability,
+        model,
+        outcome.attributeCount,
+        realloc,
+        checksum,
+    )
+    val detail = outcome.detail?.takeIf { it.isNotBlank() } ?: return base
+    return base + "\n" + detail
+}
+
+
 
 @Composable
 fun DestructiveAction.label(): String =
@@ -338,6 +373,8 @@ fun OperationTitle.localized(): String =
         is OperationTitle.Destructive -> action.statusTitle()
         OperationTitle.ProbeDevice -> stringResource(R.string.op_probe)
         OperationTitle.ReadScan -> stringResource(R.string.op_read_scan)
+        OperationTitle.SmartRead -> stringResource(R.string.op_smart_read)
+
         OperationTitle.RescueBackup -> stringResource(R.string.op_rescue_backup)
         OperationTitle.GptCriticalBackup -> stringResource(R.string.op_gpt_backup)
         OperationTitle.RefreshPartitions -> stringResource(R.string.op_refresh)
@@ -693,6 +730,38 @@ fun rescueImageInspectionLines(inspection: RescueImageInspection?): List<String>
     }
     return listOf(inspectionSizeLine(inspection.sizeBytes))
 }
+
+@Composable
+fun smartInspectionLines(outcome: SmartOutcome): List<String> {
+    val absent = stringResource(R.string.diagnostics_smart_value_absent)
+    val availability = stringResource(
+        when (outcome.availability) {
+            usb.device.SmartAvailability.Available -> R.string.diagnostics_smart_available
+            usb.device.SmartAvailability.Unsupported -> R.string.diagnostics_smart_unsupported
+            usb.device.SmartAvailability.Unavailable -> R.string.diagnostics_smart_unavailable
+        },
+    )
+    val checksum = when (outcome.checksumOk) {
+        true -> stringResource(R.string.diagnostics_smart_checksum_ok)
+        false -> stringResource(R.string.diagnostics_smart_checksum_mismatch)
+        null -> absent
+    }
+    val lines = mutableListOf(
+        availability,
+        stringResource(R.string.diagnostics_smart_model, outcome.model ?: absent),
+        stringResource(R.string.diagnostics_smart_serial, outcome.serial ?: absent),
+        stringResource(R.string.diagnostics_smart_firmware, outcome.firmware ?: absent),
+        stringResource(R.string.diagnostics_smart_attrs, outcome.attributeCount),
+        stringResource(
+            R.string.diagnostics_smart_realloc,
+            outcome.reallocatedRaw?.toString() ?: absent,
+        ),
+        stringResource(R.string.diagnostics_smart_checksum, checksum),
+    )
+    outcome.detail?.takeIf { it.isNotBlank() }?.let { lines += it }
+    return lines
+}
+
 
 @Composable
 fun rescueMapInspectionLines(inspection: RescueMapInspection?): List<String> {

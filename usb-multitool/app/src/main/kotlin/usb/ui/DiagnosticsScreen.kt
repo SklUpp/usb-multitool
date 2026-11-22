@@ -128,6 +128,23 @@ fun DiagnosticsScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DiagTile(
+                        glyph = Glyph.Pulse,
+                        title = stringResource(R.string.diagnostics_smart),
+                        hint = stringResource(R.string.diagnostics_smart_hint),
+                        enabled = state.actionsEnabled,
+                        onClick = { onIntent(UiIntent.StartSmartRead) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.weight(1f))
+                }
+                state.smartResult?.let { outcome ->
+                    InspectionText(smartInspectionLines(outcome))
+                }
                 CancelOperationButton(state = state, onIntent = onIntent)
             }
         }

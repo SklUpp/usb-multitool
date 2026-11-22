@@ -660,6 +660,10 @@ sealed class UiIntent {
     /** Read-only scan of every sector; reports unreadable ranges. */
     data object StartReadScan : UiIntent()
 
+    /** Manual read-only SAT SMART / IDENTIFY probe. Never auto-started. */
+    data object StartSmartRead : UiIntent()
+
+
     /** Read-only full image plus rescue map into the app's external files dir. */
     data object StartRescueBackup : UiIntent()
 
@@ -976,6 +980,9 @@ sealed interface UiEffect {
     ) : UiEffect
 
     data object ReadScan : UiEffect
+
+    data object SmartRead : UiEffect
+
 
     data object RescueBackup : UiEffect
 
@@ -1694,6 +1701,8 @@ object UiReducer {
                         rangeProbe = if (probingRetain) state.rangeProbe else null,
                         rangeProbeRequestedRange =
                             if (probingRetain) state.rangeProbeRequestedRange else null,
+                        smartResult = if (sameStick) state.smartResult else null,
+
                         selectedPartitionId = selected,
                         currentPath = path,
                         filesPickSession =
@@ -4265,6 +4274,8 @@ object UiReducer {
             is UiIntent.SetBackupFile ->
                 RescueBackupTransitions.setBackupFile(state, intent)
             UiIntent.StartReadScan -> RescueBackupTransitions.startReadScan(state)
+            UiIntent.StartSmartRead -> RescueBackupTransitions.startSmartRead(state)
+
             UiIntent.StartRescueBackup -> RescueBackupTransitions.startRescueBackup(state)
             UiIntent.CaptureGptBackup -> RescueBackupTransitions.captureGptBackup(state)
 

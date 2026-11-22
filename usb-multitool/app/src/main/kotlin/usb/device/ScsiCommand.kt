@@ -47,6 +47,18 @@ object ScsiCommand {
     const val OP_READ16 = 0x88
     const val OP_WRITE16 = 0x8A
     const val SERVICE_ACTION_READ_CAPACITY16 = 0x10
+    /** SAT ATA PASS-THROUGH (16). Whitelisted read-only CDBs only. */
+    const val OP_ATA_PASS_THROUGH_16 = 0x85
+    private const val ATA_PROTOCOL_PIO_DATA_IN = 4
+    private const val ATA_T_LENGTH_SECTOR_COUNT = 2
+    private const val ATA_CMD_IDENTIFY_DEVICE = 0xEC
+    private const val ATA_CMD_SMART = 0xB0
+    private const val ATA_SMART_READ_DATA = 0xD0
+    private const val ATA_SMART_LBA_MID = 0x4F
+    private const val ATA_SMART_LBA_HIGH = 0xC2
+    /** 512-byte IDENTIFY / SMART payload. */
+    const val ATA_SECTOR_BYTES = 512
+
 
     fun select(lba: ULong, blocks: Int): ScsiWidth {
         require(blocks > 0) { "blocks must be positive, was $blocks" }
@@ -113,6 +125,68 @@ object ScsiCommand {
         cdb[0] = OP_SYNCHRONIZE_CACHE10.toByte()
         return ScsiCdb(cdb, ScsiDirection.NONE, 0)
     }
+
+    /**
+     * ATA PASS-THROUGH (16) IDENTIFY DEVICE. Protocol PIO Data-In, CK_COND=1,
+     * T_DIR=device→host, BYTE_BLOCK=512, T_LENGTH=sector_count. No UI-supplied ATA fields.
+     */
+    fun ataIdentifyDevice(): ScsiCdb =
+        ataPassThrough16(
+            feature = 0,
+            sectorCount = 1,
+            lbaLow = 0,
+            lbaMid = 0,
+            lbaHigh = 0,
+            command = ATA_CMD_IDENTIFY_DEVICE,
+        )
+
+    /**
+     * ATA PASS-THROUGH (16) SMART READ DATA (feature 0xD0). Same transport flags as IDENTIFY.
+     */
+    fun ataSmartReadData(): ScsiCdb =
+        ataPassThrough16(
+            feature = ATA_SMART_READ_DATA,
+            sectorCount = 1,
+            lbaLow = 0,
+            lbaMid = ATA_SMART_LBA_MID,
+            lbaHigh = ATA_SMART_LBA_HIGH,
+            command = ATA_CMD_SMART,
+        )
+
+    private fun ataPassThrough16(
+        feature: Int,
+        sectorCount: Int,
+        lbaLow: Int,
+        lbaMid: Int,
+        lbaHigh: Int,
+        command: Int,
+    ): ScsiCdb {
+        require(feature in 0..0xFF)
+        require(sectorCount in 0..0xFF)
+        require(lbaLow in 0..0xFF)
+        require(lbaMid in 0..0xFF)
+        require(lbaHigh in 0..0xFF)
+        require(command in 0..0xFF)
+        val cdb = ByteArray(16)
+        cdb[0] = OP_ATA_PASS_THROUGH_16.toByte()
+        // MULTIPLE_COUNT=0 | PROTOCOL | EXTEND=0
+        cdb[1] = ((ATA_PROTOCOL_PIO_DATA_IN and 0x0F) shl 1).toByte()
+        // OFF_LINE=0 | CK_COND=1 | T_DIR=1 | BYTE_BLOCK=1 | T_LENGTH=2
+        cdb[2] = (
+            (1 shl 5) or
+                (1 shl 3) or
+                (1 shl 2) or
+                ATA_T_LENGTH_SECTOR_COUNT
+            ).toByte()
+        cdb[4] = feature.toByte()
+        cdb[6] = sectorCount.toByte()
+        cdb[8] = lbaLow.toByte()
+        cdb[10] = lbaMid.toByte()
+        cdb[12] = lbaHigh.toByte()
+        cdb[14] = command.toByte()
+        return ScsiCdb(cdb, ScsiDirection.IN, ATA_SECTOR_BYTES)
+    }
+
 
     private fun checkedTransferBytes(blocks: Int, sectorSize: Int): Int {
         require(blocks > 0)

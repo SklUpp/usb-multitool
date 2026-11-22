@@ -56,6 +56,18 @@ internal object RescueBackupTransitions {
     fun startReadScan(state: AppUiState): ReduceResult =
         nonDestructiveEffect(state, UiEffect.ReadScan)
 
+    fun startSmartRead(state: AppUiState): ReduceResult =
+        if (!state.actionsEnabled) {
+            ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
+        } else {
+            ReduceResult(
+                state.withStatus(UiMessage.Key(UiMessageKey.SmartReadStarting)),
+                effects = listOf(UiEffect.SmartRead),
+            )
+        }
+
+
+
     fun startRescueBackup(state: AppUiState): ReduceResult =
         createBackupEffect(state, UiEffect.RescueBackup)
 

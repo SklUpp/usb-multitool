@@ -1304,6 +1304,7 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
     // Terminal outcome (error, read-scan summary or result); it must outlive the
     // operation, so it cannot be a snackbar.
     val result = op.errorMessage
+        ?: op.smartResult?.let { smartSummary(it) }
         ?: op.readScanResult?.let { readScanSummary(it) }
         ?: op.resultMessage
     val tone = when {

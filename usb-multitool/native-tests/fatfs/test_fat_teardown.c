@@ -141,8 +141,8 @@ static void test_readonly_browse_close_is_clean(void)
 	printf("OK read-only close issues no I/O\n");
 }
 
-/* A successful write path already synced; closing afterwards must stay I/O-free
- * (detach after a completed upload must not fail and latch the session). */
+/* Streaming writes deliberately keep the FIL open between chunks. After an
+ * explicit sync, closing the volume must stay I/O-free. */
 static void test_synced_write_close_is_clean(void)
 {
 	const char *img = "teardown_clean.img";
@@ -157,6 +157,8 @@ static void test_synced_write_close_is_clean(void)
 	vol = fresh_volume(img, FAT_MKFS_FAT32, ss, sc, &block);
 	rc = fat_engine_write_file(vol, "done.txt", 0, "ok", 2, &wrote, 2, 1);
 	if (rc != 0 || wrote != 2) fail("write", rc);
+	rc = fat_engine_sync(vol);
+	if (rc != 0) fail("sync streaming write", rc);
 
 	image_block_reset_counters(block);
 	image_block_inject(block, 1, 1);

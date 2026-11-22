@@ -6,15 +6,17 @@
 
 Оценка проверяет не только идею, но и её посадку в текущий код. «Принято» ниже
 означает «имеет смысл проектировать», а не «можно включать в релиз сейчас».
+Параллельный ресерч внедрения, anchors, оценки объёма и порядок работ —
+[implementation-research.md](implementation-research.md).
 
 ## Сводка
 
 | № | Кандидат | Вердикт | Главное ограничение |
 |---|---|---|---|
 | 1 | SMART через ATA PASS-THROUGH (16), `0x85` | Условно принято, первый приоритет | SAT не гарантирован; нужен probe и whitelist read-only ATA-команд, парсер вендорских атрибутов |
-| 2 | Быстрый детектор поддельной ёмкости по идее f3probe | Условно принято только как destructive-диагностика | Тест пишет на диск и может уничтожить разметку/данные; автоматический запуск запрещён |
-| 3 | `persistence.dat` для Ventoy через `f_expand` | Условно принято, средний объём | `FF_USE_EXPAND` выключен, готового API нет; непрерывность и file-backed block device нужно доказывать |
-| 4 | Восстановление таблицы по VBR | Не готово, требуется переработка | 1 MiB — не универсальный шаг; `TableInitializer.gptPlan` создаёт пустую таблицу и не принимает найденные разделы |
+| 2 | Быстрый детектор поддельной ёмкости по идее f3probe | **Снят с очереди** | Destructive-тест не имеет доказуемого OS-unmount на non-root Android |
+| 3 | `persistence.dat` для Ventoy через `f_expand` | **Отложено** | Выбран file-backed adapter A; `FF_USE_EXPAND`/contiguous не обязательны, код позже |
+| 4 | Восстановление таблицы по VBR | **Отложено** | 1 MiB не универсален; `gptPlan` не API восстановления; нужен отдельный planner |
 | 5 | SCSI UNMAP/TRIM, `0x42` | Отложено | LBPME недостаточно; нужны VPD Block Limits, free-space semantics и отдельный стенд |
 
 ## 1. SMART через ATA PASS-THROUGH (16)
@@ -107,20 +109,27 @@
 - Нельзя запускать тест на диске, где есть смонтированные тома или
   незавершённые операции; нужен эксклюзивный claim и запрет фонового запуска.
 
-### Безопасный дизайн
+### Почему destructive-дизайн не подходит
 
-- Только раздел **Диагностика**, только вручную, только после отдельного
-  предупреждения: «Будет записан тестовый маркер. При подделке возможна потеря
-  разметки и данных».
-- Показывать точную модель, серийник, заявленную ёмкость и LBA теста.
-- Сначала read-only проверки; запись — только после подтверждения.
-- После теста сообщать «признаки подделки»/«не удалось проверить», а не
-  ставить диагноз «подделка» без повторяемого evidence.
-- В тестах использовать выделенный фейковый образ/устройство, не рабочий USB.
+- Маркерная запись требует гарантии, что весь диск не смонтирован ОС; на
+  non-root Android такой гарантии нет.
+- Предупреждение и typed confirmation снижают вероятность ошибки
+  пользователя, но не устраняют гонку с vold/page cache/другими процессами.
+- Результат «suspected/unverified» не оправдывает риск порчи данных.
+- Read-only capacity preflight может дать полезную диагностику без записи, но
+  это отдельная функция с другим названием и без обещания f3-детекции.
 
-**Вердикт:** функция уникальна для мобильного приложения, но это
-destructive-инструмент, а не «принято с 0 рисков». Реализовывать после SMART и
-только с отдельным UX/стендом.
+**Вердикт: снят с очереди.** `UsbExclusiveClaim` исключает только сессии
+приложения. `UsbDeviceConnection.claimInterface(force=true)` отсоединяет
+kernel driver, но не доказывает, что vold уже размонтировал файловую систему,
+не сбрасывает page cache и не исключает другие процессы. Публичного `unmount`
+для обычного приложения нет; `IStorageManager.unmount` требует
+системного/root-разрешения. `StorageVolume.state` — hint, а не atomic proof и
+не защищает от автомонтирования между проверкой и записью.
+
+Destructive-режим не проектируется и не включается. Безопасная альтернатива —
+отдельный read-only capacity preflight без записи; он не называется f3 и не
+обещает доказать подделку.
 
 ## 3. `persistence.dat` / VHD для Ventoy
 
@@ -143,19 +152,23 @@ destructive-инструмент, а не «принято с 0 рисков». 
   `FF_USE_EXPAND` равен `0`; `f_expand` вырезан препроцессором. Нужно включить
   опцию, пересобрать native, добавить JNI-обёртку и проверить ABI/размер типов.
 - **«Файл 4 ГБ гарантированно единый extent» — нет.** `f_expand` вернёт
-  `FR_DENIED`, если нет непрерывного участка. Это нужно показывать как
-  штатную ошибку с предложением очистить/дефрагментировать носитель.
+  `FR_DENIED`, если нет непрерывного участка. Но **непрерывность не требуется
+  для persistence**: Ventoy подключает backend через device-mapper blocklist и
+  допускает фрагментированный `.dat`; contiguous-требование относится к
+  ISO/boot payload, а не к persistence-файлу. `FR_DENIED` — повод не падать, а
+  использовать обычное создание файла или file-backed adapter.
 - **«0.3 секунды» — не измерено.** Время зависит от FAT/bitmap, USB и
   фрагментации; на телефоне это может быть заметно дольше.
 - **`VirtualPartition` не является file-backed устройством.** Он принимает
   `startLba` и `disk`. Чтобы форматировать ext4 **внутри FAT-файла**, нужен один
   из двух путей:
   1. отдельный `BlockDevice`, который читает/пишет кластеры файла через FatFs
-     (медленно, зато без обхода FAT и без требования непрерывности);
+     (медленнее, зато работает при фрагментации и не обходит FAT);
   2. contiguous-extent adapter: `f_expand` резервирует цепочку, приложение
      получает физические LBA и работает с ними напрямую, но обязано закрыть
      `FIL`, не писать через FatFs и сохранить валидную цепочку/размер файла.
-     Второй путь быстрее, но требует тщательной проверки crash-safety.
+     Это оптимизация для быстрого mkfs, но требует crash-safety; Ventoy её не
+     требует.
 - **Нет поддержки persistence plugin в `ventoy.json`.** Текущий код умеет
   `control`/`auto_install`, но не создаёт запись вида `persistence` с привязкой
   файла к ISO. Без этого созданный `persistence.dat` не будет выбран при
@@ -168,18 +181,22 @@ destructive-инструмент, а не «принято с 0 рисков». 
 
 - Размер и ФС выбираются явно; для >4 ГиБ — только exFAT (FAT32 лимит),
   ext4 создаётся через file-backed adapter.
-- До записи: проверить свободное место, `f_expand` результат, фактическую
-  непрерывность и свободный диапазон.
-- Если `FR_DENIED` — ничего не создавать, показать «нужен непрерывный блок
-  N ГиБ; очистите/дефрагментируйте».
-- После создания: `sync`, проверить размер/метку/ФС, добавить запись в
-  `ventoy.json` только после валидации JSON и точной привязки к ISO.
+- До записи: проверить свободное место и свободный диапазон; `f_expand` можно
+  попробовать как оптимизацию, но `FR_DENIED` не означает «нельзя создать
+  persistence».
+- Если `f_expand` отказал — создать обычный файл и использовать file-backed
+  adapter; не требовать дефрагментации только ради persistence.
+- После создания: `sync`, проверить размер/метку/ФС, добавить запись
+  `persistence: [{image, backend}]` в `ventoy.json` после валидации JSON и
+  точной привязки к ISO.
 - При crash: файл может остаться пустым/частичным; нужен cleanup только
   созданного файла и повторная проверка перед записью.
 
 **Оценка:** это не «мгновенная функция на 0.3 секунды», а средний
-native+storage+JSON проект. Начинать с `FF_USE_EXPAND=1` только после
-прототипа contiguous extent и теста на фрагментированном exFAT-образе.
+native+storage+JSON проект. Начинать с file-backed ext4 adapter и
+фрагментированного exFAT-образа; `FF_USE_EXPAND=1` — отдельная оптимизация,
+не блокер. Официальный `ventoy.json` использует
+`persistence: [{image, backend}]`; backend может быть фрагментирован.
 
 ## 4. Восстановление разметки по VBR (модель TestDisk)
 
@@ -282,12 +299,20 @@ native+storage+JSON проект. Начинать с `FF_USE_EXPAND=1` толь
   <https://www.smartmontools.org/static/doxygen/namespacesat.html>
 - f3probe usage (destructive probe):
   <https://fight-flash-fraud.readthedocs.io/en/stable/usage.html>
+- Android `UsbDeviceConnection.claimInterface` semantics:
+  <https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection#claimInterface(android.hardware.usb.UsbInterface,%20boolean)>
+- `StorageManager.getStorageVolumes` / `StorageVolume`:
+  <https://developer.android.com/reference/android/os/storage/StorageManager#getStorageVolumes()>
+- AOSP vold privileged unmount:
+  <https://android.googlesource.com/platform/system/vold/+/refs/heads/main/VoldNativeService.cpp>
 - Ventoy persistence plugin:
   <https://www.ventoy.net/en/plugin_persistence.html>
 - Ventoy `CreatePersistentImg.sh`:
   <https://github.com/ventoy/Ventoy/blob/master/INSTALL/CreatePersistentImg.sh>
-- Ventoy fragmented image report:
+- Ventoy fragmented image report (ISO/boot payload, not persistence backend):
   <https://github.com/ventoy/vtoyboot/issues/79>
+- Ventoy persistence backend fragmentation:
+  <https://github.com/ventoy/Ventoy/issues/138>
 - TestDisk partition recovery:
   <https://www.cgsecurity.org/testdisk_doc/partition_recovery.html>
 - Microsoft exFAT specification (PartitionOffset/VolumeLength):
