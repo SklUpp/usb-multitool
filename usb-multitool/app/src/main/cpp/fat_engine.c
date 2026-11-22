@@ -51,6 +51,8 @@ typedef struct {
 	/* A write/seek left the FIL in an unknown state and f_close failed. Keep the
 	 * handle so a later close can retry, but never append through it. */
 	int poisoned;
+	/* Created-exclusive file whose close failed; retry unlink on the next close/sync. */
+	int unlink_pending;
 } FatWriteSession;
 
 static FatWriteSession g_write;
@@ -93,6 +95,24 @@ static void vol_note_fr(FatVolume *v, FRESULT fr)
 	if (fr == FR_DISK_ERR) v->barrier_pending = 1;
 }
 
+static FRESULT retry_pending_unlink_locked(uint64_t volume)
+{
+	FRESULT fr;
+
+	if (!g_write.unlink_pending || g_write.volume != volume) return FR_OK;
+	fr = f_unlink(g_write.full);
+	if (fr == FR_OK || fr == FR_NO_FILE) {
+		/* FR_NO_FILE means the previous attempt removed the directory entry but
+		 * failed later (for example in CTRL_SYNC); cleanup is satisfied. */
+		g_write.unlink_pending = 0;
+		if (fr == FR_NO_FILE) fr = FR_OK;
+	} else {
+		FatVolume *v = vol_from(volume);
+		if (v) vol_note_fr(v, fr);
+	}
+	return fr;
+}
+
 static FRESULT close_write_session_locked(void)
 {
 	FRESULT fr;
@@ -103,6 +123,9 @@ static FRESULT close_write_session_locked(void)
 	 * session lets the next sync/delete retry instead of leaking FR_LOCKED. */
 	if (fr == FR_OK) {
 		g_write.active = 0;
+		/* A failed abort may have closed the file but left the exclusive
+		 * cleanup pending; the now-closed path can be unlinked. */
+		if (g_write.unlink_pending) fr = retry_pending_unlink_locked(g_write.volume);
 	} else {
 		g_write.poisoned = 1;
 	}
@@ -113,14 +136,21 @@ static FRESULT close_write_session_locked(void)
  * retried after f_mount(NULL), so drop the session record with the volume. */
 static void discard_write_session_for_volume_locked(uint64_t volume)
 {
-	if (g_write.active && g_write.volume == volume) g_write.active = 0;
+	if (g_write.volume == volume) {
+		g_write.active = 0;
+		g_write.unlink_pending = 0;
+	}
 }
 
 static int close_write_session_for_volume_locked(uint64_t volume)
 {
 	FRESULT fr;
 
-	if (!g_write.active || g_write.volume != volume) return 0;
+	if (!g_write.active) {
+		fr = retry_pending_unlink_locked(volume);
+		return fr == FR_OK ? 0 : map_fr(fr);
+	}
+	if (g_write.volume != volume) return 0;
 	fr = close_write_session_locked();
 	if (fr != FR_OK) {
 		FatVolume *v = vol_from(volume);
@@ -143,9 +173,11 @@ static int abort_write_session_locked(FatVolume *v, FRESULT failure)
 		g_write.active = 0;
 		/* The file is closed; only now is unlinking safe. */
 		if (exclusive) unlink_fr = f_unlink(g_write.full);
+		if (unlink_fr != FR_OK) g_write.unlink_pending = 1;
 	} else {
 		/* Keep the failed handle for a retry. Any reuse must close it first. */
 		g_write.poisoned = 1;
+		if (exclusive) g_write.unlink_pending = 1;
 	}
 	if (failure == FR_OK) failure = close_fr;
 	if (failure == FR_DISK_ERR || close_fr == FR_DISK_ERR || unlink_fr == FR_DISK_ERR) {
@@ -272,13 +304,8 @@ int fat_engine_umount(uint64_t volume)
 	if (!v) return (int)FR_INVALID_OBJECT;
 	pthread_mutex_lock(&g_fat_mu);
 	pthread_mutex_lock(&g_vols_mu);
-	if (g_write.active && g_write.volume == volume) {
-		FRESULT close_fr = close_write_session_locked();
-		if (close_fr != FR_OK) {
-			vol_note_fr(v, close_fr);
-			rc = map_fr(close_fr);
-		}
-	}
+	/* Retry a pending exclusive cleanup before the volume object disappears. */
+	rc = close_write_session_for_volume_locked(volume);
 	bh = v->block_handle;
 	/* Flush only when the medium may be missing state: f_mount(NULL,*,0) drops
 	 * the volume object without calling sync_fs, but a clean read-only volume
@@ -316,13 +343,7 @@ int fat_engine_sync(uint64_t volume)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_OBJECT;
 	}
-	if (g_write.active && g_write.volume == volume) {
-		FRESULT close_fr = close_write_session_locked();
-		if (close_fr != FR_OK) {
-			vol_note_fr(v, close_fr);
-			rc = map_fr(close_fr);
-		}
-	}
+	rc = close_write_session_for_volume_locked(volume);
 	bh = v->block_handle;
 	/* No pending state -> no I/O. A read-only browse may have set the advisory
 	 * FSInfo flag via f_getfree, and a fully synced write leaves the window
@@ -689,6 +710,15 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 			return map_fr(close_fr);
 		}
 	}
+	if (!g_write.active && g_write.unlink_pending) {
+		/* The pending path may belong to the previous volume; retry that one
+		 * before replacing the global session with a new target. */
+		FRESULT cleanup_fr = retry_pending_unlink_locked(g_write.volume);
+		if (cleanup_fr != FR_OK) {
+			pthread_mutex_unlock(&g_fat_mu);
+			return map_fr(cleanup_fr);
+		}
+	}
 	if (!g_write.active) {
 		if (create_mode == 2) {
 			mode = FA_WRITE | FA_CREATE_NEW;
@@ -710,6 +740,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		g_write.offset = offset;
 		g_write.exclusive_new = exclusive_new;
 		g_write.poisoned = 0;
+		g_write.unlink_pending = 0;
 		memcpy(g_write.full, full, strlen(full) + 1);
 		if (offset > 0) {
 			fr = f_lseek(&g_write.fil, (FSIZE_t)offset);

@@ -103,6 +103,9 @@ UI -> FilesOperationRunner -> FilesOperations -> MountedFilesVolume
 
 `libusb_native.so` содержит адаптеры JNI и статические upstream-библиотеки:
 FatFs R0.16 с патчами, ntfs-3g, lwext4, exfatprogs fsck, SectorForge bridge.
+Все пять JNI-фасадов используют общий `usb_jni::env_for` из
+`jni_thread_env.{h,cpp}`: attach текущего native thread и detach в
+thread-local destructor, без пяти копий `AttachCurrentThread`.
 При отсутствии движка выбрасывается `EngineMissingException` с именем движка;
 rescue не подменяется фиктивным результатом.
 

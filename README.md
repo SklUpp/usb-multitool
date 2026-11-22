@@ -168,7 +168,8 @@ make -C native-tests/fatfs test
 - `AGENTS.md` — архитектура, правила безопасности и команды.
 - `.github/workflows/android-debug.yml` — точный порядок команд CI; `usb-multitool/CONVENTIONS.md` — где разрешено выполнять сборки.
 - `usb-multitool/third_party/README.md` — закреплённые версии и лицензии движков.
-- `usb-multitool/docs/superpowers/specs/2026-11-01-android-usb-multitool-design.md` — утверждённый дизайн.
+- `usb-multitool/docs/README.md` — актуальный индекс архитектуры, UI, ФС, сборки и прогресса.
+- `usb-multitool/docs/feature-candidates.md` — критическая оценка SMART/f3probe/persistence/восстановления/TRIM.
 
 ### Версии приложения
 

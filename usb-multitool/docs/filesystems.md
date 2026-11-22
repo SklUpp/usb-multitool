@@ -8,6 +8,9 @@
 
 - FatFs R0.16 с патчами; `FF_VOLUMES=4`, сектор 512..4096, exFAT включён,
   `FF_LFN_UNICODE=2` (UTF-8), `FF_MAX_LFN=255`, `FF_LFN_BUF=768`.
+- `FF_USE_EXPAND=0`: `f_expand` присутствует в исходниках, но вырезан
+  препроцессором; JNI-API для persistence нет (см.
+  [feature-candidates.md](feature-candidates.md)).
 - 255 UTF-16 units в худшем случае — 765 UTF-8 байт; буфер 768 вмещает имя и NUL.
   JNI/struct буферы (`FatDirEnt`, `FatStat`) имеют тот же предел.
 - Native volume pool переиспользует первый свободный logical drive; закрытие
@@ -17,11 +20,20 @@
 - Операции: probe, label, space, list, stat, mkdir, delete, rename, read, write,
   sync. Write одним вызовом ≤8 MiB; planned size проверяется до open.
 - Последовательные write-чанки держат один `FIL` открытым до sync/umount/смены
-  файла; `f_lseek` не повторяется на каждом чанке.
+  файла, read/stat/list/usage того же тома или смены create-mode; `f_lseek` не
+  повторяется на каждом чанке.
 - `create=true` у FAT — CREATE_ALWAYS и **truncate даже при offset != 0**;
-  exclusive create при существующем файле не меняет его.
+  exclusive create при существующем файле не меняет его. Запрос create при
+  активной сессии сначала закрывает её, поэтому recreate не аппендит.
 - Короткая запись/failed close возвращает ошибку; created-only файл удаляется,
   если cleanup возможен.
+- Failed `f_close` сохраняет `FIL` и `poisoned`, а не теряет handle; следующий
+  sync/delete/close повторяет close. Если exclusive-unlink не удался, intent
+  сохраняется (`unlink_pending`) и повторяется на следующем sync/new write,
+  причём новый write сначала убирает pending на старом томе. `FR_NO_FILE`
+  считается завершённым cleanup, unmount повторяет unlink до `f_mount(NULL)`.
+- Read/stat/list/usage закрывают writer того же тома до чтения, поэтому
+  immediate read-after-write возвращает новые размер/байты, а не `FR_LOCKED`.
 - Путь ограничен 1024 байтами; слишком длинный путь отвергается до FatFs, чтобы
   не задеть короткого соседа.
 - Sync сначала flush dirty FatFs window, затем transport barrier; failed final

@@ -214,6 +214,20 @@ int main(void)
 	rc = fat_engine_stat(vol, "/closefail.bin", &st);
 	if (rc != 0 || st.size != CHUNK_SIZE) return fail("closefail size", rc);
 
+	/* Failed first-chunk write plus failed close must keep the exclusive unlink
+	 * pending until a later sync can close and remove the file. */
+	g_fail_write_at = 1;
+	g_fail_sync_at = 0;
+	rc = fat_engine_write_file(vol, "/cleanup.bin", 0, chunk, CHUNK_SIZE, &written,
+				   CHUNK_SIZE, 2);
+	if (rc != FAT_ENGINE_CLEANUP_FAILED) return fail("cleanup failure not reported", rc);
+	g_fail_write_at = -1;
+	g_fail_sync_at = -1;
+	rc = fat_engine_sync(vol);
+	if (rc != 0) return fail("cleanup sync", rc);
+	rc = fat_engine_stat(vol, "/cleanup.bin", &st);
+	if (rc == 0) return fail("cleanup target survived", 0);
+
 	/* Switching to another volume must record the failed close on the writer's
 	 * volume, so its next sync retries CTRL_SYNC instead of reporting success. */
 	{

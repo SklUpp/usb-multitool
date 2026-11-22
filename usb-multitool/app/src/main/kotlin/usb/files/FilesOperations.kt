@@ -110,6 +110,11 @@ object FilesOperations {
                 val read = input.read(buffer)
                 if (!operation.isActive()) throw CancellationException("Upload cancelled")
                 if (read <= 0) break
+                if (plannedTotal >= 0L && offset + read > plannedTotal) {
+                    throw IOException(
+                        "upload size mismatch: expected $plannedTotal bytes, stream exceeded it",
+                    )
+                }
                 val data = if (read == buffer.size) buffer else buffer.copyOf(read)
                 val firstWrite = !created
                 val planned = if (plannedTotal >= 0L) maxOf(plannedTotal, offset + data.size.toLong())
@@ -121,6 +126,11 @@ object FilesOperations {
                 }
                 offset += read
                 operation.report(offset)
+            }
+            if (plannedTotal >= 0L && offset != plannedTotal) {
+                throw IOException(
+                    "upload size mismatch: expected $plannedTotal bytes, got $offset",
+                )
             }
             if (!created) {
                 operation.mutationAttempted = true

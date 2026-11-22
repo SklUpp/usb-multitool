@@ -24,6 +24,8 @@ Windows-носителя, rescue/backup и диагностика.
 | [ui.md](ui.md) | Экраны, MD3, полоса разделов, RangeSlider и MiB-поля |
 | [build-test-release.md](build-test-release.md) | Сборка, native-движки, тесты, CI, APK |
 | [progress.md](progress.md) | Проверенный срез, APK и ограничения проверки |
+| [feature-candidates.md](feature-candidates.md) | Критическая оценка SMART/f3probe/persistence/восстановления/TRIM |
+| [requirements/2026-11-22-docs-review-candidates.md](requirements/2026-11-22-docs-review-candidates.md) | Требования этой волны: доки, ревью, границы кандидатов |
 
 ## Быстрый старт
 

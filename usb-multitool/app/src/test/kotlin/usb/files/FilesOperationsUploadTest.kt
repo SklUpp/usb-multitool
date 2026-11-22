@@ -243,6 +243,44 @@ class FilesOperationsUploadTest {
         assertEquals(1, volume.spaceCalls)
     }
 
+    @Test fun shortKnownSizeStreamFailsAndDeletesCreatedTarget() {
+        val volume = RecordingVolume()
+        val failure = runCatching {
+            FilesOperations.upload(
+                ByteArrayInputStream(byteArrayOf(1, 2, 3, 4, 5)),
+                "/x",
+                volume,
+                DiskOperation("upload-short-size"),
+                4,
+                knownSizeBytes = 10L,
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IOException)
+        assertEquals(1, volume.deleteCount)
+        assertEquals(1, volume.syncCount)
+    }
+
+    @Test fun longKnownSizeStreamFailsBeforeOversizedWrite() {
+        val volume = RecordingVolume()
+        val payload = ByteArray(15) { it.toByte() }
+        val failure = runCatching {
+            FilesOperations.upload(
+                ByteArrayInputStream(payload),
+                "/x",
+                volume,
+                DiskOperation("upload-long-size"),
+                4,
+                knownSizeBytes = 10L,
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is IOException)
+        assertTrue(volume.writes.sumOf { it.data.size } <= 10)
+        assertEquals(1, volume.deleteCount)
+        assertEquals(1, volume.syncCount)
+    }
+
     @Test fun volumeWithoutUsageIgnoresKnownSize() {
         val volume = RecordingVolume()
         FilesOperations.upload(

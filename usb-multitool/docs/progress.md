@@ -5,7 +5,12 @@
 
 ## Текущий срез
 
-- Ветка: `feature/android-usb-multitool`.
+- Ветка: `feature/android-usb-multitool`, HEAD `c5e916b`.
+- Последняя волна: UI-полировка (IME, сортировка Files, прогресс, переходы,
+  haptics, read-only Settings/Diagnostics), общий JNI thread-attach helper,
+  FAT streaming с retry close/pending unlink и когерентным read-after-write.
+- Кандидаты в SMART/f3probe/persistence/восстановление/TRIM разобраны
+  отдельно: [feature-candidates.md](feature-candidates.md); код не реализован.
 - Версия приложения: `0.1.0` (`versionCode 1`), `minSdk 28`, `targetSdk 36`,
   ABI `arm64-v8a`.
 - UI: Material 3, русский и английский (`values`, `values-ru`).
@@ -24,16 +29,31 @@
 ## Проверка
 
 - CI [44960993460](https://github.com/SklUpp/usb-multitool/actions/runs/44960993460)
-  — success: FatFs host, NTFS host, ext4 host, exFAT fsck host, usb_block
-  registry, unit tests, debug APK, 16 KiB alignment, lint, Kotlin compile.
-- APK: artifact `app-debug-apk` (id `14730001315`), локально
+  — success для предыдущего среза: FatFs host, NTFS host, ext4 host, exFAT fsck
+  host, usb_block registry, unit tests, debug APK, 16 KiB alignment, lint,
+  Kotlin compile. Для HEAD `c5e916b` CI-прогон ещё не зафиксирован в этом
+  документе.
+- APK предыдущего среза: artifact `app-debug-apk` (id `14730001315`), локально
   `/data/data/com.termux/files/home/apk-779f49a/app-debug.apk`,
   `86 700 491` байт, SHA-256
   `a440af677532843a5a2a5091977b719b6bd4f07387584c89335aa5f6dae80a1b`.
   `unzip -t` и `aapt2 dump badging` — без ошибок; package `usb.multitool 0.1.0`,
   minSdk 28, target 36.
-- Локально на телефоне: targeted JVM tests и FatFs host tests; APK локально не
-  собирается.
+- Локально на телефоне для волны `c5e916b`:
+  - `scripts/run-fat-host-test.sh` — OK, 4 МиБ streaming, no stale handle;
+    добавлены read-after-write, close retry, pending unlink, exclusive recreate,
+    CREATE_ALWAYS truncation и CTRL_SYNC attribution.
+  - targeted JVM: 64/64, 0 failures — `FilesOperationsUploadTest` 18,
+    `ShellLogBehaviorTest` 14, `PartitionRangeMathTest` 9,
+    `PartitionRenameUiTest` 6, `SchemeInitUiTest` 8,
+    `PartitionRepairUiTest` 9. Compile — BUILD SUCCESSFUL.
+  - APK локально не собирается; on-device UI/USB не проверялись.
+- Независимое ревью волны `a73d18e..HEAD` (три read-only reviewer):
+  подтверждены и исправлены SAF size mismatch, queued Files Back,
+  Diagnostics-operation origin при rotation, FAT pending unlink в close/switch/
+  unmount. Финальные вердикты — без подтверждённых дефектов; для трёх редких
+  pending-unlink веток добавление отдельных host-инъекций остаётся
+  рекомендацией, не блокером.
 
 ## Не проверено на устройстве
 

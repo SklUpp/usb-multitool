@@ -9,11 +9,18 @@
   Diagnostics. Settings открывается отдельным маршрутом из заголовка.
 - `AppUiState` — единственный state holder; экраны stateless:
   `(state, onIntent, modifier)`.
-- Переключение вкладок блокируется, пока операция Queued/Running или открыто
-  подтверждение.
+- Переключение рабочих вкладок блокируется, пока операция Queued/Running;
+  Settings и Diagnostics можно открыть read-only. Возврат разрешён только на
+  вкладку-источник операции; свайп вкладок на это время отключён.
+- Settings остаётся читаемым, но тема, язык, performance-слайдеры и выбор
+  backup-папки disabled, пока операция Queued/Running.
+- Diagnostics имеет Back: без операции — на последнюю рабочую вкладку; если
+  операция началась в Diagnostics — Back поглощается и не уводит под неё.
 - Постоянный status block под заголовком: одна строка `Status: операция —
-  состояние` и тонкий progress track; тап открывает компактный dialog с журналом.
+  состояние` и progress track 4 dp; тап открывает компактный dialog с журналом.
   Отмена — в этом dialog; отдельная кнопка в status block не дублируется.
+- Переход между рабочими вкладками — направленный горизонтальный slide с учётом
+  RTL; при reduced motion переходы выключены.
 
 ## Отмена длинных операций
 
@@ -69,7 +76,9 @@ non-cancelable.
   точную границу;
 - магниты: обе границы free region, 25/50/75%, стандартные размеры, все
   выровненные GiB-границы и размеры существующих разделов относительно
-  противоположной границы;
+  противоположной границы; haptic — только при входе в магнит, не на каждом
+  округлении до MiB;
+- dialog учитывает IME (`imePadding`), список/поля не уходят под клавиатуру;
 - поле, не совпадающее с отправляемой геометрией, блокирует create;
 - нулевая длина, `end ≤ start`, выход за free region и end > available
   блокируются; slider скрывается при невалидном end;
@@ -81,7 +90,13 @@ non-cancelable.
 - `PartitionDropdown` — тот же селектор, что в Partitions.
 - Папка: path, Refresh, Create folder; один lazy list; selection row:
   Download/Rename/Delete/Clear; row bottom sheet.
+- Сортировка детерминированная: папки первыми, затем имя без учёта регистра,
+  затем точное имя как tie-breaker.
+- Back на вложенной папке возвращает на уровень выше, но не во время
+  Queued/Running операции.
 - Копирование показывает progress и cancel; ошибки/прогресс также в shell status.
+- SAF upload сверяет фактически прочитанный размер с `OpenableColumns.SIZE`
+  до sync; короткий/лишний поток считается ошибкой, созданный файл удаляется.
 - Read-only badge основан на measured policy: EFI guard или driver mount facts;
   неизвестное состояние не рисует badge.
 - SAF picker используется для телефона; USB-файлы — через встроенный Files picker
@@ -115,6 +130,8 @@ non-cancelable.
   download; destructive actions подтверждаются.
 - Windows: раскладка установочного носителя, импорт ISO/файлов, autounattend;
   длительные действия используют общий operation/status/cancel.
+- Raw XML editor: monospace, проверка destructive-markers с debounce 300 мс
+  вне main thread; финальная проверка перед commit остаётся синхронной.
 - Никаких dot-separated meta-строк (`·`, `•`) в UI. Несколько фактов
   разделяются запятой, отдельными Text-строками или заголовками.
 

@@ -279,12 +279,30 @@ fun AppShell(
         // Last mutable work tab. Diagnostics has no Back entry of its own, so it uses
         // this to return to the operation that sent the user there.
         var lastWorkTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
+        var operationOriginTab by rememberSaveable { mutableStateOf<String?>(null) }
+        var operationOriginToken by rememberSaveable { mutableStateOf<String?>(null) }
         val operationLocked = state.isRunning || state.operation?.state == OperationState.Queued
+        val operationToken = state.operation?.token?.toString()
         LaunchedEffect(state.tab) {
             if (state.tab == ShellTab.Files || state.tab == ShellTab.Ventoy ||
                 state.tab == ShellTab.Partitions
             ) {
                 lastWorkTab = state.tab.name
+            }
+        }
+        LaunchedEffect(operationLocked, operationToken) {
+            if (!operationLocked || operationToken == null) {
+                if (!operationLocked) {
+                    operationOriginTab = null
+                    operationOriginToken = null
+                }
+            } else if (operationToken != operationOriginToken) {
+                // Keep a restored origin across configuration recreation; only a new
+                // operation token adopts the currently visible tab.
+                if (operationOriginToken != null || operationOriginTab == null) {
+                    operationOriginTab = state.tab.name
+                }
+                operationOriginToken = operationToken
             }
         }
         // Strip opens the status dialog; picker ownership still forces it closed.
@@ -317,16 +335,18 @@ fun AppShell(
         }
         BackHandler(
             enabled = !pickOpen && state.tab == ShellTab.Files &&
-                state.currentPath != "/" && !state.isRunning,
+                state.currentPath != "/" && !operationLocked,
         ) {
             onIntent(UiIntent.NavigateUp)
         }
         BackHandler(enabled = !pickOpen && state.tab == ShellTab.Diagnostics) {
-            onIntent(
-                UiIntent.SelectTab(
-                    ShellTabPersistence.decode(lastWorkTab) ?: ShellTab.Files,
-                ),
-            )
+            if (!(operationLocked && operationOriginTab == ShellTab.Diagnostics.name)) {
+                onIntent(
+                    UiIntent.SelectTab(
+                        ShellTabPersistence.decode(lastWorkTab) ?: ShellTab.Files,
+                    ),
+                )
+            }
         }
         BackHandler(enabled = panels.journalScreenOpen && !pickOpen) {
             panels = panels.closeJournalScreen()
@@ -432,7 +452,9 @@ fun AppShell(
                                 val readOnlyScreen =
                                     state.tab == ShellTab.Settings ||
                                         state.tab == ShellTab.Diagnostics
-                                val readOnlyReturn = ShellTabPersistence.decode(lastWorkTab)
+                                val readOnlyReturn = ShellTabPersistence.decode(
+                                    operationOriginTab ?: lastWorkTab,
+                                )
                                 val switchBlocked = tab != state.tab &&
                                     tab != ShellTab.Diagnostics &&
                                     !(readOnlyScreen && tab == readOnlyReturn) &&
