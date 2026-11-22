@@ -5,9 +5,9 @@
 
 ## Текущий срез
 
-- Ветка: `feature/android-usb-multitool`, HEAD `da484fb`; SMART —
+- Ветка: `feature/android-usb-multitool`, HEAD `bdcde20`; SMART —
   `f504ddf`, UI/MD3 и raw-write волна — `e81a6fa`, правки после ревью —
-  `da484fb`.
+  `da484fb`, нормализация restore-путей и lint-fix — `bdcde20`.
 - Последняя волна: SMART diagnostics; UI-полировка (IME, сортировка Files,
   прогресс, переходы, haptics, read-only Settings/Diagnostics), общий JNI
   thread-attach helper, FAT streaming с retry close/pending unlink и
@@ -87,6 +87,17 @@
 
 ## Проверка
 
+- CI [44992369032](https://github.com/SklUpp/usb-multitool/actions/runs/44992369032)
+  (`bdcde20`) — **success**: fatfs-host, host exFAT/NTFS/ext4/FAT/usb_block,
+  SectorForge fault tests, unit tests, debug APK, 16 KiB alignment, lint,
+  Kotlin compile. Lint-fix: `ventoy_promotion_unconfirmed` теперь принимает
+  оба аргумента в EN/RU.
+- APK `bdcde20` из CI `44992369032`:
+  `/data/data/com.termux/files/home/apk-bdcde20/app-debug.apk`,
+  `86 874 011` байт, SHA-256
+  `c31e4d7c5e927b1f01465af38ce819a6f12064b7ec0430c8705ded96f14de6bb`.
+  `unzip -t` и `aapt2 dump badging` — без ошибок; package `usb.multitool 0.1.0`,
+  minSdk 28, target 36.
 - CI [44960993460](https://github.com/SklUpp/usb-multitool/actions/runs/44960993460)
   — success для предыдущего среза: FatFs host, NTFS host, ext4 host, exFAT fsck
   host, usb_block registry, unit tests, debug APK, 16 KiB alignment, lint,
