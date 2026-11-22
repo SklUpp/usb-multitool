@@ -180,6 +180,7 @@ internal object OperationTransitions {
             windowsImageLinks = null,
             windowsImageLinksGeneration = state.windowsImageLinksGeneration + 1,
             windowsImageLinksIdentity = null,
+            windowsLinkTargetImage = null,
             windowsSelectedImages = emptyList(),
             windowsTemplatePath = if (keepTemplatePath) state.windowsTemplatePath else null,
             autounattendState = AutounattendState.Missing,

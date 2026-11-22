@@ -353,7 +353,7 @@ internal fun AutounattendSection(
         }
         if (!xmlGone) {
             // Choosing or replacing the template is the icon next to the path row.
-            FilledTonalButton(
+            Button(
                 onClick = { generateOpen = true },
                 enabled = state.actionsEnabled &&
                     state.autounattendState !is AutounattendState.Unreadable &&
@@ -386,7 +386,6 @@ internal fun AutounattendSection(
     if (!xmlGone) {
         val candidates = state.autounattendCandidates
         var showAllImages by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf(false) }
-        var pendingImageTarget by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf<String?>(null) }
         var addImagesOpen by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf(false) }
         var destructiveBindAck by remember(state.device?.identity, state.device?.attachGeneration, document?.templateSha256) { mutableStateOf(false) }
         val loadedTemplateHasMarkers = document?.destructiveMarkers?.isNotEmpty() == true
@@ -397,27 +396,50 @@ internal fun AutounattendSection(
             if (state.windowsImageLinks == null && state.actionsEnabled) onIntent(UiIntent.LoadWindowsImageLinks)
         }
         val pickedTemplate = state.filesPickSelections[FilesPickPurpose.WindowsTemplate]
-        LaunchedEffect(pickedTemplate, pendingImageTarget) {
+        val linkTarget = state.windowsLinkTargetImage
+        LaunchedEffect(pickedTemplate, linkTarget) {
             val picked = pickedTemplate ?: return@LaunchedEffect
             if (picked.isDirectory) return@LaunchedEffect
-            val target = pendingImageTarget
-            pendingImageTarget = null
+            val target = linkTarget
             if (target != null) {
                 onIntent(UiIntent.ClearFilesPickSelection(FilesPickPurpose.WindowsTemplate))
-                val sameLoaded = document?.sourcePath?.equals(picked.path, true) == true
-                onIntent(UiIntent.RequestBindAutounattend(
-                    picked.path,
-                    listOf(target),
-                    allowDestructiveTemplate = sameLoaded && loadedTemplateHasMarkers && destructiveBindAck,
-                    expectedTemplateSha256 = if (sameLoaded) document?.templateSha256 else null,
-                    overwrite = true,
-                ))
+                onIntent(UiIntent.SetWindowsLinkTarget(null))
+                val device = state.device
+                val livePartition = state.partitions.firstOrNull {
+                    it.id == picked.partitionId &&
+                        it.startLba == picked.startLba &&
+                        it.sectorCount == picked.sectorCount
+                }
+                val xmlPath = runCatching {
+                    usb.ventoy.normalizeVentoyFilePath(picked.path)
+                }.getOrNull()
+                if (device == null ||
+                    picked.identity != device.identity ||
+                    picked.attachGeneration != device.attachGeneration ||
+                    picked.partitionId != "1" ||
+                    livePartition == null ||
+                    xmlPath == null
+                ) {
+                    onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+                } else {
+                    val sameLoaded = document?.sourcePath?.equals(xmlPath, ignoreCase = true) == true
+                    onIntent(UiIntent.RequestBindAutounattend(
+                        xmlPath,
+                        listOf(target),
+                        allowDestructiveTemplate =
+                            sameLoaded && loadedTemplateHasMarkers && destructiveBindAck,
+                        expectedTemplateSha256 = if (sameLoaded) document?.templateSha256 else null,
+                        overwrite = true,
+                    ))
+                }
             } else {
                 onIntent(UiIntent.SelectWindowsTemplate)
             }
         }
-        LaunchedEffect(state.filesPickMode, pickedTemplate) {
-            if (state.filesPickMode == null && pickedTemplate == null) pendingImageTarget = null
+        LaunchedEffect(state.filesPickMode, pickedTemplate, linkTarget) {
+            if (state.filesPickMode == null && pickedTemplate == null && linkTarget != null) {
+                onIntent(UiIntent.SetWindowsLinkTarget(null))
+            }
         }
         SectionCard(
             title = stringResource(R.string.unattend_bindings_title),
@@ -447,7 +469,7 @@ internal fun AutounattendSection(
                             Text(xml ?: stringResource(R.string.unattend_xml_not_selected), style = MaterialTheme.typography.labelSmall)
                         }
                         IconButton(onClick = {
-                            pendingImageTarget = image
+                            onIntent(UiIntent.SetWindowsLinkTarget(image))
                             onIntent(UiIntent.BeginFilesPick(FilesPickPurpose.WindowsTemplate, ShellTab.Ventoy, FilesPickTarget.File, initialPath = "/ventoy", expectedIdentity = state.device?.identity, expectedAttachGeneration = state.device?.attachGeneration))
                         }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.File, size = 20.dp) }
                         if (xml != null) IconButton(onClick = { onIntent(UiIntent.RequestUnlinkWindowsImages(listOf(image))) }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.Close, size = 20.dp) }
@@ -541,6 +563,7 @@ internal fun AutounattendSection(
             stickEnabled = !xmlGone,
             onStick = {
                 templateSourcePrompt = false
+                onIntent(UiIntent.SetWindowsLinkTarget(null))
                 onIntent(UiIntent.BeginFilesPick(
                     purpose = FilesPickPurpose.WindowsTemplate,
                     returnTab = ShellTab.Ventoy,
@@ -552,6 +575,7 @@ internal fun AutounattendSection(
             },
             onPhone = {
                 templateSourcePrompt = false
+                onIntent(UiIntent.SetWindowsLinkTarget(null))
                 folderKind = WindowsImportKind.XmlTemplate
             },
         )
@@ -756,7 +780,7 @@ internal fun GlobalSettingsCard(
                     )
                     if (!settings.damagedLayout) {
                         Text(
-                            text = settings.message,
+                            text = normalizeProviderText(settings.message),
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -783,7 +807,7 @@ internal fun GlobalSettingsCard(
             )
         }
         if (!settingsGone) {
-            FilledTonalButton(
+            Button(
                 onClick = {
                     editorBaseline = state.pendingVentoyControls
                     editorOpen = true
@@ -1944,7 +1968,7 @@ private fun VentoyApplyDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onWrite, enabled = enabled) {
+            TextButton(onClick = onWrite, enabled = enabled) {
                 Text(stringResource(R.string.settings_apply_review_write))
             }
         },
@@ -2500,6 +2524,26 @@ private fun LayoutConfirmDialog(
 private val windowsLanguageChoices = listOf("en-US", "ru-RU", "de-DE", "fr-FR", "es-ES", "ja-JP")
 private val windowsLocaleChoices = listOf("en-US", "ru-RU", "de-DE", "fr-FR", "es-ES", "ja-JP")
 
+/** Bundled answer-file profiles; [Custom] exposes the individual fields. */
+private enum class WindowsProfile {
+    Default,
+    Russian,
+    English,
+    Offline,
+    Custom,
+}
+
+@Composable
+private fun windowsProfileLabel(profile: WindowsProfile): String = stringResource(
+    when (profile) {
+        WindowsProfile.Default -> R.string.params_profile_default
+        WindowsProfile.Russian -> R.string.params_profile_ru
+        WindowsProfile.English -> R.string.params_profile_en
+        WindowsProfile.Offline -> R.string.params_profile_offline
+        WindowsProfile.Custom -> R.string.params_profile_custom
+    },
+)
+
 /** Parameter editor: every block is opt-in and off by default; off means "not written". */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -2514,6 +2558,8 @@ private fun GenerateDialog(
     val existing = document?.existing
     val existingAccount = existing?.localAccount
     val existingLayout = existing?.diskLayout
+    var profile by remember(document) { mutableStateOf(WindowsProfile.Default) }
+    var profileMenuOpen by remember { mutableStateOf(false) }
     var language by remember(document) { mutableStateOf(existing?.languageTag ?: "en-US") }
     var languageCustom by remember(document) { mutableStateOf(existing?.languageTag !in windowsLanguageChoices) }
     var localeOn by remember(document) { mutableStateOf(existing?.localeId != null) }
@@ -2546,6 +2592,49 @@ private fun GenerateDialog(
     }
     val markers = document?.destructiveMarkers.orEmpty()
     var destructiveAck by remember(document) { mutableStateOf(markers.isEmpty()) }
+    fun selectProfile(next: WindowsProfile) {
+        profile = next
+        profileMenuOpen = false
+        when (next) {
+            WindowsProfile.Default -> {
+                language = existing?.languageTag ?: "en-US"
+                languageCustom = language !in windowsLanguageChoices
+                localeOn = existing?.localeId != null
+                locale = existing?.localeId.orEmpty()
+                localeCustom = locale !in windowsLocaleChoices
+                computerOn = existing?.computerName != null
+                computer = existing?.computerName.orEmpty()
+                accountOn = existingAccount != null
+                accountName = existingAccount?.name.orEmpty()
+                accountAdmin = existingAccount?.inAdministrators == true
+            }
+            WindowsProfile.Russian -> {
+                language = "ru-RU"
+                languageCustom = false
+                localeOn = true
+                locale = "ru-RU"
+                localeCustom = false
+            }
+            WindowsProfile.English -> {
+                language = "en-US"
+                languageCustom = false
+                localeOn = true
+                locale = "en-US"
+                localeCustom = false
+            }
+            WindowsProfile.Offline -> {
+                language = "ru-RU"
+                languageCustom = false
+                localeOn = true
+                locale = "ru-RU"
+                localeCustom = false
+                accountOn = true
+                accountAdmin = true
+                if (accountName.isBlank()) accountName = "User"
+            }
+            WindowsProfile.Custom -> Unit
+        }
+    }
 
     val draftLayout =
         DiskLayout(
@@ -2607,24 +2696,54 @@ private fun GenerateDialog(
                     isError = xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Text(
+                    text = stringResource(R.string.params_profile),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Box {
-                    TextButton(onClick = { languageMenuOpen = true }, enabled = actionsEnabled) { Text(language) }
-                    DropdownMenu(expanded = languageMenuOpen, onDismissRequest = { languageMenuOpen = false }) {
-                        val custom = stringResource(R.string.unattend_custom_value)
-                        (windowsLanguageChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { languageMenuOpen = false; languageCustom = choice == custom; if (!languageCustom) language = choice }) }
-                    }
-                }
-                if (languageCustom) OutlinedTextField(value = language, onValueChange = { language = it }, label = { Text(stringResource(R.string.params_language)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                SwitchRow(label = stringResource(R.string.params_locale), checked = localeOn, onCheckedChange = { localeOn = it }, enabled = actionsEnabled)
-                if (localeOn) {
-                    Box {
-                        TextButton(onClick = { localeMenuOpen = true }, enabled = actionsEnabled) { Text(locale) }
-                        DropdownMenu(expanded = localeMenuOpen, onDismissRequest = { localeMenuOpen = false }) {
-                            val custom = stringResource(R.string.unattend_custom_value)
-                            (windowsLocaleChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { localeMenuOpen = false; localeCustom = choice == custom; if (!localeCustom) locale = choice }) }
+                    TextButton(
+                        onClick = { profileMenuOpen = true },
+                        enabled = actionsEnabled,
+                    ) { Text(windowsProfileLabel(profile)) }
+                    DropdownMenu(
+                        expanded = profileMenuOpen,
+                        onDismissRequest = { profileMenuOpen = false },
+                    ) {
+                        WindowsProfile.entries.forEach { choice ->
+                            DropdownMenuItem(
+                                text = { Text(windowsProfileLabel(choice)) },
+                                onClick = { selectProfile(choice) },
+                            )
                         }
                     }
-                    if (localeCustom) OutlinedTextField(value = locale, onValueChange = { locale = it }, label = { Text(stringResource(R.string.params_locale_value)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+                if (profile == WindowsProfile.Custom) {
+                    Box {
+                        TextButton(onClick = { languageMenuOpen = true }, enabled = actionsEnabled) { Text(language) }
+                        DropdownMenu(expanded = languageMenuOpen, onDismissRequest = { languageMenuOpen = false }) {
+                            val custom = stringResource(R.string.unattend_custom_value)
+                            (windowsLanguageChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { languageMenuOpen = false; languageCustom = choice == custom; if (!languageCustom) language = choice }) }
+                        }
+                    }
+                    if (languageCustom) OutlinedTextField(value = language, onValueChange = { language = it }, label = { Text(stringResource(R.string.params_language)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    SwitchRow(label = stringResource(R.string.params_locale), checked = localeOn, onCheckedChange = { localeOn = it }, enabled = actionsEnabled)
+                    if (localeOn) {
+                        Box {
+                            TextButton(onClick = { localeMenuOpen = true }, enabled = actionsEnabled) { Text(locale) }
+                            DropdownMenu(expanded = localeMenuOpen, onDismissRequest = { localeMenuOpen = false }) {
+                                val custom = stringResource(R.string.unattend_custom_value)
+                                (windowsLocaleChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { localeMenuOpen = false; localeCustom = choice == custom; if (!localeCustom) locale = choice }) }
+                            }
+                        }
+                        if (localeCustom) OutlinedTextField(value = locale, onValueChange = { locale = it }, label = { Text(stringResource(R.string.params_locale_value)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    }
+                } else {
+                    Text(
+                        text = if (localeOn && locale.isNotBlank()) "$language / $locale" else language,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 SwitchRow(
                     label = stringResource(R.string.params_computer),
@@ -2874,9 +2993,9 @@ private fun GenerateDialog(
             }
         },
         confirmButton = {
-            Button(
+            TextButton(
                 onClick = {
-                    if (xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName) return@Button
+                    if (xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName) return@TextButton
                     val accountValue = if (accountOn) {
                         val existingValue = existingAccount
                         val groupChanged = existingValue == null || accountAdmin != (existingValue.inAdministrators == true)
@@ -2948,12 +3067,11 @@ private fun GenerateDialog(
                 },
                 enabled = canGenerate,
                 colors = if (markers.isNotEmpty()) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
+                    ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
                     )
                 } else {
-                    ButtonDefaults.buttonColors()
+                    ButtonDefaults.textButtonColors()
                 },
             ) { Text(stringResource(R.string.unattend_generate)) }
         },

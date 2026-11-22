@@ -2,6 +2,7 @@ package usb.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
@@ -93,13 +94,13 @@ internal fun RawPlanMap(
     val maxStart = if (count == null || count >= disk) 0UL else disk - count
     val overlaps = count?.let { geometry.overlaps(startLba, it) }.orEmpty()
     val rangeColor = MaterialTheme.colorScheme.primary
-    // Three tones of one muted hue over the track: secondaryContainer and tertiaryContainer
-    // resolve to the track colour itself in both themes, so every existing object vanished.
-    val partitionColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-    val bootColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-    val tableColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+    // Distinct container roles, not alpha tints: adjacent object classes must stay
+    // distinguishable on both light and dark surfaces and match their legend swatches.
+    val partitionColor = MaterialTheme.colorScheme.secondaryContainer
+    val bootColor = MaterialTheme.colorScheme.tertiaryContainer
+    val tableColor = MaterialTheme.colorScheme.primaryContainer
     val trackColor = MaterialTheme.colorScheme.surfaceContainerLowest
-    val freeColor = MaterialTheme.colorScheme.surfaceVariant
+    val freeColor = MaterialTheme.colorScheme.surfaceContainerHighest
     val snapTickColor = MaterialTheme.colorScheme.outline
 
     val partitionLabels = remember(geometry) {
@@ -419,8 +420,8 @@ private fun RawUnifiedMap(
                         sectorCount?.let { count ->
                             val end = if (startLba <= disk - count) startLba + count else disk
                             val rw = (xForLba(end) - rx).coerceAtLeast(MIN_SEGMENT_WIDTH_DP.dp.toPx())
-                            drawRect(rangeColor.copy(alpha = 0.22f), Offset(rx, 0f), Size(rw, size.height))
-                            drawRect(rangeColor, Offset(rx, 0f), Size(rw, size.height), style = Stroke(2.dp.toPx()))
+                            drawRect(rangeColor.copy(alpha = 0.38f), Offset(rx, 0f), Size(rw, size.height))
+                            drawRect(rangeColor, Offset(rx, 0f), Size(rw, size.height), style = Stroke(3.dp.toPx()))
                         }
                         drawRect(rangeColor, Offset(rx - 3.dp.toPx(), 0f), Size(6.dp.toPx(), size.height))
                         geometry.snapPoints.forEach { point ->
@@ -595,7 +596,12 @@ private fun LegendItem(color: Color, label: String) {
         Box(
             modifier = Modifier
                 .size(10.dp)
-                .background(color, RoundedCornerShape(2.dp)),
+                .background(color, RoundedCornerShape(2.dp))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline,
+                    RoundedCornerShape(2.dp),
+                ),
         )
         Text(text = label, style = MaterialTheme.typography.labelSmall)
     }

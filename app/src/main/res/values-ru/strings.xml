@@ -27,6 +27,7 @@
     <string name="files_empty_folder">Папка пуста</string>
     <string name="files_filter_hint">Фильтр по имени</string>
     <string name="files_search_clear">Очистить поиск</string>
+    <string name="files_search_close">Закрыть поиск</string>
     <string name="files_filter_empty">Нет совпадений</string>
     <string name="files_breadcrumb_root">USB</string>
     <string name="files_listing">Читаю папку…</string>
@@ -307,8 +308,8 @@
     <string name="partitions_raw_write_title">Посекторная запись файла</string>
     <string name="raw_write_geometry_unavailable">Геометрия диска недоступна: валидация диапазона невозможна, запись заблокирована.</string>
     <string name="raw_write_start_label">Начальный LBA</string>
+    <string name="raw_write_start_mib_label">Начало, MiB</string>
     <string name="raw_write_start_aligned">Начало будет выровнено до LBA %1$d.</string>
-    <string name="raw_write_end_and_size">Конечный LBA %1$d, будет записано %2$s</string>
     <string name="raw_write_problem_empty">Диапазон пуст.</string>
     <string name="raw_write_problem_beyond_disk">Образ выходит за пределы диска. Укажите меньший начальный LBA.</string>
     <string name="raw_write_problem_too_large">Образ слишком велик для этого диска.</string>
@@ -444,7 +445,7 @@
     <string name="diagnostics_gpt_valid">Заголовки, CRC таблиц и границы разделов проверены.</string>
     <string name="diagnostics_pick_image_folder">Выбрать папку</string>
     <string name="diagnostics_restore_image">Восстановить образ и карту</string>
-    <string name="diagnostics_restore_files_title">Выбранные файлы восстановления</string>
+    <string name="diagnostics_selected_file">Выбранный файл</string>
     <string name="diagnostics_restore_map_missing">В выбранной папке нет карты восстановления (.map)</string>
     <string name="diagnostics_no_gpt_file">Файл GPT не выбран</string>
     <string name="diagnostics_pick_gpt_file">Выбрать файл</string>
@@ -725,6 +726,12 @@
     <string name="params_layout_size">Размер, МиБ</string>
     <string name="params_layout_usage">Сумма разделов %1$d МиБ из %2$d МиБ; остаток %3$d МиБ</string>
     <string name="params_layout_wipe">Очистить целевой диск</string>
+    <string name="params_profile">Профиль</string>
+    <string name="params_profile_default">По умолчанию (Ventoy)</string>
+    <string name="params_profile_ru">Русский (ru-RU)</string>
+    <string name="params_profile_en">English (en-US)</string>
+    <string name="params_profile_offline">Без сети (локальная учётка)</string>
+    <string name="params_profile_custom">Свой</string>
     <string name="params_locale">Языковой стандарт</string>
     <string name="params_locale_value">Языковой стандарт, например ru-RU</string>
     <string name="params_remove_partition">Убрать</string>

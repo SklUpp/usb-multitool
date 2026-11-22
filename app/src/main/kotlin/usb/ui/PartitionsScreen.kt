@@ -44,9 +44,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -875,7 +875,7 @@ fun PartitionsScreen(
                             }
                         }
                     }
-                    FilledTonalButton(
+                    Button(
                         onClick = {
                             onIntent(UiIntent.RequestInitializePartitionTable(initializeScheme))
                         },
@@ -970,7 +970,7 @@ fun PartitionsScreen(
                         showLba = true,
                     )
                 }
-                FilledTonalButton(
+                Button(
                     onClick = {
                         creatableRegions.firstOrNull()?.let {
                             openCreate(it.first, it.second, it.third)
@@ -1478,7 +1478,7 @@ private fun SelectedPartitionCard(
                 }
             }
         }
-        FilledTonalButton(
+        Button(
             onClick = {
                 onIntent(UiIntent.RequestDestructive(DestructiveAction.DELETE_PARTITION))
             },
@@ -1487,7 +1487,7 @@ private fun SelectedPartitionCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
-            colors = ButtonDefaults.filledTonalButtonColors(
+            colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
             ),
@@ -1616,7 +1616,7 @@ private fun RawWriteSection(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (!hasImage) {
-                FilledTonalButton(
+                Button(
                     onClick = { sourceSheetOpen = true },
                     enabled = state.actionsEnabled,
                     modifier = Modifier
@@ -1805,40 +1805,111 @@ private fun RawWriteSection(
                     state.imageUri,
                     state.stagedRawImagePath,
                 ) { mutableStateOf("0") }
+                var customStartMib by remember(
+                    state.device?.identity,
+                    state.device?.attachGeneration,
+                    state.selectedPartitionId,
+                    state.imageUri,
+                    state.stagedRawImagePath,
+                ) { mutableStateOf("0") }
                 val rawAlignSectors = mibAlignSectors(state.diskSectorSize) ?: 1UL
                 val typedCustomStart = customStart.trim().toULongOrNull()
                 val alignedCustomStart = typedCustomStart?.let { value ->
                     PartitionRangeMath.alignUp(value, rawAlignSectors)
                 }
-                if (rawTargetMode == RawTargetMode.Custom) {
+                val rawSectorSize = (state.rawGeometry?.sectorSize ?: state.diskSectorSize)
+                    .takeIf { it > 0 }
+                val modeStart = when (rawTargetMode) {
+                    RawTargetMode.WholeDisk -> 0UL
+                    RawTargetMode.Partition -> selected?.startLba
+                    RawTargetMode.Custom -> alignedCustomStart
+                }
+                val lbaValue =
+                    if (rawTargetMode == RawTargetMode.Custom) customStart
+                    else modeStart?.toString().orEmpty()
+                val mibValue =
+                    if (rawTargetMode == RawTargetMode.Custom) customStartMib
+                    else modeStart?.let { start ->
+                        rawSectorSize?.let { formatMibInput(start, it) }
+                    }.orEmpty()
+                val typedMib = mibValue.replace(',', '.').toBigDecimalOrNull()
+                val mibError = mibValue.isNotBlank() &&
+                    (typedMib == null ||
+                        rawSectorSize == null ||
+                        typedMib < java.math.BigDecimal.ZERO ||
+                        rawStartLbaFromMib(mibValue, rawSectorSize) == null)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedTextField(
-                        value = customStart,
-                        onValueChange = { customStart = it.filter { ch -> ch.isDigit() } },
+                        value = lbaValue,
+                        onValueChange = { text ->
+                            onRawTargetMode(RawTargetMode.Custom)
+                            val digits = text.filter { ch -> ch.isDigit() }
+                            customStart = digits
+                            customStartMib = digits.toULongOrNull()?.let { typed ->
+                                val aligned = PartitionRangeMath.alignUp(
+                                    typed,
+                                    rawAlignSectors,
+                                )
+                                rawSectorSize?.let { formatMibInput(aligned, it) }.orEmpty()
+                            }.orEmpty()
+                        },
                         label = { Text(stringResource(R.string.raw_write_start_label)) },
                         singleLine = true,
+                        isError = lbaValue.isNotBlank() && lbaValue.toULongOrNull() == null,
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Number,
                             imeAction = ImeAction.Done,
                         ),
                         keyboardActions = KeyboardActions(
                             onDone = {
-                                alignedCustomStart?.let { customStart = it.toString() }
-                            },
-                        ),
-                        supportingText = alignedCustomStart
-                            ?.takeIf { it != typedCustomStart }
-                            ?.let { aligned ->
-                                {
-                                    Text(
-                                        stringResource(
-                                            R.string.raw_write_start_aligned,
-                                            aligned.toLong(),
-                                        ),
-                                    )
+                                alignedCustomStart?.let {
+                                    customStart = it.toString()
+                                    rawSectorSize?.let { size ->
+                                        customStartMib = formatMibInput(it, size)
+                                    }
                                 }
                             },
-                        modifier = Modifier.fillMaxWidth(),
+                        ),
+                        modifier = Modifier.weight(1f),
                     )
+                    OutlinedTextField(
+                        value = mibValue,
+                        onValueChange = { text ->
+                            onRawTargetMode(RawTargetMode.Custom)
+                            val normalized = text
+                                .filter { ch -> ch.isDigit() || ch == '.' || ch == ',' }
+                                .replace(',', '.')
+                            customStartMib = normalized
+                            rawSectorSize
+                                ?.let { rawStartLbaFromMib(normalized, it) }
+                                ?.let { customStart = it.toString() }
+                        },
+                        label = { Text(stringResource(R.string.raw_write_start_mib_label)) },
+                        singleLine = true,
+                        isError = mibError,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                            imeAction = ImeAction.Done,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (rawTargetMode == RawTargetMode.Custom) {
+                    alignedCustomStart
+                        ?.takeIf { it != typedCustomStart }
+                        ?.let { aligned ->
+                            Text(
+                                text = stringResource(
+                                    R.string.raw_write_start_aligned,
+                                    aligned.toLong(),
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                 }
 
                 if (geometry == null) {
@@ -2017,31 +2088,6 @@ private fun RawWriteSection(
                                 ),
                             )
                         }
-                        Text(
-                            text = stringResource(
-                                R.string.partitions_raw_binding_lba,
-                                startLbaText,
-                                endLbaText,
-                                countText,
-                            ),
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontFeatureSettings = "tnum",
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = stringResource(
-                                R.string.partitions_raw_binding_mib,
-                                startMibText,
-                                endMibText,
-                            ),
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontFeatureSettings = "tnum",
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         rangeAssessment?.message?.let { warning ->
                             Text(
                                 text = warning,
@@ -2174,7 +2220,7 @@ private fun RawWriteSection(
                         )
                     }
 
-                    FilledTonalButton(
+                    Button(
                         onClick = {
                             draftStart?.let { start ->
                                 onIntent(UiIntent.RequestRawWrite(start))
@@ -2186,7 +2232,7 @@ private fun RawWriteSection(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
+                        colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer,
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         ),
@@ -2426,17 +2472,18 @@ private fun PartitionSelectStrip(
     if (segments.isEmpty()) return
     val selectedFill = MaterialTheme.colorScheme.primary
     val selectedContent = MaterialTheme.colorScheme.onPrimary
-    // Inverse-relative-to-theme tonal steps: dark ink on light surfaces,
-    // light ink on dark surfaces. Container roles are too close to the
-    // section background to read as a legend.
-    val partitionFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f)
+    // Full container roles keep every legend class distinct from the section
+    // surface and from each other in both themes. Alpha tints disappeared on
+    // dark surfaces and looked like one unlabeled band.
+    val partitionFill = MaterialTheme.colorScheme.primaryContainer
+    val partitionInk = MaterialTheme.colorScheme.onPrimaryContainer
     val specialFill = MaterialTheme.colorScheme.tertiaryContainer
     val specialInk = MaterialTheme.colorScheme.onTertiaryContainer
     val reservedFill = MaterialTheme.colorScheme.secondaryContainer
     val reservedInk = MaterialTheme.colorScheme.onSecondaryContainer
-    val freeFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
-    val gapFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.05f)
-    val outline = MaterialTheme.colorScheme.outlineVariant
+    val freeFill = MaterialTheme.colorScheme.surfaceContainerHighest
+    val gapFill = MaterialTheme.colorScheme.outlineVariant
+    val outline = MaterialTheme.colorScheme.outline
     val hasSpecial = segments.any { it.partition?.special == true }
     val hasReserved = segments.any { it.partition?.reserved == true }
     val hasPartition = segments.any { seg ->
@@ -2516,6 +2563,7 @@ private fun PartitionSelectStrip(
                     partition != null && isSelected -> selectedContent
                     partition != null && partition.special -> specialInk
                     partition != null && partition.reserved -> reservedInk
+                    partition != null -> partitionInk
                     else -> MaterialTheme.colorScheme.onSurface
                 }
                 val description = when {
@@ -2744,6 +2792,32 @@ private fun formatMibDecimal(lba: ULong, sectorSize: Int): String {
         .divide(java.math.BigDecimal.valueOf(1024L * 1024L), 2, java.math.RoundingMode.HALF_UP)
         .stripTrailingZeros()
         .toPlainString()
+}
+
+/** Editable MiB text keeps sector-level resolution, unlike the two-decimal fact pills. */
+private fun formatMibInput(lba: ULong, sectorSize: Int): String {
+    val bytes = java.math.BigDecimal(lba.toString())
+        .multiply(java.math.BigDecimal.valueOf(sectorSize.toLong()))
+    return bytes
+        .divide(java.math.BigDecimal.valueOf(1024L * 1024L), 6, java.math.RoundingMode.HALF_UP)
+        .stripTrailingZeros()
+        .toPlainString()
+}
+
+/**
+ * Whole-MiB start for a typed MiB value. Fractional input rounds up so the marker never
+ * lands before the number the user typed; null means zero sector size or overflow.
+ */
+internal fun rawStartLbaFromMib(text: String, sectorSize: Int): ULong? {
+    val mib = text.replace(',', '.').toBigDecimalOrNull() ?: return null
+    if (mib < java.math.BigDecimal.ZERO) return null
+    val perMib = mibAlignSectors(sectorSize) ?: return null
+    val whole = mib
+        .setScale(0, java.math.RoundingMode.CEILING)
+        .toBigInteger()
+    if (whole.bitLength() >= 64) return null
+    val value = whole.toLong().toULong()
+    return if (value <= ULong.MAX_VALUE / perMib) value * perMib else null
 }
 
 

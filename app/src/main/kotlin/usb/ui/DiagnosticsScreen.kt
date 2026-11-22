@@ -259,7 +259,6 @@ fun DiagnosticsScreen(
                 }
                 FilledTonalIconButton(
                     onClick = onPickBackupFolder,
-                    enabled = state.actionsEnabled,
                     modifier = Modifier.semantics {
                         contentDescription = chooseFolderLabel
                     },
@@ -322,7 +321,6 @@ fun DiagnosticsScreen(
                     ) {
                         IconButton(
                             onClick = onPickBackupFolder,
-                            enabled = state.actionsEnabled,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics {
@@ -333,8 +331,7 @@ fun DiagnosticsScreen(
                         }
                         IconButton(
                             onClick = { onIntent(UiIntent.ResetRescueSelection) },
-                            enabled = state.actionsEnabled &&
-                                (state.rescueImageUri != null || state.rescueMapUri != null),
+                            enabled = state.rescueImageUri != null || state.rescueMapUri != null,
                             modifier = Modifier.semantics {
                                 contentDescription = resetSelectionLabel
                             },
@@ -358,7 +355,7 @@ fun DiagnosticsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(
+                FilledTonalButton(
                     onClick = { requestCreate(onStartRescueBackup) },
                     enabled = state.actionsEnabled && backupFolderReady,
                     modifier = Modifier
@@ -407,6 +404,11 @@ fun DiagnosticsScreen(
                     ) {
                         if (state.rescueImageUri != null) {
                             Text(
+                                text = stringResource(R.string.diagnostics_selected_file),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
                                 text = restorePathText(
                                     state.rescueImageUri,
                                     state.rescueImageInspection?.displayName,
@@ -432,6 +434,11 @@ fun DiagnosticsScreen(
                             )
                         }
                         if (state.rescueMapUri != null) {
+                            Text(
+                                text = stringResource(R.string.diagnostics_selected_file),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                             Text(
                                 text = restorePathText(
                                     state.rescueMapUri,
@@ -464,7 +471,6 @@ fun DiagnosticsScreen(
                     ) {
                         IconButton(
                             onClick = onPickBackupFolder,
-                            enabled = state.actionsEnabled,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics {
@@ -475,7 +481,7 @@ fun DiagnosticsScreen(
                         }
                         IconButton(
                             onClick = { onIntent(UiIntent.ResetGptSelection) },
-                            enabled = state.actionsEnabled && state.backupUri != null,
+                            enabled = state.backupUri != null,
                             modifier = Modifier.semantics {
                                 contentDescription = resetSelectionLabel
                             },
@@ -493,7 +499,7 @@ fun DiagnosticsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Button(
+                FilledTonalButton(
                     onClick = { requestCreate(onCreateGptCopy) },
                     enabled = state.actionsEnabled && backupFolderReady,
                     modifier = Modifier
@@ -540,6 +546,11 @@ fun DiagnosticsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
+                        Text(
+                            text = stringResource(R.string.diagnostics_selected_file),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Text(
                             text = restorePathText(
                                 state.backupUri,

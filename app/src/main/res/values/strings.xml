@@ -27,6 +27,7 @@
     <string name="files_empty_folder">Folder is empty</string>
     <string name="files_filter_hint">Filter by name</string>
     <string name="files_search_clear">Clear search</string>
+    <string name="files_search_close">Close search</string>
     <string name="files_filter_empty">No matching files</string>
     <string name="files_breadcrumb_root">USB</string>
     <string name="files_listing">Reading the folder…</string>
@@ -307,8 +308,8 @@
     <string name="partitions_raw_write_title">Sector-by-sector file write</string>
     <string name="raw_write_geometry_unavailable">Disk geometry unavailable: range validation impossible, write blocked.</string>
     <string name="raw_write_start_label">Start LBA</string>
+    <string name="raw_write_start_mib_label">Start, MiB</string>
     <string name="raw_write_start_aligned">Start will be aligned to LBA %1$d.</string>
-    <string name="raw_write_end_and_size">End LBA %1$d, writes %2$s</string>
     <string name="raw_write_problem_empty">The range is empty.</string>
     <string name="raw_write_problem_beyond_disk">Image exceeds disk bounds. Choose an earlier start LBA.</string>
     <string name="raw_write_problem_too_large">The image is too large for this disk.</string>
@@ -443,7 +444,7 @@
     <string name="diagnostics_gpt_valid">Headers, entry CRCs and partition bounds validate.</string>
     <string name="diagnostics_pick_image_folder">Choose folder</string>
     <string name="diagnostics_restore_image">Restore image and map</string>
-    <string name="diagnostics_restore_files_title">Selected restore files</string>
+    <string name="diagnostics_selected_file">Selected file</string>
     <string name="diagnostics_restore_map_missing">No rescue map (.map) found in the selected folder</string>
     <string name="diagnostics_no_gpt_file">No GPT file selected</string>
     <string name="diagnostics_pick_gpt_file">Choose file</string>
@@ -724,6 +725,12 @@
     <string name="params_layout_size">Size, MiB</string>
     <string name="params_layout_usage">Partitions total %1$d MiB of %2$d MiB; remaining %3$d MiB</string>
     <string name="params_layout_wipe">Wipe the target disk</string>
+    <string name="params_profile">Profile</string>
+    <string name="params_profile_default">Default (Ventoy)</string>
+    <string name="params_profile_ru">Russian (ru-RU)</string>
+    <string name="params_profile_en">English (en-US)</string>
+    <string name="params_profile_offline">No network (local account)</string>
+    <string name="params_profile_custom">Custom</string>
     <string name="params_locale">Locale</string>
     <string name="params_locale_value">Locale, for example ru-RU</string>
     <string name="params_remove_partition">Remove</string>

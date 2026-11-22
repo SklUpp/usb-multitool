@@ -243,9 +243,14 @@ fun VentoyScreen(
                     showDeviceActions = !usbGone,
                 )
                 // The centered empty state already names the missing device; only Busy
-                // and PermissionRequired still need the per-card hint.
-                if (!state.actionsEnabled && !usbGone) {
-                    EmptyHint(UiReducer.presenceMessage(state.presence).localized())
+                // and PermissionRequired still need the per-card hint. A confirmation
+                // already owns the screen, so it gets no duplicate availability hint.
+                when {
+                    state.deviceBusy -> EmptyHint(
+                        UiMessage.Key(UiMessageKey.WaitForOperation).localized(),
+                    )
+                    !state.actionsEnabled && !usbGone && state.pendingConfirmation == null ->
+                        EmptyHint(UiReducer.presenceMessage(state.presence).localized())
                 }
                 if (!state.ventoyInstallAvailable) {
                     Text(
@@ -883,7 +888,7 @@ internal fun ImportFolderDialog(
             Text(text = stringResource(R.string.import_folder_refreshing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
         }
         when {
-            errorText != null -> ListItem(headlineContent = { Text(text = errorText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) })
+            errorText != null -> ListItem(headlineContent = { Text(text = normalizeProviderText(errorText), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) })
             loading && listed.isEmpty() -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_loading), style = MaterialTheme.typography.bodySmall) })
             folders == null && !blocked -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_not_loaded), style = MaterialTheme.typography.bodySmall) })
             folders == null -> Unit

@@ -24,7 +24,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,8 +47,6 @@ internal fun SettingsScreen(
     onIntent: (UiIntent) -> Unit,
     onBack: () -> Unit,
     onPickBackupFolder: () -> Unit,
-    /** False while an operation runs: readable settings, no mutation controls. */
-    interactive: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
@@ -79,12 +76,11 @@ internal fun SettingsScreen(
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SettingsAppearance(state = state, onIntent = onIntent, interactive = interactive)
-            SettingsPerformance(interactive = interactive)
+            SettingsAppearance(state = state, onIntent = onIntent)
+            SettingsPerformance()
             SettingsBackups(
                 state = state,
                 onPickBackupFolder = onPickBackupFolder,
-                interactive = interactive,
             )
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -116,7 +112,6 @@ internal fun SettingsScreen(
 private fun SettingsAppearance(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
-    interactive: Boolean,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -135,10 +130,9 @@ private fun SettingsAppearance(
             SettingRow(
                 label = stringResource(R.string.theme_label),
                 value = themeLabel(state.darkTheme),
-                enabled = interactive,
                 onClick = { onIntent(UiIntent.ToggleTheme) },
             )
-            LanguageSettingRow(state.language, onIntent, interactive)
+            LanguageSettingRow(state.language, onIntent)
         }
     }
 }
@@ -147,19 +141,14 @@ private fun SettingsAppearance(
 private fun LanguageSettingRow(
     language: AppLanguage,
     onIntent: (UiIntent) -> Unit,
-    interactive: Boolean,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    LaunchedEffect(interactive) {
-        if (!interactive) expanded = false
-    }
     // DropdownMenu positions against the nearest parent layout bounds; wrap the
     // SettingRow so the popup anchors to the row, not the surrounding Column.
     Box(modifier = Modifier.fillMaxWidth()) {
         SettingRow(
             label = stringResource(R.string.language_label),
             value = languageName(language),
-            enabled = interactive,
             onClick = { expanded = true },
         )
         DropdownMenu(
@@ -181,7 +170,6 @@ private fun LanguageSettingRow(
                         expanded = false
                         onIntent(UiIntent.SetLanguage(option))
                     },
-                    enabled = interactive,
                     modifier = Modifier.heightIn(min = 48.dp),
                     trailingIcon = if (option == language) {
                         {
@@ -201,15 +189,14 @@ private fun LanguageSettingRow(
 }
 
 @Composable
-private fun SettingsPerformance(interactive: Boolean) {
-    PerformanceSettingsSection(enabled = interactive)
+private fun SettingsPerformance() {
+    PerformanceSettingsSection()
 }
 
 @Composable
 private fun SettingsBackups(
     state: AppUiState,
     onPickBackupFolder: () -> Unit,
-    interactive: Boolean,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -249,7 +236,6 @@ private fun SettingsBackups(
                     else R.string.diagnostics_change_folder,
                 ),
                 value = "",
-                enabled = interactive,
                 onClick = onPickBackupFolder,
             )
         }

@@ -1530,6 +1530,8 @@ data class AppUiState(
      * cancel the deferred folder re-read or the demand itself.
      */
     val deferredImportFolderPick: WindowsImportKind? = null,
+    /** Image row waiting for its own XML file; survives leaving the Ventoy screen. */
+    val windowsLinkTargetImage: String? = null,
     /** Absolute image paths ticked in the XML section before one explicit bind. */
     val windowsSelectedImages: List<String> = emptyList(),
     /** Existing auto_install bindings; null = not loaded. */
@@ -1776,14 +1778,18 @@ data class AppUiState(
         get() = ventoyStoreState is VentoyReleaseStoreState.Absent ||
             ventoyStoreState is VentoyReleaseStoreState.Verified
 
-    val actionsEnabled: Boolean
+    /** Attachment physically usable: present, not ejecting or ejected. */
+    val deviceReady: Boolean
+        get() = presence == DevicePresence.Ready && !ejectInFlight && !ejected
+
+    /** One serialized disk operation owns the attachment; local UI work stays allowed. */
+    val deviceBusy: Boolean
         get() =
-            presence == DevicePresence.Ready &&
-                !ejectInFlight &&
-                !ejected &&
-                operation?.state != OperationState.Running &&
-                operation?.state != OperationState.Queued &&
-                pendingConfirmation == null
+            operation?.state == OperationState.Running ||
+                operation?.state == OperationState.Queued
+
+    val actionsEnabled: Boolean
+        get() = deviceReady && !deviceBusy && pendingConfirmation == null
 
     val isRunning: Boolean
         get() = operation?.state == OperationState.Running

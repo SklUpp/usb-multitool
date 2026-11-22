@@ -186,9 +186,7 @@ private fun isGptBackupName(name: String): Boolean =
     name.startsWith("gpt-critical-", ignoreCase = true) &&
         name.endsWith(".bin", ignoreCase = true)
 
-/** Error text may quote a SAF URI; user-facing status must show the canonical path only. */
-private fun sanitizedProviderText(message: String): String =
-    Regex("content://\\S+").replace(message) { usb.ui.normalizedRestorePath(it.value) }
+
 
 /** Durable high-water storage; allocation itself is serialized in [WindowsImportRequestCodes]. */
 private class SharedPreferencesRequestCodeStorage(
@@ -2321,7 +2319,7 @@ class MainViewModel(
                         uri = target,
                         name = name,
                         sizeBytes = size,
-                        error = sanitizedProviderText(
+                        error = usb.ui.normalizeProviderText(
                             failure.message ?: failure.javaClass.simpleName,
                         ),
                     )
@@ -2517,7 +2515,7 @@ class MainViewModel(
                                 )
                             } catch (failure: Throwable) {
                                 rejections += "${candidate.name}: " +
-                                    sanitizedProviderText(
+                                    usb.ui.normalizeProviderText(
                                         failure.message ?: failure.javaClass.simpleName,
                                     )
                                 continue
@@ -2592,7 +2590,7 @@ class MainViewModel(
                     }
                 }
             } catch (failure: Throwable) {
-                failureMessage = sanitizedProviderText(
+                failureMessage = usb.ui.normalizeProviderText(
                     failure.message ?: failure.javaClass.simpleName,
                 )
             }

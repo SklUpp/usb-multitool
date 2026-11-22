@@ -1,12 +1,11 @@
 package usb.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
@@ -28,7 +27,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
@@ -54,7 +56,6 @@ import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextField
@@ -250,7 +251,7 @@ fun FilesScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 EmptyHint(stringResource(R.string.files_no_partitions_hint))
-                FilledTonalButton(
+                Button(
                     onClick = { onIntent(UiIntent.SelectTab(ShellTab.Partitions)) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -930,7 +931,7 @@ private fun FilesPickScreen(
                         }
                         (copying.errorMessage ?: copying.resultMessage)?.let { message ->
                             Text(
-                                text = message,
+                                text = normalizeProviderText(message),
                                 style = MaterialTheme.typography.bodySmall,
                                 color =
                                     if (failed) {
@@ -992,7 +993,8 @@ private fun FilesPickScreen(
             when {
                 pickListingState == FilesListingState.Failed.name -> item(key = "pick-error") {
                     Text(
-                        text = pickError ?: stringResource(R.string.import_folder_read_failed),
+                        text = pickError?.let(::normalizeProviderText)
+                            ?: stringResource(R.string.import_folder_read_failed),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
@@ -1047,7 +1049,7 @@ private fun FilesPickScreen(
                         FilesPickRow(
                             entry = entry,
                             isSelected = picked != null && selectedPickEntry != null,
-                            actionsEnabled = canAct && !state.isRunning,
+                            actionsEnabled = canAct && !state.deviceBusy,
                             allowLongPress = mode.target != FilesPickTarget.Folder,
                             onToggleSelect = {
                                 val live = entries.firstOrNull { it.name == entry.name } ?: return@FilesPickRow
@@ -1204,7 +1206,7 @@ private fun FolderCard(
     }
     val rowsState = state.filesListingState.name
     val rowsError = state.filesError
-    val locked = state.isRunning
+    val locked = state.deviceBusy
     Column(modifier = modifier.fillMaxSize()) {
         if (selection.entries.isNotEmpty()) {
             Row(
@@ -1278,8 +1280,16 @@ private fun FolderCard(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     )
                 }
+                if (state.deviceBusy) {
+                    item(key = "busy") {
+                        EmptyHint(
+                            UiMessage.Key(UiMessageKey.WaitForOperation).localized(),
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                }
                 when {
-                    !state.actionsEnabled -> item(key = "presence") {
+                    !state.deviceReady -> item(key = "presence") {
                         EmptyHint(
                             UiReducer.presenceMessage(state.presence).localized(),
                             modifier = Modifier.padding(16.dp),
@@ -1298,7 +1308,8 @@ private fun FolderCard(
                     }
                     rowsState == FilesListingState.Failed.name -> item(key = "error") {
                         EmptyHint(
-                            rowsError ?: stringResource(R.string.import_folder_read_failed),
+                            rowsError?.let(::normalizeProviderText)
+                                ?: stringResource(R.string.import_folder_read_failed),
                             modifier = Modifier.padding(16.dp),
                         )
                     }
@@ -1366,6 +1377,7 @@ private fun FolderSubblock(
     val newFolderDescription = stringResource(R.string.files_create_folder)
     val searchDescription = stringResource(R.string.files_filter_hint)
     val clearSearchDescription = stringResource(R.string.files_search_clear)
+    val closeSearchDescription = stringResource(R.string.files_search_close)
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -1385,19 +1397,30 @@ private fun FolderSubblock(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val fullWidth = maxWidth
+            // The field grows leftwards from the 48 dp search button and shrinks back into
+            // a circle; breadcrumb/action chrome waits until the collapse finishes.
+            val searchWidth by animateDpAsState(
+                targetValue = if (searchOpen) fullWidth else 48.dp,
+                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                label = "files-search-width",
+            )
+            val searchProgress by animateFloatAsState(
+                targetValue = if (searchOpen) 1f else 0f,
+                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                label = "files-search-progress",
+            )
+            val collapsed = !searchOpen && searchProgress < 0.01f
+            val searchShape = RoundedCornerShape(24.dp + (12.dp - 24.dp) * searchProgress)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterEnd,
-                ) {
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = !searchOpen,
-                        enter = fadeIn(),
-                        exit = fadeOut(),
+                if (collapsed) {
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterEnd,
                     ) {
                         FolderBreadcrumbs(
                             path = path,
@@ -1408,69 +1431,80 @@ private fun FolderSubblock(
                                 .semantics { contentDescription = pathA11y },
                         )
                     }
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = searchOpen,
-                        enter = slideInHorizontally(tween(180)) { it } + fadeIn(),
-                        exit = slideOutHorizontally(tween(160)) { it } + fadeOut(),
-                    ) {
-                        OutlinedTextField(
-                            value = filter,
-                            onValueChange = onFilterChange,
-                            singleLine = true,
-                            trailingIcon = if (filter.isNotEmpty()) {
-                                {
-                                    IconButton(
-                                        onClick = { onFilterChange("") },
-                                        modifier = Modifier.semantics {
-                                            contentDescription = clearSearchDescription
-                                        },
-                                    ) { GlyphIcon(Glyph.Close, size = 18.dp) }
-                                }
-                            } else {
-                                null
-                            },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    FolderActionButton(
+                        glyph = Glyph.Search,
+                        description = searchDescription,
+                        // Local filter over the current snapshot: no stick work involved.
+                        enabled = true,
+                        onClick = onSearchToggle,
+                    )
+                    if (isLoading) {
+                        IconButton(
+                            onClick = onRefresh,
+                            enabled = canAct,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(focusRequester),
+                                .size(48.dp)
+                                .semantics { contentDescription = refreshDescription },
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    } else {
+                        FolderActionButton(
+                            glyph = Glyph.Refresh,
+                            description = refreshDescription,
+                            enabled = canAct,
+                            onClick = onRefresh,
                         )
                     }
-                }
-                FolderActionButton(
-                    glyph = Glyph.Search,
-                    description = searchDescription,
-                    enabled = canAct,
-                    onClick = onSearchToggle,
-                    tint = if (searchOpen) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        LocalContentColor.current
-                    },
-                )
-                if (isLoading) {
-                    IconButton(
-                        onClick = onRefresh,
-                        enabled = canAct,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .semantics { contentDescription = refreshDescription },
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                    }
-                } else {
                     FolderActionButton(
-                        glyph = Glyph.Refresh,
-                        description = refreshDescription,
-                        enabled = canAct,
-                        onClick = onRefresh,
+                        glyph = Glyph.FolderPlus,
+                        description = newFolderDescription,
+                        enabled = canWrite,
+                        onClick = onNewFolder,
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = filter,
+                        onValueChange = onFilterChange,
+                        singleLine = true,
+                        placeholder = {
+                            Text(
+                                text = searchDescription,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    if (filter.isEmpty()) {
+                                        onSearchToggle()
+                                    } else {
+                                        onFilterChange("")
+                                    }
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription = if (filter.isEmpty()) {
+                                        closeSearchDescription
+                                    } else {
+                                        clearSearchDescription
+                                    }
+                                },
+                            ) { GlyphIcon(Glyph.Close, size = 18.dp) }
+                        },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        shape = searchShape,
+                        modifier = Modifier
+                            .width(searchWidth)
+                            .height(48.dp)
+                            .clip(searchShape)
+                            .focusRequester(focusRequester),
                     )
                 }
-                FolderActionButton(
-                    glyph = Glyph.FolderPlus,
-                    description = newFolderDescription,
-                    enabled = canWrite,
-                    onClick = onNewFolder,
-                )
             }
         }
     }

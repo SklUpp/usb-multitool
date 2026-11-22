@@ -289,7 +289,7 @@ fun AppShell(
         var lastWorkTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         var operationOriginTab by rememberSaveable { mutableStateOf<String?>(null) }
         var operationOriginToken by rememberSaveable { mutableStateOf<String?>(null) }
-        val operationLocked = state.isRunning || state.operation?.state == OperationState.Queued
+        val operationLocked = state.deviceBusy
         val operationToken = state.operation?.token?.toString()
         LaunchedEffect(state.tab) {
             if (state.tab == ShellTab.Files || state.tab == ShellTab.Ventoy ||
@@ -766,7 +766,6 @@ fun AppShell(
                                         )
                                     },
                                     onPickBackupFolder = onPickBackupFolder,
-                                    interactive = !operationLocked,
                                 )
                             }
                         }
@@ -1080,7 +1079,7 @@ private fun DeviceHeader(
     onOpenLog: () -> Unit,
 ) {
     val device = state.device
-    val operationLocked = state.isRunning || state.operation?.state == OperationState.Queued
+    val operationLocked = state.deviceBusy
     val subtitle = when (state.presence) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
@@ -1365,10 +1364,11 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
     }
     // Terminal outcome (error, read-scan summary or result); it must outlive the
     // operation, so it cannot be a snackbar.
-    val result = op.errorMessage
+    val result = (op.errorMessage
         ?: op.smartResult?.let { smartSummary(it) }
         ?: op.readScanResult?.let { readScanSummary(it) }
-        ?: op.resultMessage
+        ?: op.resultMessage)
+        ?.let(::normalizeProviderText)
     val tone = when {
         op.state == OperationState.Failed || op.errorMessage != null -> StatusTone.Error
         op.state == OperationState.Partial -> StatusTone.Warning

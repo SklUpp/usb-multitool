@@ -345,6 +345,8 @@ sealed class UiIntent {
     /** Add or remove one data-partition image from the pending XML selection. */
     data class ToggleWindowsImage(val path: String) : UiIntent()
     data object ClearWindowsSelection : UiIntent()
+    /** Pin the image row whose XML pick is in flight; state survives the tab switch. */
+    data class SetWindowsLinkTarget(val image: String?) : UiIntent()
     /**
      * Consume the already-confirmed shared Files pick for [FilesPickPurpose.WindowsTemplate].
      * Takes no path: the reducer atomically reads and clears
@@ -1849,6 +1851,8 @@ object UiReducer {
                             },
                         windowsSelectedImages =
                             if (keepVentoy) state.windowsSelectedImages else emptyList(),
+                        windowsLinkTargetImage =
+                            if (keepVentoy) state.windowsLinkTargetImage else null,
                         windowsTemplatePath =
                             if (templatePinValid) state.windowsTemplatePath else null,
                         windowsImageLinks =
@@ -3305,6 +3309,15 @@ object UiReducer {
 
             UiIntent.ClearWindowsSelection ->
                 ReduceResult(state.copy(windowsSelectedImages = emptyList()))
+
+            is UiIntent.SetWindowsLinkTarget ->
+                ReduceResult(
+                    state.copy(
+                        windowsLinkTargetImage = intent.image
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() },
+                    ),
+                )
 
             UiIntent.SelectWindowsTemplate -> {
                 // Atomic consume: the only accepted provenance is the reducer-held confirmed

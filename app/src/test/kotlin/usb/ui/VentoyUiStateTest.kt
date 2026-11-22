@@ -269,6 +269,27 @@ class VentoyUiStateTest {
     }
 
     @Test
+    fun linkTargetIsScopedToAttachment() {
+        val pinned = UiReducer.reduce(
+            withVentoy(),
+            UiIntent.SetWindowsLinkTarget("  $pathA  "),
+        ).state
+        assertEquals(pathA, pinned.windowsLinkTargetImage)
+
+        val blank = UiReducer.reduce(
+            pinned,
+            UiIntent.SetWindowsLinkTarget("   "),
+        ).state
+        assertNull(blank.windowsLinkTargetImage)
+
+        val nowPinned = UiReducer.reduce(
+            UiReducer.reduce(blank, UiIntent.SetWindowsLinkTarget(pathB)).state,
+            UiIntent.DeviceChanged(DevicePresence.Disconnected),
+        ).state
+        assertNull(nowPinned.windowsLinkTargetImage)
+    }
+
+    @Test
     fun requestBindUsesSelectedPaths() {
         val selected = withVentoy().copy(windowsSelectedImages = listOf(pathA, pathB))
         val result = UiReducer.reduce(

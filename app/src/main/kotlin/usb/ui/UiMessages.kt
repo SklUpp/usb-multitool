@@ -12,14 +12,17 @@ import usb.fs.FormatCatalog
 import usb.multitool.R
 import usb.ventoy.AutounattendProblem
 
-private val providerUriPattern = Regex("content://\\S+")
+private val providerUriPattern = Regex("content://[^\\s,;)\\]]+")
+
+/** Replace outgoing SAF URIs with the canonical display path. */
+fun normalizeProviderText(text: String): String =
+    providerUriPattern.replace(text) { normalizedRestorePath(it.value) }
 
 /** Localized text for authored reducer/status messages. Raw errors never expose SAF URIs. */
 @Composable
 fun UiMessage.localized(): String =
     when (this) {
-        is UiMessage.Raw ->
-            providerUriPattern.replace(text) { normalizedRestorePath(it.value) }
+        is UiMessage.Raw -> normalizeProviderText(text)
         is UiMessage.ReadScan -> readScanSummary(outcome)
         is UiMessage.Smart -> smartSummary(outcome)
 
@@ -31,7 +34,11 @@ fun UiMessage.localized(): String =
             }
             stringResource(R.string.msg_target_layout_invalid, detail.toString())
         }
-        is UiMessage.Key -> when (key) {
+        is UiMessage.Key -> {
+            val safeArgs = args.map { arg ->
+                if (arg is String) normalizeProviderText(arg) else arg
+            }
+            when (key) {
             UiMessageKey.NoDevice -> stringResource(R.string.msg_no_device)
             UiMessageKey.PermissionRequired -> stringResource(R.string.msg_permission_required)
             UiMessageKey.DeviceBusy -> stringResource(R.string.msg_device_busy)
@@ -39,7 +46,7 @@ fun UiMessage.localized(): String =
             UiMessageKey.Ready -> stringResource(R.string.msg_ready)
             UiMessageKey.WaitForOperation -> stringResource(R.string.msg_wait_for_operation)
             UiMessageKey.FormatUnsupported ->
-                stringResource(R.string.msg_format_unsupported, *args.toTypedArray())
+                stringResource(R.string.msg_format_unsupported, *safeArgs.toTypedArray())
             UiMessageKey.InvalidFreeRegion -> stringResource(R.string.msg_invalid_free_region)
             UiMessageKey.RawRangeInvalid -> stringResource(R.string.msg_raw_range_invalid)
             UiMessageKey.NoIsoForLink -> stringResource(R.string.msg_no_iso_for_link)
@@ -47,13 +54,13 @@ fun UiMessage.localized(): String =
             UiMessageKey.LinkMismatch -> stringResource(R.string.msg_link_mismatch)
             UiMessageKey.LinkOverwriteNeeded -> stringResource(R.string.msg_link_overwrite_needed)
             UiMessageKey.EfiPartitionMissing ->
-                stringResource(R.string.msg_efi_partition_missing, *args.toTypedArray())
+                stringResource(R.string.msg_efi_partition_missing, *safeArgs.toTypedArray())
             UiMessageKey.EfiGeometryUnknown -> stringResource(R.string.msg_efi_geometry_unknown)
             UiMessageKey.StagingFile ->
-                stringResource(R.string.msg_staging_file, *args.toTypedArray())
+                stringResource(R.string.msg_staging_file, *safeArgs.toTypedArray())
             UiMessageKey.CannotChangeStaged -> stringResource(R.string.msg_cannot_change_staged)
             UiMessageKey.StagedImageReady ->
-                stringResource(R.string.msg_staged_image_ready, *args.toTypedArray())
+                stringResource(R.string.msg_staged_image_ready, *safeArgs.toTypedArray())
             UiMessageKey.CannotClearStaged -> stringResource(R.string.msg_cannot_clear_staged)
             UiMessageKey.StagedCleared -> stringResource(R.string.msg_staged_cleared)
             UiMessageKey.OperationInProgress -> stringResource(R.string.msg_operation_in_progress)
@@ -65,7 +72,7 @@ fun UiMessage.localized(): String =
             UiMessageKey.SelectFileToDownload -> stringResource(R.string.msg_select_file_to_download)
             UiMessageKey.SelectPartitionFirst -> stringResource(R.string.msg_select_partition_first)
             UiMessageKey.ReadOnlyPartition ->
-                stringResource(R.string.msg_read_only_partition, *args.toTypedArray())
+                stringResource(R.string.msg_read_only_partition, *safeArgs.toTypedArray())
             UiMessageKey.SelectedFileMissing -> stringResource(R.string.msg_selected_file_missing)
             UiMessageKey.FilesPickActive -> stringResource(R.string.msg_files_pick_active)
             UiMessageKey.FilesPickTargetInvalid ->
@@ -88,21 +95,21 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_import_picker_unavailable)
             UiMessageKey.ImageCleared -> stringResource(R.string.msg_image_cleared)
             UiMessageKey.ImageReady ->
-                stringResource(R.string.msg_image_ready, *args.toTypedArray())
-            UiMessageKey.WritingXml -> stringResource(R.string.msg_writing_xml, *args.toTypedArray())
+                stringResource(R.string.msg_image_ready, *safeArgs.toTypedArray())
+            UiMessageKey.WritingXml -> stringResource(R.string.msg_writing_xml, *safeArgs.toTypedArray())
             UiMessageKey.BackupCleared -> stringResource(R.string.msg_backup_cleared)
-            UiMessageKey.BackupReady -> stringResource(R.string.msg_backup_ready, *args.toTypedArray())
+            UiMessageKey.BackupReady -> stringResource(R.string.msg_backup_ready, *safeArgs.toTypedArray())
             UiMessageKey.RescueImageCleared -> stringResource(R.string.msg_rescue_image_cleared)
             UiMessageKey.RescueImageReady ->
-                stringResource(R.string.msg_rescue_image_ready, *args.toTypedArray())
+                stringResource(R.string.msg_rescue_image_ready, *safeArgs.toTypedArray())
             UiMessageKey.RescueMapCleared -> stringResource(R.string.msg_rescue_map_cleared)
             UiMessageKey.RescueMapReady ->
-                stringResource(R.string.msg_rescue_map_ready, *args.toTypedArray())
+                stringResource(R.string.msg_rescue_map_ready, *safeArgs.toTypedArray())
             UiMessageKey.ChooseGptBackup -> stringResource(R.string.msg_choose_gpt_backup)
             UiMessageKey.ChooseRescueFiles -> stringResource(R.string.msg_choose_rescue_files)
             UiMessageKey.ChooseBackupFolder -> stringResource(R.string.msg_choose_backup_folder)
             UiMessageKey.BackupFolderReady ->
-                stringResource(R.string.msg_backup_folder_ready, *args.toTypedArray())
+                stringResource(R.string.msg_backup_folder_ready, *safeArgs.toTypedArray())
             UiMessageKey.BackupFolderPermissionLost ->
                 stringResource(R.string.msg_backup_folder_permission_lost)
             UiMessageKey.BackupFolderTargetChanged ->
@@ -116,32 +123,32 @@ fun UiMessage.localized(): String =
             UiMessageKey.ArchiveMissingImage -> stringResource(R.string.msg_archive_missing_image)
             UiMessageKey.ArchiveMissingMap -> stringResource(R.string.msg_archive_missing_map)
             UiMessageKey.ArchiveMultipleImages ->
-                stringResource(R.string.msg_archive_multiple_images, *args.toTypedArray())
+                stringResource(R.string.msg_archive_multiple_images, *safeArgs.toTypedArray())
             UiMessageKey.ArchiveUnexpectedFiles ->
-                stringResource(R.string.msg_archive_unexpected_files, *args.toTypedArray())
+                stringResource(R.string.msg_archive_unexpected_files, *safeArgs.toTypedArray())
             UiMessageKey.ArchiveUnreadable ->
-                stringResource(R.string.msg_archive_unreadable, *args.toTypedArray())
+                stringResource(R.string.msg_archive_unreadable, *safeArgs.toTypedArray())
             UiMessageKey.SourceInspectionRejected ->
-                stringResource(R.string.msg_source_inspection_rejected, *args.toTypedArray())
+                stringResource(R.string.msg_source_inspection_rejected, *safeArgs.toTypedArray())
             UiMessageKey.RescueMapSectorSizeMismatch ->
-                stringResource(R.string.msg_rescue_map_sector_size_mismatch, *args.toTypedArray())
+                stringResource(R.string.msg_rescue_map_sector_size_mismatch, *safeArgs.toTypedArray())
             UiMessageKey.RescueMapSectorSizeUnknown ->
                 stringResource(R.string.msg_rescue_map_sector_size_unknown)
             UiMessageKey.RescueMapDiskTooSmall ->
-                stringResource(R.string.msg_rescue_map_disk_too_small, *args.toTypedArray())
+                stringResource(R.string.msg_rescue_map_disk_too_small, *safeArgs.toTypedArray())
             UiMessageKey.RescueMapImageTooShort ->
                 stringResource(
                     R.string.msg_rescue_map_image_too_short,
-                    *args.toTypedArray(),
+                    *safeArgs.toTypedArray(),
                 )
             UiMessageKey.RescueMapImageGeometryOverflow ->
                 stringResource(R.string.msg_rescue_map_image_geometry_overflow)
             UiMessageKey.RescueMapPartialCopy ->
-                stringResource(R.string.msg_rescue_map_partial_copy, *args.toTypedArray())
+                stringResource(R.string.msg_rescue_map_partial_copy, *safeArgs.toTypedArray())
             UiMessageKey.GptBackupSectorSizeMismatch ->
-                stringResource(R.string.msg_gpt_backup_sector_size_mismatch, *args.toTypedArray())
+                stringResource(R.string.msg_gpt_backup_sector_size_mismatch, *safeArgs.toTypedArray())
             UiMessageKey.GptBackupDiskMismatch ->
-                stringResource(R.string.msg_gpt_backup_disk_mismatch, *args.toTypedArray())
+                stringResource(R.string.msg_gpt_backup_disk_mismatch, *safeArgs.toTypedArray())
             UiMessageKey.SelectImageFirst -> stringResource(R.string.msg_select_image_first)
             UiMessageKey.CorruptTableCreate -> stringResource(R.string.msg_corrupt_table_create)
             UiMessageKey.VentoyStoreUnavailable ->
@@ -149,42 +156,42 @@ fun UiMessage.localized(): String =
             UiMessageKey.Probing -> stringResource(R.string.msg_probing)
             UiMessageKey.NoPartitionsFound -> stringResource(R.string.msg_no_partitions_found)
             UiMessageKey.ProbeCancelled -> stringResource(R.string.msg_probe_cancelled)
-            UiMessageKey.ProbeFailed -> stringResource(R.string.msg_probe_failed, *args.toTypedArray())
-            UiMessageKey.SavedFile -> stringResource(R.string.msg_saved_file, *args.toTypedArray())
+            UiMessageKey.ProbeFailed -> stringResource(R.string.msg_probe_failed, *safeArgs.toTypedArray())
+            UiMessageKey.SavedFile -> stringResource(R.string.msg_saved_file, *safeArgs.toTypedArray())
             UiMessageKey.UploadCleanupFailed ->
-                stringResource(R.string.msg_upload_cleanup_failed, *args.toTypedArray())
+                stringResource(R.string.msg_upload_cleanup_failed, *safeArgs.toTypedArray())
             UiMessageKey.StagingLeftovers ->
-                stringResource(R.string.msg_staging_leftovers, *args.toTypedArray())
+                stringResource(R.string.msg_staging_leftovers, *safeArgs.toTypedArray())
             UiMessageKey.StaleStagedImage -> stringResource(R.string.msg_stale_staged_image)
             UiMessageKey.CannotDeleteStaging ->
-                stringResource(R.string.msg_cannot_delete_staging, *args.toTypedArray())
+                stringResource(R.string.msg_cannot_delete_staging, *safeArgs.toTypedArray())
             UiMessageKey.CannotStage -> stringResource(R.string.msg_cannot_stage)
             UiMessageKey.CannotReadUsb ->
-                stringResource(R.string.msg_cannot_read_usb, *args.toTypedArray())
+                stringResource(R.string.msg_cannot_read_usb, *safeArgs.toTypedArray())
             UiMessageKey.CannotReadPartitionTable ->
-                stringResource(R.string.msg_cannot_read_partition_table, *args.toTypedArray())
+                stringResource(R.string.msg_cannot_read_partition_table, *safeArgs.toTypedArray())
             UiMessageKey.FolderListChanged -> stringResource(R.string.msg_folder_list_changed)
             UiMessageKey.CreatedFolder ->
-                stringResource(R.string.msg_created_folder, *args.toTypedArray())
-            UiMessageKey.DeletedPath -> stringResource(R.string.msg_deleted_path, *args.toTypedArray())
-            UiMessageKey.UploadedFile -> stringResource(R.string.msg_uploaded_file, *args.toTypedArray())
+                stringResource(R.string.msg_created_folder, *safeArgs.toTypedArray())
+            UiMessageKey.DeletedPath -> stringResource(R.string.msg_deleted_path, *safeArgs.toTypedArray())
+            UiMessageKey.UploadedFile -> stringResource(R.string.msg_uploaded_file, *safeArgs.toTypedArray())
             UiMessageKey.CannotOpenUsb ->
-                stringResource(R.string.msg_cannot_open_usb, *args.toTypedArray())
+                stringResource(R.string.msg_cannot_open_usb, *safeArgs.toTypedArray())
             UiMessageKey.VolumeSyncUnconfirmed ->
-                stringResource(R.string.msg_volume_sync_unconfirmed, *args.toTypedArray())
+                stringResource(R.string.msg_volume_sync_unconfirmed, *safeArgs.toTypedArray())
             UiMessageKey.EjectSucceeded ->
-                stringResource(R.string.msg_eject_succeeded, *args.toTypedArray())
+                stringResource(R.string.msg_eject_succeeded, *safeArgs.toTypedArray())
             UiMessageKey.EjectStarted -> stringResource(R.string.msg_eject_started)
             UiMessageKey.EjectBusy -> stringResource(R.string.msg_eject_busy)
             UiMessageKey.EjectStale -> stringResource(R.string.msg_eject_stale)
             UiMessageKey.EjectRescanRequired ->
                 stringResource(R.string.msg_eject_rescan_required)
             UiMessageKey.DeleteStagingFailed ->
-                stringResource(R.string.msg_delete_staging_failed, *args.toTypedArray())
+                stringResource(R.string.msg_delete_staging_failed, *safeArgs.toTypedArray())
             UiMessageKey.InvalidEntryName -> stringResource(R.string.msg_invalid_entry_name)
             UiMessageKey.RenameSameName -> stringResource(R.string.msg_rename_same_name)
             UiMessageKey.RenamedPath ->
-                stringResource(R.string.msg_renamed_path, *args.toTypedArray())
+                stringResource(R.string.msg_renamed_path, *safeArgs.toTypedArray())
             UiMessageKey.TargetChanged -> stringResource(R.string.msg_target_changed)
             UiMessageKey.TableDamaged -> stringResource(R.string.msg_table_damaged)
             UiMessageKey.PartitionGeometryUnknown ->
@@ -195,11 +202,11 @@ fun UiMessage.localized(): String =
             UiMessageKey.PartitionNameUnsupported ->
                 stringResource(R.string.msg_partition_name_unsupported)
             UiMessageKey.InvalidPartitionName ->
-                stringResource(R.string.msg_invalid_partition_name, *args.toTypedArray())
+                stringResource(R.string.msg_invalid_partition_name, *safeArgs.toTypedArray())
             UiMessageKey.InvalidVolumeLabel ->
-                stringResource(R.string.msg_invalid_volume_label, *args.toTypedArray())
+                stringResource(R.string.msg_invalid_volume_label, *safeArgs.toTypedArray())
             UiMessageKey.VolumeLabelUnsupported ->
-                stringResource(R.string.msg_volume_label_unsupported, *args.toTypedArray())
+                stringResource(R.string.msg_volume_label_unsupported, *safeArgs.toTypedArray())
             UiMessageKey.FilesystemUnknown -> stringResource(R.string.msg_filesystem_unknown)
             UiMessageKey.SchemeAlreadyCurrent ->
                 stringResource(R.string.msg_scheme_already_current)
@@ -230,6 +237,7 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_settings_source_stale)
             UiMessageKey.SettingsSourceUnavailable ->
                 stringResource(R.string.msg_settings_source_unavailable)
+            }
         }
     }
 
@@ -774,7 +782,9 @@ fun rescueMapInspectionLines(inspection: RescueMapInspection?): List<String> {
     val unavailable = stringResource(R.string.diagnostics_inspection_unavailable)
     if (inspection == null) return listOf(unavailable)
     inspection.error?.let {
-        return listOf(stringResource(R.string.diagnostics_inspection_failed, it))
+        return listOf(
+            stringResource(R.string.diagnostics_inspection_failed, normalizeProviderText(it)),
+        )
     }
     val summary = inspection.summary ?: return listOf(unavailable)
     val lines = mutableListOf(
@@ -806,7 +816,9 @@ fun gptBackupInspectionLines(inspection: GptBackupInspection?): List<String> {
     val unavailable = stringResource(R.string.diagnostics_inspection_unavailable)
     if (inspection == null) return listOf(unavailable)
     inspection.error?.let {
-        return listOf(stringResource(R.string.diagnostics_inspection_failed, it))
+        return listOf(
+            stringResource(R.string.diagnostics_inspection_failed, normalizeProviderText(it)),
+        )
     }
     val summary = inspection.summary ?: return listOf(unavailable)
     val lines = mutableListOf(
