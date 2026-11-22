@@ -830,6 +830,9 @@
     <string name="unattend_add_image">Добавить образ</string>
     <string name="unattend_xml_not_selected">XML не выбран</string>
     <string name="unattend_show_all">Показать все</string>
+    <string name="unattend_collapse">Свернуть</string>
+    <string name="unattend_xml_name">Имя XML-файла</string>
+    <string name="unattend_xml_name_invalid">Имя файла должно быть непустым именем .xml без / и ..</string>
     <string name="unattend_unlink">Удалить привязки образов</string>
     <string name="unattend_unlink_confirm">Удалить выбранные привязки образов? Файлы останутся на флешке.</string>
     <string name="unattend_custom_value">Своё значение</string>
