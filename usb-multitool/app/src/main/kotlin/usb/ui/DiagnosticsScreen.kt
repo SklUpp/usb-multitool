@@ -50,6 +50,7 @@ fun DiagnosticsScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickBackup: () -> Unit = {},
+    onPickBackupFolder: () -> Unit = {},
     onOpenBackupSettings: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
@@ -224,6 +225,17 @@ fun DiagnosticsScreen(
                                 modifier = Modifier.weight(1f),
                             )
                             TextButton(
+                                onClick = onPickBackupFolder,
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = stringResource(R.string.diagnostics_backup_choose_folder),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                            }
+                            TextButton(
                                 onClick = onOpenBackupSettings,
                                 modifier = Modifier.heightIn(min = 48.dp),
                             ) {
@@ -276,6 +288,21 @@ fun DiagnosticsScreen(
                     )
                 }
             }
+            if (state.rescueImageUri != null || state.rescueMapUri != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.diagnostics_restore_files_title),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
             if (state.rescueImageUri != null) {
                 Text(
                     text = stringResource(
@@ -341,6 +368,9 @@ fun DiagnosticsScreen(
                 GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.diagnostics_restore_image))
+            }
+                    }
+                }
             }
 
             SubsectionHeader(

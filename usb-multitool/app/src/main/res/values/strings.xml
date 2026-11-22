@@ -157,6 +157,7 @@
     <string name="diagnostics_backups_subtitle">Read-only. Files stay in the app folder.</string>
     <string name="diagnostics_backup_folder">Backup folder</string>
     <string name="diagnostics_backup_folder_none">Not selected</string>
+    <string name="diagnostics_backup_choose_folder">Choose folder</string>
     <string name="diagnostics_pick_folder">Choose folder…</string>
     <string name="diagnostics_change_folder">Change…</string>
     <string name="diagnostics_create_image">Create</string>
@@ -436,6 +437,7 @@
     <string name="diagnostics_gpt_valid">Headers, entry CRCs and partition bounds validate.</string>
     <string name="diagnostics_pick_image_folder">Choose folder</string>
     <string name="diagnostics_restore_image">Restore image</string>
+    <string name="diagnostics_restore_files_title">Selected restore files</string>
     <string name="diagnostics_restore_map_missing">No rescue map (.map) found in the selected folder</string>
     <string name="diagnostics_no_gpt_file">No GPT file selected</string>
     <string name="diagnostics_pick_gpt_file">Choose file</string>
@@ -737,8 +739,8 @@
     <string name="settings_file_label">File</string>
     <string name="settings_not_loaded">Global settings have not been read yet.</string>
     <string name="settings_applies_note">Edits are staged. Update writes them into the selected file in place; a confirmed Ventoy install or update writes the standard file. Unknown JSON sections are preserved.</string>
-    <string name="settings_win11_hint">1 bypasses the Windows 11 hardware checks (TPM, RAM, Secure Boot, CPU); 0 requires them; remove leaves Ventoy\'s default.</string>
-    <string name="settings_win11_nro_hint">1 skips the Windows 11 online-account requirement and allows a local account; 0 requires a Microsoft account; remove leaves Ventoy\'s default.</string>
+    <string name="settings_win11_hint">Bypasses the Windows 11 hardware checks (TPM, RAM, Secure Boot, CPU). Enabled by default in Ventoy; turn it off to require the checks.</string>
+    <string name="settings_win11_nro_hint">Allows a local Windows 11 account without a network connection. Enabled by default in Ventoy; turn it off to keep the Microsoft-account flow.</string>
     <string name="settings_win11_short">Hardware checks bypass</string>
     <string name="settings_win11_nro_short">Local account without network</string>
     <string name="settings_help_title">Global Ventoy settings</string>
@@ -768,6 +770,10 @@
     <string name="settings_current">Current: %1$s</string>
     <string name="settings_not_set">not set</string>
     <string name="settings_will_remove">will be removed</string>
+    <string name="settings_enabled">Enabled</string>
+    <string name="settings_disabled">Disabled</string>
+    <string name="settings_default_on">Default (enabled)</string>
+    <string name="settings_reset_default">Reset to default</string>
     <string name="settings_discard">Discard</string>
     <string name="settings_apply_now">Update the selected file</string>
     <string name="settings_retry_pending">Ventoy was installed or updated but these settings were not saved. The cause is shown above; retry below.</string>

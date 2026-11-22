@@ -157,6 +157,7 @@
     <string name="diagnostics_backups_subtitle">Только чтение; файлы остаются в папке приложения</string>
     <string name="diagnostics_backup_folder">Папка резервных копий</string>
     <string name="diagnostics_backup_folder_none">Не выбрана</string>
+    <string name="diagnostics_backup_choose_folder">Выбрать папку</string>
     <string name="diagnostics_pick_folder">Выбрать папку…</string>
     <string name="diagnostics_change_folder">Изменить…</string>
     <string name="diagnostics_create_image">Создать</string>
@@ -437,6 +438,7 @@
     <string name="diagnostics_gpt_valid">Заголовки, CRC таблиц и границы разделов проверены.</string>
     <string name="diagnostics_pick_image_folder">Выбрать папку</string>
     <string name="diagnostics_restore_image">Восстановить образ</string>
+    <string name="diagnostics_restore_files_title">Выбранные файлы восстановления</string>
     <string name="diagnostics_restore_map_missing">В выбранной папке нет карты восстановления (.map)</string>
     <string name="diagnostics_no_gpt_file">Файл GPT не выбран</string>
     <string name="diagnostics_pick_gpt_file">Выбрать файл</string>
@@ -738,8 +740,8 @@
     <string name="settings_file_label">Файл</string>
     <string name="settings_not_loaded">Глобальные настройки ещё не прочитаны.</string>
     <string name="settings_applies_note">Изменения подготовлены. «Обновить» записывает их в выбранный файл на месте; подтверждённая установка или обновление Ventoy записывает стандартный файл. Неизвестные разделы JSON сохраняются.</string>
-    <string name="settings_win11_hint">1 обходит аппаратные проверки Windows 11 (TPM, RAM, Secure Boot, CPU); 0 требует их; удаление оставляет значение Ventoy по умолчанию.</string>
-    <string name="settings_win11_nro_hint">1 пропускает требование онлайн-аккаунта Windows 11 и разрешает локальную учётную запись; 0 требует учётную запись Microsoft; удаление оставляет значение Ventoy по умолчанию.</string>
+    <string name="settings_win11_hint">Обходит аппаратные проверки Windows 11 (TPM, RAM, Secure Boot, CPU). В Ventoy включено по умолчанию; выключите, чтобы требовать проверки.</string>
+    <string name="settings_win11_nro_hint">Разрешает локальную учётную запись Windows 11 без сети. В Ventoy включено по умолчанию; выключите, чтобы сохранить сценарий с учётной записью Microsoft.</string>
     <string name="settings_win11_short">Обход аппаратных проверок</string>
     <string name="settings_win11_nro_short">Локальная запись без сети</string>
     <string name="settings_help_title">Глобальные настройки Ventoy</string>
@@ -769,6 +771,10 @@
     <string name="settings_current">Сейчас: %1$s</string>
     <string name="settings_not_set">не задано</string>
     <string name="settings_will_remove">будет удалено</string>
+    <string name="settings_enabled">Включено</string>
+    <string name="settings_disabled">Выключено</string>
+    <string name="settings_default_on">По умолчанию (включено)</string>
+    <string name="settings_reset_default">Сбросить по умолчанию</string>
     <string name="settings_discard">Отменить</string>
     <string name="settings_apply_now">Обновить выбранный файл</string>
     <string name="settings_retry_pending">Ventoy установлен или обновлён, но эти настройки не сохранены. Причина показана выше; повторите ниже.</string>

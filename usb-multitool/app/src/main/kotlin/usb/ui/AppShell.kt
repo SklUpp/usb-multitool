@@ -683,6 +683,7 @@ fun AppShell(
                                     onIntent = onIntent,
                                     modifier = Modifier.fillMaxSize(),
                                     onPickBackup = onPickBackup,
+                                    onPickBackupFolder = onPickBackupFolder,
                                     onStartRescueBackup = onStartRescueBackup,
                                     onCreateGptCopy = onCreateGptCopy,
                                     onPickRestoreFolder = onPickRestoreFolder,

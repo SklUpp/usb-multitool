@@ -1,20 +1,12 @@
 package usb.ui
 
 import usb.fs.FilesystemId
-import usb.fs.FilesystemUsage
-import usb.fs.FilesystemUsagePhase
 import usb.fs.FormatCatalog
 import usb.fs.VolumeLabel
 import usb.partition.PartitionName
 import usb.partition.TableScheme
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -66,21 +58,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -93,7 +82,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.offset
@@ -719,16 +707,6 @@ fun PartitionsScreen(
     val schemeBlocked = state.partitionTableAmbiguous || state.partitionTableDamaged || !state.tableValid
     val blockedHint = writeBlockHint(state)
     val screenScroll = rememberScrollState()
-    var viewportTop by remember { mutableIntStateOf(0) }
-    var partitionSelectorTop by remember { mutableIntStateOf(Int.MAX_VALUE) }
-    var partitionListBottom by remember { mutableIntStateOf(0) }
-    val initialSelectorHeightPx = with(LocalDensity.current) { 56.dp.roundToPx() }
-    var partitionSelectorHeightPx by remember {
-        mutableIntStateOf(initialSelectorHeightPx)
-    }
-    val pinnedPartitionSelector =
-        partitionSelectorTop + partitionSelectorHeightPx <= viewportTop &&
-            partitionListBottom > viewportTop + partitionSelectorHeightPx
     val latestState by rememberUpdatedState(state)
 
     @Composable
@@ -755,13 +733,19 @@ fun PartitionsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            partitionSelector(
+                Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .onGloballyPositioned { coordinates ->
-                    viewportTop = coordinates.positionInRoot().y.roundToInt()
-                },
+                .weight(1f),
         ) {
         Column(
             modifier = Modifier
@@ -966,26 +950,12 @@ fun PartitionsScreen(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { coordinates ->
-                            partitionSelectorTop = coordinates.positionInRoot().y.roundToInt()
-                            partitionSelectorHeightPx = coordinates.size.height
-                        },
-                ) {
-                    partitionSelector()
-                }
                 CancelOperationButton(state = state, onIntent = onIntent)
 
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .selectableGroup()
-                        .onGloballyPositioned { coordinates ->
-                            partitionListBottom =
-                                (coordinates.positionInRoot().y + coordinates.size.height).roundToInt()
-                        },
+                        .selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     orderedPartitions.forEach { partition ->
@@ -1201,26 +1171,6 @@ fun PartitionsScreen(
                 orderedPartitions = orderedPartitions,
             )
         }
-        androidx.compose.animation.AnimatedVisibility(
-            visible = pinnedPartitionSelector,
-            modifier = Modifier.align(Alignment.TopStart),
-            enter = fadeIn(tween(140)) + expandVertically(tween(160)),
-            exit = fadeOut(tween(100)) + shrinkVertically(tween(120)),
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 3.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onGloballyPositioned { coordinates ->
-                        partitionSelectorHeightPx = coordinates.size.height
-                    },
-            ) {
-                partitionSelector(
-                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                )
-            }
-        }
         }
     }
 }
@@ -1301,7 +1251,6 @@ private fun SelectedPartitionCard(
             value = selected.filesystemLabel.ifEmpty { "—" },
             enabled = state.actionsEnabled && blockedHint == null,
             interactive = true,
-            editPrimary = false,
             onClick = {
                 state.device?.let { device ->
                     onFilesystemMenu(
@@ -1328,7 +1277,6 @@ private fun SelectedPartitionCard(
             value = typeLabel,
             enabled = editRoleEnabled && !vtoyRoleDerived,
             interactive = !vtoyRoleDerived,
-            editPrimary = false,
             onClick = if (!vtoyRoleDerived) {
                 {
                     state.device?.let { device ->
@@ -1351,56 +1299,7 @@ private fun SelectedPartitionCard(
                 }
             } else null,
         )
-        if (vtoyRoleDerived) {
-            Text(
-                text = stringResource(R.string.partitions_vtoyefi_role_derived),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        val bootableToggleEnabled = editRoleEnabled && !vtoyRoleDerived
-        val bootableToggleState =
-            stringResource(if (selected.displayBootable) R.string.answer_yes else R.string.answer_no)
-        FactRow(
-            label = stringResource(R.string.bootable_label),
-            value = bootableToggleState,
-            enabled = bootableToggleEnabled,
-            interactive = !vtoyRoleDerived,
-            editPrimary = false,
-            onClick = if (!vtoyRoleDerived) {
-                {
-                    state.device?.let { device ->
-                        onIntent(
-                            UiIntent.RequestSetPartitionBootable(
-                                bootable = !selected.bootable,
-                                target = PartitionBinding(
-                                    device,
-                                    selected.id,
-                                    selected.startLba,
-                                    selected.sectorCount,
-                                ),
-                            ),
-                        )
-                    }
-                }
-            } else null,
-        )
-        val usage = state.partitionUsageSnapshot(selected)?.usage
-        val freeSpaceText = when (usage) {
-            is FilesystemUsage.Known -> DeviceIdentity.formatCapacity(usage.space.freeBytes)
-            else -> when (state.partitionUsagePhase(selected)) {
-                FilesystemUsagePhase.Queued -> stringResource(R.string.usage_queued)
-                FilesystemUsagePhase.Waiting -> stringResource(R.string.usage_waiting)
-                FilesystemUsagePhase.Calculating -> stringResource(R.string.usage_calculating)
-                else -> "—"
-            }
-        }
-        FactRow(
-            label = stringResource(R.string.partitions_strip_free),
-            value = freeSpaceText,
-            enabled = false,
-        )
-        if (selected.readOnly) {
+        if (selected.displayEfi && selected.readOnly) {
             val efiPolicyEnabled = state.isEfiWriteAllowed(selected)
             val efiBinding = state.device?.let { device ->
                 PartitionBinding(device, selected.id, selected.startLba, selected.sectorCount)
@@ -1421,12 +1320,40 @@ private fun SelectedPartitionCard(
                     efiGeometryKnown,
                 hint = null,
             )
+        }
+        if (vtoyRoleDerived) {
             Text(
-                text = stringResource(R.string.partitions_efi_ro_caption),
+                text = stringResource(R.string.partitions_vtoyefi_role_derived),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        val bootableToggleEnabled = editRoleEnabled && !vtoyRoleDerived
+        val bootableToggleState =
+            stringResource(if (selected.displayBootable) R.string.answer_yes else R.string.answer_no)
+        FactRow(
+            label = stringResource(R.string.bootable_label),
+            value = bootableToggleState,
+            enabled = bootableToggleEnabled,
+            interactive = !vtoyRoleDerived,
+            onClick = if (!vtoyRoleDerived) {
+                {
+                    state.device?.let { device ->
+                        onIntent(
+                            UiIntent.RequestSetPartitionBootable(
+                                bootable = !selected.bootable,
+                                target = PartitionBinding(
+                                    device,
+                                    selected.id,
+                                    selected.startLba,
+                                    selected.sectorCount,
+                                ),
+                            ),
+                        )
+                    }
+                }
+            } else null,
+        )
         val formatTarget = filesystemMenuTarget
         if (formatTarget != null) {
             ModalBottomSheet(
@@ -1520,7 +1447,6 @@ private fun FactRow(
     value: String,
     enabled: Boolean = true,
     interactive: Boolean = false,
-    editPrimary: Boolean = true,
     mono: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
@@ -1578,10 +1504,8 @@ private fun FactRow(
                 modifier = Modifier.size(18.dp),
                 tint = if (!enabled) {
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                } else if (editPrimary) {
-                    MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    MaterialTheme.colorScheme.primary
                 },
             )
         }
@@ -2073,7 +1997,7 @@ private fun RawWriteSection(
                             }
                         },
                         enabled = state.actionsEnabled && planRange != null &&
-                            probeFresh && planProblems.isEmpty() &&
+                            planProblems.isEmpty() &&
                             rangeAssessment?.ok == true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2259,66 +2183,87 @@ private fun PartitionSelectStrip(
         return
     }
     if (segments.isEmpty()) return
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp)),
     ) {
-        segments.forEach { segment ->
-            val partition = segment.partition
-            val free = segment.free
-            val isSelected = partition?.id == state.selectedPartitionId
-            val fill = when {
-                partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
-                partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
-                free != null -> MaterialTheme.colorScheme.surfaceContainerLow
-                else -> MaterialTheme.colorScheme.surfaceContainerHighest
-            }
-            val description = when {
-                partition != null -> stringResource(
-                    R.string.partitions_strip_item_a11y_name,
-                    partition.name.ifBlank { partition.id },
+        // Keep tiny partitions selectable without hiding larger proportions. When the
+        // minimum widths no longer fit, the strip scrolls instead of collapsing to pixels.
+        val minimumSegmentWidth = 12.dp
+        val rawWidths = segments.map { segment ->
+            (maxWidth * (segmentSpan(segment).toDouble() / diskSectorCount.toDouble()).toFloat())
+                .coerceAtLeast(minimumSegmentWidth)
+        }
+        val rawTotal = rawWidths.fold(0.dp) { total, width -> total + width }
+        val widths = if (rawTotal < maxWidth && rawTotal > 0.dp) {
+            val scale = maxWidth.value / rawTotal.value
+            rawWidths.map { it * scale }
+        } else {
+            rawWidths
+        }
+        val contentWidth = widths.fold(0.dp) { total, width -> total + width }
+            .coerceAtLeast(maxWidth)
+        Row(
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .width(contentWidth)
+                .height(48.dp),
+        ) {
+            segments.forEachIndexed { index, segment ->
+                val partition = segment.partition
+                val free = segment.free
+                val isSelected = partition?.id == state.selectedPartitionId
+                val fill = when {
+                    partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
+                    partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
+                    free != null -> MaterialTheme.colorScheme.surfaceContainerLow
+                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                }
+                val description = when {
+                    partition != null -> stringResource(
+                        R.string.partitions_strip_item_a11y_name,
+                        partition.name.ifBlank { partition.id },
+                    )
+                    free != null -> stringResource(R.string.partitions_strip_free)
+                    else -> stringResource(R.string.partitions_strip_unallocated)
+                }
+                Box(
+                    modifier = Modifier
+                        .width(widths[index])
+                        .fillMaxHeight()
+                        .background(fill)
+                        .then(
+                            if (isSelected) {
+                                Modifier.border(
+                                    width = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    shape = RoundedCornerShape(2.dp),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .then(
+                            when {
+                                partition != null -> Modifier.selectable(
+                                    selected = isSelected,
+                                    enabled = state.actionsEnabled,
+                                    role = Role.RadioButton,
+                                    onClick = { onSelectPartition(partition.id) },
+                                )
+                                free != null -> Modifier.clickable(
+                                    enabled = state.actionsEnabled,
+                                    role = Role.Button,
+                                    onClick = { onSelectFree(free) },
+                                )
+                                else -> Modifier.clearAndSetSemantics { }
+                            },
+                        )
+                        .semantics { contentDescription = description },
                 )
-                free != null -> stringResource(R.string.partitions_strip_free)
-                else -> stringResource(R.string.partitions_strip_unallocated)
             }
-            Box(
-                modifier = Modifier
-                    .weight(
-                        (segmentSpan(segment).toDouble() / diskSectorCount.toDouble()).toFloat(),
-                    )
-                    .fillMaxHeight()
-                    .background(fill)
-                    .then(
-                        if (isSelected) {
-                            Modifier.border(
-                                width = 2.dp,
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = RoundedCornerShape(2.dp),
-                            )
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .then(
-                        when {
-                            partition != null -> Modifier.selectable(
-                                selected = isSelected,
-                                enabled = state.actionsEnabled,
-                                role = Role.RadioButton,
-                                onClick = { onSelectPartition(partition.id) },
-                            )
-                            free != null -> Modifier.clickable(
-                                enabled = state.actionsEnabled,
-                                role = Role.Button,
-                                onClick = { onSelectFree(free) },
-                            )
-                            else -> Modifier.clearAndSetSemantics { }
-                        },
-                    )
-                    .semantics { contentDescription = description },
-            )
         }
     }
     FlowRow(
@@ -2337,7 +2282,6 @@ private fun PartitionSelectStrip(
         StripLegend(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             label = stringResource(R.string.partitions_strip_free),
-            outlined = true,
         )
         StripLegend(
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -2347,7 +2291,7 @@ private fun PartitionSelectStrip(
 }
 
 @Composable
-private fun StripLegend(color: Color, label: String, outlined: Boolean = false) {
+private fun StripLegend(color: Color, label: String) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2356,16 +2300,10 @@ private fun StripLegend(color: Color, label: String, outlined: Boolean = false) 
             modifier = Modifier
                 .size(10.dp)
                 .background(color, RoundedCornerShape(2.dp))
-                .then(
-                    if (outlined) {
-                        Modifier.border(
-                            1.dp,
-                            MaterialTheme.colorScheme.outlineVariant,
-                            RoundedCornerShape(2.dp),
-                        )
-                    } else {
-                        Modifier
-                    },
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline,
+                    RoundedCornerShape(2.dp),
                 ),
         )
         Text(

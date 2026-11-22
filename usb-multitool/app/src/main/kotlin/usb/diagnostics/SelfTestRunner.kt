@@ -1,6 +1,10 @@
 package usb.diagnostics
 
 import java.nio.ByteBuffer
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import usb.device.BlockDevice
 import usb.device.ScsiCommand
 import usb.device.ScsiDirection
@@ -23,6 +27,11 @@ data class SelfTestResult(
 )
 
 private const val LIVE_PROBE_NAME = "Live USB Device Safe Probe"
+private const val CHECK_TIMEOUT_MS = 10_000L
+
+private val checkExecutor = Executors.newCachedThreadPool { runnable ->
+    Thread(runnable, "self-test").apply { isDaemon = true }
+}
 
 data class SelfTestReport(
     val results: List<SelfTestResult>,
@@ -66,7 +75,18 @@ object SelfTestRunner {
             onProgress(name)
             val start = System.currentTimeMillis()
             try {
-                val msg = block()
+                val future = checkExecutor.submit<String> { block() }
+                val msg = try {
+                    future.get(CHECK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                } catch (e: TimeoutException) {
+                    future.cancel(true)
+                    throw IllegalStateException(
+                        "timed out after ${CHECK_TIMEOUT_MS}ms; check did not return",
+                        e,
+                    )
+                } catch (e: ExecutionException) {
+                    throw e.cause ?: e
+                }
                 val elapsed = System.currentTimeMillis() - start
                 results.add(SelfTestResult(name, true, msg, elapsed))
             } catch (t: Throwable) {

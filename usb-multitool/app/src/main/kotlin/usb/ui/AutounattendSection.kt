@@ -1603,14 +1603,19 @@ private fun KnownControlRow(
     val staged = pending.firstOrNull { it.key == known.key }
     val onDisk = entries.firstOrNull { it.key == known.key }
     val value = if (staged != null) staged.value else onDisk?.rawValue
+    val booleanKey =
+        known.allowed.size == 2 && known.allowed.containsAll(listOf("0", "1"))
+    // Both official Windows 11 bypass controls default to 1 in Ventoy.
+    val effectiveValue = value ?: "1"
     val current =
         when {
+            booleanKey && value == null -> stringResource(R.string.settings_default_on)
+            booleanKey && effectiveValue == "1" -> stringResource(R.string.settings_enabled)
+            booleanKey -> stringResource(R.string.settings_disabled)
             staged != null -> staged.value ?: stringResource(R.string.settings_will_remove)
             onDisk != null -> onDisk.rawValue
             else -> stringResource(R.string.settings_not_set)
         }
-    val booleanKey =
-        known.allowed.size == 2 && known.allowed.containsAll(listOf("0", "1"))
     val humanTitle = when (known.key) {
         "VTOY_WIN11_BYPASS_CHECK" -> stringResource(R.string.wave4_win11_bypass_tpm)
         "VTOY_WIN11_BYPASS_NRO" -> stringResource(R.string.wave4_win11_local_account)
@@ -1628,7 +1633,7 @@ private fun KnownControlRow(
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
                     .toggleable(
-                        value = value == "1",
+                        value = effectiveValue == "1",
                         enabled = actionsEnabled,
                         role = Role.Switch,
                         onValueChange = { enabled ->
@@ -1658,7 +1663,11 @@ private fun KnownControlRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Switch(checked = value == "1", onCheckedChange = null, enabled = actionsEnabled)
+                Switch(
+                    checked = effectiveValue == "1",
+                    onCheckedChange = null,
+                    enabled = actionsEnabled,
+                )
                 keyHint?.let {
                     InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
                 }
@@ -1714,7 +1723,14 @@ private fun KnownControlRow(
                 enabled = actionsEnabled,
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                 modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.settings_remove)) }
+            ) {
+                Text(
+                    stringResource(
+                        if (booleanKey) R.string.settings_reset_default
+                        else R.string.settings_remove,
+                    ),
+                )
+            }
         }
     }
 }
