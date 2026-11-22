@@ -233,6 +233,9 @@ sealed class UiIntent {
         val source: String?,
     ) : UiIntent()
 
+    /** Toggle the optional post-write source/disk readback for raw writes. */
+    data class SetRawVerifyReadback(val enabled: Boolean) : UiIntent()
+
     /** User explicitly stops a stuck decode-count pass. */
     data object CancelRawSourceMeasurement : UiIntent()
 
@@ -746,7 +749,6 @@ sealed class UiIntent {
     data class DownloadFile(
         val binding: FilesDownloadBinding,
         val uri: String,
-        val stagedPath: String? = null,
     ) : UiIntent()
 
     /** Delete every entry in [selection] after UI confirmation; reducer re-checks pin/write. */
@@ -957,7 +959,6 @@ sealed interface UiEffect {
     data class DownloadFile(
         val binding: FilesDownloadBinding,
         val uri: String,
-        val stagedPath: String? = null,
     ) : UiEffect
     data class DownloadPickerReady(
         val binding: FilesDownloadBinding,
@@ -2697,10 +2698,13 @@ object UiReducer {
                     )
                 } else {
                     val generation = state.rawSizeGeneration + 1L
-                    // SAF content is not an immutable snapshot: measure it (and hash it)
-                    // before any confirmation regardless of the provider SIZE. A pass only
-                    // starts once a positive disk/geometry bound is known.
-                    val limit = rawMeasureLimit(state)?.takeIf { it > 0L }
+                    // Fast mode (readback verification off) trusts the stored size and skips
+                    // the digest pass. Safe mode measures so a same-size provider change
+                    // cannot slip past confirmation.
+                    val cheap =
+                        if (state.rawVerifyReadback) null
+                        else cheapRawDecodedBytes(intent.name, intent.sizeBytes)
+                    val limit = if (cheap == null) rawMeasureLimit(state)?.takeIf { it > 0L } else null
                     ReduceResult(
                         state.copy(
                             imageUri = uri,
@@ -2711,13 +2715,13 @@ object UiReducer {
                             stagedRawImagePath = null,
                             stagedRawImageLabel = null,
                             stagedRawImageSizeBytes = null,
-                            rawDecodedSizeBytes = null,
+                            rawDecodedSizeBytes = cheap,
                             rawDecodedSizeSource = uri,
                             rawDecodedSizeError = null,
                             rawDecodedErrorKind = null,
                             rawDecodedSha256 = null,
-                            rawSizeMeasuring = limit != null,
-                            rawMeasurementPending = limit == null,
+                            rawSizeMeasuring = cheap == null && limit != null,
+                            rawMeasurementPending = cheap == null && limit == null,
                             rawMeasurementWaitingForPrevious = false,
                             rawSizeGeneration = generation,
                         ).withStatus(UiMessage.Key(
@@ -2725,7 +2729,7 @@ object UiReducer {
                                 listOf(intent.name ?: uri),
                             )),
                         effects =
-                            if (limit != null) {
+                            if (cheap == null && limit != null) {
                                 listOf(
                                     UiEffect.MeasureRawSource(
                                         uri,
@@ -2751,6 +2755,56 @@ object UiReducer {
                 RawTransitions.rawSourceMeasurementWaiting(state, intent)
             is UiIntent.RawSourceMeasurementStarted ->
                 RawTransitions.rawSourceMeasurementStarted(state, intent)
+            is UiIntent.SetRawVerifyReadback -> {
+                if (state.rawVerifyReadback == intent.enabled) {
+                    ReduceResult(state)
+                } else if (!intent.enabled) {
+                    val nonSnapshot = state.imageUri != null && state.stagedRawImagePath == null
+                    ReduceResult(
+                        state.copy(
+                            rawVerifyReadback = false,
+                            // Drop the digest so the writer does not perform a preflight
+                            // pass in fast mode. A measured size remains usable.
+                            rawDecodedSha256 =
+                                if (nonSnapshot) null else state.rawDecodedSha256,
+                        ),
+                    )
+                } else {
+                    val nonSnapshot = state.imageUri != null && state.stagedRawImagePath == null
+                    if (!nonSnapshot || state.rawDecodedSha256 != null) {
+                        ReduceResult(state.copy(rawVerifyReadback = true))
+                    } else {
+                        val generation = state.rawSizeGeneration + 1L
+                        val limit = rawMeasureLimit(state)?.takeIf { it > 0L }
+                        ReduceResult(
+                            state.copy(
+                                rawVerifyReadback = true,
+                                rawDecodedSizeBytes = null,
+                                rawDecodedSizeError = null,
+                                rawDecodedErrorKind = null,
+                                rawDecodedSha256 = null,
+                                rawSizeMeasuring = limit != null,
+                                rawMeasurementPending = limit == null,
+                                rawMeasurementWaitingForPrevious = false,
+                                rawSizeGeneration = generation,
+                            ),
+                            effects =
+                                if (limit != null) {
+                                    listOf(
+                                        UiEffect.MeasureRawSource(
+                                            state.imageUri,
+                                            staged = false,
+                                            generation = generation,
+                                            limitBytes = limit,
+                                        ),
+                                    )
+                                } else {
+                                    emptyList()
+                                },
+                        )
+                    }
+                }
+            }
             is UiIntent.CancelRawSourceMeasurement ->
                 RawTransitions.cancelRawSourceMeasurement(state)
             UiIntent.RetryRawSourceMeasurement -> retryRawSourceMeasurement(state)
@@ -4592,7 +4646,7 @@ object UiReducer {
                     else ->
                         ReduceResult(
                             state,
-                            effects = listOf(UiEffect.DownloadFile(intent.binding, intent.uri, intent.stagedPath))
+                            effects = listOf(UiEffect.DownloadFile(intent.binding, intent.uri))
                         )
 
                 }

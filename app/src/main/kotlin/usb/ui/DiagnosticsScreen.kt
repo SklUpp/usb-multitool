@@ -126,6 +126,8 @@ fun DiagnosticsScreen(
     onIntent: (UiIntent) -> Unit,
     modifier: Modifier = Modifier,
     onPickBackupFolder: () -> Unit = {},
+    onPickRescueFile: () -> Unit = {},
+    onPickGptFile: () -> Unit = {},
     onOpenBackupSettings: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
@@ -150,6 +152,8 @@ fun DiagnosticsScreen(
             onOpenBackupSettings()
         }
     }
+    val pickRestoreFileLabel = stringResource(R.string.diagnostics_pick_restore_file)
+    val pickGptFileLabel = stringResource(R.string.diagnostics_pick_gpt_file)
     val usbPresent = state.device != null &&
         (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy)
     val dangerActionLabel = stringResource(
@@ -351,6 +355,16 @@ fun DiagnosticsScreen(
                             GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
                         }
                         IconButton(
+                            onClick = onPickRescueFile,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics {
+                                    contentDescription = pickRestoreFileLabel
+                                },
+                        ) {
+                            GlyphIcon(glyph = Glyph.File, size = 18.dp)
+                        }
+                        IconButton(
                             onClick = { onIntent(UiIntent.ResetRescueSelection) },
                             enabled = state.rescueImageUri != null || state.rescueMapUri != null,
                             modifier = Modifier.semantics {
@@ -483,6 +497,16 @@ fun DiagnosticsScreen(
                                 },
                         ) {
                             GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                        }
+                        IconButton(
+                            onClick = onPickGptFile,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics {
+                                    contentDescription = pickGptFileLabel
+                                },
+                        ) {
+                            GlyphIcon(glyph = Glyph.File, size = 18.dp)
                         }
                         IconButton(
                             onClick = { onIntent(UiIntent.ResetGptSelection) },

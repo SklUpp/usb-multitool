@@ -331,6 +331,8 @@
     <string name="raw_probe_data_present">Data found in %1$d of %2$d sampled sectors.</string>
     <string name="raw_probe_no_data_sampled">All %1$d sampled sectors are empty.</string>
     <string name="raw_probe_unknown">Presence of data could not be checked.</string>
+    <string name="raw_verify_readback_label">Verify write by readback</string>
+    <string name="raw_readback_skipped">Readback verification was disabled.</string>
     <string name="raw_readback_verified">Verified by readback.</string>
     <string name="raw_readback_verified_partial">Readback verified: written data matches, range partially written (%1$d bytes).</string>
     <string name="raw_readback_mismatch">Readback mismatch: %1$d sectors differ, first at LBA %2$d.</string>
@@ -420,6 +422,7 @@
     <string name="diagnostics_rescue_note">Sector-by-sector restore verifies USB Serial, Disk ID, and sector size against the image. Writes only ranges marked in the sector map (.map) with checksum verification. Do not modify the source image during restore.</string>
     <string name="diagnostics_image_named">Image: %1$s</string>
     <string name="diagnostics_pick_image">Pick image…</string>
+    <string name="diagnostics_pick_restore_file">Choose image or map file</string>
     <string name="diagnostics_map_named">Map: %1$s</string>
     <string name="diagnostics_pick_map">Pick map…</string>
     <string name="diagnostics_gpt_restore_info_text">Restores critical partition sectors: LBA 1–33 (primary GPT) and disk end (backup GPT) from a saved dump. Use only with disks of matching geometry and sector size.</string>

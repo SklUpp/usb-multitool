@@ -116,6 +116,8 @@ object RawWriter {
         expectedDecodedBytes: Long? = null,
         /** SHA-256 of the decoded bytes; non-snapshot sources must match before writing. */
         expectedSha256: String? = null,
+        /** Run the source+disk readback pass. Disabled only by an explicit user choice. */
+        verifyReadback: Boolean = true,
         operation: DiskOperation = DiskOperation("raw-write"),
     ): RawWriteResult = withCloseAdmission { admission ->
         confirmation.requireMatch(identity, disk.capacityBytes)
@@ -210,6 +212,7 @@ object RawWriter {
                     chunkBytes = chunkBytes,
                     known = known,
                     digest = writeDigest,
+                    verifyReadback = verifyReadback,
                     operation = operation,
                 )
             } catch (primary: Throwable) {
@@ -316,6 +319,7 @@ object RawWriter {
         chunkBytes: Int,
         known: Long?,
         digest: java.security.MessageDigest? = null,
+        verifyReadback: Boolean,
         operation: DiskOperation,
     ): RawWriteResult {
         // A provider's SIZE hint is untrusted; preflight already measured the decoded bytes.
@@ -340,6 +344,23 @@ object RawWriter {
                     stop = ImageCancelledException("raw write cancelled after $total bytes")
                     break
                 }
+                val expectedRemaining = expected?.let { it - total }
+                if (expectedRemaining == 0L) {
+                    // A source larger than its confirmed size must not spill into the
+                    // sector-rounded remainder of the selected range.
+                    val extra = try {
+                        readFully(input, ByteArray(1), 1)
+                    } catch (e: Exception) {
+                        stop = e
+                        break
+                    }
+                    if (extra > 0) {
+                        stop = ImageTooLargeException(
+                            "source exceeds confirmed size $expected at byte ${total + extra}",
+                        )
+                    }
+                    break
+                }
                 val remaining = capacity - total.toULong()
                 if (remaining == 0UL) {
                     // The range is full. Any further source byte is refused, never written.
@@ -356,7 +377,8 @@ object RawWriter {
                     }
                     break
                 }
-                // Never read past the range end: the tail is exactly what was asked for.
+                // Never read past the range end. If the source yields more than its
+                // confirmed length, write only the confirmed prefix and fail afterwards.
                 val readLimit = minOf(chunkBytes.toULong(), remaining).toInt()
                 val n = try {
                     readFully(input, chunk, readLimit)
@@ -365,17 +387,25 @@ object RawWriter {
                     break
                 }
                 if (n <= 0) break
-                digest?.update(chunk, 0, n)
+                val allowed =
+                    if (expected == null) n
+                    else minOf(n.toLong(), expected - total).toInt()
+                if (allowed < n) {
+                    stop = ImageTooLargeException(
+                        "source exceeds confirmed size $expected at byte ${total + n}",
+                    )
+                }
+                digest?.update(chunk, 0, allowed)
                 val padded =
-                    if (n % sectorSize == 0) {
-                        n
+                    if (allowed % sectorSize == 0) {
+                        allowed
                     } else {
                         // Pad the final partial sector with zeros, inside the range only.
-                        val pad = ((n + sectorSize - 1) / sectorSize) * sectorSize
+                        val pad = ((allowed + sectorSize - 1) / sectorSize) * sectorSize
                         check(pad.toULong() <= remaining) {
                             "padded final sector exceeds the selected range"
                         }
-                        chunk.fill(0, n, pad)
+                        chunk.fill(0, allowed, pad)
                         pad
                     }
                 operation.mutationAttempted = true
@@ -387,14 +417,14 @@ object RawWriter {
                     stop = e
                     attemptedLocal = local
                     attemptedBlocks = (padded / sectorSize).toULong()
-                    attemptedDecoded = n.toLong()
+                    attemptedDecoded = allowed.toLong()
                     attemptedWriteFailed = true
                     break
                 }
                 local += (padded / sectorSize).toULong()
-                total += n
+                total += allowed
                 operation.report(total)
-                if (n < readLimit) break
+                if (stop != null || n < readLimit) break
             }
 
             if (expected != null && stop == null && total in 1L until expected) {
@@ -427,6 +457,32 @@ object RawWriter {
                     disk.sync()
                 } catch (_: Exception) {
                 }
+            }
+
+            if (!verifyReadback) {
+                val failure = stop
+                if (failure != null) {
+                    operation.state = OperationState.Partial
+                    operation.failureCause = failure
+                    return RawWriteResult(
+                        range = range,
+                        writtenBytes = total,
+                        readback = ReadbackVerdict.Skipped,
+                        state = RawWriteStatus.Partial,
+                        failure = failure,
+                    )
+                }
+                if (operation.state == OperationState.Queued ||
+                    operation.state == OperationState.Running
+                ) {
+                    operation.state = OperationState.Completed
+                }
+                return RawWriteResult(
+                    range = range,
+                    writtenBytes = total,
+                    readback = ReadbackVerdict.Skipped,
+                    state = RawWriteStatus.Completed,
+                )
             }
 
             // The failed request's decoded bytes were already consumed from the stream, so a

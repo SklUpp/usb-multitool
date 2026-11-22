@@ -90,6 +90,38 @@ typedef struct NtfsVolumeContext {
     uint64_t block_handle;
 } NtfsVolumeContext;
 
+/*
+ * Sequential reads keep one named-data attribute open instead of resolving the
+ * path through the MFT for every chunk. Mutations close it first; a different
+ * path or volume replaces it.
+ */
+typedef struct NtfsReadSession {
+    int active;
+    NtfsVolumeContext *volume;
+    ntfs_inode *inode;
+    ntfs_attr *attr;
+    char *path;
+} NtfsReadSession;
+
+static NtfsReadSession g_ntfs_read;
+static pthread_mutex_t g_ntfs_read_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void close_ntfs_read_session_locked(void)
+{
+    if (!g_ntfs_read.active) return;
+    if (g_ntfs_read.attr) ntfs_attr_close(g_ntfs_read.attr);
+    if (g_ntfs_read.inode) ntfs_inode_close(g_ntfs_read.inode);
+    free(g_ntfs_read.path);
+    memset(&g_ntfs_read, 0, sizeof(g_ntfs_read));
+}
+
+static void close_ntfs_read_session_for(NtfsVolumeContext *v)
+{
+    pthread_mutex_lock(&g_ntfs_read_mu);
+    if (g_ntfs_read.active && g_ntfs_read.volume == v) close_ntfs_read_session_locked();
+    pthread_mutex_unlock(&g_ntfs_read_mu);
+}
+
 /* Low-level device operations translating byte pread/pwrite to usb_block sectors */
 
 static int dev_op_open(struct ntfs_device *dev, int flags)
@@ -421,6 +453,7 @@ int ntfs_engine_close(uint64_t vol_handle)
     if (!v) return -EINVAL;
 
     int rc = 0;
+    close_ntfs_read_session_for(v);
     if (v->vol) {
         rc = ntfs_umount(v->vol, 0);
         v->vol = NULL;
@@ -608,28 +641,55 @@ int ntfs_engine_read(uint64_t vol_handle, const char *path,
     NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
     if (!v || !v->vol || !path || !buf || !out_read) return -EINVAL;
 
+    int rc = 0;
+    pthread_mutex_lock(&g_ntfs_read_mu);
     *out_read = 0;
-    errno = 0;
-    ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
-    if (!ni) return (errno == ENOENT) ? -ENOENT : -EIO;
-    if (ni->mft_no < FILE_first_user) {
-        ntfs_inode_close(ni);
-        return -EPERM;
+    if (!g_ntfs_read.active ||
+        g_ntfs_read.volume != v ||
+        strcmp(g_ntfs_read.path, path) != 0) {
+        close_ntfs_read_session_locked();
+        errno = 0;
+        ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
+        if (!ni) {
+            rc = (errno == ENOENT) ? -ENOENT : -EIO;
+            goto done;
+        }
+        if (ni->mft_no < FILE_first_user) {
+            ntfs_inode_close(ni);
+            rc = -EPERM;
+            goto done;
+        }
+        ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+        if (!na) {
+            ntfs_inode_close(ni);
+            rc = -EIO;
+            goto done;
+        }
+        char *owned_path = strdup(path);
+        if (!owned_path) {
+            ntfs_attr_close(na);
+            ntfs_inode_close(ni);
+            rc = -ENOMEM;
+            goto done;
+        }
+        g_ntfs_read.active = 1;
+        g_ntfs_read.volume = v;
+        g_ntfs_read.inode = ni;
+        g_ntfs_read.attr = na;
+        g_ntfs_read.path = owned_path;
     }
 
-    ntfs_attr *na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
-    if (!na) {
-        ntfs_inode_close(ni);
-        return -EIO;
+    s64 got = ntfs_attr_pread(g_ntfs_read.attr, (s64)offset, (s64)count, buf);
+    if (got < 0) {
+        close_ntfs_read_session_locked();
+        rc = -EIO;
+        goto done;
     }
-
-    s64 got = ntfs_attr_pread(na, (s64)offset, (s64)count, buf);
-    ntfs_attr_close(na);
-    ntfs_inode_close(ni);
-
-    if (got < 0) return -EIO;
     *out_read = (size_t)got;
-    return 0;
+
+done:
+    pthread_mutex_unlock(&g_ntfs_read_mu);
+    return rc;
 }
 
 #define NTFS_MAX_NAME_UNITS 255
@@ -698,6 +758,7 @@ int ntfs_engine_write_exclusive(uint64_t vol_handle, const char *path,
 	/* libntfs-3g silently skips the device write under NVolReadOnly() yet
 	 * reports the full length as written; refuse instead of faking success. */
 	if (NVolReadOnly(v->vol)) return -EROFS;
+	close_ntfs_read_session_for(v);
 
     char parent[512];
     const char *filename = NULL;
@@ -812,6 +873,7 @@ int ntfs_engine_mkdir(uint64_t vol_handle, const char *path)
     NtfsVolumeContext *v = (NtfsVolumeContext *)(uintptr_t)vol_handle;
     if (!v || !v->vol || !path) return -EINVAL;
     if (NVolReadOnly(v->vol)) return -EROFS;
+    close_ntfs_read_session_for(v);
 
     char parent[512];
     const char *filename = NULL;
@@ -863,6 +925,7 @@ int ntfs_engine_delete(uint64_t vol_handle, const char *path)
 	if (!v || !v->vol || !path) return -EINVAL;
 	if (NVolReadOnly(v->vol)) return -EROFS;
 	if (!path[0] || (path[0] == '/' && path[1] == '\0')) return -EINVAL;
+	close_ntfs_read_session_for(v);
 
 	errno = 0;
 	ntfs_inode *ni = ntfs_pathname_to_inode(v->vol, NULL, path);
@@ -920,6 +983,7 @@ int ntfs_engine_rename(uint64_t vol_handle, const char *from, const char *to)
 	if (!v || !v->vol || !from || !to) return -EINVAL;
 	if (NVolReadOnly(v->vol)) return -EROFS;
 	if (!from[0] || !to[0]) return -EINVAL;
+	close_ntfs_read_session_for(v);
 
 	errno = 0;
 	ntfs_inode *dest = ntfs_pathname_to_inode(v->vol, NULL, to);

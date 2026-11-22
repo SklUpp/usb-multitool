@@ -346,6 +346,7 @@ class NtfsVolume internal constructor(
     }
 
 
+    @Synchronized
     override fun write(
         path: String,
         data: ByteArray,

@@ -124,6 +124,30 @@ int main(void)
 	rc = check_tail(vol, "/stream.bin", chunk);
 	if (rc != 0) return fail("tail", rc);
 
+	/* The read session must seek backwards, then continue sequentially without reopening. */
+	{
+		uint8_t readback[CHUNK_SIZE];
+		size_t read = 0;
+		rc = fat_engine_read_file(vol, "/stream.bin", 0, readback, sizeof(readback), &read);
+		if (rc != 0 || read != sizeof(readback) ||
+		    memcmp(readback, chunk, sizeof(readback)) != 0) {
+			return fail("read session rewind", rc);
+		}
+		read = 0;
+		rc = fat_engine_read_file(vol, "/stream.bin", CHUNK_SIZE, readback,
+					  sizeof(readback), &read);
+		if (rc != 0 || read != sizeof(readback) ||
+		    memcmp(readback, chunk, sizeof(readback)) != 0) {
+			return fail("read session sequential", rc);
+		}
+		read = 0;
+		rc = fat_engine_read_file(vol, "/stream.bin", 0, readback, sizeof(readback), &read);
+		if (rc != 0 || read != sizeof(readback) ||
+		    memcmp(readback, chunk, sizeof(readback)) != 0) {
+			return fail("read session rewind again", rc);
+		}
+	}
+
 	/* Read/stat/list must see a just-written file without an explicit sync. */
 	{
 		FatDirEnt entries[16];

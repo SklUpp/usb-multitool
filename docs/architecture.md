@@ -12,10 +12,10 @@ JNI-движки; UI не имеет доступа к устройствам н
 | Shell | `usb.multitool` | `MainActivity`, `MainViewModel`, USB attach/permission, probe, эффекты |
 | Операции | `usb.operation`, `usb.service` | `DiskOperation`, очередь, токены, прогресс, отмена, foreground service |
 | USB | `usb.device` | discovery BOT, bulk-канал, CBW/CSW, SCSI, capacity, claim |
-| Файлы | `usb.files` | монтирование тома, staging, list/read/write/delete/rename/copy |
+| Файлы | `usb.files` | монтирование тома, list/read/write/delete/rename/copy, потоковая выгрузка в SAF |
 | ФС | `usb.fs` + `cpp` | FAT/exFAT, NTFS, ext4, форматирование, fsck, label |
 | Разделы | `usb.partition` | MBR/GPT parse, редактор, запись, backup, выравнивание |
-| Образы | `usb.image` | source detect, измерение, staging, raw write + readback |
+| Образы | `usb.image` | source detect, измерение, staging, raw write + отключаемый readback |
 | Ventoy | `usb.ventoy` | layout, install/update, control keys/autounattend, release |
 | Rescue | `usb.diagnostics` | scan/wipe/self-test, SectorForge, backup/restore |
 | SAF | `usb.saf` | документы телефона: папки, backup, checkpoint, экспорт |

@@ -57,6 +57,35 @@ typedef struct ExtVolumeContext {
 static pthread_mutex_t g_ext_mu = PTHREAD_MUTEX_INITIALIZER;
 static ExtVolumeContext *g_slots[EXT_MP_MAX];
 
+/*
+ * Sequential reads keep one ext4 file open; a random offset seeks it and a
+ * different path/volume reopens. Mutations and close flush it first.
+ */
+typedef struct {
+	int active;
+	ExtVolumeContext *volume;
+	ext4_file file;
+	char path[EXT_PATH_MAX];
+	uint64_t next;
+} ExtReadSession;
+
+static ExtReadSession g_ext_read;
+static pthread_mutex_t g_ext_read_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void close_ext_read_session_locked(void)
+{
+	if (!g_ext_read.active) return;
+	(void)ext4_fclose(&g_ext_read.file);
+	g_ext_read.active = 0;
+}
+
+static void close_ext_read_session_for(ExtVolumeContext *v)
+{
+	pthread_mutex_lock(&g_ext_read_mu);
+	if (g_ext_read.active && g_ext_read.volume == v) close_ext_read_session_locked();
+	pthread_mutex_unlock(&g_ext_read_mu);
+}
+
 static int map_lw(int rc)
 {
 	if (rc == EOK) return 0;
@@ -377,6 +406,7 @@ int ext_engine_close(uint64_t vol_handle)
 
 	int first_err = 0;
 	pthread_mutex_lock(&g_ext_mu);
+	close_ext_read_session_for(v);
 	if (v->mounted) {
 		if (!v->read_only) {
 			int rc = ext4_cache_flush(v->mount_point);
@@ -548,20 +578,45 @@ int ext_engine_read(uint64_t vol_handle, const char *path, uint64_t offset,
 	int j = join_path(full, sizeof(full), v, path);
 	if (j != 0) return j;
 
-	ext4_file f;
-	int rc = ext4_fopen(&f, full, "rb");
-	if (rc != EOK) return map_lw(rc);
-	rc = ext4_fseek(&f, (int64_t)offset, SEEK_SET);
-	if (rc != EOK) {
-		ext4_fclose(&f);
-		return map_lw(rc);
+	int rc = 0;
+	pthread_mutex_lock(&g_ext_read_mu);
+	if (!g_ext_read.active ||
+	    g_ext_read.volume != v ||
+	    strcmp(g_ext_read.path, full) != 0) {
+		close_ext_read_session_locked();
+		int open_rc = ext4_fopen(&g_ext_read.file, full, "rb");
+		if (open_rc != EOK) {
+			rc = map_lw(open_rc);
+			goto done;
+		}
+		g_ext_read.active = 1;
+		g_ext_read.volume = v;
+		strncpy(g_ext_read.path, full, sizeof(g_ext_read.path) - 1);
+		g_ext_read.path[sizeof(g_ext_read.path) - 1] = '\0';
+		g_ext_read.next = 0;
+	}
+	if (offset != g_ext_read.next) {
+		int seek_rc = ext4_fseek(&g_ext_read.file, (int64_t)offset, SEEK_SET);
+		if (seek_rc != EOK) {
+			close_ext_read_session_locked();
+			rc = map_lw(seek_rc);
+			goto done;
+		}
+		g_ext_read.next = offset;
 	}
 	size_t got = 0;
-	rc = ext4_fread(&f, buf, count, &got);
-	ext4_fclose(&f);
-	if (rc != EOK) return map_lw(rc);
+	int read_rc = ext4_fread(&g_ext_read.file, buf, count, &got);
+	if (read_rc != EOK) {
+		close_ext_read_session_locked();
+		rc = map_lw(read_rc);
+		goto done;
+	}
+	g_ext_read.next = offset + (uint64_t)got;
 	*out_read = got;
-	return 0;
+
+done:
+	pthread_mutex_unlock(&g_ext_read_mu);
+	return rc;
 }
 
 int ext_engine_write_exclusive(uint64_t vol_handle, const char *path, uint64_t offset,
@@ -572,6 +627,7 @@ int ext_engine_write_exclusive(uint64_t vol_handle, const char *path, uint64_t o
     if (!v || !v->mounted || !path || !out_written || (!buf && count != 0)) return -EINVAL;
     *out_written = 0;
     if (v->read_only) return -EROFS;
+    close_ext_read_session_for(v);
 
     char full[EXT_PATH_MAX];
     int j = join_path(full, sizeof(full), v, path);
@@ -637,6 +693,7 @@ int ext_engine_mkdir(uint64_t vol_handle, const char *path)
 	ExtVolumeContext *v = from_handle(vol_handle);
 	if (!v || !v->mounted || !path) return -EINVAL;
 	if (v->read_only) return -EROFS;
+	close_ext_read_session_for(v);
 	char full[EXT_PATH_MAX];
 	int j = join_path(full, sizeof(full), v, path);
 	if (j != 0) return j;
@@ -648,6 +705,7 @@ int ext_engine_delete(uint64_t vol_handle, const char *path)
 	ExtVolumeContext *v = from_handle(vol_handle);
 	if (!v || !v->mounted || !path) return -EINVAL;
 	if (v->read_only) return -EROFS;
+	close_ext_read_session_for(v);
 	char full[EXT_PATH_MAX];
 	int j = join_path(full, sizeof(full), v, path);
 	if (j != 0) return j;
@@ -676,6 +734,7 @@ int ext_engine_rename(uint64_t vol_handle, const char *from, const char *to)
 	ExtVolumeContext *v = from_handle(vol_handle);
 	if (!v || !v->mounted || !from || !to) return -EINVAL;
 	if (v->read_only) return -EROFS;
+	close_ext_read_session_for(v);
 	char a[EXT_PATH_MAX], b[EXT_PATH_MAX];
 	int j = join_path(a, sizeof(a), v, from);
 	if (j != 0) return j;
@@ -696,6 +755,9 @@ int ext_engine_mkfs(uint64_t block_handle, const char *label)
 	}
 
 	pthread_mutex_lock(&g_ext_mu);
+	pthread_mutex_lock(&g_ext_read_mu);
+	close_ext_read_session_locked();
+	pthread_mutex_unlock(&g_ext_read_mu);
 	int rc = take_slot(v);
 	if (rc != 0) {
 		pthread_mutex_unlock(&g_ext_mu);

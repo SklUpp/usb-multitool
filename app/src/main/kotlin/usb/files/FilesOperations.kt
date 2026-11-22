@@ -4,8 +4,6 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
-import java.io.File
-import java.io.FileInputStream
 import java.io.IOException
 import java.io.OutputStream
 import kotlinx.coroutines.CancellationException
@@ -13,7 +11,6 @@ import usb.fs.FilesystemSpace
 import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsUsageVolume
 import usb.fs.UsbFsVolume
-import usb.image.ImageStaging
 import usb.image.MeasurementHandle
 import usb.operation.DiskOperation
 import usb.operation.OperationState
@@ -272,9 +269,9 @@ object FilesOperations {
 
 
     /**
-     * Streams USB bytes into caller-owned SAF destination. A failed or cancelled write leaves
-     * destination in place: SAF does not prove exclusive ownership, so cleanup would risk
-     * deleting a document the user or provider owns. The Partial error names this honestly.
+     * Streams USB bytes into a caller-owned SAF destination without a full local copy. On
+     * failure the freshly created document is deleted unless the provider refuses, in which
+     * case the Partial error says the destination was retained.
      */
     fun download(
         resolver: ContentResolver,
@@ -282,74 +279,51 @@ object FilesOperations {
         destination: Uri,
         volume: UsbFsVolume,
         operation: DiskOperation,
-        filesDir: File,
     ) {
         val size = volume.stat(target).size
         operation.beginCurrentFile(size)
-        val staged = stageUsbFile(filesDir, volume, target, size, operation)
         var offset = 0L
         try {
             if (!operation.isActive()) throw CancellationException("Download cancelled")
             operation.mutationAttempted = true
             writeSyncedDownload(resolver, destination) { stream ->
-                FileInputStream(staged).use { input ->
-                    val buffer = ByteArray(usb.device.TransferTuning.jniCapBytes)
-                    while (true) {
-                        if (!operation.isActive()) throw CancellationException("Download cancelled")
-                        val count = input.read(buffer)
-                        if (count <= 0) break
-                        stream.write(buffer, 0, count)
-                        offset += count
-                        operation.report(offset)
-                    }
-                }
+                offset = streamVolume(volume, target, size, stream, operation)
             }
-            if (offset != size) error("staged size mismatch: got $offset, expected $size")
+            if (offset != size) error("download size mismatch: got $offset, expected $size")
         } catch (failure: Throwable) {
             operation.state = OperationState.Partial
-            operation.failureCause = usb.device.DiskException.IoFailure("Download destination may contain partial bytes ($offset of $size); destination retained", failure)
+            operation.failureCause = usb.device.DiskException.IoFailure(
+                "Download failed after $offset of $size bytes; destination retained",
+                failure,
+            )
             throw failure
-        } finally {
-            runCatching { ImageStaging.deleteIfManaged(filesDir, staged.absolutePath) }
-                .onFailure { cleanup ->
-                    operation.state = OperationState.Partial
-                    operation.failureCause?.addSuppressed(cleanup) ?: run { operation.failureCause = cleanup }
-                }
         }
     }
-    fun stageDownloadSource(
-        filesDir: File,
+
+    /** Copy [size] bytes from [volume] to [stream], reporting progress. */
+    private fun streamVolume(
         volume: UsbFsVolume,
-        target: String,
-        operation: DiskOperation,
-    ): File {
-        val entry = volume.stat(target)
-        operation.beginCurrentFile(entry.size)
-        return stageUsbFile(filesDir, volume, target, entry.size, operation)
-    }
-    fun downloadStaged(
-        resolver: ContentResolver,
-        staged: File,
+        sourcePath: String,
         size: Long,
-        destination: Uri,
+        stream: OutputStream,
         operation: DiskOperation,
-        filesDir: File,
-    ) {
-        require(ImageStaging.isManaged(filesDir, staged.absolutePath)) { "unowned staged file" }
-        operation.beginCurrentFile(size)
-        operation.mutationAttempted = true
-        writeStagedDownload(resolver, destination, staged, size, operation, filesDir)
+    ): Long {
+        require(size >= 0L) { "negative source size: $size" }
+        val bufferBytes = usb.device.TransferTuning.jniCapBytes
+        var offset = 0L
+        while (offset < size) {
+            if (!operation.isActive()) throw CancellationException("Download cancelled")
+            val want = minOf(bufferBytes.toLong(), size - offset).toInt()
+            val data = volume.read(sourcePath, offset, want)
+            if (data.isEmpty()) {
+                throw IOException("short read at $offset of $size bytes: $sourcePath")
+            }
+            stream.write(data, 0, data.size)
+            offset += data.size
+            operation.report(offset)
+        }
+        return offset
     }
-    private fun stageUsbFile(filesDir: File, volume: UsbFsVolume, target: String, size: Long, operation: DiskOperation): File =
-        usb.image.stageRawImageChunks(
-            filesDir = filesDir,
-            volume = volume,
-            sourcePath = target,
-            sourceSize = size,
-            sourceName = target.substringAfterLast('/'),
-            operation = operation,
-            chunkBytes = usb.device.TransferTuning.jniCapBytes,
-        )
 
     /**
      * SAF/content size when the provider reports a non-negative value; null when
@@ -452,7 +426,6 @@ object FilesOperations {
         operation: DiskOperation,
         conflict: (FilesConflict) -> FilesConflictDecision,
         onProgress: ((String) -> Unit)? = null,
-        filesDir: File,
     ) {
         downloadTree(
             resolver = resolver,
@@ -463,7 +436,6 @@ object FilesOperations {
             operation = operation,
             conflict = conflict,
             onProgress = onProgress,
-            filesDir = filesDir,
         )
     }
 
@@ -477,11 +449,10 @@ object FilesOperations {
         operation: DiskOperation,
         conflict: (FilesConflict) -> FilesConflictDecision,
         onProgress: ((String) -> Unit)? = null,
-        filesDir: File,
     ) {
         val root = FilesOperationPolicy.normalizeVolumePathExact(sourcePath)
         try {
-            downloadEntry(resolver, volume, root, destTree, destParent, operation, conflict, onProgress, filesDir)
+            downloadEntry(resolver, volume, root, destTree, destParent, operation, conflict, onProgress)
         } catch (failure: Throwable) {
             markPartialIfMutated(operation, failure)
             throw failure
@@ -497,7 +468,6 @@ object FilesOperations {
         operation: DiskOperation,
         conflict: (FilesConflict) -> FilesConflictDecision,
         onProgress: ((String) -> Unit)?,
-        filesDir: File,
     ) {
         if (!operation.isActive()) throw CancellationException("Download cancelled")
         val entry = volume.stat(sourcePath)
@@ -521,7 +491,6 @@ object FilesOperations {
             operation = operation,
             conflict = conflict,
             onProgress = onProgress,
-            filesDir = filesDir,
         )
     }
 
@@ -544,7 +513,6 @@ object FilesOperations {
         onProgress: ((String) -> Unit)? = null,
         resume: BatchDownloadCursor? = null,
         onCursor: (BatchDownloadCursor) -> Unit = {},
-        filesDir: File,
     ) {
         downloadChildren(
             resolver,
@@ -558,7 +526,6 @@ object FilesOperations {
             onProgress,
             resume,
             onCursor,
-            filesDir,
         )
     }
 
@@ -574,7 +541,6 @@ object FilesOperations {
         onProgress: ((String) -> Unit)? = null,
         resume: BatchDownloadCursor? = null,
         onCursor: (BatchDownloadCursor) -> Unit = {},
-        filesDir: File,
     ) {
         val parent = FilesOperationPolicy.normalizeVolumePathExact(parentPath)
         val roots = ArrayDeque(resume?.remainingRoots ?: names)
@@ -602,7 +568,6 @@ object FilesOperations {
                     conflict = trackedConflict,
                     onProgress = onProgress,
                     park = park,
-                    filesDir = filesDir,
                 )
                 roots.removeFirst()
                 park.remainingRoots = roots.toList()
@@ -636,7 +601,6 @@ object FilesOperations {
                     atBatchRoot = true,
                     relPrefix = "",
                     rootsAfter = roots.drop(1).toList(),
-                    filesDir = filesDir,
                 )
                 roots.removeFirst()
                 park.remainingRoots = roots.toList()
@@ -676,7 +640,6 @@ object FilesOperations {
         conflict: (FilesConflict) -> FilesConflictDecision,
         onProgress: ((String) -> Unit)?,
         park: DownloadParkState,
-        filesDir: File,
     ) {
         val childName = FilesOperationPolicy.requireChildName(rootName, parent)
         val sourceRoot = FilesOperationPolicy.resolveInsideTree(parent, childName)
@@ -731,7 +694,6 @@ object FilesOperations {
                 relPrefix = segments.dropLast(1).joinToString("/"),
                 rootsAfter = rootsAfter,
                 siblingTail = pending.drop(1),
-                filesDir = filesDir,
             )
             pending.removeAt(0)
         }
@@ -755,7 +717,6 @@ object FilesOperations {
         relPrefix: String = "",
         rootsAfter: List<String> = emptyList(),
         siblingTail: List<String> = emptyList(),
-        filesDir: File,
     ) {
         if (!operation.isActive()) throw CancellationException("Download cancelled")
         val existing = destTree.listChildren(destParent).filter { it.name == childName }
@@ -839,15 +800,12 @@ object FilesOperations {
                     relPrefix = relHere ?: "",
                     rootsAfter = rootsAfter,
                     siblingTail = tailRels,
-                    filesDir = filesDir,
                 )
                 remaining.removeAt(0)
             }
             onProgress?.invoke(sourcePath)
             return
         }
-        val stagingDir = requireNotNull(filesDir) { "filesDir required for SAF download staging" }
-        var staged: File? = null
         var preflight: FilesConflictDecision? = null
         if (hit != null && !hit.isDirectory) {
             preflight = decideConflict(
@@ -857,69 +815,67 @@ object FilesOperations {
             if (preflight == FilesConflictDecision.Skip) return
             if (preflight == FilesConflictDecision.Cancel) throw CancellationException("Download cancelled")
         }
-        try {
-            // Stage source before provider create; failed read never leaves empty destination.
-            operation.beginCurrentFile(sourceEntry.size)
-            staged = stageUsbFile(stagingDir, volume, sourcePath, sourceEntry.size, operation)
-            val destUri = resolveDownloadFile(childName, sourcePath, hit, destTree, destParent, operation, conflict, preflight)
-                ?: run {
-                    ImageStaging.deleteIfManaged(stagingDir, staged!!.absolutePath)
-                    staged = null
-                    return
-                }
-            operation.mutationAttempted = true
-            onProgress?.invoke(sourcePath)
-            writeStagedDownload(resolver, destUri, staged!!, sourceEntry.size, operation, stagingDir)
-        } catch (failure: Throwable) {
-            staged?.let { owned -> runCatching { ImageStaging.deleteIfManaged(stagingDir, owned.absolutePath) }.onFailure(failure::addSuppressed) }
-            throw failure
-        } finally {
-            staged?.let { owned ->
-                runCatching { ImageStaging.deleteIfManaged(stagingDir, owned.absolutePath) }
-                    .onFailure { cleanup ->
-                        operation.failureCause?.addSuppressed(cleanup) ?: run { operation.failureCause = cleanup }
-                        if (operation.mutationAttempted) operation.state = OperationState.Partial
-                    }
-            }
-        }
+        operation.beginCurrentFile(sourceEntry.size)
+        val target = resolveDownloadFile(
+            childName,
+            sourcePath,
+            hit,
+            destTree,
+            destParent,
+            operation,
+            conflict,
+            preflight,
+        ) ?: return
+        operation.mutationAttempted = true
+        onProgress?.invoke(sourcePath)
+        streamDownload(
+            resolver = resolver,
+            volume = volume,
+            sourcePath = sourcePath,
+            size = sourceEntry.size,
+            target = target,
+            destTree = destTree,
+            operation = operation,
+        )
     }
-    private fun writeStagedDownload(
+
+    private data class DownloadTarget(val uri: Uri, val created: Boolean)
+
+    /**
+     * Stream directly into SAF; only delete a destination this call created. A pre-existing
+     * user document is retained because the provider cannot prove exclusive ownership.
+     */
+    private fun streamDownload(
         resolver: ContentResolver,
-        destination: Uri,
-        staged: File,
+        volume: UsbFsVolume,
+        sourcePath: String,
         size: Long,
+        target: DownloadTarget,
+        destTree: BatchSafFolder,
         operation: DiskOperation,
-        filesDir: File,
     ) {
         var offset = 0L
         try {
-            if (!operation.isActive()) throw CancellationException("Download cancelled")
-            writeSyncedDownload(resolver, destination) { stream ->
-                FileInputStream(staged).use { input ->
-                    val buffer = ByteArray(usb.device.TransferTuning.jniCapBytes)
-                    while (true) {
-                        if (!operation.isActive()) throw CancellationException("Download cancelled")
-                        val count = input.read(buffer)
-                        if (count <= 0) break
-                        stream.write(buffer, 0, count)
-                        offset += count
-                        operation.report(offset)
-                    }
-                }
+            writeSyncedDownload(resolver, target.uri) { stream ->
+                offset = streamVolume(volume, sourcePath, size, stream, operation)
             }
-            if (offset != size) error("staged size mismatch: got $offset, expected $size")
+            if (offset != size) error("download size mismatch: got $offset, expected $size")
         } catch (failure: Throwable) {
+            val cleanupNote =
+                if (target.created) {
+                    runCatching { destTree.deleteDocument(target.uri) }
+                        .onFailure(failure::addSuppressed)
+                        .getOrDefault(false)
+                        .let { deleted -> if (deleted) "partial destination deleted" else "destination retained" }
+                } else {
+                    "destination retained"
+                }
             operation.state = OperationState.Partial
-            operation.failureCause = usb.device.DiskException.IoFailure("Download destination may contain partial bytes ($offset of $size); destination retained", failure)
+            operation.failureCause = usb.device.DiskException.IoFailure(
+                "Download failed after $offset of $size bytes; $cleanupNote",
+                failure,
+            )
             throw failure
-        } finally {
-            filesDir?.let { dir ->
-                runCatching { ImageStaging.deleteIfManaged(dir, staged.absolutePath) }
-                    .onFailure { cleanup ->
-                        operation.state = OperationState.Partial
-                        operation.failureCause?.addSuppressed(cleanup) ?: run { operation.failureCause = cleanup }
-                    }
-            }
         }
     }
 
@@ -1014,10 +970,13 @@ object FilesOperations {
         operation: DiskOperation,
         conflict: (FilesConflict) -> FilesConflictDecision,
         preflight: FilesConflictDecision? = null,
-    ): Uri? {
+    ): DownloadTarget? {
         if (hit == null) {
             operation.mutationAttempted = true
-            return destTree.createExclusiveFile(destParent, childName, OCTET_STREAM)
+            return DownloadTarget(
+                uri = destTree.createExclusiveFile(destParent, childName, OCTET_STREAM),
+                created = true,
+            )
         }
         if (hit.isDirectory) {
             val empty = destTree.listChildren(hit.uri).isEmpty()
@@ -1056,6 +1015,7 @@ object FilesOperations {
                         "provider atomic rename is unavailable; choose another name or Skip",
                 )
         }
+        return DownloadTarget(uri = hit.uri, created = false)
     }
 
     /**

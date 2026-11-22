@@ -26,9 +26,8 @@ internal object RawTransitions {
                 )
             else -> {
                 val sourceBytes = state.rawWriteDecodedBytes()
-                val contentNeedsDigest =
-                    state.imageUri != null && state.stagedRawImagePath == null
-                if (contentNeedsDigest && state.rawDecodedSha256 == null) {
+                val nonSnapshot = state.imageUri != null && state.stagedRawImagePath == null
+                if (state.rawVerifyReadback && nonSnapshot && state.rawDecodedSha256 == null) {
                     return ReduceResult(
                         state.withStatus(UiMessage.Key(UiMessageKey.RawRangeInvalid)),
                     )
@@ -56,6 +55,7 @@ internal object RawTransitions {
                                         rawSectorCount = range.sectorCount,
                                         rawDecodedBytes = sourceBytes,
                                         rawSourceSha256 = state.rawDecodedSha256,
+                                        rawVerifyReadback = state.rawVerifyReadback,
                                         diskSectorCount = geometry.diskSectorCount,
                                         diskSectorSize = geometry.sectorSize,
                                         rawSourceName = state.rawWriteSourceName,

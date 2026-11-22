@@ -247,6 +247,8 @@ fun AppShell(
     /** Opens OpenMultipleDocuments into the pinned current Files directory. */
     onRequestBatchUpload: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
+    onPickRescueFile: () -> Unit = {},
+    onPickGptFile: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
     /** Live SAF grant predicate for Diagnostics create gates; Activity owns the check. */
@@ -746,6 +748,8 @@ fun AppShell(
                                     onIntent = onIntent,
                                     modifier = Modifier.fillMaxSize(),
                                     onPickBackupFolder = onPickBackupFolder,
+                                    onPickRescueFile = onPickRescueFile,
+                                    onPickGptFile = onPickGptFile,
                                     onStartRescueBackup = onStartRescueBackup,
                                     onCreateGptCopy = onCreateGptCopy,
                                     onOpenBackupSettings = {
@@ -1335,6 +1339,7 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
                 } else {
                     stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
                 }
+            ReadbackVerdict.Skipped -> stringResource(R.string.raw_readback_skipped)
             is ReadbackVerdict.Mismatch -> stringResource(
                 R.string.raw_readback_mismatch,
                 verdict.mismatchedSectors.toLong(),
@@ -1358,7 +1363,7 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
         }
         val tone = when (result.readback) {
             is ReadbackVerdict.Mismatch, is ReadbackVerdict.Incomplete -> StatusTone.Error
-            is ReadbackVerdict.Unverified -> StatusTone.Warning
+            is ReadbackVerdict.Unverified, ReadbackVerdict.Skipped -> StatusTone.Warning
             ReadbackVerdict.Verified -> StatusTone.Success
         }
         text to tone

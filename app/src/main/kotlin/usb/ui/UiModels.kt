@@ -431,6 +431,8 @@ data class DestructiveConfirmation(
      * confirmation; never an opaque document id alone when a real name is known.
      */
     val rawSourceName: String? = null,
+    /** Whether the confirmed raw write runs the source/disk readback pass. */
+    val rawVerifyReadback: Boolean = true,
     /** Full SAF/content URI snapshotted for GPT_RESTORE — not only a display label. */
     val gptBackupUri: String? = null,
     /** Display label for GPT backup when a basename exists; optional for opaque URIs. */
@@ -519,6 +521,7 @@ data class DestructiveConfirmation(
             diskSectorCount: ULong? = null,
             diskSectorSize: Int? = null,
             rawSourceName: String? = null,
+            rawVerifyReadback: Boolean = true,
             gptBackupUri: String? = null,
             gptBackupName: String? = null,
             rescueImageUri: String? = null,
@@ -565,6 +568,7 @@ data class DestructiveConfirmation(
                     },
                 rawSourceName =
                     if (action == DestructiveAction.RAW_WRITE) rawSourceName else null,
+                rawVerifyReadback = rawVerifyReadback,
                 gptBackupUri =
                     if (action == DestructiveAction.GPT_RESTORE) gptBackupUri else null,
                 gptBackupName =
@@ -1675,6 +1679,8 @@ data class AppUiState(
     val rawDecodedErrorKind: RawMeasureError? = null,
     /** SHA-256 of the measured decoded bytes; binds confirmation to SAF content. */
     val rawDecodedSha256: String? = null,
+    /** Opt-in readback pass after a raw write; disabled skips a full source+disk reread. */
+    val rawVerifyReadback: Boolean = true,
     /** True while the decode-count pass for the current source is running. */
     val rawSizeMeasuring: Boolean = false,
     /** Waiting for a positive capacity/geometry before a bounded pass may start. */

@@ -9,6 +9,9 @@ import usb.partition.RawWriteRange
 sealed interface ReadbackVerdict {
     data object Verified : ReadbackVerdict
 
+    /** The user disabled the optional readback pass; write success is not proof of content. */
+    data object Skipped : ReadbackVerdict
+
     data class Mismatch(
         val mismatchedSectors: ULong,
         val firstMismatchLba: ULong,

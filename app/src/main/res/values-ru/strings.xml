@@ -331,6 +331,8 @@
     <string name="raw_probe_data_present">Данные найдены в %1$d из %2$d проверенных секторов.</string>
     <string name="raw_probe_no_data_sampled">Все %1$d проверенных секторов пусты.</string>
     <string name="raw_probe_unknown">Наличие данных проверить не удалось.</string>
+    <string name="raw_verify_readback_label">Проверять запись чтением</string>
+    <string name="raw_readback_skipped">Проверка чтением отключена.</string>
     <string name="raw_readback_verified">Проверено обратным чтением.</string>
     <string name="raw_readback_verified_partial">Верификация пройдена: записанные данные проверены, диапазон записан частично (%1$d байт).</string>
     <string name="raw_readback_mismatch">Расхождение при обратном чтении: %1$d секторов, первый на LBA %2$d.</string>
@@ -421,6 +423,7 @@
     <string name="diagnostics_rescue_note">Посекторное восстановление сверяет USB Serial, Disk ID и размер сектора накопителя с метаданными образа. Запись производится строго в диапазоны, зафиксированные в карте сбоев (.map), с повторной проверкой контрольных сумм. Не изменяйте исходный файл образа до окончания процесса.</string>
     <string name="diagnostics_image_named">Образ: %1$s</string>
     <string name="diagnostics_pick_image">Выбрать образ…</string>
+    <string name="diagnostics_pick_restore_file">Выбрать образ или карту</string>
     <string name="diagnostics_map_named">Карта: %1$s</string>
     <string name="diagnostics_pick_map">Выбрать карту…</string>
     <string name="diagnostics_gpt_restore_info_text">Восстановление GPT перезаписывает критические секторы разметки: LBA 1–33 (основная таблица) и LBA в конце диска (резервная копия) из предварительно сохраненного файла дампа. Используйте дампы только от накопителей с абсолютно идентичной геометрией и размером сектора.</string>

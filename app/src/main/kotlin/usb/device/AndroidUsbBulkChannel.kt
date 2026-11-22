@@ -57,6 +57,8 @@ class AndroidUsbBulkChannel private constructor(
     private val outEndpoint: UsbEndpoint,
 ) : UsbBulkChannel {
     private val closed = AtomicBoolean(false)
+    /** Direct ByteBuffers cannot be passed to android.hardware.usb bulkTransfer. */
+    private val directScratch = ByteArray(BotConstants.MAX_BULK_REQUEST)
 
     override val interfaceId: Int get() = usbInterface.id
 
@@ -129,31 +131,46 @@ class AndroidUsbBulkChannel private constructor(
         }
         if (length == 0) return 0
 
-        val array: ByteArray
-        val baseOffset: Int
-        if (buffer.hasArray()) {
-            array = buffer.array()
-            baseOffset = buffer.arrayOffset() + buffer.position()
+        val direct = !buffer.hasArray()
+        val directOut = direct && endpoint.direction == UsbConstants.USB_DIR_OUT
+        val heapArray = if (direct) null else buffer.array()
+        val heapOffset = if (direct) 0 else buffer.arrayOffset() + buffer.position()
+        val source = if (directOut) {
+            buffer.duplicate().apply { limit(position() + length) }
         } else {
-            array = ByteArray(length)
-            baseOffset = 0
-            if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
-                val dup = buffer.duplicate()
-                dup.limit(dup.position() + length)
-                dup.get(array)
-            }
+            null
         }
+        val sourceStart = source?.position() ?: 0
 
         var transferred = 0
         while (transferred < length) {
             val chunk = minOf(length - transferred, BotConstants.MAX_BULK_REQUEST)
-            val n = connection.bulkTransfer(
-                endpoint,
-                array,
-                baseOffset + transferred,
-                chunk,
-                timeoutMs,
-            )
+            val n =
+                if (direct) {
+                    if (source != null) {
+                        source.position(sourceStart + transferred)
+                        source.get(directScratch, 0, chunk)
+                    }
+                    val read = connection.bulkTransfer(
+                        endpoint,
+                        directScratch,
+                        0,
+                        chunk,
+                        timeoutMs,
+                    )
+                    if (read > 0 && endpoint.direction == UsbConstants.USB_DIR_IN) {
+                        buffer.put(directScratch, 0, read)
+                    }
+                    read
+                } else {
+                    connection.bulkTransfer(
+                        endpoint,
+                        heapArray!!,
+                        heapOffset + transferred,
+                        chunk,
+                        timeoutMs,
+                    )
+                }
             if (n < 0) {
                 throw DiskException.IoFailure(
                     "bulkTransfer failed on ep 0x${endpoint.address.toString(16)}",
@@ -171,9 +188,9 @@ class AndroidUsbBulkChannel private constructor(
             if (endpoint.direction == UsbConstants.USB_DIR_IN && n < chunk) break
         }
 
-        if (!buffer.hasArray() && endpoint.direction == UsbConstants.USB_DIR_IN) {
-            buffer.put(array, 0, transferred)
-        } else {
+        if (directOut) {
+            buffer.position(buffer.position() + transferred)
+        } else if (!direct) {
             buffer.position(buffer.position() + transferred)
         }
         return transferred

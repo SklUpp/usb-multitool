@@ -105,6 +105,53 @@ class RawWriterTest {
         awaitFreshBudget()
     }
 
+    @Test fun disabledReadbackSkipsDiskReread() {
+        awaitFreshBudget()
+        val payload = ByteArray(512) { 9 }
+        val disk = RecordingDisk(sectorCount = 1UL, sectorSize = 512)
+        val result =
+            RawWriter.write(
+                rawSource(payload, decodedSize = payload.size.toLong()),
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = wholeDisk(disk),
+                verifyReadback = false,
+            )
+        assertEquals(RawWriteStatus.Completed, result.state)
+        assertEquals(ReadbackVerdict.Skipped, result.readback)
+        assertEquals(1, disk.writes.size)
+        assertEquals(0L, disk.readCount)
+        awaitFreshBudget()
+    }
+
+    @Test fun sourceBeyondConfirmedSizeDoesNotReachSecondSector() {
+        awaitFreshBudget()
+        val disk = RecordingDisk(sectorCount = 2UL, sectorSize = 512)
+        val payload = ByteArray(600) { 3 }
+        val source =
+            ImageSource.fromContent(
+                openRaw = { java.io.ByteArrayInputStream(payload) },
+                displayName = "grow.iso",
+                size = 512L,
+            )
+        val result =
+            RawWriter.write(
+                source,
+                disk,
+                identity,
+                conf(disk),
+                overwrite = true,
+                range = wholeDisk(disk),
+                expectedDecodedBytes = 512L,
+            )
+        assertEquals(RawWriteStatus.Partial, result.state)
+        assertEquals(1, disk.writes.size)
+        assertTrue(result.failure is ImageTooLargeException)
+        awaitFreshBudget()
+    }
+
     @Test fun writerRefusesBeforeOpeningWhenAdmissionIsExhausted() {
         awaitFreshBudget()
         val held = mutableListOf<MeasurementHandle>()

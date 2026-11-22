@@ -439,6 +439,43 @@ class RawRangeUiStateTest {
     }
 
     @Test
+    fun plainIsoPickUsesProviderSizeInFastMode() {
+        val result =
+            UiReducer.reduce(
+                ready().copy(
+                    imageUri = null,
+                    rawDecodedSizeBytes = null,
+                    rawDecodedSha256 = null,
+                    rawVerifyReadback = false,
+                ),
+                UiIntent.SetImage(
+                    uri = "content://images/picked.iso",
+                    name = "picked.iso",
+                    sizeBytes = 2048L,
+                ),
+            )
+        assertTrue(result.effects.isEmpty())
+        assertEquals(2048L, result.state.rawDecodedSizeBytes)
+        assertFalse(result.state.rawSizeMeasuring)
+        assertFalse(result.state.rawMeasurementPending)
+    }
+
+    @Test
+    fun plainIsoPickMeasuresInSafeMode() {
+        val result =
+            UiReducer.reduce(
+                ready().copy(imageUri = null, rawDecodedSizeBytes = null, rawDecodedSha256 = null),
+                UiIntent.SetImage(
+                    uri = "content://images/picked.iso",
+                    name = "picked.iso",
+                    sizeBytes = 2048L,
+                ),
+            )
+        assertTrue(result.state.rawSizeMeasuring)
+        assertTrue(result.effects.single() is UiEffect.MeasureRawSource)
+    }
+
+    @Test
     fun compressedPickRequestsMeasurement() {
         val result =
             UiReducer.reduce(

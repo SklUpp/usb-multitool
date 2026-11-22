@@ -126,7 +126,7 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = dest,
             operation = op,
-            filesDir = filesDir,
+
             conflict = { error("unexpected conflict $it") },
         )
         assertTrue(saf.isDirectory(dest, "docs"))
@@ -153,7 +153,7 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = saf.root,
             operation = op,
-            filesDir = filesDir,
+
             conflict = { error("unexpected $it") },
         )
         assertEquals(byteArrayOf(1).toList(), resolver.written[saf.child(saf.root, "a.bin")!!]!!.toList())
@@ -179,7 +179,7 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = saf.root,
             operation = DiskOperation("dl-padded"),
-            filesDir = filesDir,
+
             conflict = { error("unexpected $it") },
         )
         assertEquals(
@@ -206,7 +206,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 conflict = {
                     decisions += it
                     FilesConflictDecision.ReplaceFile
@@ -234,7 +234,7 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = saf.root,
             operation = DiskOperation("dl-empty-reuse"),
-            filesDir = filesDir,
+
             conflict = { error("reuse must not conflict: $it") }
         )
         assertEquals(existing, saf.child(saf.root, "docs"))
@@ -257,7 +257,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 conflict = {
                     assertFalse(it.isDirectory)
                     FilesConflictDecision.ReplaceFile
@@ -287,7 +287,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 conflict = { error("no") },
             )
         }
@@ -296,7 +296,7 @@ class FilesOperationsBatchTest {
         assertEquals(OperationState.Queued, op.state)
     }
     @Test
-    fun downloadUsbReadFailureCreatesNoSafDestination() {
+    fun downloadUsbReadFailureDeletesCreatedSafDestination() {
         val volume = object : MemoryVolume() {
             override fun read(path: String, offset: Long, length: Int): ByteArray =
                 throw IOException("usb read failure")
@@ -312,15 +312,15 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 conflict = { error("no conflict before read") },
             )
         }
         assertTrue(saf.listChildren(saf.root).isEmpty())
-        assertFalse(op.mutationAttempted)
+        assertTrue(op.mutationAttempted)
     }
     @Test
-    fun skippedSafConflictAvoidsUsbReadAndStaging() {
+    fun skippedSafConflictAvoidsUsbRead() {
         val volume = object : MemoryVolume() {
             override fun read(path: String, offset: Long, length: Int): ByteArray =
                 throw IOException("must not read skipped source")
@@ -336,7 +336,7 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = saf.root,
             operation = DiskOperation("dl-skip-preflight"),
-            filesDir = filesDir,
+
             conflict = { FilesConflictDecision.Skip },
         )
         assertEquals(before, ImageStaging.listStagingFiles(filesDir).map { it.canonicalPath }.toSet())
@@ -359,13 +359,13 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 conflict = { error("no") },
             )
         }
         assertTrue(op.mutationAttempted)
         assertEquals(OperationState.Partial, op.state)
-        assertEquals(1, saf.listChildren(saf.child(saf.root, "docs")!!).size)
+        assertTrue(saf.listChildren(saf.child(saf.root, "docs")!!).isEmpty())
     }
 
     @Test
@@ -498,7 +498,7 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = saf.root,
             operation = DiskOperation("dl-skip-cleanup"),
-            filesDir = filesDir,
+
             conflict = { FilesConflictDecision.Skip },
         )
         assertEquals(before, usb.image.ImageStaging.listStagingFiles(filesDir).map { it.canonicalPath }.toSet())
@@ -523,7 +523,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 conflict = { throw RuntimeException("park:${it.pathLabel}") },
                 onCursor = { cursor = it },
             )
@@ -564,7 +564,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 resume = resume,
                 conflict = {
                     decisions++
@@ -616,7 +616,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 onCursor = { cursor = it },
                 conflict = {
                     if (it.pathLabel == "/folder/a/x.bin") throw RuntimeException("park-nested")
@@ -661,7 +661,7 @@ class FilesOperationsBatchTest {
                 destTree = saf,
                 destParent = saf.root,
                 operation = op,
-                filesDir = filesDir,
+
                 onCursor = { cursor = it },
                 conflict = {
                     if (it.pathLabel == "/foo/foo/file.bin") throw RuntimeException("park-same-name")
@@ -685,8 +685,8 @@ class FilesOperationsBatchTest {
         val op = DiskOperation("dl-progress")
         val seenTotals = mutableListOf<Long>()
         val seenDoneAtOpen = mutableListOf<Long>()
-        // openOutputStream supplier runs inside download() after beginCurrentFile — not onProgress
-        // (onProgress fires before download, so it still sees the previous file's counters).
+        // openOutputStream runs before the first direct read, after beginCurrentFile reset
+        // the counters for the file currently streaming.
         val (saf, resolver) =
             RecordingResolver.paired(
                 onWrite = {
@@ -702,10 +702,10 @@ class FilesOperationsBatchTest {
             destTree = saf,
             destParent = saf.root,
             operation = op,
-            filesDir = filesDir,
+
             conflict = { error("unexpected $it") }
         )
-        assertEquals(listOf(8L, 1L), seenDoneAtOpen)
+        assertEquals(listOf(0L, 0L), seenDoneAtOpen)
         assertEquals(listOf(8L, 1L), seenTotals)
         assertEquals(1L, op.bytesDone)
         assertEquals(1L, op.bytesTotal)

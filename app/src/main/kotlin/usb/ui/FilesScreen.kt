@@ -1603,7 +1603,7 @@ internal fun PartitionDropdown(
     var expanded by remember { mutableStateOf(false) }
     val selected = selectedId?.let { id -> partitions.firstOrNull { it.id == id } }
         ?: partitions.firstOrNull()
-    val selectable = partitions.isNotEmpty()
+    val selectable = partitions.size > 1
     val rowEnabled = enabled && selectable
     LaunchedEffect(rowEnabled) {
         if (!rowEnabled) expanded = false
@@ -2086,7 +2086,9 @@ internal fun filesBatchSelectionOrNull(
     entries: List<FileEntry>,
 ): FilesBatchSelection? {
     val device = state.device ?: return null
-    val partition = state.selectedFilesVolume() ?: return null
+    val partition = state.selectedPartitionId?.let { id ->
+        state.filesVolumes.firstOrNull { it.id == id }
+    } ?: return null
     if (entries.isEmpty()) return null
     return FilesBatchSelection(
         directory = state.currentPath,

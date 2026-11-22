@@ -52,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -1112,119 +1113,6 @@ fun PartitionsScreen(
     }
 }
 
-/** One MD3 list row used by the real list and by the scroll-pinned copy. */
-@Composable
-private fun PartitionListRow(
-    state: AppUiState,
-    partition: PartitionTab,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val isSelected = partition.id == state.selectedPartitionId
-    val access = state.partitionWriteAccess(partition)
-    val displayName = partition.name.ifBlank { partition.id }
-    val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
-    val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
-    val rowStart = partition.startLba
-    val rowCount = partition.sectorCount
-    val rowEnd = if (rowStart != null && rowCount != null &&
-        rowCount > 0UL &&
-        rowStart <= ULong.MAX_VALUE - (rowCount - 1UL)
-    ) {
-        rowStart + rowCount - 1UL
-    } else {
-        null
-    }
-    val rowRange = if (rowStart != null && rowEnd != null) {
-        stringResource(
-            R.string.partitions_info_lba_range_value,
-            rowStart.toLong(),
-            rowEnd.toLong(),
-        )
-    } else {
-        null
-    }
-    val rowContent = if (isSelected) {
-        MaterialTheme.colorScheme.onSecondaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    ListItem(
-        headlineContent = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = rowTitle,
-                    fontWeight = FontWeight.SemiBold,
-                    color = rowContent,
-                    modifier = Modifier.weight(1f),
-                )
-                if (partition.filesystemLabel.isNotEmpty()) {
-                    Badge(text = partition.filesystemLabel)
-                }
-                if (partition.displayEfi) {
-                    Badge(text = stringResource(R.string.partitions_badge_efi))
-                }
-                if (partition.displayBootable) {
-                    Badge(text = stringResource(R.string.partitions_badge_boot))
-                }
-            }
-        },
-        supportingContent = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = partitionUsageLabel(state, partition),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontFeatureSettings = "tnum",
-                    ),
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                rowRange?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
-            }
-        },
-        trailingContent = { WriteAccessBadge(access) },
-        colors = ListItemDefaults.colors(
-            containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                Color.Transparent
-            },
-            headlineColor = rowContent,
-            supportingColor = rowContent,
-        ),
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .selectable(
-                selected = isSelected,
-                enabled = state.actionsEnabled,
-                role = Role.RadioButton,
-                onClick = { onSelect(partition.id) },
-            ),
-    )
-}
-
 private enum class RawTargetMode {
     WholeDisk,
     Partition,
@@ -1912,6 +1800,21 @@ private fun RawWriteSection(
                         }
                 }
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.raw_verify_readback_label),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = state.rawVerifyReadback,
+                        onCheckedChange = { onIntent(UiIntent.SetRawVerifyReadback(it)) },
+                        enabled = state.actionsEnabled,
+                    )
+                }
                 if (geometry == null) {
                     EmptyHint(stringResource(R.string.raw_write_geometry_unavailable))
                 } else {
@@ -1923,15 +1826,7 @@ private fun RawWriteSection(
                     val plan = draftStart?.let {
                         RawRangePlan.planFromSourceSize(it, sourceBytes, geometry)
                     }
-                    val planRange =
-                        if (state.imageUri != null &&
-                            state.stagedRawImagePath == null &&
-                            state.rawDecodedSha256 == null
-                        ) {
-                            null
-                        } else {
-                            (plan as? RawWritePlan.Ready)?.range
-                        }
+                    val planRange = (plan as? RawWritePlan.Ready)?.range
                     val planProblems =
                         ((plan as? RawWritePlan.Rejected)?.problems ?: emptySet())
                             .filterNot { sourceBytes == null && it == RawRangeProblem.SourceSizeUnknown }
