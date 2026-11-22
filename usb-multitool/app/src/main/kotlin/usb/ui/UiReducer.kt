@@ -2629,8 +2629,12 @@ object UiReducer {
 
             is UiIntent.SetImage -> {
                 val uri = intent.uri
-                if (!state.actionsEnabled) {
-                    // Busy / pending confirm — do not clear staged source under a live raw write.
+                val sourceLocked = state.isRunning ||
+                    state.operation?.state == OperationState.Queued ||
+                    state.pendingConfirmation != null
+                if (sourceLocked) {
+                    // Only a live destructive operation owns the source. A transient
+                    // re-probe Busy after the SAF picker returns must not drop the pick.
                     ReduceResult(state)
                 } else if (uri == null) {
                     // Clearing the SAF pick keeps an existing staged copy as the source.

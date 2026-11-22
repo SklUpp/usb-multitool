@@ -262,24 +262,6 @@ fun PartitionsScreen(
             sliderEnd > sliderStart
         val valid = regionFits && isAligned && fits && extraValid && mibInputsValid
 
-        val otherPartitionSizesMib = remember(state.partitions, alignSectors) {
-            val align = alignSectors ?: return@remember emptyList<ULong>()
-            if (align == 0UL) emptyList()
-            else state.partitions.mapNotNull { it.sectorCount?.div(align) }
-        }
-        val baseSnapPoints = remember(availableMib, firstAligned, alignSectors, otherPartitionSizesMib) {
-            if (alignSectors == null || firstAligned == null) emptyList()
-            else PartitionRangeMath.snapPoints(
-                availableMib = availableMib,
-                firstAligned = firstAligned,
-                sectorsPerMib = alignSectors,
-                otherPartitionSizesMib = otherPartitionSizesMib,
-            )
-        }
-        val sizeMagnets = remember(otherPartitionSizesMib) {
-            (PartitionRangeMath.standardSizesMib + otherPartitionSizesMib).distinct()
-        }
-
         AlertDialog(
             onDismissRequest = { createRegion = null },
             modifier = Modifier.imePadding(),
@@ -348,81 +330,21 @@ fun PartitionsScreen(
                             endLba.toLong(),
                             (sliderEnd - sliderStart).toLong(),
                         )
-                        val haptic = LocalHapticFeedback.current
-                        var lastMagnet by remember {
-                            mutableStateOf<Pair<Boolean, ULong>?>(null)
-                        }
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             RangeSlider(
                                 value = safeStart..safeEnd,
                                 onValueChange = { range ->
-                                    val magnetThreshold = (availableMib.toFloat() * 0.02f).coerceIn(1f, 1024f)
-                                    val movingStart =
-                                        kotlin.math.abs(range.start - safeStart) >=
-                                            kotlin.math.abs(range.endInclusive - safeEnd)
-                                    val startMagnet =
-                                        if (movingStart) {
-                                            val points = baseSnapPoints + PartitionRangeMath.sizePointsBelow(
-                                                anchorMib = sliderEnd,
-                                                sizes = sizeMagnets,
-                                            )
-                                            PartitionRangeMath.nearestMagnet(
-                                                position = range.start,
-                                                maxMib = availableMib,
-                                                snapPoints = points,
-                                                thresholdMib = magnetThreshold,
-                                            )
-                                        } else {
-                                            null
-                                        }
+                                    // Predictable whole-MiB steps only; no snapping to
+                                    // arbitrary partition sizes or hidden magnets.
                                     val snapStart =
-                                        if (movingStart) {
-                                            (startMagnet ?: PartitionRangeMath.snapToMib(
-                                                range.start,
-                                                availableMib,
-                                            )).coerceAtMost(if (sliderEnd > 0UL) sliderEnd - 1UL else 0UL)
-                                        } else {
-                                            sliderStart
-                                        }
-                                    val endMagnet =
-                                        if (!movingStart) {
-                                            val points = baseSnapPoints + PartitionRangeMath.sizePointsAbove(
-                                                anchorMib = sliderStart,
-                                                maxMib = availableMib,
-                                                sizes = sizeMagnets,
+                                        PartitionRangeMath.snapToMib(range.start, availableMib)
+                                            .coerceAtMost(
+                                                if (availableMib > 1UL) availableMib - 1UL else 0UL,
                                             )
-                                            PartitionRangeMath.nearestMagnet(
-                                                position = range.endInclusive,
-                                                maxMib = availableMib,
-                                                snapPoints = points,
-                                                thresholdMib = magnetThreshold,
-                                            )
-                                        } else {
-                                            null
-                                        }
                                     val snapEnd =
-                                        if (!movingStart) {
-                                            (endMagnet ?: PartitionRangeMath.snapToMib(
-                                                range.endInclusive,
-                                                availableMib,
-                                            )).coerceAtLeast(snapStart + 1UL)
-                                        } else {
-                                            sliderEnd
-                                        }
-                                    val magnet =
-                                        when {
-                                            movingStart && startMagnet != null && startMagnet == snapStart ->
-                                                true to startMagnet
-                                            !movingStart && endMagnet != null && endMagnet == snapEnd ->
-                                                false to endMagnet
-                                            else -> null
-                                        }
-                                    if (magnet != null && magnet != lastMagnet) {
-                                        haptic.performHapticFeedback(
-                                            HapticFeedbackType.TextHandleMove,
-                                        )
-                                    }
-                                    lastMagnet = magnet
+                                        PartitionRangeMath.snapToMib(range.endInclusive, availableMib)
+                                            .coerceAtLeast(snapStart + 1UL)
+                                            .coerceAtMost(availableMib)
                                     val selection = PartitionRangeMath.sectorsFor(
                                         firstAligned = regionBase,
                                         regionEnd = regionEnd,
@@ -1495,26 +1417,8 @@ private fun FactRow(
     mono: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = if (onClick != null) 48.dp else 44.dp)
-            .then(
-                if (onClick != null) {
-                    Modifier.clickable(
-                        enabled = enabled,
-                        role = Role.Button,
-                        onClick = onClick,
-                    )
-                } else {
-                    Modifier
-                },
-            )
-            .padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
+    ListItem(
+        headlineContent = {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
@@ -1522,6 +1426,8 @@ private fun FactRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        },
+        supportingContent = {
             Text(
                 text = value,
                 style = if (mono) {
@@ -1541,20 +1447,40 @@ private fun FactRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-        if (interactive && onClick != null) {
-            Icon(
-                imageVector = Icons.Outlined.Edit,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = if (!enabled) {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        },
+        trailingContent = if (interactive && onClick != null) {
+            {
+                Icon(
+                    imageVector = Icons.Outlined.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (!enabled) {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+        } else {
+            null
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .heightIn(min = 48.dp)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        enabled = enabled,
+                        role = Role.Button,
+                        onClick = onClick,
+                    )
                 } else {
-                    MaterialTheme.colorScheme.primary
+                    Modifier
                 },
-            )
-        }
-    }
+            ),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1568,7 +1494,9 @@ private fun RawWriteSection(
     orderedPartitions: List<PartitionTab>,
 ) {
     var sourceSheetOpen by remember { mutableStateOf(false) }
-    val rawName = state.stagedRawImageLabel ?: rawSourceName(state.imageUri)
+    val rawName = state.stagedRawImageLabel
+        ?: state.imageName?.takeIf { it.isNotBlank() }
+        ?: rawSourceName(state.imageUri)
     val rawStaged = state.stagedRawImagePath != null
     val hasImage = rawName != null
     SectionCard(

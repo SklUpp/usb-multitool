@@ -41,7 +41,6 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBar
@@ -2305,7 +2304,6 @@ private fun OfficialControlKeyPickerDialog(
                     )
                 }
                 selected?.let { def ->
-                    HorizontalDivider()
                     Text(
                         text = stringResource(R.string.wave4_catalog_value_title, def.key),
                         style = MaterialTheme.typography.labelMedium,

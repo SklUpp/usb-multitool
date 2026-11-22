@@ -215,11 +215,13 @@ fun DiagnosticsScreen(
             },
         ) {
             val backupFolderReady = state.backupFolderUsable
+            val restoreFolderLabel = stringResource(R.string.diagnostics_pick_image_folder)
             val folderStatusText = when {
                 state.backupFolderUri == null ->
                     stringResource(R.string.diagnostics_backup_folder_none)
                 else -> state.backupFolderUri?.let { uri ->
-                    state.backupFolderName?.takeIf { it.isNotBlank() }?.let { "$it\n$uri" } ?: uri
+                    val path = normalizedRestorePath(uri)
+                    state.backupFolderName?.takeIf { it.isNotBlank() }?.let { "$it\n$path" } ?: path
                 } ?: stringResource(R.string.diagnostics_backup_folder_none)
             }
             val folderStatusColor = when {
@@ -342,6 +344,27 @@ fun DiagnosticsScreen(
                     )
                 }
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.diagnostics_restore_files_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                FilledTonalIconButton(
+                    onClick = onPickRestoreFolder,
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier.semantics {
+                        contentDescription = restoreFolderLabel
+                    },
+                ) {
+                    GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                }
+            }
             if (state.rescueImageUri != null || state.rescueMapUri != null) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -352,11 +375,6 @@ fun DiagnosticsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text(
-                            text = stringResource(R.string.diagnostics_restore_files_title),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                        )
             if (state.rescueImageUri != null) {
                 Text(
                     text = restorePathText(
@@ -398,6 +416,10 @@ fun DiagnosticsScreen(
                     ),
                 )
             }
+                    }
+                }
+            }
+
             val rescueImage = state.rescueImageInspection
                 ?.takeIf { it.uri == state.rescueImageUri }
             val rescueMap = state.rescueMapInspection
@@ -424,9 +446,6 @@ fun DiagnosticsScreen(
                 GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.diagnostics_restore_image))
-            }
-                    }
-                }
             }
 
             SubsectionHeader(

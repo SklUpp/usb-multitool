@@ -2,12 +2,17 @@ package usb.ui
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
@@ -77,12 +82,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import usb.formatBinaryBytesPerSecond
 import usb.formatEtaDuration
 import usb.fs.FilesystemUsage
@@ -1234,8 +1239,17 @@ private fun FolderCard(
                         onOpenPath = onOpenPath,
                         onRefresh = onRefresh,
                         onNewFolder = onNewFolder,
-                        filterActive = fileFilter.isNotBlank(),
-                        onSearch = { searchOpen = true },
+                        searchOpen = searchOpen,
+                        filter = fileFilter,
+                        onFilterChange = { fileFilter = it },
+                        onSearchToggle = {
+                            if (searchOpen) {
+                                fileFilter = ""
+                                searchOpen = false
+                            } else {
+                                searchOpen = true
+                            }
+                        },
                         isLoading = isLoading,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     )
@@ -1304,19 +1318,10 @@ private fun FolderCard(
             }
         }
     }
-    if (searchOpen) {
-        FileFilterDialog(
-            query = fileFilter,
-            onQueryChange = { fileFilter = it },
-            matches = visibleRows.size,
-            total = rows.size,
-            onDismiss = { searchOpen = false },
-        )
-    }
 }
 
-/** Path row with Refresh/CreateFolder only. Selection Download/Rename/Delete/Clear live in the
- * selection row above and the per-row bottom sheet, never in this toolbar. */
+/** Path row with an expanding search slot plus the fixed Refresh/CreateFolder icons. Selection
+ * Download/Rename/Delete/Clear live in the selection row above and the per-row bottom sheet. */
 @Composable
 private fun FolderSubblock(
     path: String,
@@ -1326,15 +1331,28 @@ private fun FolderSubblock(
     onOpenPath: (String) -> Unit,
     onRefresh: () -> Unit,
     onNewFolder: () -> Unit,
-    filterActive: Boolean,
-    onSearch: () -> Unit,
+    searchOpen: Boolean,
+    filter: String,
+    onFilterChange: (String) -> Unit,
+    onSearchToggle: () -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val refreshDescription = stringResource(R.string.unattend_refresh)
     val newFolderDescription = stringResource(R.string.files_create_folder)
     val searchDescription = stringResource(R.string.files_filter_hint)
+    val clearSearchDescription = stringResource(R.string.files_search_clear)
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(searchOpen) {
+        if (searchOpen) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        } else {
+            keyboard?.hide()
+        }
+    }
 
     Surface(
         shape = MaterialTheme.shapes.small,
@@ -1346,20 +1364,57 @@ private fun FolderSubblock(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                FolderBreadcrumbs(
-                    path = path,
-                    enabled = canAct,
-                    onOpen = onOpenPath,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics { contentDescription = pathA11y },
-                )
+                Box(modifier = Modifier.weight(1f)) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = !searchOpen,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                    ) {
+                        FolderBreadcrumbs(
+                            path = path,
+                            enabled = canAct,
+                            onOpen = onOpenPath,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = pathA11y },
+                        )
+                    }
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = searchOpen,
+                        enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
+                        exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut(),
+                    ) {
+                        OutlinedTextField(
+                            value = filter,
+                            onValueChange = onFilterChange,
+                            placeholder = { Text(stringResource(R.string.files_filter_hint)) },
+                            singleLine = true,
+                            leadingIcon = { GlyphIcon(Glyph.Search, size = 18.dp) },
+                            trailingIcon = if (filter.isNotEmpty()) {
+                                {
+                                    IconButton(
+                                        onClick = { onFilterChange("") },
+                                        modifier = Modifier.semantics {
+                                            contentDescription = clearSearchDescription
+                                        },
+                                    ) { GlyphIcon(Glyph.Close, size = 18.dp) }
+                                }
+                            } else {
+                                null
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester),
+                        )
+                    }
+                }
                 FolderActionButton(
                     glyph = Glyph.Search,
                     description = searchDescription,
                     enabled = canAct,
-                    onClick = onSearch,
-                    tint = if (filterActive) {
+                    onClick = onSearchToggle,
+                    tint = if (searchOpen) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         LocalContentColor.current
@@ -1389,89 +1444,6 @@ private fun FolderSubblock(
                     enabled = canWrite,
                     onClick = onNewFolder,
                 )
-            }
-        }
-    }
-}
-
-/**
- * Modal name filter: the folder toolbar owns a single search icon. The overlay keeps the
- * existing list interactive behind it so every keystroke updates the visible rows live.
- */
-@Composable
-private fun FileFilterDialog(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    matches: Int,
-    total: Int,
-    onDismiss: () -> Unit,
-) {
-    val focusRequester = remember { FocusRequester() }
-    val searchLabel = stringResource(R.string.files_filter_hint)
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 3.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp)
-                .imePadding(),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = searchLabel,
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    label = { Text(searchLabel) },
-                    singleLine = true,
-                    leadingIcon = { GlyphIcon(Glyph.Search, size = 20.dp) },
-                    trailingIcon = if (query.isNotEmpty()) {
-                        {
-                            IconButton(
-                                onClick = { onQueryChange("") },
-                                modifier = Modifier.semantics {
-                                    contentDescription = searchLabel
-                                },
-                            ) { GlyphIcon(Glyph.Close, size = 20.dp) }
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
-                )
-                Text(
-                    text = "$matches / $total",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFeatureSettings = "tnum",
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.heightIn(min = 48.dp),
-                    ) {
-                        Text(stringResource(android.R.string.ok))
-                    }
-                }
             }
         }
     }

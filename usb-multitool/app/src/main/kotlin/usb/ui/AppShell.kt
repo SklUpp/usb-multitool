@@ -55,6 +55,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
@@ -1490,6 +1492,7 @@ private fun OperationStatusLine(
                 text = titleText,
                 style = MaterialTheme.typography.titleSmall,
                 color = titleColor,
+                textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp)
@@ -1506,6 +1509,7 @@ private fun OperationStatusLine(
                     text = newerStandaloneText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp)
@@ -2346,21 +2350,8 @@ internal fun SwitchRow(
     enabled: Boolean = true,
     hint: String? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .toggleable(
-                value = checked,
-                enabled = enabled,
-                role = Role.Switch,
-                onValueChange = onCheckedChange,
-            )
-            .padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
+    ListItem(
+        headlineContent = {
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyMedium,
@@ -2370,7 +2361,9 @@ internal fun SwitchRow(
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 },
             )
-            hint?.let {
+        },
+        supportingContent = hint?.let {
+            {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.labelSmall,
@@ -2381,9 +2374,20 @@ internal fun SwitchRow(
                     },
                 )
             }
-        }
-        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
-    }
+        },
+        trailingContent = { Switch(checked = checked, onCheckedChange = null, enabled = enabled) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+            ),
+    )
 }
 
 @Composable

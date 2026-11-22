@@ -416,6 +416,29 @@ class RawRangeUiStateTest {
     }
 
     @Test
+    fun imagePickSurvivesTransientProbeAfterPickerReturns() {
+        val busy = ready().copy(
+            presence = DevicePresence.Busy,
+            imageUri = null,
+            imageName = null,
+            imageSizeBytes = null,
+            rawDecodedSizeBytes = null,
+            rawDecodedSizeSource = null,
+            rawDecodedSha256 = null,
+        )
+        val result = UiReducer.reduce(
+            busy,
+            UiIntent.SetImage(
+                uri = "content://images/picked.iso",
+                name = "picked.iso",
+                sizeBytes = 2048L,
+            ),
+        )
+        assertEquals("content://images/picked.iso", result.state.imageUri)
+        assertEquals("picked.iso", result.state.imageName)
+    }
+
+    @Test
     fun compressedPickRequestsMeasurement() {
         val result =
             UiReducer.reduce(

@@ -26,6 +26,7 @@
 
     <string name="files_empty_folder">Папка пуста</string>
     <string name="files_filter_hint">Фильтр по имени</string>
+    <string name="files_search_clear">Очистить поиск</string>
     <string name="files_filter_empty">Нет совпадений</string>
     <string name="files_breadcrumb_root">USB</string>
     <string name="files_listing">Читаю папку…</string>
