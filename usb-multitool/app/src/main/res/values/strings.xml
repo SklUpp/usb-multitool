@@ -82,7 +82,7 @@
     <string name="partitions_disk_usage">In use %1$s of %2$s (%3$.1f%%)</string>
     <string name="partitions_disk_sectors">In use %1$d of %2$d sectors</string>
     <string name="partitions_strip_item_a11y">Partition %1$d: %2$s, %3$s</string>
-    <string name="partitions_strip_scale_note">Scaled by disk LBA. Minimum block width: 48 dp (for accurate touch targeting).</string>
+    <string name="partitions_strip_scale_note">Scaled by disk LBA. Minimum block width: 12 dp; the strip scrolls when needed.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Partition information</string>
     <string name="partitions_info_help_text">\'Name\' is stored in the GPT table entry (up to 36 characters). \'Volume Label\' is stored in the filesystem metadata. RO/RW indicators reflect physical block device access.</string>

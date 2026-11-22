@@ -82,7 +82,7 @@
     <string name="partitions_disk_usage">Используется %1$s из %2$s (%3$.1f%%)</string>
     <string name="partitions_disk_sectors">Используется %1$d из %2$d секторов</string>
     <string name="partitions_strip_item_a11y">Раздел %1$d: %2$s, %3$s</string>
-    <string name="partitions_strip_scale_note">Масштаб по LBA диска. Мин. ширина блока: 48 dp (для точного нажатия).</string>
+    <string name="partitions_strip_scale_note">Масштаб по LBA диска. Мин. ширина блока: 12 dp; при нехватке места полоса прокручивается.</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Информация о разделе</string>
     <string name="partitions_info_help_text">«Имя» является свойством записи в таблице GPT (до 36 символов). «Метка тома» хранится в метаданных самой файловой системы. Индикаторы RO/RW отражают фактический физический доступ к блочному устройству: аппаратную защиту переключателем, флаг в дескрипторе тома или ограничения native-драйвера.</string>
