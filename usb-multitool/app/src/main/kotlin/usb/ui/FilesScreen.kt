@@ -1629,37 +1629,47 @@ private fun PartitionOptionRow(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(
-                text = partitionDisplayName(partition),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                softWrap = true,
-            )
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (partition.filesystemLabel.isNotEmpty()) {
-                    Badge(text = partition.filesystemLabel)
+                Text(
+                    text = partitionDisplayName(partition),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Row(
+                    modifier = Modifier.padding(start = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (partition.filesystemLabel.isNotEmpty()) {
+                        Badge(text = partition.filesystemLabel)
+                    }
+                    if (partition.displayEfi) {
+                        Badge(text = stringResource(R.string.partitions_badge_efi))
+                    }
+                    if (partition.displayBootable) {
+                        Badge(text = stringResource(R.string.partitions_badge_boot))
+                    }
+                    WriteAccessBadge(access)
                 }
-                if (partition.displayEfi) {
-                    Badge(text = stringResource(R.string.partitions_badge_efi))
-                }
-                if (partition.displayBootable) {
-                    Badge(text = stringResource(R.string.partitions_badge_boot))
-                }
-                usage?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        softWrap = true,
-                    )
-                }
+            }
+            usage?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    softWrap = true,
+                )
             }
             if (showLba) {
                 lbaRangeLabel(
@@ -1678,7 +1688,6 @@ private fun PartitionOptionRow(
                 }
             }
         }
-        WriteAccessBadge(access)
     }
 }
 

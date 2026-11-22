@@ -58,7 +58,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -1479,62 +1479,106 @@ private fun OperationStatusLine(
                 onClickLabel = openLabel,
                 onClick = onOpenDetails,
             )
-            .heightIn(min = 48.dp),
+            .heightIn(min = 48.dp, max = 64.dp),
         color = containerColor,
         shape = MaterialTheme.shapes.small,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = titleText,
-                style = MaterialTheme.typography.titleSmall,
-                color = titleColor,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                    .then(
-                        if (running || standaloneMessage) {
-                            Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                        } else {
-                            Modifier
-                        },
-                    ),
-            )
-            if (newerStandaloneText != null) {
-                Text(
-                    text = newerStandaloneText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 10.dp)
-                        .semantics { liveRegion = LiveRegionMode.Polite },
-                )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (facts != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (running || standaloneMessage) {
+                                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = facts.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = titleColor,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = facts.state,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = titleColor,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else {
+                    Text(
+                        text = titleText,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = titleColor,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (running || standaloneMessage) {
+                                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    )
+                }
+                if (newerStandaloneText != null) {
+                    Text(
+                        text = newerStandaloneText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
             }
             if (running) {
                 val total = operation?.bytesTotal ?: 0L
                 val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
-                val track = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
+                val progressModifier = Modifier.size(24.dp)
                 if (total > 0L) {
-                    LinearProgressIndicator(
+                    CircularProgressIndicator(
                         progress = { fraction },
-                        modifier = track,
+                        modifier = progressModifier,
                         color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 3.dp,
                         trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                     )
                 } else {
-                    // Running without a known total: real indeterminate track, never on Ready.
-                    LinearProgressIndicator(
-                        modifier = track,
+                    // Running without a known total: real indeterminate ring, never on Ready.
+                    CircularProgressIndicator(
+                        modifier = progressModifier,
                         color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 3.dp,
                         trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                     )
                 }

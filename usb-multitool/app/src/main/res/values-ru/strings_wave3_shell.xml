@@ -3,7 +3,7 @@
     <!-- Permanent status block subject while idle. -->
     <string name="shell_status_ready">Готово</string>
     <!-- Status block title: Статус: &lt;операция|сообщение|Готово&gt;. -->
-    <string name="shell_status_title">Статус: %1$s</string>
+    <string name="shell_status_title">%1$s</string>
     <!-- Accessibility action label: the block opens the status dialog (idle too). -->
     <string name="shell_status_open_details">Открыть статус</string>
     <!-- Status dialog title (operation name is supporting text when present). -->

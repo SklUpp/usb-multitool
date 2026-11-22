@@ -290,6 +290,9 @@ class MainViewModel(
     private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private val backupFolderScanGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private var currentBackupFolderUri: String? = null
+    private val ventoyUpstreamCache by lazy {
+        usb.ventoy.VentoyUpstreamCache(getApplication<Application>())
+    }
     @Volatile
     var usbManager: UsbManager? = null
         private set
@@ -382,6 +385,8 @@ class MainViewModel(
         // Seed the handle so a kill before any SelectTab still restores the same tab.
         ShellTabPersistence.write(savedStateHandle, restoredTab)
         DiskService.initialize(application)
+        // Purge a server answer cached by a previous app version before it can be used.
+        ventoyUpstreamCache.readRelease()
         if (folder.usable) {
             folder.uri?.let { stored ->
                 val storedUri = Uri.parse(stored)
@@ -5363,6 +5368,18 @@ class MainViewModel(
 
 
     private fun checkVentoyUpstream(requestToken: Long) {
+        // One successful server answer is reused until the app version changes;
+        // reinstall clears app data, update changes the stored version code.
+        ventoyUpstreamCache.readRelease()?.let { cached ->
+            onIntent(
+                UiIntent.SetVentoyUpstreamRelease(
+                    requestToken = requestToken,
+                    tag = cached,
+                    pinned = VentoyDownloader.pinnedSourceOrNull(cached) != null,
+                ),
+            )
+            return
+        }
         scope.launch {
             val outcome = runCatching {
                 withContext(Dispatchers.IO) {
@@ -5372,6 +5389,7 @@ class MainViewModel(
             }
             outcome.fold(
                 onSuccess = { tag ->
+                    ventoyUpstreamCache.saveRelease(tag)
                     onIntent(
                         UiIntent.SetVentoyUpstreamRelease(
                             requestToken = requestToken,

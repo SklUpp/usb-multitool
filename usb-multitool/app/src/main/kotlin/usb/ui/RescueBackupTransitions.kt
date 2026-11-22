@@ -16,7 +16,7 @@ internal object RescueBackupTransitions {
                         intent.uri == null -> UiMessage.Key(UiMessageKey.ChooseBackupFolder)
                         intent.usable -> UiReducer.message(
                             UiMessageKey.BackupFolderReady,
-                            intent.name ?: intent.uri.orEmpty(),
+                            intent.name ?: normalizedRestorePath(intent.uri.orEmpty()),
                         )
                         else -> UiMessage.Key(UiMessageKey.BackupFolderPermissionLost)
                     }),
@@ -46,7 +46,7 @@ internal object RescueBackupTransitions {
                             )
                             else -> UiReducer.message(
                                 UiMessageKey.BackupReady,
-                                DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
+                                DestructiveConfirmation.displayLabel(intent.uri).orEmpty(),
                             )
                         }),
             )
@@ -93,7 +93,7 @@ internal object RescueBackupTransitions {
                         } else {
                             UiReducer.message(
                                 UiMessageKey.RescueImageReady,
-                                DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
+                                DestructiveConfirmation.displayLabel(intent.uri).orEmpty(),
                             )
                         }),
             )
@@ -124,7 +124,7 @@ internal object RescueBackupTransitions {
                             )
                             else -> UiReducer.message(
                                 UiMessageKey.RescueMapReady,
-                                DestructiveConfirmation.fileLabel(intent.uri) ?: intent.uri,
+                                DestructiveConfirmation.displayLabel(intent.uri).orEmpty(),
                             )
                         }),
             )

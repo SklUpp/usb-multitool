@@ -162,6 +162,7 @@
     <string name="diagnostics_backup_folder">Папка резервных копий</string>
     <string name="diagnostics_backup_folder_none">Не выбрана</string>
     <string name="diagnostics_backup_choose_folder">Выбрать папку</string>
+    <string name="diagnostics_reset_selection">Сбросить выбор</string>
     <string name="diagnostics_pick_folder">Выбрать папку…</string>
     <string name="diagnostics_change_folder">Изменить…</string>
     <string name="diagnostics_create_image">Создать</string>

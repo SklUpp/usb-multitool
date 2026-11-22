@@ -1090,28 +1090,20 @@ fun PartitionsScreen(
                 .zIndex(2f),
         ) {
             selected?.let { live ->
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = MaterialTheme.shapes.small,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 1.dp,
+                PartitionDropdown(
+                    partitions = orderedPartitions,
+                    selectedId = live.id,
+                    writeAccessOf = state::partitionWriteAccess,
+                    usageOf = state::partitionUsageSnapshot,
+                    phaseOf = state::partitionUsagePhase,
+                    sectorSize = state.diskSectorSize,
+                    enabled = state.actionsEnabled,
+                    onSelect = { onIntent(UiIntent.SelectPartition(it)) },
+                    showLba = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                ) {
-                    PartitionDropdown(
-                        partitions = orderedPartitions,
-                        selectedId = live.id,
-                        writeAccessOf = state::partitionWriteAccess,
-                        usageOf = state::partitionUsageSnapshot,
-                        phaseOf = state::partitionUsagePhase,
-                        sectorSize = state.diskSectorSize,
-                        enabled = state.actionsEnabled,
-                        onSelect = { onIntent(UiIntent.SelectPartition(it)) },
-                        showLba = true,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
-                }
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                )
             }
         }
         }

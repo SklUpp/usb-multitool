@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -213,6 +214,7 @@ fun DiagnosticsScreen(
             },
         ) {
             val backupFolderReady = state.backupFolderUsable
+            val resetSelectionLabel = stringResource(R.string.diagnostics_reset_selection)
             val chooseFolderLabel =
                 stringResource(R.string.diagnostics_backup_choose_folder)
             val folderStatusText = when {
@@ -310,6 +312,18 @@ fun DiagnosticsScreen(
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_rescue_backup),
                 hint = stringResource(R.string.diagnostics_rescue_backup_hint),
+                trailing = {
+                    IconButton(
+                        onClick = { onIntent(UiIntent.ResetRescueSelection) },
+                        enabled = state.actionsEnabled &&
+                            (state.rescueImageUri != null || state.rescueMapUri != null),
+                        modifier = Modifier.semantics {
+                            contentDescription = resetSelectionLabel
+                        },
+                    ) {
+                        GlyphIcon(glyph = Glyph.Close, size = 18.dp)
+                    }
+                },
             )
             val rescueImage = state.rescueImageInspection
                 ?.takeIf { it.uri == state.rescueImageUri }
@@ -424,6 +438,17 @@ fun DiagnosticsScreen(
             SubsectionHeader(
                 title = stringResource(R.string.diagnostics_gpt_copy),
                 hint = stringResource(R.string.diagnostics_gpt_copy_hint),
+                trailing = {
+                    IconButton(
+                        onClick = { onIntent(UiIntent.ResetGptSelection) },
+                        enabled = state.actionsEnabled && state.backupUri != null,
+                        modifier = Modifier.semantics {
+                            contentDescription = resetSelectionLabel
+                        },
+                    ) {
+                        GlyphIcon(glyph = Glyph.Close, size = 18.dp)
+                    }
+                },
             )
             val gptRestoreReady = state.backupUri != null &&
                 state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
@@ -621,6 +646,7 @@ fun DiagnosticsScreen(
 private fun SubsectionHeader(
     title: String,
     hint: String? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -641,6 +667,7 @@ private fun SubsectionHeader(
                 )
             }
         }
+        trailing?.invoke()
     }
 }
 

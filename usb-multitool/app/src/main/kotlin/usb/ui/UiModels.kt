@@ -624,7 +624,8 @@ data class DestructiveConfirmation(
          * without blocking the operation.
          */
         fun displayLabel(uriOrPath: String?): String? =
-            fileLabel(uriOrPath) ?: uriOrPath?.takeIf { it.isNotBlank() }
+            fileLabel(uriOrPath)
+                ?: uriOrPath?.takeIf { it.isNotBlank() }?.let(::normalizedRestorePath)
     }
 }
 fun DestructiveAction.displayName(): String =

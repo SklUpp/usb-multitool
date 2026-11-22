@@ -654,6 +654,12 @@ sealed class UiIntent {
     ) : UiIntent()
     data class SetRescueArchiveTree(val treeUri: String?) : UiIntent()
 
+    /** Clear the image+map restore pair without touching the shared backup folder. */
+    data object ResetRescueSelection : UiIntent()
+
+    /** Clear the GPT restore file without touching the shared backup folder. */
+    data object ResetGptSelection : UiIntent()
+
     data class SetRescueMap(
         val uri: String?,
         val inspection: RescueMapInspection? = null,
@@ -4306,6 +4312,18 @@ object UiReducer {
 
             is UiIntent.SetRescueArchiveTree ->
                 ReduceResult(state.copy(rescueArchiveTreeUri = intent.treeUri))
+            UiIntent.ResetRescueSelection -> ReduceResult(
+                state.copy(
+                    rescueArchiveTreeUri = null,
+                    rescueImageUri = null,
+                    rescueImageInspection = null,
+                    rescueMapUri = null,
+                    rescueMapInspection = null,
+                ),
+            )
+            UiIntent.ResetGptSelection -> ReduceResult(
+                state.copy(backupUri = null, backupInspection = null),
+            )
             is UiIntent.SetRescueImage ->
                 RescueBackupTransitions.setRescueImage(state, intent)
             is UiIntent.SetRescueMap ->

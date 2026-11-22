@@ -162,6 +162,7 @@
     <string name="diagnostics_backup_folder">Backup folder</string>
     <string name="diagnostics_backup_folder_none">Not selected</string>
     <string name="diagnostics_backup_choose_folder">Choose folder</string>
+    <string name="diagnostics_reset_selection">Reset selection</string>
     <string name="diagnostics_pick_folder">Choose folder…</string>
     <string name="diagnostics_change_folder">Change…</string>
     <string name="diagnostics_create_image">Create</string>
