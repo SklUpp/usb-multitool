@@ -85,7 +85,7 @@
     <string name="partitions_strip_scale_note">Scaled by disk LBA. Minimum block width: 48 dp (for accurate touch targeting).</string>
     <string name="partitions_efi_label">EFI</string>
     <string name="partitions_info_help_title">Partition information</string>
-    <string name="partitions_info_help_text">'Name' is stored in the GPT table entry (up to 36 characters). 'Volume Label' is stored in the filesystem metadata. RO/RW indicators reflect physical block device access.</string>
+    <string name="partitions_info_help_text">\'Name\' is stored in the GPT table entry (up to 36 characters). \'Volume Label\' is stored in the filesystem metadata. RO/RW indicators reflect physical block device access.</string>
     <string name="partitions_info_name_label">Name</string>
     <string name="files_write_short_ro">RO</string>
     <string name="files_write_short_rw">RW</string>
@@ -106,7 +106,7 @@
     <string name="partitions_scheme_title">Table scheme</string>
     <string name="partitions_scheme_unknown">unknown</string>
     <string name="partitions_scheme_help_title">Scheme and backup GPT</string>
-    <string name="partitions_scheme_help_text">Changing scheme (MBR/GPT) reinitializes the disk: all existing partitions are erased. 'Fix backup GPT' preserves partitions by relocating the backup header to the actual disk end.</string>
+    <string name="partitions_scheme_help_text">Changing scheme (MBR/GPT) reinitializes the disk: all existing partitions are erased. \'Fix backup GPT\' preserves partitions by relocating the backup header to the actual disk end.</string>
     <string name="partitions_scheme_choice_title">%1$s: choose action</string>
     <string name="partitions_scheme_choice_note">Fix backup GPT keeps all partitions. Changing the scheme erases all partitions and asks for a separate confirmation.</string>
     <string name="partitions_scheme_choice_change">Change scheme to %1$s…</string>
@@ -741,7 +741,7 @@
     <string name="settings_valid">Valid</string>
     <string name="settings_file_label">File</string>
     <string name="settings_not_loaded">Global settings have not been read yet.</string>
-    <string name="settings_applies_note">Changes staged in memory. Click 'Update selected file' to write them to /ventoy/ventoy.json on the drive.</string>
+    <string name="settings_applies_note">Changes staged in memory. Click \'Update selected file\' to write them to /ventoy/ventoy.json on the drive.</string>
     <string name="settings_win11_hint">1 — bypass Windows 11 requirements (TPM 2.0, Secure Boot, RAM, CPU).</string>
     <string name="settings_win11_nro_hint">1 — allow local account creation without internet or MS account (BypassNRO).</string>
     <string name="settings_win11_short">Hardware checks bypass</string>
