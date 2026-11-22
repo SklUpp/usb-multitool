@@ -226,9 +226,8 @@ private fun SettingsBackups(
                 modifier = Modifier.semantics { heading() },
             )
             Text(
-                text = state.backupFolderUri?.let { uri ->
-                    state.backupFolderName?.takeIf { it.isNotBlank() }?.let { "$it\n$uri" } ?: uri
-                } ?: stringResource(R.string.diagnostics_backup_folder_none),
+                text = state.backupFolderUri?.let(::normalizedRestorePath)
+                    ?: stringResource(R.string.diagnostics_backup_folder_none),
                 style = MaterialTheme.typography.bodyMedium,
                 softWrap = true,
                 color = if (state.backupFolderUri != null && !state.backupFolderUsable) {
