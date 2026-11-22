@@ -1157,7 +1157,13 @@ private fun FolderCard(
     ) {
         listState.scrollToItem(0)
     }
-    val rows = state.files
+    val rows = remember(state.files) {
+        state.files.sortedWith(
+            compareByDescending<FileEntry> { it.isDirectory }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+                .thenBy { it.name },
+        )
+    }
     val rowsState = state.filesListingState.name
     val rowsError = state.filesError
     val locked = state.isRunning

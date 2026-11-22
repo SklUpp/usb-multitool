@@ -68,6 +68,50 @@ class ShellLogBehaviorTest {
     }
 
     @Test
+    fun readOnlyTabsOpenWhileOperationRunsButPrimaryTabsRemainBlocked() {
+        val running = AppUiState(
+            presence = DevicePresence.Ready,
+            tab = ShellTab.Partitions,
+            operation = runningOperation(),
+        )
+        for (target in listOf(ShellTab.Settings, ShellTab.Diagnostics)) {
+            val opened = UiReducer.reduce(running, UiIntent.SelectTab(target)).state
+            assertEquals(target, opened.tab)
+            assertFalse(opened.actionsEnabled)
+        }
+        val blocked = UiReducer.reduce(running, UiIntent.SelectTab(ShellTab.Files)).state
+        assertEquals(ShellTab.Partitions, blocked.tab)
+        assertEquals(UiMessage.Key(UiMessageKey.WaitForOperation), blocked.statusMessage)
+
+        val backFromSettings = UiReducer.reduce(
+            running.copy(tab = ShellTab.Settings),
+            UiIntent.SelectTab(ShellTab.Files),
+        ).state
+        assertEquals(ShellTab.Files, backFromSettings.tab)
+    }
+
+    @Test
+    fun diagnosticsReturnsToWorkTabWhileRunningOrQueued() {
+        val running = AppUiState(
+            presence = DevicePresence.Ready,
+            tab = ShellTab.Partitions,
+            operation = runningOperation(),
+        )
+        val queued = running.copy(
+            operation = runningOperation().copy(state = OperationState.Queued),
+        )
+        for (state in listOf(running, queued)) {
+            val returned = UiReducer.reduce(
+                state.copy(tab = ShellTab.Diagnostics),
+                UiIntent.SelectTab(ShellTab.Partitions),
+            ).state
+            assertEquals(ShellTab.Partitions, returned.tab)
+            assertFalse(returned.actionsEnabled)
+            assertEquals(state.operation, returned.operation)
+        }
+    }
+
+    @Test
     fun newEntriesAppearImmediatelyAfterClear() {
         val cleared = UiReducer.reduce(
             AppUiState(logLines = listOf("old")),

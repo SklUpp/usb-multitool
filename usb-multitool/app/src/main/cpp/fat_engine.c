@@ -48,6 +48,9 @@ typedef struct {
 	char full[1024];
 	uint64_t offset;
 	int exclusive_new;
+	/* A write/seek left the FIL in an unknown state and f_close failed. Keep the
+	 * handle so a later close can retry, but never append through it. */
+	int poisoned;
 } FatWriteSession;
 
 static FatWriteSession g_write;
@@ -96,8 +99,21 @@ static FRESULT close_write_session_locked(void)
 
 	if (!g_write.active) return FR_OK;
 	fr = f_close(&g_write.fil);
-	g_write.active = 0;
+	/* f_close leaves the FIL and its share lock open on failure. Keeping the
+	 * session lets the next sync/delete retry instead of leaking FR_LOCKED. */
+	if (fr == FR_OK) {
+		g_write.active = 0;
+	} else {
+		g_write.poisoned = 1;
+	}
 	return fr;
+}
+
+/* The volume is being destroyed; a handle that still failed to close cannot be
+ * retried after f_mount(NULL), so drop the session record with the volume. */
+static void discard_write_session_for_volume_locked(uint64_t volume)
+{
+	if (g_write.active && g_write.volume == volume) g_write.active = 0;
 }
 
 static int close_write_session_for_volume_locked(uint64_t volume)
@@ -123,11 +139,21 @@ static int abort_write_session_locked(FatVolume *v, FRESULT failure)
 	if (!g_write.active) return map_fr(failure);
 	exclusive = g_write.exclusive_new;
 	close_fr = f_close(&g_write.fil);
-	g_write.active = 0;
+	if (close_fr == FR_OK) {
+		g_write.active = 0;
+		/* The file is closed; only now is unlinking safe. */
+		if (exclusive) unlink_fr = f_unlink(g_write.full);
+	} else {
+		/* Keep the failed handle for a retry. Any reuse must close it first. */
+		g_write.poisoned = 1;
+	}
 	if (failure == FR_OK) failure = close_fr;
-	if (exclusive) unlink_fr = f_unlink(g_write.full);
-	if (close_fr == FR_DISK_ERR || unlink_fr == FR_DISK_ERR) vol_note_fr(v, FR_DISK_ERR);
-	if (exclusive && unlink_fr != FR_OK) return FAT_ENGINE_CLEANUP_FAILED;
+	if (failure == FR_DISK_ERR || close_fr == FR_DISK_ERR || unlink_fr == FR_DISK_ERR) {
+		vol_note_fr(v, FR_DISK_ERR);
+	}
+	if (exclusive && (close_fr != FR_OK || unlink_fr != FR_OK)) {
+		return FAT_ENGINE_CLEANUP_FAILED;
+	}
 	return map_fr(failure);
 }
 
@@ -268,6 +294,9 @@ int fat_engine_umount(uint64_t volume)
 	snprintf(path, sizeof(path), "%u:", (unsigned)v->pdrv);
 	fr = f_mount(NULL, path, 0);
 	if (rc == 0) rc = map_fr(fr);
+	/* f_mount(NULL) destroyed the volume object; a still-open FIL cannot be
+	 * retried, so forget it only after the mount is gone. */
+	discard_write_session_for_volume_locked(volume);
 	fat_diskio_unbind(v->pdrv);
 	memset(v, 0, sizeof(*v));
 	pthread_mutex_unlock(&g_vols_mu);
@@ -328,6 +357,7 @@ int fat_engine_usage(uint64_t volume, uint64_t *out_total_bytes, uint64_t *out_f
 	FRESULT fr;
 	uint64_t clusters;
 	uint64_t cluster_bytes;
+	int rc;
 
 	if (!out_total_bytes || !out_free_bytes) return (int)FR_INVALID_PARAMETER;
 
@@ -336,6 +366,11 @@ int fat_engine_usage(uint64_t volume, uint64_t *out_total_bytes, uint64_t *out_f
 	if (!v) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_OBJECT;
+	}
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
 	}
 	if ((fr = (FRESULT)make_path(path, sizeof(path), v->pdrv, "/")) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
@@ -368,6 +403,7 @@ int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t ca
 	char full[1024];
 	FRESULT fr;
 	size_t n = 0;
+	int rc;
 
 	if (!out_count) return (int)FR_INVALID_PARAMETER;
 	*out_count = 0;
@@ -377,6 +413,11 @@ int fat_engine_list(uint64_t volume, const char *path, FatDirEnt *out, size_t ca
 	if (!v) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
+	}
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
 	}
 	if ((fr = (FRESULT)make_path(full, sizeof(full), v->pdrv, path)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
@@ -417,6 +458,7 @@ int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 	char full[1024];
 	FRESULT fr;
 	const char *p;
+	int rc;
 
 	if (!out || !path) return (int)FR_INVALID_PARAMETER;
 
@@ -425,6 +467,11 @@ int fat_engine_stat(uint64_t volume, const char *path, FatStat *out)
 	if (!v) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
+	}
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
 	}
 
 	/* FatFs f_stat rejects bare drive roots ("0:"); synthesize directory stat. */
@@ -464,6 +511,7 @@ int fat_engine_mkdir(uint64_t volume, const char *path)
 	FatVolume *v;
 	char full[1024];
 	FRESULT fr;
+	int rc;
 	if (!path) return (int)FR_INVALID_PARAMETER;
 	pthread_mutex_lock(&g_fat_mu);
 	v = vol_from(volume);
@@ -471,7 +519,11 @@ int fat_engine_mkdir(uint64_t volume, const char *path)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
 	}
-	(void)close_write_session_for_volume_locked(volume);
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
+	}
 	if ((fr = (FRESULT)make_path(full, sizeof(full), v->pdrv, path)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
@@ -488,6 +540,7 @@ int fat_engine_delete(uint64_t volume, const char *path)
 	FatVolume *v;
 	char full[1024];
 	FRESULT fr;
+	int rc;
 	if (!path) return (int)FR_INVALID_PARAMETER;
 	pthread_mutex_lock(&g_fat_mu);
 	v = vol_from(volume);
@@ -495,7 +548,11 @@ int fat_engine_delete(uint64_t volume, const char *path)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
 	}
-	(void)close_write_session_for_volume_locked(volume);
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
+	}
 	if ((fr = (FRESULT)make_path(full, sizeof(full), v->pdrv, path)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return map_fr(fr);
@@ -512,6 +569,7 @@ int fat_engine_rename(uint64_t volume, const char *from, const char *to)
 	FatVolume *v;
 	char a[1024], b[1024];
 	FRESULT fr;
+	int rc;
 	if (!from || !to) return (int)FR_INVALID_PARAMETER;
 	pthread_mutex_lock(&g_fat_mu);
 	v = vol_from(volume);
@@ -519,7 +577,11 @@ int fat_engine_rename(uint64_t volume, const char *from, const char *to)
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
 	}
-	(void)close_write_session_for_volume_locked(volume);
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
+	}
 	if ((fr = (FRESULT)make_path(a, sizeof(a), v->pdrv, from)) != FR_OK ||
 	    (fr = (FRESULT)make_path(b, sizeof(b), v->pdrv, to)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
@@ -540,6 +602,7 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 	char full[1024];
 	FRESULT fr;
 	UINT br = 0;
+	int rc;
 
 	if (!path || (!buf && len > 0) || !out_read) return (int)FR_INVALID_PARAMETER;
 	*out_read = 0;
@@ -549,6 +612,11 @@ int fat_engine_read_file(uint64_t volume, const char *path, uint64_t offset,
 	if (!v) {
 		pthread_mutex_unlock(&g_fat_mu);
 		return (int)FR_INVALID_PARAMETER;
+	}
+	rc = close_write_session_for_volume_locked(volume);
+	if (rc != 0) {
+		pthread_mutex_unlock(&g_fat_mu);
+		return rc;
 	}
 	if ((fr = (FRESULT)make_path(full, sizeof(full), v->pdrv, path)) != FR_OK) {
 		pthread_mutex_unlock(&g_fat_mu);
@@ -609,10 +677,14 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 	}
 	if (g_write.active &&
 	    (g_write.volume != volume || strcmp(g_write.full, full) != 0 ||
-	     g_write.offset != offset)) {
+	     g_write.offset != offset || create_mode != 0 || g_write.poisoned)) {
+		uint64_t writer_volume = g_write.volume;
 		FRESULT close_fr = close_write_session_locked();
 		if (close_fr != FR_OK) {
-			vol_note_fr(v, close_fr);
+			/* f_sync may have cleared FA_MODIFIED before CTRL_SYNC failed.
+			 * Mark the volume whose FIL was closed, not the new target. */
+			FatVolume *writer = vol_from(writer_volume);
+			if (writer) vol_note_fr(writer, close_fr);
 			pthread_mutex_unlock(&g_fat_mu);
 			return map_fr(close_fr);
 		}
@@ -637,6 +709,7 @@ int fat_engine_write_file(uint64_t volume, const char *path, uint64_t offset,
 		g_write.volume = volume;
 		g_write.offset = offset;
 		g_write.exclusive_new = exclusive_new;
+		g_write.poisoned = 0;
 		memcpy(g_write.full, full, strlen(full) + 1);
 		if (offset > 0) {
 			fr = f_lseek(&g_write.fil, (FSIZE_t)offset);
@@ -670,6 +743,7 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 	BYTE *work;
 	char path[8];
 	FRESULT fr;
+	FRESULT close_fr;
 
 	if (!block_handle || sector_size < 512 || sector_size > 4096 || sector_count == 0) {
 		return (int)FR_INVALID_PARAMETER;
@@ -681,7 +755,14 @@ int fat_engine_mkfs(uint64_t block_handle, uint32_t sector_size, uint64_t sector
 	}
 
 	pthread_mutex_lock(&g_fat_mu);
-	(void)close_write_session_locked();
+	close_fr = close_write_session_locked();
+	if (close_fr != FR_OK) {
+		FatVolume *writer = vol_from(g_write.volume);
+		if (writer) vol_note_fr(writer, close_fr);
+		pthread_mutex_unlock(&g_fat_mu);
+		free(work);
+		return map_fr(close_fr);
+	}
 	pthread_mutex_lock(&g_vols_mu);
 	v = alloc_vol_locked();
 	if (!v) {

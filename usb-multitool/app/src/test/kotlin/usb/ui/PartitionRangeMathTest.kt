@@ -132,4 +132,12 @@ class PartitionRangeMathTest {
         // Close to boundary 4096
         assertEquals(4096UL, PartitionRangeMath.snapWithMagnets(4092f, 4096UL, snapPoints, 10f))
     }
+
+    @Test
+    fun nearestMagnetIsNullOutsideThreshold() {
+        val snapPoints = listOf(0UL, 1024UL, 2048UL, 4096UL)
+        assertEquals(1024UL, PartitionRangeMath.nearestMagnet(1030f, 4096UL, snapPoints, 10f))
+        assertNull(PartitionRangeMath.nearestMagnet(1050f, 4096UL, snapPoints, 10f))
+        assertNull(PartitionRangeMath.nearestMagnet(1020f, 4096UL, snapPoints, 0f))
+    }
 }

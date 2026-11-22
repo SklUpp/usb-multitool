@@ -9,6 +9,7 @@
 
 #include "ext_engine.h"
 #include "ext_name_utf8.h"
+#include "jni_thread_env.h"
 #include "usb_block.h"
 
 namespace {
@@ -30,37 +31,12 @@ struct MountedVolumeWrapper {
     JniBlockDevice *block_dev = nullptr;
 };
 
-struct ThreadDetacher {
-    JavaVM *jvm = nullptr;
-    ~ThreadDetacher()
-    {
-        if (jvm) jvm->DetachCurrentThread();
-    }
-};
-
-thread_local ThreadDetacher tls_detacher;
-thread_local JNIEnv *tls_env = nullptr;
-
-JNIEnv *get_env(JavaVM *jvm)
-{
-    if (tls_env) return tls_env;
-    JNIEnv *env = nullptr;
-    jint status = jvm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
-    if (status == JNI_EDETACHED) {
-        if (jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
-        /* Attached native threads must detach before they exit, or ART aborts. */
-        tls_detacher.jvm = jvm;
-    } else if (status != JNI_OK) {
-        return nullptr;
-    }
-    tls_env = env;
-    return env;
-}
+using usb_jni::env_for;
 
 int jni_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 {
     auto *dev = static_cast<JniBlockDevice *>(ctx);
-    JNIEnv *env = get_env(dev->jvm);
+    JNIEnv *env = env_for(dev->jvm);
     if (!env) return -1;
     jlong bytes = static_cast<jlong>(sectors) * dev->sector_size;
     jobject directBuf = env->NewDirectByteBuffer(buf, bytes);
@@ -77,7 +53,7 @@ int jni_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 int jni_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors)
 {
     auto *dev = static_cast<JniBlockDevice *>(ctx);
-    JNIEnv *env = get_env(dev->jvm);
+    JNIEnv *env = env_for(dev->jvm);
     if (!env) return -1;
     jlong bytes = static_cast<jlong>(sectors) * dev->sector_size;
     jobject directBuf = env->NewDirectByteBuffer(const_cast<void *>(buf), bytes);
@@ -94,7 +70,7 @@ int jni_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors)
 int jni_sync(void *ctx)
 {
     auto *dev = static_cast<JniBlockDevice *>(ctx);
-    JNIEnv *env = get_env(dev->jvm);
+    JNIEnv *env = env_for(dev->jvm);
     if (!env) return -1;
     env->CallVoidMethod(dev->device, dev->syncMid);
     if (env->ExceptionCheck()) {

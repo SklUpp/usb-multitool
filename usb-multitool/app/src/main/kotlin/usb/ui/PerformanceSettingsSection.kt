@@ -36,7 +36,7 @@ import usb.multitool.R
  * a slider never resizes an in-flight transfer.
  */
 @Composable
-internal fun PerformanceSettingsSection() {
+internal fun PerformanceSettingsSection(enabled: Boolean = true) {
     val context = LocalContext.current
     val prefs = remember { PerformancePreferences.prefs(context) }
     val haptic = LocalHapticFeedback.current
@@ -88,6 +88,7 @@ internal fun PerformanceSettingsSection() {
             step = TransferTuning.SCSI_CHUNK_STEP_KIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_kib, scsiChunkKib),
             resetDescription = resetDescription,
+            enabled = enabled,
             onValueChange = { scsiChunkKib = it },
             onValueChangeFinished = { saveValues() },
             onReset = {
@@ -106,6 +107,7 @@ internal fun PerformanceSettingsSection() {
             step = TransferTuning.JNI_CAP_STEP_KIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_kib, jniCapKib),
             resetDescription = resetDescription,
+            enabled = enabled,
             onValueChange = { jniCapKib = it },
             onValueChangeFinished = { saveValues() },
             onReset = {
@@ -125,6 +127,7 @@ internal fun PerformanceSettingsSection() {
             step = TransferTuning.RESCUE_CHECKPOINT_STEP_MIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_mib, rescueCheckpointMib),
             resetDescription = resetDescription,
+            enabled = enabled,
             onValueChange = { rescueCheckpointMib = it },
             onValueChangeFinished = { saveValues() },
             onReset = {
@@ -147,6 +150,7 @@ private fun PerfSlider(
     step: Int,
     valueLabel: String,
     resetDescription: String,
+    enabled: Boolean,
     onValueChange: (Int) -> Unit,
     onValueChangeFinished: () -> Unit,
     onReset: () -> Unit,
@@ -189,6 +193,7 @@ private fun PerfSlider(
             )
             IconButton(
                 onClick = onReset,
+                enabled = enabled,
                 modifier = Modifier
                     .size(48.dp)
                     .semantics { contentDescription = resetDescription },
@@ -207,6 +212,7 @@ private fun PerfSlider(
                 onValueChange(snapped)
             },
             onValueChangeFinished = onValueChangeFinished,
+            enabled = enabled,
             valueRange = range.first.toFloat()..range.last.toFloat(),
             steps = ((range.last - range.first) / step) - 1,
             modifier = Modifier.fillMaxWidth(),

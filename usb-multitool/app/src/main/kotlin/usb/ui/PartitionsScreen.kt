@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -284,6 +285,7 @@ fun PartitionsScreen(
 
         AlertDialog(
             onDismissRequest = { createRegion = null },
+            modifier = Modifier.imePadding(),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -349,6 +351,10 @@ fun PartitionsScreen(
                             endLba.toLong(),
                             (sliderEnd - sliderStart).toLong(),
                         )
+                        val haptic = LocalHapticFeedback.current
+                        var lastMagnet by remember {
+                            mutableStateOf<Pair<Boolean, ULong>?>(null)
+                        }
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             RangeSlider(
                                 value = safeStart..safeEnd,
@@ -357,37 +363,69 @@ fun PartitionsScreen(
                                     val movingStart =
                                         kotlin.math.abs(range.start - safeStart) >=
                                             kotlin.math.abs(range.endInclusive - safeEnd)
-                                    val snapStart =
+                                    val startMagnet =
                                         if (movingStart) {
                                             val points = baseSnapPoints + PartitionRangeMath.sizePointsBelow(
                                                 anchorMib = sliderEnd,
                                                 sizes = sizeMagnets,
                                             )
-                                            PartitionRangeMath.snapWithMagnets(
+                                            PartitionRangeMath.nearestMagnet(
                                                 position = range.start,
                                                 maxMib = availableMib,
                                                 snapPoints = points,
                                                 thresholdMib = magnetThreshold,
-                                            ).coerceAtMost(if (sliderEnd > 0UL) sliderEnd - 1UL else 0UL)
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                    val snapStart =
+                                        if (movingStart) {
+                                            (startMagnet ?: PartitionRangeMath.snapToMib(
+                                                range.start,
+                                                availableMib,
+                                            )).coerceAtMost(if (sliderEnd > 0UL) sliderEnd - 1UL else 0UL)
                                         } else {
                                             sliderStart
                                         }
-                                    val snapEnd =
+                                    val endMagnet =
                                         if (!movingStart) {
                                             val points = baseSnapPoints + PartitionRangeMath.sizePointsAbove(
                                                 anchorMib = sliderStart,
                                                 maxMib = availableMib,
                                                 sizes = sizeMagnets,
                                             )
-                                            PartitionRangeMath.snapWithMagnets(
+                                            PartitionRangeMath.nearestMagnet(
                                                 position = range.endInclusive,
                                                 maxMib = availableMib,
                                                 snapPoints = points,
                                                 thresholdMib = magnetThreshold,
-                                            ).coerceAtLeast(snapStart + 1UL)
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                    val snapEnd =
+                                        if (!movingStart) {
+                                            (endMagnet ?: PartitionRangeMath.snapToMib(
+                                                range.endInclusive,
+                                                availableMib,
+                                            )).coerceAtLeast(snapStart + 1UL)
                                         } else {
                                             sliderEnd
                                         }
+                                    val magnet =
+                                        when {
+                                            movingStart && startMagnet != null && startMagnet == snapStart ->
+                                                true to startMagnet
+                                            !movingStart && endMagnet != null && endMagnet == snapEnd ->
+                                                false to endMagnet
+                                            else -> null
+                                        }
+                                    if (magnet != null && magnet != lastMagnet) {
+                                        haptic.performHapticFeedback(
+                                            HapticFeedbackType.TextHandleMove,
+                                        )
+                                    }
+                                    lastMagnet = magnet
                                     val selection = PartitionRangeMath.sectorsFor(
                                         firstAligned = regionBase,
                                         regionEnd = regionEnd,

@@ -1218,10 +1218,17 @@ object UiReducer {
     fun reduce(state: AppUiState, intent: UiIntent): ReduceResult =
         when (intent) {
             is UiIntent.SelectTab -> {
-                // A running or queued operation owns the USB lane: tab navigation (tap or
-                // swipe, both arrive here) must not orphan it from Cancel/status. The tab
-                // stays; completion restores actionsEnabled and navigation works again.
+                // A running or queued operation owns the USB lane: primary tab navigation
+                // must not orphan it from Cancel/status. Settings/Diagnostics are read-only
+                // destinations and may open while actionsEnabled stays false.
+                val readOnlyDestination =
+                    intent.tab == ShellTab.Settings || intent.tab == ShellTab.Diagnostics
+                // Leaving a read-only screen must work after opening it during an operation;
+                // otherwise Back would trap the user there.
+                val readOnlyTraversal = readOnlyDestination ||
+                    state.tab == ShellTab.Settings || state.tab == ShellTab.Diagnostics
                 if (intent.tab != state.tab &&
+                    !readOnlyTraversal &&
                     (state.isRunning || state.operation?.state == OperationState.Queued)
                 ) {
                     ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.WaitForOperation)))

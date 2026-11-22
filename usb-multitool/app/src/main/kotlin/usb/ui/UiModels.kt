@@ -2020,20 +2020,17 @@ object PartitionRangeMath {
     }
 
     /**
-     * Snap [position] to the nearest magnetic snap point in [snapPoints] if within
-     * [thresholdMib], otherwise fallback to standard [snapToMib].
+     * Nearest magnetic point within [thresholdMib], or null when [position] is only
+     * being rounded to the next whole MiB.
      */
-    fun snapWithMagnets(
+    fun nearestMagnet(
         position: Float,
         maxMib: ULong,
         snapPoints: List<ULong>,
         thresholdMib: Float = 0f,
-    ): ULong {
-        val wholeMib = snapToMib(position, maxMib)
-        if (maxMib == 0UL || snapPoints.isEmpty() || thresholdMib <= 0f) {
-            return wholeMib
-        }
-        var bestPoint = wholeMib
+    ): ULong? {
+        if (maxMib == 0UL || snapPoints.isEmpty() || thresholdMib <= 0f) return null
+        var bestPoint: ULong? = null
         var bestDist = Float.MAX_VALUE
         for (pt in snapPoints) {
             if (pt > maxMib) continue
@@ -2045,6 +2042,19 @@ object PartitionRangeMath {
         }
         return bestPoint
     }
+
+    /**
+     * Snap [position] to the nearest magnetic snap point in [snapPoints] if within
+     * [thresholdMib], otherwise fallback to standard [snapToMib].
+     */
+    fun snapWithMagnets(
+        position: Float,
+        maxMib: ULong,
+        snapPoints: List<ULong>,
+        thresholdMib: Float = 0f,
+    ): ULong =
+        nearestMagnet(position, maxMib, snapPoints, thresholdMib)
+            ?: snapToMib(position, maxMib)
 
     /**
      * Sector selection for a snapped range, or null for an empty/inverted range or when

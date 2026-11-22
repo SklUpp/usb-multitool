@@ -59,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
@@ -81,6 +82,9 @@ import androidx.compose.ui.res.painterResource
 import usb.ventoy.VentoySetup
 import usb.ventoy.WindowsTemplate
 import usb.ventoy.XmlText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import usb.ventoy.Autounattend
@@ -1301,13 +1305,16 @@ private fun AutounattendRawEditorDialog(
         runCatching { document.sourceCharsetName?.let(Charset::forName) }.getOrNull()
             ?: StandardCharsets.UTF_8
     }
-    val markers = remember(draft, sourceCharset, document.sourceBom) {
-        runCatching {
-            WindowsTemplate.inspect(
-                XmlText.encode(draft, sourceCharset, document.sourceBom),
-                requireUnattendRoot = true,
-            ).destructiveMarkers
-        }.getOrDefault(emptyList())
+    val markers by produceState(emptyList<String>(), draft, sourceCharset, document.sourceBom) {
+        delay(300)
+        value = withContext(Dispatchers.Default) {
+            runCatching {
+                WindowsTemplate.inspect(
+                    XmlText.encode(draft, sourceCharset, document.sourceBom),
+                    requireUnattendRoot = true,
+                ).destructiveMarkers
+            }.getOrDefault(emptyList())
+        }
     }
     val invalidMessage = stringResource(R.string.unattend_editor_invalid)
     val destructiveAckRequired = stringResource(R.string.unattend_editor_destructive_ack)
@@ -1409,7 +1416,9 @@ private fun AutounattendRawEditorDialog(
                         .weight(1f)
                         .semantics { contentDescription = xmlFieldDescription },
                     enabled = actionsEnabled,
-                    textStyle = MaterialTheme.typography.bodySmall,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
                 )
                 if (markers.isNotEmpty() || document.destructiveMarkers.isNotEmpty()) {
                     Row(

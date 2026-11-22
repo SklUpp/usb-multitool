@@ -16,6 +16,8 @@
 #include <limits>
 #include <mutex>
 
+#include "jni_thread_env.h"
+
 #if USB_WITH_SECTORFORGE
 
 extern "C" {
@@ -63,25 +65,7 @@ struct BridgeCtx {
 std::mutex g_runs_mutex;
 BridgeCtx *g_runs[kMaxRuns] = {};
 
-struct ThreadDetacher {
-    JavaVM *jvm = nullptr;
-    ~ThreadDetacher() {
-        if (jvm) jvm->DetachCurrentThread();
-    }
-};
-
-thread_local ThreadDetacher tls_detacher;
-
-JNIEnv *env_for(BridgeCtx *ctx) {
-    JNIEnv *env = nullptr;
-    jint status = ctx->vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
-    if (status == JNI_OK) return env;
-    if (status != JNI_EDETACHED) return nullptr;
-    if (ctx->vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
-    /* Attached native threads must detach before they exit, or ART aborts. */
-    tls_detacher.jvm = ctx->vm;
-    return env;
-}
+using usb_jni::env_for;
 
 void capture_exception(JNIEnv *env, BridgeCtx *ctx) {
     if (!env->ExceptionCheck()) return;
@@ -106,7 +90,7 @@ void capture_illegal_state(JNIEnv *env, BridgeCtx *ctx, const char *message) {
 
 int32_t read_at(void *raw, uint64_t offset, uint8_t *out, size_t len) {
     auto *ctx = static_cast<BridgeCtx *>(raw);
-    JNIEnv *env = env_for(ctx);
+    JNIEnv *env = env_for(ctx->vm);
     if (env == nullptr) return kReadFatal;
     jobject buffer = env->NewDirectByteBuffer(out, static_cast<jlong>(len));
     if (buffer == nullptr) {
@@ -125,7 +109,7 @@ int32_t read_at(void *raw, uint64_t offset, uint8_t *out, size_t len) {
 
 int32_t write_at(void *raw, uint64_t offset, const uint8_t *data, size_t len) {
     auto *ctx = static_cast<BridgeCtx *>(raw);
-    JNIEnv *env = env_for(ctx);
+    JNIEnv *env = env_for(ctx->vm);
     if (env == nullptr) return kReadFatal;
     jobject buffer = env->NewDirectByteBuffer(const_cast<uint8_t *>(data),
                                               static_cast<jlong>(len));
@@ -146,7 +130,7 @@ int32_t write_at(void *raw, uint64_t offset, const uint8_t *data, size_t len) {
 int32_t progress(void *raw, uint64_t finished, uint64_t bad, uint64_t pending,
                  uint64_t position, const SfTriple *blocks, size_t count) {
     auto *ctx = static_cast<BridgeCtx *>(raw);
-    JNIEnv *env = env_for(ctx);
+    JNIEnv *env = env_for(ctx->vm);
     if (env == nullptr) return 1;
     if (count > static_cast<size_t>(std::numeric_limits<jsize>::max()) / 3) {
         capture_illegal_state(env, ctx, "SectorForge progress map exceeds JNI long-array limit");
@@ -182,7 +166,7 @@ int32_t progress(void *raw, uint64_t finished, uint64_t bad, uint64_t pending,
 
 void release(BridgeCtx *ctx) {
     if (ctx == nullptr) return;
-    JNIEnv *env = env_for(ctx);
+    JNIEnv *env = env_for(ctx->vm);
     if (env != nullptr) {
         if (ctx->reader != nullptr) env->DeleteGlobalRef(ctx->reader);
         if (ctx->writer != nullptr) env->DeleteGlobalRef(ctx->writer);

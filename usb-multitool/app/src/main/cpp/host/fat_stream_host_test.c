@@ -15,6 +15,8 @@
 
 static uint8_t *g_image;
 static int g_fail_write_at = -1;
+static int g_fail_sync_at = -1;
+static int g_sync_count = 0;
 
 static int img_read(void *ctx, uint64_t lba, void *buf, uint32_t sectors)
 {
@@ -40,6 +42,12 @@ static int img_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors)
 static int img_sync(void *ctx)
 {
 	(void)ctx;
+	if (g_fail_sync_at == 0) {
+		g_fail_sync_at = -1;
+		return -1;
+	}
+	if (g_fail_sync_at > 0) g_fail_sync_at--;
+	g_sync_count++;
 	return 0;
 }
 
@@ -116,6 +124,45 @@ int main(void)
 	rc = check_tail(vol, "/stream.bin", chunk);
 	if (rc != 0) return fail("tail", rc);
 
+	/* Read/stat/list must see a just-written file without an explicit sync. */
+	{
+		FatDirEnt entries[16];
+		size_t count = 0;
+		size_t read = 0;
+		uint8_t readback[CHUNK_SIZE];
+		rc = fat_engine_write_file(vol, "/readnow.bin", 0, chunk, CHUNK_SIZE,
+					   &written, CHUNK_SIZE, 2);
+		if (rc != 0) return fail("readnow create", rc);
+		rc = fat_engine_read_file(vol, "/readnow.bin", 0, readback,
+					  sizeof(readback), &read);
+		if (rc != 0 || read != sizeof(readback) ||
+		    memcmp(readback, chunk, sizeof(readback)) != 0) {
+			return fail("readnow read", rc);
+		}
+		rc = fat_engine_write_file(vol, "/statnow.bin", 0, chunk, CHUNK_SIZE,
+					   &written, CHUNK_SIZE, 2);
+		if (rc != 0) return fail("statnow create", rc);
+		rc = fat_engine_stat(vol, "/statnow.bin", &st);
+		if (rc != 0 || st.size != CHUNK_SIZE) return fail("statnow size", rc);
+		rc = fat_engine_write_file(vol, "/listnow.bin", 0, chunk, CHUNK_SIZE,
+					   &written, CHUNK_SIZE, 2);
+		if (rc != 0) return fail("listnow create", rc);
+		rc = fat_engine_list(vol, "/", entries, 16, &count);
+		if (rc != 0) return fail("listnow list", rc);
+		int found = 0;
+		for (size_t i = 0; i < count && i < 16; i++) {
+			if (strcmp(entries[i].name, "listnow.bin") == 0) {
+				found = entries[i].size == CHUNK_SIZE;
+				break;
+			}
+		}
+		if (!found) return fail("listnow size", 0);
+		rc = fat_engine_delete(vol, "/readnow.bin");
+		if (rc == 0) rc = fat_engine_delete(vol, "/statnow.bin");
+		if (rc == 0) rc = fat_engine_delete(vol, "/listnow.bin");
+		if (rc != 0) return fail("readnow cleanup", rc);
+	}
+
 	/* A structure-changing op must close the stream before touching the file. */
 	rc = fat_engine_write_file(vol, "/open.bin", 0, chunk, CHUNK_SIZE, &written,
 				   CHUNK_SIZE, 2);
@@ -153,6 +200,90 @@ int main(void)
 	if (rc != 0) return fail("recover", rc);
 	rc = fat_engine_sync(vol);
 	if (rc != 0) return fail("recover sync", rc);
+
+	/* A failed f_close must keep the session so the next sync retries it. */
+	rc = fat_engine_write_file(vol, "/closefail.bin", 0, chunk, CHUNK_SIZE, &written,
+				   CHUNK_SIZE, 2);
+	if (rc != 0) return fail("closefail create", rc);
+	g_fail_write_at = 0;
+	rc = fat_engine_sync(vol);
+	if (rc == 0) return fail("close failure swallowed", 0);
+	g_fail_write_at = -1;
+	rc = fat_engine_sync(vol);
+	if (rc != 0) return fail("close retry", rc);
+	rc = fat_engine_stat(vol, "/closefail.bin", &st);
+	if (rc != 0 || st.size != CHUNK_SIZE) return fail("closefail size", rc);
+
+	/* Switching to another volume must record the failed close on the writer's
+	 * volume, so its next sync retries CTRL_SYNC instead of reporting success. */
+	{
+		uint64_t vol2 = 0;
+		int sync_before;
+		rc = fat_engine_mount(block, SECTOR_SIZE, SECTOR_COUNT, &kind, &vol2);
+		if (rc != 0) return fail("mount second volume", rc);
+		rc = fat_engine_write_file(vol, "/switcha.bin", 0, chunk, CHUNK_SIZE,
+					   &written, CHUNK_SIZE, 2);
+		if (rc != 0) return fail("switcha create", rc);
+		g_fail_sync_at = 0;
+		rc = fat_engine_write_file(vol2, "/switchb.bin", 0, chunk, CHUNK_SIZE,
+					   &written, CHUNK_SIZE, 2);
+		if (rc == 0) return fail("switch close failure swallowed", 0);
+		g_fail_sync_at = -1;
+		sync_before = g_sync_count;
+		rc = fat_engine_sync(vol);
+		if (rc != 0) return fail("switch a sync", rc);
+		if (g_sync_count <= sync_before) return fail("switch a barrier not retried", 0);
+		rc = fat_engine_stat(vol, "/switcha.bin", &st);
+		if (rc != 0 || st.size != CHUNK_SIZE) return fail("switcha size", rc);
+		rc = fat_engine_umount(vol2);
+		if (rc != 0) return fail("umount second volume", rc);
+	}
+
+	/* Structural ops must report an unflushed session instead of mutating. */
+	rc = fat_engine_write_file(vol, "/struct.bin", 0, chunk, CHUNK_SIZE, &written,
+				   CHUNK_SIZE, 2);
+	if (rc != 0) return fail("struct create", rc);
+	g_fail_write_at = 0;
+	rc = fat_engine_delete(vol, "/struct.bin");
+	if (rc == 0) return fail("delete swallowed close error", 0);
+	g_fail_write_at = -1;
+	rc = fat_engine_delete(vol, "/struct.bin");
+	if (rc != 0) return fail("delete retry", rc);
+
+	/* A create request must close a matching append session and re-open. */
+	rc = fat_engine_write_file(vol, "/same.bin", 0, chunk, CHUNK_SIZE, &written,
+				   CHUNK_SIZE * 2, 2);
+	if (rc != 0) return fail("same create", rc);
+	rc = fat_engine_write_file(vol, "/same.bin", CHUNK_SIZE, chunk, CHUNK_SIZE, &written,
+				   CHUNK_SIZE * 2, 2);
+	if (rc == 0) return fail("exclusive recreate accepted", 0);
+	rc = fat_engine_sync(vol);
+	if (rc != 0) return fail("same sync", rc);
+	rc = fat_engine_stat(vol, "/same.bin", &st);
+	if (rc != 0 || st.size != CHUNK_SIZE) return fail("same size", rc);
+	rc = fat_engine_delete(vol, "/same.bin");
+	if (rc != 0) return fail("same delete", rc);
+
+	/* CREATE_ALWAYS at the current offset must truncate, not append through
+	 * the open session. */
+	rc = fat_engine_write_file(vol, "/trunc.bin", 0, chunk, CHUNK_SIZE, &written,
+				   CHUNK_SIZE * 2, 2);
+	if (rc != 0) return fail("trunc create", rc);
+	rc = fat_engine_write_file(vol, "/trunc.bin", CHUNK_SIZE, chunk, CHUNK_SIZE,
+				   &written, CHUNK_SIZE * 2, 1);
+	if (rc != 0) return fail("trunc recreate", rc);
+	rc = fat_engine_sync(vol);
+	if (rc != 0) return fail("trunc sync", rc);
+	{
+		uint8_t byte = 0xff;
+		size_t read = 0;
+		rc = fat_engine_read_file(vol, "/trunc.bin", CHUNK_SIZE / 2, &byte, 1, &read);
+		if (rc != 0 || read != 1 || byte != 0) return fail("trunc stale data", rc);
+	}
+	rc = fat_engine_stat(vol, "/trunc.bin", &st);
+	if (rc != 0 || st.size != CHUNK_SIZE * 2) return fail("trunc size", rc);
+	rc = fat_engine_delete(vol, "/trunc.bin");
+	if (rc != 0) return fail("trunc delete", rc);
 
 	/* unmount alone must close the writer, not discard the last chunk. */
 	rc = fat_engine_write_file(vol, "/nosync.bin", 0, chunk, CHUNK_SIZE, &written,

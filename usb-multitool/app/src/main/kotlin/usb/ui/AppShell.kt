@@ -7,6 +7,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import android.provider.Settings
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -274,6 +276,17 @@ fun AppShell(
         val pickOpen = state.filesPickMode != null
         // Shell status lives in OperationStatusLine only; LogScreen keeps its own host.
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
+        // Last mutable work tab. Diagnostics has no Back entry of its own, so it uses
+        // this to return to the operation that sent the user there.
+        var lastWorkTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
+        val operationLocked = state.isRunning || state.operation?.state == OperationState.Queued
+        LaunchedEffect(state.tab) {
+            if (state.tab == ShellTab.Files || state.tab == ShellTab.Ventoy ||
+                state.tab == ShellTab.Partitions
+            ) {
+                lastWorkTab = state.tab.name
+            }
+        }
         // Strip opens the status dialog; picker ownership still forces it closed.
         var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
         // Terminal results get one short snackbar in addition to the permanent block;
@@ -301,6 +314,19 @@ fun AppShell(
         // picker and reports why). Journal/Settings handlers are disabled while pickOpen.
         BackHandler(enabled = pickOpen) {
             onIntent(UiIntent.CancelFilesPick)
+        }
+        BackHandler(
+            enabled = !pickOpen && state.tab == ShellTab.Files &&
+                state.currentPath != "/" && !state.isRunning,
+        ) {
+            onIntent(UiIntent.NavigateUp)
+        }
+        BackHandler(enabled = !pickOpen && state.tab == ShellTab.Diagnostics) {
+            onIntent(
+                UiIntent.SelectTab(
+                    ShellTabPersistence.decode(lastWorkTab) ?: ShellTab.Files,
+                ),
+            )
         }
         BackHandler(enabled = panels.journalScreenOpen && !pickOpen) {
             panels = panels.closeJournalScreen()
@@ -403,8 +429,14 @@ fun AppShell(
                                 // Reducer also refuses the switch; the disabled state names it
                                 // up front. Presence alone never disables: empty states stay
                                 // navigable, only a live operation pins the tab.
+                                val readOnlyScreen =
+                                    state.tab == ShellTab.Settings ||
+                                        state.tab == ShellTab.Diagnostics
+                                val readOnlyReturn = ShellTabPersistence.decode(lastWorkTab)
                                 val switchBlocked = tab != state.tab &&
-                                    (state.isRunning || state.operation?.state == OperationState.Queued)
+                                    tab != ShellTab.Diagnostics &&
+                                    !(readOnlyScreen && tab == readOnlyReturn) &&
+                                    operationLocked
                                 NavigationBarItem(
                                     selected = state.tab == tab,
                                     onClick = { onIntent(UiIntent.SelectTab(tab)) },
@@ -514,9 +546,9 @@ fun AppShell(
                             .weight(1f)
                             .fillMaxWidth()
                             .then(
-                                if (pickOpen) {
-                                    // Modal pick task owns its gestures; the tab swipe stays
-                                    // off so a sideways drag can never cancel the session.
+                                if (pickOpen || operationLocked) {
+                                    // Modal pick/operation pins navigation; a sideways drag
+                                    // must not move away from the originating work tab.
                                     Modifier
                                 } else {
                                     Modifier.pointerInput(
@@ -545,10 +577,28 @@ fun AppShell(
                             targetState = state.tab,
                             modifier = Modifier.fillMaxSize(),
                             transitionSpec = {
-                                if (reducedMotion) {
-                                    EnterTransition.None togetherWith ExitTransition.None
+                                val from = PrimaryShellTabs.indexOf(initialState)
+                                val to = PrimaryShellTabs.indexOf(targetState)
+                                val slide = if (from >= 0 && to >= 0 && from != to) {
+                                    val forward = if (to > from) 1 else -1
+                                    if (layoutDirection == LayoutDirection.Rtl) -forward else forward
                                 } else {
-                                    fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
+                                    0
+                                }
+                                if (reducedMotion || slide == 0) {
+                                    if (reducedMotion) {
+                                        EnterTransition.None togetherWith ExitTransition.None
+                                    } else {
+                                        fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
+                                    }
+                                } else {
+                                    (
+                                        slideInHorizontally(tween(220)) { width -> slide * width } +
+                                            fadeIn(tween(180))
+                                        ).togetherWith(
+                                        slideOutHorizontally(tween(220)) { width -> -slide * width } +
+                                            fadeOut(tween(120)),
+                                    )
                                 }
                             },
                             label = "tab",
@@ -633,6 +683,7 @@ fun AppShell(
                                         )
                                     },
                                     onPickBackupFolder = onPickBackupFolder,
+                                    interactive = !operationLocked,
                                 )
                             }
                         }
@@ -995,7 +1046,6 @@ TopAppBar(
                 Box {
                     IconButton(
                         onClick = { moreOpen = true },
-                        enabled = !operationLocked,
                         modifier = Modifier
                             .size(48.dp)
                             .semantics { contentDescription = moreLabel },
@@ -1008,7 +1058,6 @@ TopAppBar(
                     ) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.settings_title_screen)) },
-                            enabled = !operationLocked,
                             onClick = { moreOpen = false; onOpenSettings() },
                         )
                         val ejectEnabled =
@@ -1386,8 +1435,8 @@ private fun OperationStatusLine(
                 val track = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
-                    .height(2.dp)
-                    .clip(RoundedCornerShape(1.dp))
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
                 if (total > 0L) {
                     LinearProgressIndicator(
                         progress = { fraction },

@@ -133,6 +133,7 @@ if(USB_WITH_LWEXT4)
     list(APPEND USB_ENGINE_LIBS lwext4_upstream)
 endif()
 set(USB_NATIVE_SOURCES
+    jni_thread_env.cpp
     native-lib.cpp
     usb_block.c
     exfat_fsck_jni.cpp

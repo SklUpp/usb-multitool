@@ -10,6 +10,7 @@
 #include <jni.h>
 #include <pthread.h>
 
+#include "jni_thread_env.h"
 #include "usb_block.h"
 
 extern "C" {
@@ -41,29 +42,7 @@ jmethodID g_bb_clear = nullptr;
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_method_cache_mu = PTHREAD_MUTEX_INITIALIZER;
 
-struct ThreadDetacher {
-    JavaVM *jvm = nullptr;
-    ~ThreadDetacher() {
-        if (jvm) jvm->DetachCurrentThread();
-    }
-};
-
-thread_local ThreadDetacher tls_detacher;
-
-JNIEnv *env_for_current_thread() {
-    JNIEnv *env = nullptr;
-    jint status = g_vm->GetEnv(reinterpret_cast<void **>(&env),
-                               JNI_VERSION_1_6);
-    if (status == JNI_OK)
-        return env;
-    if (status != JNI_EDETACHED)
-        return nullptr;
-    if (g_vm->AttachCurrentThread(&env, nullptr) != 0)
-        return nullptr;
-    /* Attached native threads must detach before they exit, or ART aborts. */
-    tls_detacher.jvm = g_vm;
-    return env;
-}
+using usb_jni::env_for;
 
 int ensure_method_cache(JNIEnv *env) {
     pthread_mutex_lock(&g_method_cache_mu);
@@ -121,7 +100,7 @@ int ensure_method_cache(JNIEnv *env) {
 
 int java_transfer(HandleRec *h, int writing, uint64_t lba, void *buf,
                   const void *cbuf, uint32_t sectors) {
-    JNIEnv *env = env_for_current_thread();
+    JNIEnv *env = env_for(g_vm);
     if (!env)
         return -EIO;
     if (ensure_method_cache(env) != 0)
@@ -180,7 +159,7 @@ int java_write(void *ctx, uint64_t lba, const void *buf, uint32_t sectors) {
 
 int java_sync(void *ctx) {
     HandleRec *h = static_cast<HandleRec *>(ctx);
-    JNIEnv *env = env_for_current_thread();
+    JNIEnv *env = env_for(g_vm);
     if (!env)
         return -EIO;
     if (ensure_method_cache(env) != 0)
