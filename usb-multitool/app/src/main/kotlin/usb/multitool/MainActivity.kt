@@ -1653,8 +1653,9 @@ class MainViewModel(
                     val ticker = launch {
                         while (true) {
                             delay(LOG_TICK_MS)
-                            val done = op.bytesDone
-                            val total = op.bytesTotal
+                            val sample = op.progressSnapshot()
+                            val done = sample.bytesDone
+                            val total = sample.bytesTotal
                             if (handle.state == usb.operation.OperationState.Running) {
                                 onIntent(UiIntent.OperationUpdated(OperationProgress(
                                     state = OperationState.Running,
@@ -1662,8 +1663,9 @@ class MainViewModel(
                                     token = token,
                                     bytesDone = done,
                                     bytesTotal = total,
-                                    bytesPerSecond = op.currentBytesPerSecond(),
+                                    bytesPerSecond = sample.bytesPerSecond,
                                     cancelable = isCooperative,
+                                    phase = sample.phase,
                                 )))
                                 val progress = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $done bytes"
                                 val message = "$actionName$progress"

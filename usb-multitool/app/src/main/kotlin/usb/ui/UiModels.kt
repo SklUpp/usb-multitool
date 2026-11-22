@@ -1,6 +1,7 @@
 package usb.ui
 
 import usb.service.OperationToken
+import usb.operation.DiskOperationPhase
 import usb.fs.FilesystemId
 import usb.fs.FilesystemAccess
 import usb.fs.FilesystemUsageKey
@@ -807,6 +808,14 @@ data class PartitionTab(
     val displayEfi: Boolean
         get() = isEfiType || isVtoyEfiRole
 
+    /** EFI / system-boot class for strip coloring and layout special counts. */
+    val special: Boolean
+        get() = displayEfi
+
+    /** No filesystem id and not special — reserved/unknown strip class. */
+    val reserved: Boolean
+        get() = !special && filesystemId == null
+
     /** Bootable fact shown in the info card; real flag stays [bootable]. */
     val displayBootable: Boolean
         get() = bootable || isVtoyEfiRole
@@ -1218,6 +1227,11 @@ data class OperationProgress(
     val smartResult: SmartOutcome? = null,
 
     val cancelable: Boolean = true,
+    /**
+     * Raw-write streaming phase mirrored from [usb.operation.DiskOperation.phase].
+     * Null for every other operation and after readback completes.
+     */
+    val phase: DiskOperationPhase? = null,
 ) {
     /**
      * Stable English technical label for journals and DiskOperation.name.

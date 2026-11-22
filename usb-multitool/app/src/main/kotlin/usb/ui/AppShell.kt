@@ -161,6 +161,7 @@ import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
 import usb.image.ReadbackProblem
 import usb.image.ReadbackVerdict
+import usb.operation.DiskOperationPhase
 import usb.multitool.R
 import usb.service.OperationToken
 import java.util.Locale
@@ -1374,9 +1375,18 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
         op.state == OperationState.Completed -> StatusTone.Success
         else -> StatusTone.Neutral
     }
+    val phaseLabel = op.phase?.let { phase ->
+        stringResource(
+            when (phase) {
+                DiskOperationPhase.Write -> R.string.op_phase_write
+                DiskOperationPhase.Sync -> R.string.op_phase_sync
+                DiskOperationPhase.Verify -> R.string.op_phase_verify
+            },
+        )
+    }
     return OperationStatusFacts(
         name = operationLabel(op),
-        state = operationStateLabel(op.state),
+        state = phaseLabel ?: operationStateLabel(op.state),
         progress = progress,
         readback = readback?.first,
         readbackTone = readback?.second ?: StatusTone.Neutral,

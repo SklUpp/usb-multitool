@@ -12,6 +12,22 @@ sealed class OperationState {
     data class Failed(val cause: Throwable) : OperationState()
 }
 
+/** Consistent ticker sample across counters and raw-write phase. */
+data class DiskOperationProgressSnapshot(
+    val bytesDone: Long,
+    val bytesTotal: Long,
+    val bytesPerSecond: Long,
+    val phase: DiskOperationPhase?,
+)
+
+/** Streaming / flush / readback phase published during a raw write. */
+enum class DiskOperationPhase {
+    Write,
+    Sync,
+    Verify,
+}
+
+
 open class DiskOperation(
     open val name: String = "",
     /**
@@ -25,6 +41,8 @@ open class DiskOperation(
     @Volatile var state: OperationState = OperationState.Queued,
     @Volatile var failureCause: Throwable? = null,
     @Volatile var mutationAttempted: Boolean = false,
+    /** Non-null while a raw write is in Write/Sync/Verify; cleared after readback. */
+    @Volatile var phase: DiskOperationPhase? = null,
     /** Set once cancellation can no longer undo the operation's committed result. */
     @Volatile var commitReached: Boolean = false,
     private val active: () -> Boolean = { true },
@@ -118,6 +136,21 @@ open class DiskOperation(
         sampleNanos = 0L
         hasSample = false
     }
+
+    /**
+     * Reset counters then publish [phase] under the same lock so a ticker sample cannot
+     * pair Write's 100% bytes with Sync/Verify.
+     */
+    @Synchronized
+    fun beginPhase(phase: DiskOperationPhase, total: Long) {
+        beginCurrentFile(total)
+        this.phase = phase
+    }
+
+    /** Read progress fields under one lock so phase and counters cannot tear. */
+    @Synchronized
+    fun progressSnapshot(): DiskOperationProgressSnapshot =
+        DiskOperationProgressSnapshot(bytesDone, bytesTotal, currentBytesPerSecond(), phase)
 
     internal fun markInactive() {
         if (explicitActive.getAndSet(false)) {

@@ -10,6 +10,7 @@ import usb.diagnostics.DestructiveConfirmation
 import usb.partition.RawRangePlan
 import usb.partition.RawWriteRange
 import usb.operation.DiskOperation
+import usb.operation.DiskOperationPhase
 import usb.operation.OperationState
 
 class ImageTooLargeException(message: String) : Exception(message)
@@ -322,8 +323,8 @@ object RawWriter {
         if (expected != null && (expected < 0L || expected.toULong() > capacity)) {
             throw ImageTooLargeException("image $expected exceeds selected range $capacity bytes")
         }
-        // Progress is only advertised when the decoded size is actually known.
-        if (expected != null) operation.bytesTotal = expected
+        // beginPhase resets counters then publishes Write under one lock.
+        operation.beginPhase(DiskOperationPhase.Write, expected ?: -1L)
 
         val chunk = ByteArray(chunkBytes)
         var local = 0UL
@@ -333,184 +334,191 @@ object RawWriter {
         var attemptedBlocks = 0UL
         var attemptedDecoded = 0L
         var attemptedWriteFailed = false
-        while (true) {
-            if (!operation.isActive()) {
-                stop = ImageCancelledException("raw write cancelled after $total bytes")
-                break
-            }
-            val remaining = capacity - total.toULong()
-            if (remaining == 0UL) {
-                // The range is full. Any further source byte is refused, never written.
-                val extra = try {
-                    input.read(ByteArray(1))
+        try {
+            while (true) {
+                if (!operation.isActive()) {
+                    stop = ImageCancelledException("raw write cancelled after $total bytes")
+                    break
+                }
+                val remaining = capacity - total.toULong()
+                if (remaining == 0UL) {
+                    // The range is full. Any further source byte is refused, never written.
+                    val extra = try {
+                        input.read(ByteArray(1))
+                    } catch (e: Exception) {
+                        stop = e
+                        break
+                    }
+                    if (extra > 0) {
+                        stop = ImageTooLargeException(
+                            "source exceeds selected range at byte ${total + extra}",
+                        )
+                    }
+                    break
+                }
+                // Never read past the range end: the tail is exactly what was asked for.
+                val readLimit = minOf(chunkBytes.toULong(), remaining).toInt()
+                val n = try {
+                    readFully(input, chunk, readLimit)
                 } catch (e: Exception) {
                     stop = e
                     break
                 }
-                if (extra > 0) {
-                    stop = ImageTooLargeException(
-                        "source exceeds selected range at byte ${total + extra}",
+                if (n <= 0) break
+                digest?.update(chunk, 0, n)
+                val padded =
+                    if (n % sectorSize == 0) {
+                        n
+                    } else {
+                        // Pad the final partial sector with zeros, inside the range only.
+                        val pad = ((n + sectorSize - 1) / sectorSize) * sectorSize
+                        check(pad.toULong() <= remaining) {
+                            "padded final sector exceeds the selected range"
+                        }
+                        chunk.fill(0, n, pad)
+                        pad
+                    }
+                operation.mutationAttempted = true
+                try {
+                    disk.write(range.startLba + local, ByteBuffer.wrap(chunk, 0, padded))
+                } catch (e: Exception) {
+                    // The transport may have transferred part or all of this request before
+                    // failing; the whole attempted range is potentially modified.
+                    stop = e
+                    attemptedLocal = local
+                    attemptedBlocks = (padded / sectorSize).toULong()
+                    attemptedDecoded = n.toLong()
+                    attemptedWriteFailed = true
+                    break
+                }
+                local += (padded / sectorSize).toULong()
+                total += n
+                operation.report(total)
+                if (n < readLimit) break
+            }
+
+            if (expected != null && stop == null && total in 1L until expected) {
+                stop = EOFException("Premature EOF: wrote $total of $expected bytes")
+            }
+            if (!operation.mutationAttempted && total == 0L) {
+                if (stop != null) {
+                    if (stop is CancellationException) throw stop
+                    operation.state = OperationState.Failed(stop)
+                    throw stop
+                }
+                val ex = IllegalArgumentException("image is empty")
+                operation.state = OperationState.Failed(ex)
+                throw ex
+            }
+
+            // From here at least one write was attempted: sync what may be on the medium,
+            // then read back the committed prefix plus the failed attempt's full range.
+            if (stop == null) {
+                try {
+                    operation.beginPhase(DiskOperationPhase.Sync, -1L)
+                    disk.sync()
+                } catch (e: Exception) {
+                    stop = e
+                }
+            } else {
+                // A failed transport may also refuse sync; that must not hide the original.
+                try {
+                    operation.beginPhase(DiskOperationPhase.Sync, -1L)
+                    disk.sync()
+                } catch (_: Exception) {
+                }
+            }
+
+            // The failed request's decoded bytes were already consumed from the stream, so a
+            // re-opened source yields prefix followed by exactly those attempted bytes.
+            val readbackDecoded = total + attemptedDecoded
+            operation.beginPhase(DiskOperationPhase.Verify, readbackDecoded)
+            val outcome =
+                try {
+                    verify(
+                        source = source,
+                        disk = disk,
+                        startLba = range.startLba,
+                        totalDecoded = readbackDecoded,
+                        sectorSize = sectorSize,
+                        operation = operation,
+                        requireSourceExhausted = stop == null,
+                        checkActive = stop == null,
+                    )
+                } catch (e: ImageCancelledException) {
+                    ReadbackOutcome(
+                        ReadbackVerdict.Incomplete(ReadbackProblem.Cancelled, e.message),
+                    )
+                } catch (e: ImageVerifyException) {
+                    ReadbackOutcome(
+                        ReadbackVerdict.Incomplete(ReadbackProblem.SourceChanged, e.message),
+                    )
+                } catch (e: CancellationException) {
+                    ReadbackOutcome(
+                        ReadbackVerdict.Incomplete(ReadbackProblem.Cancelled, e.message),
+                    )
+                } catch (e: Exception) {
+                    ReadbackOutcome(
+                        ReadbackVerdict.Incomplete(
+                            ReadbackProblem.IoError,
+                            "${e.javaClass.simpleName}: ${e.message}",
+                        ),
                     )
                 }
-                break
-            }
-            // Never read past the range end: the tail is exactly what was asked for.
-            val readLimit = minOf(chunkBytes.toULong(), remaining).toInt()
-            val n = try {
-                readFully(input, chunk, readLimit)
-            } catch (e: Exception) {
-                stop = e
-                break
-            }
-            if (n <= 0) break
-            digest?.update(chunk, 0, n)
-            val padded =
-                if (n % sectorSize == 0) {
-                    n
+            val writtenPrefixMatches = outcome.verdict is ReadbackVerdict.Verified
+            val verdict: ReadbackVerdict =
+                if (attemptedWriteFailed && writtenPrefixMatches) {
+                    // Content happens to match, but the failed request is not proof enough:
+                    // the transport can throw after a partial transfer, so do not claim it.
+                    ReadbackVerdict.Unverified(
+                        range = RawWriteRange(
+                            range.startLba + attemptedLocal,
+                            attemptedBlocks,
+                        ),
+                        detail = "write request failed; the attempted range was not proven",
+                    )
                 } else {
-                    // Pad the final partial sector with zeros, inside the range only.
-                    val pad = ((n + sectorSize - 1) / sectorSize) * sectorSize
-                    check(pad.toULong() <= remaining) {
-                        "padded final sector exceeds the selected range"
-                    }
-                    chunk.fill(0, n, pad)
-                    pad
+                    outcome.verdict
                 }
-            operation.mutationAttempted = true
-            try {
-                disk.write(range.startLba + local, ByteBuffer.wrap(chunk, 0, padded))
-            } catch (e: Exception) {
-                // The transport may have transferred part or all of this request before
-                // failing; the whole attempted range is potentially modified.
-                stop = e
-                attemptedLocal = local
-                attemptedBlocks = (padded / sectorSize).toULong()
-                attemptedDecoded = n.toLong()
-                attemptedWriteFailed = true
-                break
-            }
-            local += (padded / sectorSize).toULong()
-            total += n
-            operation.report(total)
-            if (n < readLimit) break
-        }
 
-        if (expected != null && stop == null && total in 1L until expected) {
-            stop = EOFException("Premature EOF: wrote $total of $expected bytes")
-        }
-        if (!operation.mutationAttempted && total == 0L) {
-            if (stop != null) {
-                if (stop is CancellationException) throw stop
-                operation.state = OperationState.Failed(stop)
-                throw stop
+            val failure: Throwable? = when {
+                stop != null -> stop
+                verdict is ReadbackVerdict.Mismatch ->
+                    ImageVerifyException(
+                        "readback mismatch in ${verdict.mismatchedSectors} sector(s); " +
+                            "first at LBA ${verdict.firstMismatchLba}",
+                    )
+                verdict is ReadbackVerdict.Incomplete ->
+                    ImageVerifyException("readback incomplete: ${verdict.reason}")
+                verdict is ReadbackVerdict.Unverified ->
+                    ImageVerifyException("readback unverified: ${verdict.detail ?: "failed attempt"}")
+                else -> null
             }
-            val ex = IllegalArgumentException("image is empty")
-            operation.state = OperationState.Failed(ex)
-            throw ex
-        }
-
-        // From here at least one write was attempted: sync what may be on the medium,
-        // then read back the committed prefix plus the failed attempt's full range.
-        if (stop == null) {
-            try {
-                disk.sync()
-            } catch (e: Exception) {
-                stop = e
-            }
-        } else {
-            // A failed transport may also refuse sync; that must not hide the original.
-            try {
-                disk.sync()
-            } catch (_: Exception) {
-            }
-        }
-
-        // The failed request's decoded bytes were already consumed from the stream, so a
-        // re-opened source yields prefix followed by exactly those attempted bytes.
-        val readbackDecoded = total + attemptedDecoded
-        val outcome =
-            try {
-                verify(
-                    source = source,
-                    disk = disk,
-                    startLba = range.startLba,
-                    totalDecoded = readbackDecoded,
-                    sectorSize = sectorSize,
-                    operation = operation,
-                    requireSourceExhausted = stop == null,
-                    checkActive = stop == null,
-                )
-            } catch (e: ImageCancelledException) {
-                ReadbackOutcome(
-                    ReadbackVerdict.Incomplete(ReadbackProblem.Cancelled, e.message),
-                )
-            } catch (e: ImageVerifyException) {
-                ReadbackOutcome(
-                    ReadbackVerdict.Incomplete(ReadbackProblem.SourceChanged, e.message),
-                )
-            } catch (e: CancellationException) {
-                ReadbackOutcome(
-                    ReadbackVerdict.Incomplete(ReadbackProblem.Cancelled, e.message),
-                )
-            } catch (e: Exception) {
-                ReadbackOutcome(
-                    ReadbackVerdict.Incomplete(
-                        ReadbackProblem.IoError,
-                        "${e.javaClass.simpleName}: ${e.message}",
-                    ),
+            if (failure != null) {
+                operation.state = OperationState.Partial
+                operation.failureCause = failure
+                return RawWriteResult(
+                    range = range,
+                    writtenBytes = total,
+                    readback = verdict,
+                    state = RawWriteStatus.Partial,
+                    failure = failure,
                 )
             }
-        val writtenPrefixMatches = outcome.verdict is ReadbackVerdict.Verified
-        val verdict: ReadbackVerdict =
-            if (attemptedWriteFailed && writtenPrefixMatches) {
-                // Content happens to match, but the failed request is not proof enough:
-                // the transport can throw after a partial transfer, so do not claim it.
-                ReadbackVerdict.Unverified(
-                    range = RawWriteRange(
-                        range.startLba + attemptedLocal,
-                        attemptedBlocks,
-                    ),
-                    detail = "write request failed; the attempted range was not proven",
-                )
-            } else {
-                outcome.verdict
+            if (operation.state == OperationState.Queued ||
+                operation.state == OperationState.Running
+            ) {
+                operation.state = OperationState.Completed
             }
-
-        val failure: Throwable? = when {
-            stop != null -> stop
-            verdict is ReadbackVerdict.Mismatch ->
-                ImageVerifyException(
-                    "readback mismatch in ${verdict.mismatchedSectors} sector(s); " +
-                        "first at LBA ${verdict.firstMismatchLba}",
-                )
-            verdict is ReadbackVerdict.Incomplete ->
-                ImageVerifyException("readback incomplete: ${verdict.reason}")
-            verdict is ReadbackVerdict.Unverified ->
-                ImageVerifyException("readback unverified: ${verdict.detail ?: "failed attempt"}")
-            else -> null
-        }
-        if (failure != null) {
-            operation.state = OperationState.Partial
-            operation.failureCause = failure
             return RawWriteResult(
                 range = range,
                 writtenBytes = total,
                 readback = verdict,
-                state = RawWriteStatus.Partial,
-                failure = failure,
+                state = RawWriteStatus.Completed,
             )
+        } finally {
+            operation.phase = null
         }
-        if (operation.state == OperationState.Queued ||
-            operation.state == OperationState.Running
-        ) {
-            operation.state = OperationState.Completed
-        }
-        return RawWriteResult(
-            range = range,
-            writtenBytes = total,
-            readback = verdict,
-            state = RawWriteStatus.Completed,
-        )
     }
 
     /**
@@ -602,7 +610,7 @@ object RawWriter {
                     inChunk += sectorLen
                 }
                 offset += fromSource
-                operation.report(totalDecoded)
+                operation.report(offset)
             }
             if (requireSourceExhausted) {
                 val extra = input.read(ByteArray(1))

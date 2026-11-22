@@ -733,6 +733,33 @@ fun PartitionsScreen(
         ) {
             SectionCard(
                 title = stringResource(R.string.partitions_layout_title),
+                subtitle = diskGeometry(state)?.let { geometry ->
+                    val partitionCount = pluralStringResource(
+                        R.plurals.partitions_count_label,
+                        state.partitions.size,
+                        state.partitions.size,
+                    )
+                    val specialCount = state.partitions.count { it.special }
+                    val countLabel = stringResource(
+                        R.string.partitions_layout_count_with_special,
+                        partitionCount,
+                        pluralStringResource(
+                            R.plurals.partitions_layout_special_count,
+                            specialCount,
+                            specialCount,
+                        ),
+                    )
+                    stringResource(
+                        R.string.partitions_layout_subtitle,
+                        stringResource(
+                            R.string.partitions_layout_mib,
+                            geometry.exactMib,
+                        ),
+                        formatGroupedULong(0UL),
+                        formatGroupedULong(geometry.lastLbaInclusive),
+                        countLabel,
+                    )
+                },
                 modifier = Modifier.onGloballyPositioned { coordinates ->
                     layoutBlockBottomWindow =
                         coordinates.positionInWindow().y + coordinates.size.height
@@ -743,18 +770,6 @@ fun PartitionsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        val countLabel = pluralStringResource(
-                            R.plurals.partitions_count_label,
-                            state.partitions.size,
-                            state.partitions.size,
-                        )
-                        Box(
-                            modifier = Modifier.clearAndSetSemantics {
-                                contentDescription = countLabel
-                            },
-                        ) {
-                            Badge(text = countLabel)
-                        }
                         val needsInitialize = !state.partitionTableRecognized &&
                             state.partitionTableRecognition !=
                             usb.partition.TableRecognition.SUPERFLOPPY &&
@@ -834,23 +849,6 @@ fun PartitionsScreen(
                     }
                 },
             ) {
-                val geometry = diskGeometry(state)
-                if (geometry != null) {
-                    Text(
-                        text = stringResource(
-                            R.string.partitions_geometry_signature,
-                            geometry.sizeLabel,
-                            geometry.totalSectors.toString(),
-                        ),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
                 if (!state.partitionTableRecognized &&
                     state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
                     !state.partitionTableAmbiguous
@@ -1564,7 +1562,7 @@ private fun FactRow(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun RawWriteSection(
     state: AppUiState,
@@ -1956,24 +1954,84 @@ private fun RawWriteSection(
 
                     planRange?.let { range ->
                         val end = range.startLba + range.sectorCount - 1UL
-                        val verdictCore = stringResource(
-                            R.string.partitions_raw_verdict,
-                            range.startLba.toLong(),
-                            end.toLong(),
-                        )
-                        val warning = rangeAssessment?.message
+                        val sectorSize = geometry.sectorSize
+                        val startMibText = formatMibDecimal(range.startLba, sectorSize)
+                        val endMibText = formatMibDecimal(end + 1UL, sectorSize)
+                        val startLbaText = formatGroupedULong(range.startLba)
+                        val endLbaText = formatGroupedULong(end)
+                        val countText = formatGroupedULong(range.sectorCount)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            RawFactPill(
+                                stringResource(
+                                    R.string.partitions_raw_pill_start_lba,
+                                    startLbaText,
+                                ),
+                            )
+                            RawFactPill(
+                                stringResource(
+                                    R.string.partitions_raw_pill_end_lba,
+                                    endLbaText,
+                                ),
+                            )
+                            RawFactPill(
+                                stringResource(
+                                    R.string.partitions_raw_pill_sector_count,
+                                    countText,
+                                ),
+                            )
+                            RawFactPill(
+                                stringResource(
+                                    R.string.partitions_raw_pill_start_mib,
+                                    startMibText,
+                                ),
+                            )
+                            RawFactPill(
+                                stringResource(
+                                    R.string.partitions_raw_pill_end_mib,
+                                    endMibText,
+                                ),
+                            )
+                        }
                         Text(
-                            text = if (warning != null) "$verdictCore — $warning" else verdictCore,
+                            text = stringResource(
+                                R.string.partitions_raw_binding_lba,
+                                startLbaText,
+                                endLbaText,
+                                countText,
+                            ),
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontFeatureSettings = "tnum",
                             ),
-                            color = if (rangeAssessment?.ok == true) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        Text(
+                            text = stringResource(
+                                R.string.partitions_raw_binding_mib,
+                                startMibText,
+                                endMibText,
+                            ),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        rangeAssessment?.message?.let { warning ->
+                            Text(
+                                text = warning,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (rangeAssessment.ok) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                            )
+                        }
                     }
 
                     planProblems.forEach { problem ->
@@ -2120,6 +2178,27 @@ private fun RawWriteSection(
         }
     }
 }
+
+@Composable
+private fun RawFactPill(text: String) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontFeatureSettings = "tnum",
+            ),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
+
 
 private data class RawRangeAssessment(
     val ok: Boolean,
@@ -2330,9 +2409,21 @@ private fun PartitionSelectStrip(
     // light ink on dark surfaces. Container roles are too close to the
     // section background to read as a legend.
     val partitionFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f)
+    val specialFill = MaterialTheme.colorScheme.tertiaryContainer
+    val specialInk = MaterialTheme.colorScheme.onTertiaryContainer
+    val reservedFill = MaterialTheme.colorScheme.secondaryContainer
+    val reservedInk = MaterialTheme.colorScheme.onSecondaryContainer
     val freeFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
     val gapFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.05f)
     val outline = MaterialTheme.colorScheme.outlineVariant
+    val hasSpecial = segments.any { it.partition?.special == true }
+    val hasReserved = segments.any { it.partition?.reserved == true }
+    val hasPartition = segments.any { seg ->
+        val p = seg.partition
+        p != null && !p.special && !p.reserved
+    }
+    val hasFree = segments.any { it.free != null }
+    val hasGap = segments.any { it.gapSectorCount != null }
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -2394,9 +2485,17 @@ private fun PartitionSelectStrip(
                 val isSelected = partition?.id == state.selectedPartitionId
                 val fill = when {
                     partition != null && isSelected -> selectedFill
+                    partition != null && partition.special -> specialFill
+                    partition != null && partition.reserved -> reservedFill
                     partition != null -> partitionFill
                     free != null -> freeFill
                     else -> gapFill
+                }
+                val ink = when {
+                    partition != null && isSelected -> selectedContent
+                    partition != null && partition.special -> specialInk
+                    partition != null && partition.reserved -> reservedInk
+                    else -> MaterialTheme.colorScheme.onSurface
                 }
                 val description = when {
                     partition != null -> stringResource(
@@ -2442,11 +2541,7 @@ private fun PartitionSelectStrip(
                                 text = partition.name.ifBlank { partition.id },
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (isSelected) {
-                                    selectedContent
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
+                                color = ink,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -2454,11 +2549,7 @@ private fun PartitionSelectStrip(
                                 Text(
                                     text = partition.filesystemLabel,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (isSelected) {
-                                        selectedContent
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    },
+                                    color = ink,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -2479,21 +2570,41 @@ private fun PartitionSelectStrip(
             borderColor = MaterialTheme.colorScheme.primary,
             label = stringResource(R.string.partitions_strip_legend_selected),
         )
-        StripLegend(
-            color = partitionFill,
-            borderColor = outline,
-            label = stringResource(R.string.partitions_strip_legend_partition),
-        )
-        StripLegend(
-            color = freeFill,
-            borderColor = outline,
-            label = stringResource(R.string.partitions_strip_free),
-        )
-        StripLegend(
-            color = gapFill,
-            borderColor = outline,
-            label = stringResource(R.string.partitions_strip_unallocated),
-        )
+        if (hasSpecial) {
+            StripLegend(
+                color = specialFill,
+                borderColor = outline,
+                label = stringResource(R.string.partitions_strip_legend_special),
+            )
+        }
+        if (hasReserved) {
+            StripLegend(
+                color = reservedFill,
+                borderColor = outline,
+                label = stringResource(R.string.partitions_strip_legend_reserved),
+            )
+        }
+        if (hasPartition) {
+            StripLegend(
+                color = partitionFill,
+                borderColor = outline,
+                label = stringResource(R.string.partitions_strip_legend_partition),
+            )
+        }
+        if (hasFree) {
+            StripLegend(
+                color = freeFill,
+                borderColor = outline,
+                label = stringResource(R.string.partitions_strip_free),
+            )
+        }
+        if (hasGap) {
+            StripLegend(
+                color = gapFill,
+                borderColor = outline,
+                label = stringResource(R.string.partitions_strip_unallocated),
+            )
+        }
     }
 }
 
@@ -2575,7 +2686,9 @@ private fun mibAlignSectors(sectorSize: Int): ULong? =
 /** Disk size and total LBA count for the Layout card; null when geometry is unknown. */
 private data class DiskGeometry(
     val sizeLabel: String,
+    val exactMib: String,
     val totalSectors: ULong,
+    val lastLbaInclusive: ULong,
 )
 
 /** Size and block/LBA totals only: the layout card no longer claims used vs free space. */
@@ -2586,10 +2699,30 @@ private fun diskGeometry(state: AppUiState): DiskGeometry? {
     if (sectorSize == 0UL || totalBytes == 0UL) return null
     val totalSectors = totalBytes / sectorSize
     if (totalSectors == 0UL) return null
+    val exactMib = java.math.BigDecimal(totalBytes.toString())
+        .divide(java.math.BigDecimal.valueOf(1024L * 1024L))
+        .stripTrailingZeros()
+        .toPlainString()
     return DiskGeometry(
         sizeLabel = DeviceIdentity.formatCapacity(totalBytes),
+        exactMib = exactMib,
         totalSectors = totalSectors,
+        lastLbaInclusive = totalSectors - 1UL,
     )
+}
+
+/** Locale-aware grouping for LBA / MiB counts shown in layout and raw binding. */
+private fun formatGroupedULong(value: ULong): String =
+    java.text.NumberFormat.getIntegerInstance(java.util.Locale.getDefault())
+        .format(java.math.BigInteger(value.toString()))
+
+private fun formatMibDecimal(lba: ULong, sectorSize: Int): String {
+    val bytes = java.math.BigDecimal(lba.toString())
+        .multiply(java.math.BigDecimal.valueOf(sectorSize.toLong()))
+    return bytes
+        .divide(java.math.BigDecimal.valueOf(1024L * 1024L), 2, java.math.RoundingMode.HALF_UP)
+        .stripTrailingZeros()
+        .toPlainString()
 }
 
 
