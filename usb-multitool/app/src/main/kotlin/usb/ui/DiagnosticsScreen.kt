@@ -1,5 +1,7 @@
 package usb.ui
 
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +46,34 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.yield
 import usb.multitool.R
+
+/**
+ * SAF document/tree URIs become one canonical display path: percent-decoded document id,
+ * forward slashes, no `.`/`..` or duplicate separators. The raw URI is not shown to the user.
+ */
+internal fun normalizedRestorePath(uri: String): String {
+    val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return uri
+    val documentId =
+        runCatching { DocumentsContract.getDocumentId(parsed) }.getOrNull()
+            ?: runCatching { DocumentsContract.getTreeDocumentId(parsed) }.getOrNull()
+    val source = documentId ?: parsed.path ?: return uri
+    val raw = if (documentId != null) source.substringAfter(':', source) else source
+    return normalizeDocumentPath(raw)
+}
+
+/** Pure segment normalizer shared by restore display and tests. */
+internal fun normalizeDocumentPath(raw: String): String {
+    val segments = raw.replace('\\', '/').split('/')
+    val normalized = ArrayList<String>(segments.size)
+    for (segment in segments) {
+        when (segment) {
+            "", "." -> Unit
+            ".." -> if (normalized.isNotEmpty()) normalized.removeAt(normalized.lastIndex)
+            else -> normalized += segment
+        }
+    }
+    return if (normalized.isEmpty()) "/" else "/" + normalized.joinToString("/")
+}
 
 @Composable
 fun DiagnosticsScreen(
@@ -310,8 +340,9 @@ fun DiagnosticsScreen(
                     text = stringResource(
                         R.string.diagnostics_image_named,
                         state.rescueImageInspection?.displayName
-                            ?: state.rescueImageUri?.substringAfterLast('/').orEmpty(),
-                    ) + "\n" + state.rescueImageUri.orEmpty(),
+                            ?: state.rescueImageUri?.let(::normalizedRestorePath)
+                                ?.substringAfterLast('/').orEmpty(),
+                    ) + "\n" + state.rescueImageUri?.let(::normalizedRestorePath).orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 3,
@@ -335,8 +366,9 @@ fun DiagnosticsScreen(
                     text = stringResource(
                         R.string.diagnostics_map_named,
                         state.rescueMapInspection?.displayName
-                            ?: state.rescueMapUri?.substringAfterLast('/').orEmpty(),
-                    ) + "\n" + state.rescueMapUri.orEmpty(),
+                            ?: state.rescueMapUri?.let(::normalizedRestorePath)
+                                ?.substringAfterLast('/').orEmpty(),
+                    ) + "\n" + state.rescueMapUri?.let(::normalizedRestorePath).orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 3,
@@ -423,8 +455,9 @@ fun DiagnosticsScreen(
                     text = stringResource(
                         R.string.diagnostics_backup_file_named,
                         state.backupInspection?.displayName
-                            ?: state.backupUri?.substringAfterLast('/').orEmpty(),
-                    ) + "\n" + state.backupUri.orEmpty(),
+                            ?: state.backupUri?.let(::normalizedRestorePath)
+                                ?.substringAfterLast('/').orEmpty(),
+                    ) + "\n" + state.backupUri?.let(::normalizedRestorePath).orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                 )

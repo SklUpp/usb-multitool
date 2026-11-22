@@ -6,7 +6,13 @@ import usb.fs.VolumeLabel
 import usb.partition.PartitionName
 import usb.partition.TableScheme
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -58,6 +64,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -70,7 +77,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -124,9 +133,9 @@ fun PartitionsScreen(
     var labelText by remember { mutableStateOf("") }
     var filesystemMenuTarget by remember { mutableStateOf<PartitionBinding?>(null) }
     val partitionGeometryKey = state.partitions.map { it.id to (it.startLba to it.sectorCount) }
-    // LBA 0 is always vetoed by the range guard, so the whole-disk chip can never
-    // write; default to the selected partition instead of a permanently blocked mode.
-    var rawTargetMode by remember(state.device?.identity) { mutableStateOf(RawTargetMode.Partition) }
+    // Raw image writing is whole-device semantics; the chart and confirmation still
+    // make the overwritten range explicit before anything is submitted.
+    var rawTargetMode by remember(state.device?.identity) { mutableStateOf(RawTargetMode.WholeDisk) }
     var initializeScheme by remember(state.device, state.partitionScheme, partitionGeometryKey) {
         mutableStateOf(PartitionScheme.Gpt)
     }
@@ -708,21 +717,14 @@ fun PartitionsScreen(
     val blockedHint = writeBlockHint(state)
     val screenScroll = rememberScrollState()
     val latestState by rememberUpdatedState(state)
+    var viewportTop by remember { mutableFloatStateOf(0f) }
+    var selectedRowBottomWindow by remember(state.selectedPartitionId) { mutableFloatStateOf(0f) }
+    // The pinned copy is a second rendering only while the real row is above the
+    // viewport; at rest the list owns the only visible row.
+    val pinnedVisible =
+        selected != null && selectedRowBottomWindow > 0f &&
+            selectedRowBottomWindow <= viewportTop
 
-    @Composable
-    fun partitionSelector(modifier: Modifier = Modifier) {
-        PartitionDropdown(
-            partitions = state.partitions,
-            selectedId = state.selectedPartitionId,
-            writeAccessOf = state::partitionWriteAccess,
-            usageOf = state::partitionUsageSnapshot,
-            phaseOf = state::partitionUsagePhase,
-            sectorSize = state.diskSectorSize,
-            enabled = state.actionsEnabled,
-            onSelect = { onIntent(UiIntent.SelectPartition(it)) },
-            modifier = modifier,
-        )
-    }
     LaunchedEffect(
         state.device,
         state.selectedPartitionId,
@@ -733,19 +735,11 @@ fun PartitionsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            partitionSelector(
-                Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-            )
-        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .onGloballyPositioned { viewportTop = it.positionInWindow().y },
         ) {
         Column(
             modifier = Modifier
@@ -956,108 +950,22 @@ fun PartitionsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .selectableGroup(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     orderedPartitions.forEach { partition ->
-                        val isSelected = partition.id == state.selectedPartitionId
-                        val access = state.partitionWriteAccess(partition)
-                        val displayName = partition.name.ifBlank { partition.id }
-                        val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
-                        val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
-                        val rowStart = partition.startLba
-                        val rowCount = partition.sectorCount
-                        val rowEnd = if (rowStart != null && rowCount != null &&
-                            rowCount > 0UL &&
-                            rowStart <= ULong.MAX_VALUE - (rowCount - 1UL)
-                        ) {
-                            rowStart + rowCount - 1UL
-                        } else {
-                            null
-                        }
-                        val rowRange = if (rowStart != null && rowEnd != null) {
-                            stringResource(
-                                R.string.partitions_info_lba_range_value,
-                                rowStart.toLong(),
-                                rowEnd.toLong(),
-                            )
-                        } else {
-                            null
-                        }
-                        val rowContent = if (isSelected) {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        }
-                        ListItem(
-                            headlineContent = {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        text = rowTitle,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = rowContent,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    if (partition.filesystemLabel.isNotEmpty()) {
-                                        Badge(text = partition.filesystemLabel)
-                                    }
-                                    if (partition.displayEfi) {
-                                        Badge(text = stringResource(R.string.partitions_badge_efi))
-                                    }
+                        val trackPosition = partition.id == state.selectedPartitionId
+                        PartitionListRow(
+                            state = state,
+                            partition = partition,
+                            onSelect = { onIntent(UiIntent.SelectPartition(it)) },
+                            modifier = if (trackPosition) {
+                                Modifier.onGloballyPositioned { coordinates ->
+                                    selectedRowBottomWindow =
+                                        coordinates.positionInWindow().y + coordinates.size.height
                                 }
+                            } else {
+                                Modifier
                             },
-                            supportingContent = {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(
-                                        text = partitionUsageLabel(state, partition),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                            fontFeatureSettings = "tnum",
-                                        ),
-                                        color = if (isSelected) {
-                                            MaterialTheme.colorScheme.onSecondaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                    )
-                                    rowRange?.let {
-                                        Text(
-                                            text = it,
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontFamily = FontFamily.Monospace,
-                                                fontFeatureSettings = "tnum",
-                                            ),
-                                            color = if (isSelected) {
-                                                MaterialTheme.colorScheme.onSecondaryContainer
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            },
-                                        )
-                                    }
-                                }
-                            },
-                            trailingContent = { WriteAccessBadge(access) },
-                            colors = ListItemDefaults.colors(
-                                containerColor = if (isSelected) {
-                                    MaterialTheme.colorScheme.secondaryContainer
-                                } else {
-                                    Color.Transparent
-                                },
-                                headlineColor = rowContent,
-                                supportingColor = rowContent,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(MaterialTheme.shapes.small)
-                                .selectable(
-                                    selected = isSelected,
-                                    enabled = state.actionsEnabled,
-                                    role = Role.RadioButton,
-                                    onClick = { onIntent(UiIntent.SelectPartition(partition.id)) },
-                                ),
                         )
                     }
                 }
@@ -1171,8 +1079,144 @@ fun PartitionsScreen(
                 orderedPartitions = orderedPartitions,
             )
         }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = pinnedVisible,
+            enter = fadeIn(tween(140)) + slideInVertically(tween(220)) { -it },
+            exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { -it },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(2f),
+        ) {
+            selected?.let { live ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    PartitionListRow(
+                        state = state,
+                        partition = live,
+                        onSelect = { onIntent(UiIntent.SelectPartition(it)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
         }
     }
+}
+
+/** One MD3 list row used by the real list and by the scroll-pinned copy. */
+@Composable
+private fun PartitionListRow(
+    state: AppUiState,
+    partition: PartitionTab,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isSelected = partition.id == state.selectedPartitionId
+    val access = state.partitionWriteAccess(partition)
+    val displayName = partition.name.ifBlank { partition.id }
+    val displayLabel = partition.volumeLabel?.trim()?.takeIf { it.isNotEmpty() }
+    val rowTitle = displayLabel?.let { "$displayName ($it)" } ?: displayName
+    val rowStart = partition.startLba
+    val rowCount = partition.sectorCount
+    val rowEnd = if (rowStart != null && rowCount != null &&
+        rowCount > 0UL &&
+        rowStart <= ULong.MAX_VALUE - (rowCount - 1UL)
+    ) {
+        rowStart + rowCount - 1UL
+    } else {
+        null
+    }
+    val rowRange = if (rowStart != null && rowEnd != null) {
+        stringResource(
+            R.string.partitions_info_lba_range_value,
+            rowStart.toLong(),
+            rowEnd.toLong(),
+        )
+    } else {
+        null
+    }
+    val rowContent = if (isSelected) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    ListItem(
+        headlineContent = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = rowTitle,
+                    fontWeight = FontWeight.SemiBold,
+                    color = rowContent,
+                    modifier = Modifier.weight(1f),
+                )
+                if (partition.filesystemLabel.isNotEmpty()) {
+                    Badge(text = partition.filesystemLabel)
+                }
+                if (partition.displayEfi) {
+                    Badge(text = stringResource(R.string.partitions_badge_efi))
+                }
+            }
+        },
+        supportingContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = partitionUsageLabel(state, partition),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                rowRange?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        },
+        trailingContent = { WriteAccessBadge(access) },
+        colors = ListItemDefaults.colors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                Color.Transparent
+            },
+            headlineColor = rowContent,
+            supportingColor = rowContent,
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .selectable(
+                selected = isSelected,
+                enabled = state.actionsEnabled,
+                role = Role.RadioButton,
+                onClick = { onSelect(partition.id) },
+            ),
+    )
 }
 
 private enum class RawTargetMode {
@@ -1747,15 +1791,10 @@ private fun RawWriteSection(
                     val plan = draftStart?.let {
                         RawRangePlan.planFromSourceSize(it, sourceBytes, geometry)
                     }
-                    val planRange =
-                        if (state.imageUri != null &&
-                            state.stagedRawImagePath == null &&
-                            state.rawDecodedSha256 == null
-                        ) {
-                            null
-                        } else {
-                            (plan as? RawWritePlan.Ready)?.range
-                        }
+                    // A content URI does not need a precomputed digest to be written;
+                    // the decoded size is enough to plan and the optional hash is
+                    // carried into confirmation when measurement produced one.
+                    val planRange = (plan as? RawWritePlan.Ready)?.range
                     val planProblems =
                         ((plan as? RawWritePlan.Rejected)?.problems ?: emptySet())
                             .filterNot { sourceBytes == null && it == RawRangeProblem.SourceSizeUnknown }
@@ -1807,6 +1846,18 @@ private fun RawWriteSection(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
+                    if (sourceBytes == null &&
+                        !state.rawSizeMeasuring &&
+                        !state.rawMeasurementPending &&
+                        !state.rawMeasurementWaitingForPrevious
+                    ) {
+                        TextButton(
+                            onClick = { onIntent(UiIntent.RetryRawSourceMeasurement) },
+                            enabled = state.actionsEnabled,
+                        ) {
+                            Text(stringResource(R.string.settings_retry))
+                        }
+                    }
 
                     val rangeAssessment = planRange?.let { range ->
                         assessRawRange(
@@ -1815,6 +1866,7 @@ private fun RawWriteSection(
                             rangeStart = range.startLba,
                             rangeCount = range.sectorCount,
                             selected = selected,
+                            wholeDisk = rawTargetMode == RawTargetMode.WholeDisk,
                         )
                     }
 
@@ -2030,6 +2082,7 @@ private fun assessRawRange(
     rangeStart: ULong,
     rangeCount: ULong,
     selected: PartitionTab?,
+    wholeDisk: Boolean,
 ): RawRangeAssessment {
     if (rangeCount == 0UL || rangeStart > ULong.MAX_VALUE - rangeCount) {
         return RawRangeAssessment(
@@ -2073,19 +2126,23 @@ private fun assessRawRange(
         } &&
         !touchesTableOrBoot
     val insideFree = partitionHits.isEmpty() && !touchesTableOrBoot && !touchesLba0
-    val refinedOk = insideFree || onlySelected
+    // Whole-disk raw write necessarily replaces the table and boot sectors; the
+    // destructive confirmation is the gate, not a range veto that made the chip inert.
+    val refinedOk = wholeDisk || insideFree || onlySelected
 
     var roEfiBlocked = false
-    for (hit in partitionHits) {
-        val part = state.partitions.firstOrNull { p ->
-            p.startLba == hit.target.startLba && p.sectorCount == hit.target.sectorCount
-        } ?: continue
-        val access = state.partitionWriteAccess(part)
-        val readOnly = access == PartitionWriteAccess.ReadOnly ||
-            access == PartitionWriteAccess.DriverReadOnly || part.readOnly
-        if (readOnly && !state.isEfiWriteAllowed(part)) {
-            roEfiBlocked = true
-            break
+    if (!wholeDisk) {
+        for (hit in partitionHits) {
+            val part = state.partitions.firstOrNull { p ->
+                p.startLba == hit.target.startLba && p.sectorCount == hit.target.sectorCount
+            } ?: continue
+            val access = state.partitionWriteAccess(part)
+            val readOnly = access == PartitionWriteAccess.ReadOnly ||
+                access == PartitionWriteAccess.DriverReadOnly || part.readOnly
+            if (readOnly && !state.isEfiWriteAllowed(part)) {
+                roEfiBlocked = true
+                break
+            }
         }
     }
 
@@ -2183,6 +2240,15 @@ private fun PartitionSelectStrip(
         return
     }
     if (segments.isEmpty()) return
+    val selectedFill = MaterialTheme.colorScheme.primary
+    val selectedContent = MaterialTheme.colorScheme.onPrimary
+    // Inverse-relative-to-theme tonal steps: dark ink on light surfaces,
+    // light ink on dark surfaces. Container roles are too close to the
+    // section background to read as a legend.
+    val partitionFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f)
+    val freeFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
+    val gapFill = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.05f)
+    val outline = MaterialTheme.colorScheme.outlineVariant
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -2205,9 +2271,16 @@ private fun PartitionSelectStrip(
         }
         val contentWidth = widths.fold(0.dp) { total, width -> total + width }
             .coerceAtLeast(maxWidth)
+        val stripScroll = rememberScrollState()
         Row(
             modifier = Modifier
-                .horizontalScroll(rememberScrollState())
+                .then(
+                    if (contentWidth > maxWidth) {
+                        Modifier.horizontalScroll(stripScroll, overscrollEffect = null)
+                    } else {
+                        Modifier
+                    },
+                )
                 .width(contentWidth)
                 .height(48.dp),
         ) {
@@ -2216,10 +2289,10 @@ private fun PartitionSelectStrip(
                 val free = segment.free
                 val isSelected = partition?.id == state.selectedPartitionId
                 val fill = when {
-                    partition != null && isSelected -> MaterialTheme.colorScheme.secondaryContainer
-                    partition != null -> MaterialTheme.colorScheme.surfaceContainerHigh
-                    free != null -> MaterialTheme.colorScheme.surfaceContainerLow
-                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                    partition != null && isSelected -> selectedFill
+                    partition != null -> partitionFill
+                    free != null -> freeFill
+                    else -> gapFill
                 }
                 val description = when {
                     partition != null -> stringResource(
@@ -2234,17 +2307,6 @@ private fun PartitionSelectStrip(
                         .width(widths[index])
                         .fillMaxHeight()
                         .background(fill)
-                        .then(
-                            if (isSelected) {
-                                Modifier.border(
-                                    width = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    shape = RoundedCornerShape(2.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        )
                         .then(
                             when {
                                 partition != null -> Modifier.selectable(
@@ -2277,7 +2339,7 @@ private fun PartitionSelectStrip(
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (isSelected) {
-                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                    selectedContent
                                 } else {
                                     MaterialTheme.colorScheme.onSurface
                                 },
@@ -2289,9 +2351,9 @@ private fun PartitionSelectStrip(
                                     text = partition.filesystemLabel,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (isSelected) {
-                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                        selectedContent
                                     } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                        MaterialTheme.colorScheme.onSurface
                                     },
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -2309,44 +2371,48 @@ private fun PartitionSelectStrip(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         StripLegend(
-            color = MaterialTheme.colorScheme.secondaryContainer,
+            color = selectedFill,
+            borderColor = MaterialTheme.colorScheme.primary,
             label = stringResource(R.string.partitions_strip_legend_selected),
         )
         StripLegend(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = partitionFill,
+            borderColor = outline,
             label = stringResource(R.string.partitions_strip_legend_partition),
         )
         StripLegend(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            color = freeFill,
+            borderColor = outline,
             label = stringResource(R.string.partitions_strip_free),
         )
         StripLegend(
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            color = gapFill,
+            borderColor = outline,
             label = stringResource(R.string.partitions_strip_unallocated),
         )
     }
 }
 
 @Composable
-private fun StripLegend(color: Color, label: String) {
+private fun StripLegend(
+    color: Color,
+    borderColor: Color,
+    label: String,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(10.dp)
-                .background(color, RoundedCornerShape(2.dp))
-                .border(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline,
-                    RoundedCornerShape(2.dp),
-                ),
+                .size(12.dp)
+                .background(color, RoundedCornerShape(3.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(3.dp)),
         )
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurface,
         )
     }
 }

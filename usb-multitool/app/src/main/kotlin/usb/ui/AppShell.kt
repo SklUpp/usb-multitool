@@ -2563,6 +2563,8 @@ internal enum class Glyph {
     ChevronDown,
     ChevronUp,
     ChevronLeft,
+    /** Magnifier: search or filter the current list. */
+    Search,
     /** Two crossing strokes: dismiss or clear. */
     Close,
     /** Filled square: cancel a running operation. */
@@ -2794,6 +2796,20 @@ internal fun GlyphIcon(
                     tint,
                     style = stroke,
                 )
+                Glyph.Search -> {
+                    drawCircle(
+                        tint,
+                        radius = 6.5f,
+                        center = androidx.compose.ui.geometry.Offset(10.5f, 10.5f),
+                        style = stroke,
+                    )
+                    drawLine(
+                        tint,
+                        androidx.compose.ui.geometry.Offset(15.2f, 15.2f),
+                        androidx.compose.ui.geometry.Offset(20f, 20f),
+                        1.8f,
+                    )
+                }
                 Glyph.Close -> {
                     drawLine(tint, androidx.compose.ui.geometry.Offset(7f, 7f), androidx.compose.ui.geometry.Offset(17f, 17f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(17f, 7f), androidx.compose.ui.geometry.Offset(7f, 17f), 1.8f)

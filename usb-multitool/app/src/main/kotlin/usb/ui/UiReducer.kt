@@ -235,6 +235,9 @@ sealed class UiIntent {
     /** User explicitly stops a stuck decode-count pass. */
     data object CancelRawSourceMeasurement : UiIntent()
 
+    /** Restart a failed/cancelled decode-count pass for the still-selected source. */
+    data object RetryRawSourceMeasurement : UiIntent()
+
     /** Scan the selected partition for raw-write sources; no extension filter. */
     data object LoadRawSourceCandidates : UiIntent()
     data class RawSourceCandidatesLoaded(
@@ -2716,6 +2719,7 @@ object UiReducer {
                 RawTransitions.rawSourceMeasurementStarted(state, intent)
             is UiIntent.CancelRawSourceMeasurement ->
                 RawTransitions.cancelRawSourceMeasurement(state)
+            UiIntent.RetryRawSourceMeasurement -> retryRawSourceMeasurement(state)
             is UiIntent.LoadRawSourceCandidates ->
                 RawTransitions.loadRawSourceCandidates(state, intent)
             is UiIntent.RawSourceCandidatesLoaded ->
@@ -5295,6 +5299,37 @@ object UiReducer {
         }
         val capacity = state.device?.capacityBytes ?: return null
         return if (capacity > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else capacity.toLong()
+    }
+
+    /** Restart a terminal failed/cancelled pass without changing the selected source. */
+    private fun retryRawSourceMeasurement(state: AppUiState): ReduceResult {
+        if (!state.actionsEnabled) {
+            return ReduceResult(state.withStatus(presenceMessage(state.presence)))
+        }
+        val key = state.rawSourceKey ?: return ReduceResult(state)
+        val limit = rawMeasureLimit(state)?.takeIf { it > 0L } ?: return ReduceResult(state)
+        val generation = state.rawSizeGeneration + 1L
+        return ReduceResult(
+            state.copy(
+                rawDecodedSizeBytes = null,
+                rawDecodedSizeSource = key,
+                rawDecodedSizeError = null,
+                rawDecodedErrorKind = null,
+                rawDecodedSha256 = null,
+                rawSizeMeasuring = true,
+                rawMeasurementPending = false,
+                rawMeasurementWaitingForPrevious = false,
+                rawSizeGeneration = generation,
+            ),
+            effects = listOf(
+                UiEffect.MeasureRawSource(
+                    source = key,
+                    staged = state.stagedRawImagePath != null,
+                    generation = generation,
+                    limitBytes = limit,
+                ),
+            ),
+        )
     }
 
     /** Start a queued bounded pass once capacity/geometry is known. */

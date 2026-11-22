@@ -71,13 +71,18 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import usb.formatBinaryBytesPerSecond
 import usb.formatEtaDuration
 import usb.fs.FilesystemUsage
@@ -1157,6 +1162,12 @@ private fun FolderCard(
         state.device?.identity,
         state.device?.attachGeneration,
     ) { mutableStateOf("") }
+    var searchOpen by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf(false) }
     val visibleRows = if (fileFilter.isBlank()) {
         rows
     } else {
@@ -1223,8 +1234,8 @@ private fun FolderCard(
                         onOpenPath = onOpenPath,
                         onRefresh = onRefresh,
                         onNewFolder = onNewFolder,
-                        filter = fileFilter,
-                        onFilterChange = { fileFilter = it },
+                        filterActive = fileFilter.isNotBlank(),
+                        onSearch = { searchOpen = true },
                         isLoading = isLoading,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     )
@@ -1293,6 +1304,15 @@ private fun FolderCard(
             }
         }
     }
+    if (searchOpen) {
+        FileFilterDialog(
+            query = fileFilter,
+            onQueryChange = { fileFilter = it },
+            matches = visibleRows.size,
+            total = rows.size,
+            onDismiss = { searchOpen = false },
+        )
+    }
 }
 
 /** Path row with Refresh/CreateFolder only. Selection Download/Rename/Delete/Clear live in the
@@ -1306,13 +1326,14 @@ private fun FolderSubblock(
     onOpenPath: (String) -> Unit,
     onRefresh: () -> Unit,
     onNewFolder: () -> Unit,
-    filter: String,
-    onFilterChange: (String) -> Unit,
+    filterActive: Boolean,
+    onSearch: () -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val refreshDescription = stringResource(R.string.unattend_refresh)
     val newFolderDescription = stringResource(R.string.files_create_folder)
+    val searchDescription = stringResource(R.string.files_filter_hint)
     val pathA11y = stringResource(R.string.files_current_path, pathLabel)
 
     Surface(
@@ -1332,6 +1353,17 @@ private fun FolderSubblock(
                     modifier = Modifier
                         .weight(1f)
                         .semantics { contentDescription = pathA11y },
+                )
+                FolderActionButton(
+                    glyph = Glyph.Search,
+                    description = searchDescription,
+                    enabled = canAct,
+                    onClick = onSearch,
+                    tint = if (filterActive) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        LocalContentColor.current
+                    },
                 )
                 if (isLoading) {
                     IconButton(
@@ -1358,17 +1390,89 @@ private fun FolderSubblock(
                     onClick = onNewFolder,
                 )
             }
-            OutlinedTextField(
-                value = filter,
-                onValueChange = onFilterChange,
-                label = { Text(stringResource(R.string.files_filter_hint)) },
-                singleLine = true,
-                enabled = canAct,
+        }
+    }
+}
+
+/**
+ * Modal name filter: the folder toolbar owns a single search icon. The overlay keeps the
+ * existing list interactive behind it so every keystroke updates the visible rows live.
+ */
+@Composable
+private fun FileFilterDialog(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    matches: Int,
+    total: Int,
+    onDismiss: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    val searchLabel = stringResource(R.string.files_filter_hint)
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 3.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+                .imePadding(),
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp)
-                    .padding(bottom = 8.dp),
-            )
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = searchLabel,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    label = { Text(searchLabel) },
+                    singleLine = true,
+                    leadingIcon = { GlyphIcon(Glyph.Search, size = 20.dp) },
+                    trailingIcon = if (query.isNotEmpty()) {
+                        {
+                            IconButton(
+                                onClick = { onQueryChange("") },
+                                modifier = Modifier.semantics {
+                                    contentDescription = searchLabel
+                                },
+                            ) { GlyphIcon(Glyph.Close, size = 20.dp) }
+                        }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                )
+                Text(
+                    text = "$matches / $total",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(stringResource(android.R.string.ok))
+                    }
+                }
+            }
         }
     }
 }
@@ -1654,20 +1758,73 @@ private fun FileRow(
         isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = if (isSelected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            Color.Transparent
+    ListItem(
+        headlineContent = {
+            Text(
+                text = entry.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (entry.isDirectory || isSelected) {
+                    FontWeight.Medium
+                } else {
+                    FontWeight.Normal
+                },
+                color = contentColor,
+            )
         },
-        contentColor = if (isSelected) {
-            MaterialTheme.colorScheme.onSecondaryContainer
+        supportingContent = if (!entry.isDirectory) {
+            {
+                Text(
+                    text = DeviceIdentity.formatCapacity(entry.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = supportingColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                )
+            }
         } else {
-            MaterialTheme.colorScheme.onSurface
+            null
         },
+        leadingContent = {
+            Icon(
+                painter = painterResource(
+                    if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
+                ),
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(24.dp),
+            )
+        },
+        trailingContent = if (showActions) {
+            {
+                IconButton(
+                    onClick = onAction,
+                    enabled = actionsEnabled,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = moreActionsDescription },
+                ) {
+                    GlyphIcon(Glyph.More, size = 24.dp)
+                }
+            }
+        } else {
+            null
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                Color.Transparent
+            },
+            headlineColor = contentColor,
+            supportingColor = supportingColor,
+        ),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
             .semantics { selected = isSelected }
             .combinedClickable(
                 enabled = actionsEnabled,
@@ -1682,67 +1839,9 @@ private fun FileRow(
                     }
                 },
                 onLongClick = onToggleSelect,
-            ),
-    ) {
-        ListItem(
-            headlineContent = {
-                Text(
-                    text = entry.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (entry.isDirectory || isSelected) {
-                        FontWeight.Medium
-                    } else {
-                        FontWeight.Normal
-                    },
-                    color = contentColor,
-                )
-            },
-            supportingContent = if (!entry.isDirectory) {
-                {
-                    Text(
-                        text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = supportingColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        softWrap = false,
-                    )
-                }
-            } else {
-                null
-            },
-            leadingContent = {
-                Icon(
-                    painter = painterResource(
-                        if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
-                    ),
-                    contentDescription = null,
-                    tint = contentColor,
-                    modifier = Modifier.size(24.dp),
-                )
-            },
-            trailingContent = if (showActions) {
-                {
-                    IconButton(
-                        onClick = onAction,
-                        enabled = actionsEnabled,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .semantics { contentDescription = moreActionsDescription },
-                    ) {
-                        GlyphIcon(Glyph.More, size = 24.dp)
-                    }
-                }
-            } else {
-                null
-            },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.heightIn(min = 48.dp),
-        )
-    }
+            )
+            .heightIn(min = 48.dp),
+    )
 }
 
 /**
@@ -1777,20 +1876,60 @@ private fun FilesPickRow(
         isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = if (isSelected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            Color.Transparent
+    ListItem(
+        headlineContent = {
+            Text(
+                text = entry.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                color = contentColor,
+                softWrap = true,
+            )
         },
-        contentColor = if (isSelected) {
-            MaterialTheme.colorScheme.onSecondaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurface
+        supportingContent = {
+            if (entry.isDirectory) {
+                Text(
+                    text = stringResource(R.string.type_folder),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = supportingColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = DeviceIdentity.formatCapacity(entry.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = supportingColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         },
+        leadingContent = {
+            Icon(
+                painter = painterResource(
+                    if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
+                ),
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(24.dp),
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                Color.Transparent
+            },
+            headlineColor = contentColor,
+            supportingColor = supportingColor,
+        ),
         modifier = modifier
             .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
             .semantics { selected = isSelected }
             .combinedClickable(
                 enabled = actionsEnabled,
@@ -1800,52 +1939,7 @@ private fun FilesPickRow(
                 onClick = { if (entry.isDirectory) onNavigate() else onToggleSelect() },
                 onLongClick = onToggleSelect.takeIf { allowLongPress },
             ),
-    ) {
-        ListItem(
-            headlineContent = {
-                Text(
-                    text = entry.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                    color = contentColor,
-                    softWrap = true,
-                )
-            },
-            supportingContent = {
-                if (entry.isDirectory) {
-                    Text(
-                        text = stringResource(R.string.type_folder),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = supportingColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                } else {
-                    Text(
-                        text = DeviceIdentity.formatCapacity(entry.sizeBytes),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontFeatureSettings = "tnum",
-                        ),
-                        color = supportingColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            },
-            leadingContent = {
-                Icon(
-                    painter = painterResource(
-                        if (entry.isDirectory) R.drawable.ic_file_folder else R.drawable.ic_file,
-                    ),
-                    contentDescription = null,
-                    tint = contentColor,
-                    modifier = Modifier.size(24.dp),
-                )
-            },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        )
-    }
+    )
 }
 
 /**

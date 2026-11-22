@@ -108,11 +108,11 @@
     <string name="partitions_scheme_help_title">Scheme and backup GPT</string>
     <string name="partitions_scheme_help_text">Changing scheme (MBR/GPT) reinitializes the disk: all existing partitions are erased. \'Fix backup GPT\' preserves partitions by relocating the backup header to the actual disk end.</string>
     <string name="partitions_scheme_choice_title">%1$s: choose action</string>
-    <string name="partitions_scheme_choice_note">'Fix backup GPT' preserves partitions. Changing scheme wipes the disk and requires confirmation.</string>
+    <string name="partitions_scheme_choice_note">\'Fix backup GPT\' preserves partitions. Changing scheme wipes the disk and requires confirmation.</string>
     <string name="partitions_scheme_choice_change">Change scheme to %1$s…</string>
     <string name="partitions_scheme_prompt_title">Change scheme to %1$s?</string>
     <string name="partitions_scheme_prompt_note">Changing partition scheme will re-partition the disk. All existing partitions and data will be destroyed.</string>
-    <string name="partitions_scheme_repair_note">'Fix backup GPT' preserves partitions: requires an intact primary GPT table.</string>
+    <string name="partitions_scheme_repair_note">\'Fix backup GPT\' preserves partitions: requires an intact primary GPT table.</string>
     <string name="partitions_scheme_erase_title">Partitions to erase:</string>
     <string name="partitions_scheme_erase_partition">%1$s — %2$s</string>
     <string name="partitions_scheme_change_action">Change to %1$s</string>
@@ -729,7 +729,7 @@
     <string name="params_role_primary">Primary</string>
     <string name="params_role_recovery">Recovery</string>
     <string name="params_title">Answer file parameters</string>
-    <string name="settings_empty">Section 'control' missing or empty. Check /ventoy/ventoy.json syntax.</string>
+    <string name="settings_empty">Section \'control\' missing or empty. Check /ventoy/ventoy.json syntax.</string>
     <string name="settings_invalid">Invalid; expected %1$s</string>
     <string name="settings_raw">Value: %1$s</string>
     <string name="settings_remove">Remove</string>
@@ -744,11 +744,9 @@
     <string name="settings_applies_note">Changes staged in memory. Click \'Update selected file\' to write them to /ventoy/ventoy.json on the drive.</string>
     <string name="settings_win11_hint">1 — bypass Windows 11 requirements (TPM 2.0, Secure Boot, RAM, CPU).</string>
     <string name="settings_win11_nro_hint">1 — allow local account creation without internet or MS account (BypassNRO).</string>
-    <string name="settings_win11_short">Hardware checks bypass</string>
-    <string name="settings_win11_nro_short">Local account without network</string>
     <string name="settings_help_title">Global Ventoy settings</string>
     <string name="settings_help_text">Settings are read from the control section of /ventoy/ventoy.json. Known keys are edited via toggles; custom keys are edited manually. Unrecognized JSON sections are preserved.</string>
-    <string name="settings_missing">ventoy.json not found on data partition. It will be created automatically upon Ventoy install.</string>
+    <string name="settings_missing">No /ventoy/ventoy.json yet. Ventoy\'s built-in defaults still apply: both Windows 11 bypass keys are enabled. Applying staged changes creates the file.</string>
     <string name="settings_read_error">ventoy.json could not be read or parsed. This is not reported as empty settings.</string>
     <string name="settings_damaged_layout">Ventoy partition layout damaged: cannot read ventoy.json. Run repair in Diagnostics.</string>
     <string name="settings_retry">Retry</string>
@@ -768,7 +766,7 @@
     <string name="settings_problem_no_changes">No Ventoy setting changes to apply</string>
     <string name="settings_delete_row">Delete row</string>
     <string name="settings_staged">Staged settings</string>
-    <string name="settings_staged_hint">'Update' writes changes to the file on USB. Unrecognized JSON sections are preserved.</string>
+    <string name="settings_staged_hint">\'Update\' writes changes to the file on USB. Unrecognized JSON sections are preserved.</string>
     <string name="settings_staged_row">%1$s = %2$s</string>
     <string name="settings_current">Current: %1$s</string>
     <string name="settings_not_set">not set</string>
@@ -784,7 +782,7 @@
     <string name="settings_apply_review_write">Write</string>
     <string name="settings_discard">Discard</string>
     <string name="settings_apply_now">Update the selected file</string>
-    <string name="settings_retry_pending">Ventoy updated, but ventoy.json was not written. Click 'Update selected file' to retry.</string>
+    <string name="settings_retry_pending">Ventoy updated, but ventoy.json was not written. Click \'Update selected file\' to retry.</string>
     <string name="settings_retry_pending_action">Retry settings</string>
     <string name="settings_validation">Cannot stage: %1$s</string>
     <string name="settings_known_bypass_checks">Windows 11 checks</string>
@@ -847,7 +845,7 @@
     <string name="unattend_unknown_note">Custom XML tags are preserved upon saving (formatting indentation may change).</string>
     <string name="unattend_open_editor">Open editor</string>
     <string name="unattend_editor_title">Edit unattend XML</string>
-    <string name="unattend_editor_help">Edit raw answer file XML. 'Save' validates structure and commits changes. Close discards draft.</string>
+    <string name="unattend_editor_help">Edit raw answer file XML. \'Save\' validates structure and commits changes. Close discards draft.</string>
     <string name="unattend_editor_invalid">XML syntax error: DOCTYPE and ENTITY declarations are not allowed.</string>
     <string name="unattend_editor_destructive_ack">I understand these sections can erase disks on the target computer</string>
     <string name="windows_selected_image">Selected image:</string>
@@ -902,7 +900,7 @@
     <string name="settings_source_phone_note">The phone document is updated in place; it is never copied to the stick.</string>
     <string name="settings_open_editor">Open editor</string>
     <string name="settings_editor_title">Global settings</string>
-    <string name="settings_editor_help">Standard keys are edited via toggles; custom keys manually. 'Save' stages changes in memory.</string>
+    <string name="settings_editor_help">Standard keys are edited via toggles; custom keys manually. \'Save\' stages changes in memory.</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_apply">Apply</string>
     <string name="settings_save">Save</string>

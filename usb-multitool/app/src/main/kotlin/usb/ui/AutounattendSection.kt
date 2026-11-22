@@ -32,6 +32,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -65,6 +66,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -752,6 +755,20 @@ internal fun GlobalSettingsCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (settings is VentoyGlobalSettings.Missing && source.isDefaultPath()) {
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_missing),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
+        }
         if (settings is VentoyGlobalSettings.ReadError) {
             Surface(
                 shape = MaterialTheme.shapes.small,
@@ -1109,6 +1126,7 @@ private fun GlobalSettingsEditorDialog(
                                     },
                                     onDelete = { drafts.removeAll { it.id == draft.id } },
                                     keyReadOnly = true,
+                                    description = ventoyKeyShortDescription(draft.key),
                                 )
                             }
                         }
@@ -1433,6 +1451,7 @@ private fun EditablePairRow(
     onChange: (EditorPairDraft) -> Unit,
     onDelete: () -> Unit,
     keyReadOnly: Boolean = false,
+    description: String? = null,
 ) {
     val deleteLabel = stringResource(R.string.settings_delete_row)
     val dismissState = rememberSwipeToDismissBoxState(
@@ -1466,7 +1485,16 @@ private fun EditablePairRow(
         },
     ) {
         Surface(color = MaterialTheme.colorScheme.surface) {
-            Row(
+            Column(modifier = Modifier.fillMaxWidth()) {
+                description?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 12.dp, top = 6.dp, end = 12.dp),
+                    )
+                }
+                Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp),
@@ -1511,6 +1539,7 @@ private fun EditablePairRow(
                         .size(48.dp)
                         .semantics { contentDescription = deleteLabel },
                 ) { GlyphIcon(Glyph.Trash, size = 18.dp) }
+                }
             }
         }
     }
@@ -1565,6 +1594,36 @@ private fun SettingsSourceDialog(
         )
     }
 }
+/** Short, localized semantics for every key bundled with the pinned Ventoy release. */
+@Composable
+private fun ventoyKeyShortDescription(key: String): String? = when (key) {
+    "VTOY_MENU_LANGUAGE" -> stringResource(R.string.ventoy_key_menu_language)
+    "VTOY_DEFAULT_SEARCH_ROOT" -> stringResource(R.string.ventoy_key_default_search_root)
+    "VTOY_SECURE_BOOT_POLICY" -> stringResource(R.string.ventoy_key_secure_boot_policy)
+    "VTOY_WIN_UEFI_RES_LOCK" -> stringResource(R.string.ventoy_key_win_uefi_res_lock)
+    "VTOY_WIN11_BYPASS_CHECK" -> stringResource(R.string.ventoy_key_win11_bypass_check)
+    "VTOY_WIN11_BYPASS_NRO" -> stringResource(R.string.ventoy_key_win11_bypass_nro)
+    "VTOY_DEFAULT_MENU_MODE" -> stringResource(R.string.ventoy_key_default_menu_mode)
+    "VTOY_MENU_TIMEOUT" -> stringResource(R.string.ventoy_key_menu_timeout)
+    "VTOY_DEFAULT_IMAGE" -> stringResource(R.string.ventoy_key_default_image)
+    "VTOY_MAX_SEARCH_LEVEL" -> stringResource(R.string.ventoy_key_max_search_level)
+    "VTOY_SECONDARY_BOOT_MENU" -> stringResource(R.string.ventoy_key_secondary_boot_menu)
+    "VTOY_SHOW_PASSWORD_ASTERISK" -> stringResource(R.string.ventoy_key_show_password_asterisk)
+    "VTOY_SECONDARY_TIMEOUT" -> stringResource(R.string.ventoy_key_secondary_timeout)
+    "VTOY_DEFAULT_KBD_LAYOUT" -> stringResource(R.string.ventoy_key_default_kbd_layout)
+    "VTOY_TREE_VIEW_MENU_STYLE" -> stringResource(R.string.ventoy_key_tree_view_menu_style)
+    "VTOY_FILT_DOT_UNDERSCORE_FILE" -> stringResource(R.string.ventoy_key_filt_dot_underscore_file)
+    "VTOY_SORT_CASE_SENSITIVE" -> stringResource(R.string.ventoy_key_sort_case_sensitive)
+    "VTOY_VHD_NO_WARNING" -> stringResource(R.string.ventoy_key_vhd_no_warning)
+    "VTOY_FILE_FLT_ISO" -> stringResource(R.string.ventoy_key_file_flt_iso)
+    "VTOY_FILE_FLT_WIM" -> stringResource(R.string.ventoy_key_file_flt_wim)
+    "VTOY_FILE_FLT_EFI" -> stringResource(R.string.ventoy_key_file_flt_efi)
+    "VTOY_FILE_FLT_IMG" -> stringResource(R.string.ventoy_key_file_flt_img)
+    "VTOY_FILE_FLT_VHD" -> stringResource(R.string.ventoy_key_file_flt_vhd)
+    "VTOY_FILE_FLT_VTOY" -> stringResource(R.string.ventoy_key_file_flt_vtoy)
+    else -> null
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun KnownControlRow(
@@ -1600,11 +1659,7 @@ private fun KnownControlRow(
         "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
         else -> null
     }
-    val shortHint = when (known.key) {
-        "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_short
-        "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_short
-        else -> null
-    }
+    val shortHint = ventoyKeyShortDescription(known.key)
     Column(modifier = Modifier.fillMaxWidth()) {
         if (booleanKey) {
             Row(
@@ -1638,7 +1693,7 @@ private fun KnownControlRow(
                     )
                     shortHint?.let {
                         Text(
-                            text = stringResource(it),
+                            text = it,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1675,7 +1730,7 @@ private fun KnownControlRow(
                     )
                     shortHint?.let {
                         Text(
-                            text = stringResource(it),
+                            text = it,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1834,35 +1889,37 @@ private fun CompactStagedControls(
         )
         pending.forEach { setting ->
             key(setting.key) {
-                Row(
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            text = stringResource(
+                                R.string.settings_staged_row,
+                                setting.key,
+                                controlValueText(setting.key, setting.value, removeLabel),
+                            ),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    trailingContent = {
+                        IconButton(
+                            onClick = { onDiscard(setting.key) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics { contentDescription = discardLabel },
+                        ) {
+                            GlyphIcon(Glyph.Close, size = 18.dp)
+                        }
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
                         .heightIn(min = 48.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = stringResource(
-                            R.string.settings_staged_row,
-                            setting.key,
-                            controlValueText(setting.key, setting.value, removeLabel),
-                        ),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                        ),
-                        modifier = Modifier.weight(1f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    IconButton(
-                        onClick = { onDiscard(setting.key) },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .semantics { contentDescription = discardLabel },
-                    ) {
-                        GlyphIcon(Glyph.Close, size = 18.dp)
-                    }
-                }
+                )
             }
         }
     }
@@ -1902,16 +1959,33 @@ private fun VentoyFileSettingsPreview(entries: List<VentoySetting>) {
         }
         val visible = if (expanded) entries else entries.take(1)
         visible.forEachIndexed { index, setting ->
-            Text(
-                text = "${index + 1}. ${setting.key} = ${
-                    controlValueText(setting.key, setting.rawValue, "")
-                }",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            ListItem(
+                headlineContent = {
+                    Text(
+                        text = "${index + 1}. ${setting.key}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        text = controlValueText(setting.key, setting.rawValue, ""),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .heightIn(min = 48.dp),
             )
         }
     }
@@ -2168,21 +2242,56 @@ private fun OfficialControlKeyPickerDialog(
                 }
                 defs.forEach { def ->
                     val alreadySet = def.key in existingKeys
-                    Surface(
-                        color = if (selectedKey == def.key) {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                text = def.key,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         },
-                        contentColor = if (selectedKey == def.key) {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
+                        supportingContent = {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = kindLabel(def.kind),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                ventoyKeyShortDescription(def.key)?.let { description ->
+                                    Text(
+                                        text = description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                         },
-                        shape = MaterialTheme.shapes.small,
+                        trailingContent = if (alreadySet) {
+                            {
+                                Text(
+                                    text = stringResource(R.string.wave4_catalog_already_set),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        colors = ListItemDefaults.colors(
+                            containerColor = if (selectedKey == def.key) {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            } else {
+                                Color.Transparent
+                            },
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 48.dp)
+                            .clip(MaterialTheme.shapes.small)
                             .clickable(
                                 enabled = state.actionsEnabled && !alreadySet,
                                 role = Role.Button,
@@ -2191,39 +2300,9 @@ private fun OfficialControlKeyPickerDialog(
                                     value = ""
                                     problem = null
                                 },
-                            ),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = def.key,
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = kindLabel(def.kind),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (alreadySet) {
-                                Text(
-                                    text = stringResource(R.string.wave4_catalog_already_set),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
+                            )
+                            .heightIn(min = 48.dp),
+                    )
                 }
                 selected?.let { def ->
                     HorizontalDivider()

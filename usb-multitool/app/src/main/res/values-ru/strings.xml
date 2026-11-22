@@ -745,11 +745,9 @@
     <string name="settings_applies_note">Изменения сохранены во временном буфере. Нажмите «Обновить выбранный файл», чтобы физически записать их в /ventoy/ventoy.json на накопителе.</string>
     <string name="settings_win11_hint">1 — пропуск проверок Windows 11 (наличие TPM 2.0, Secure Boot, ОЗУ, CPU).</string>
     <string name="settings_win11_nro_hint">1 — локальная учетная запись без интернета и аккаунта MS (BypassNRO).</string>
-    <string name="settings_win11_short">Обход аппаратных проверок</string>
-    <string name="settings_win11_nro_short">Локальная запись без сети</string>
     <string name="settings_help_title">Глобальные настройки Ventoy</string>
     <string name="settings_help_text">Параметры считываются из секции control конфигурационного файла /ventoy/ventoy.json. Известные ключи Ventoy редактируются переключателями, остальные — вручную в формате ключ/значение. Нераспознанные секции JSON сохраняются при перезаписи без изменений.</string>
-    <string name="settings_missing">Файл ventoy.json отсутствует на разделе данных. Он будет создан автоматически после установки Ventoy.</string>
+    <string name="settings_missing">Файла /ventoy/ventoy.json ещё нет. Действуют встроенные значения Ventoy: оба ключа обхода Windows 11 включены. Применение изменений создаст файл.</string>
     <string name="settings_read_error">ventoy.json не удалось прочитать или разобрать. Это не пустые настройки.</string>
     <string name="settings_damaged_layout">Разметка Ventoy повреждена: чтение ventoy.json невозможно. Выполните восстановление в Диагностике.</string>
     <string name="settings_retry">Повторить</string>

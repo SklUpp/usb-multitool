@@ -434,6 +434,44 @@ class RawRangeUiStateTest {
     }
 
     @Test
+    fun wholeDiskStartsAtLbaZeroAndReachesConfirmation() {
+        val result = UiReducer.reduce(ready(), UiIntent.RequestRawWrite(0UL))
+        val pending = result.state.pendingConfirmation
+        assertNotNull(pending)
+        assertEquals(0UL, pending!!.rawStartLba)
+        assertEquals(4096UL, pending.rawSectorCount)
+    }
+
+    @Test
+    fun contentUriWithoutDigestCanStillBeWritten() {
+        val result =
+            UiReducer.reduce(
+                ready().copy(rawDecodedSha256 = null),
+                UiIntent.RequestRawWrite(2048UL),
+            )
+        val pending = result.state.pendingConfirmation
+        assertNotNull(pending)
+        assertEquals(2048UL, pending!!.rawStartLba)
+        assertEquals(4096UL, pending.rawSectorCount)
+    }
+
+    @Test
+    fun retryRestartsTerminalMeasurementForSelectedSource() {
+        val failed =
+            ready().copy(
+                rawDecodedSizeBytes = null,
+                rawDecodedSizeError = "cancelled",
+                rawSizeMeasuring = false,
+                rawSizeGeneration = 5L,
+            )
+        val result = UiReducer.reduce(failed, UiIntent.RetryRawSourceMeasurement)
+        val effect = result.effects.single() as UiEffect.MeasureRawSource
+        assertEquals(failed.rawSourceKey, effect.source)
+        assertTrue(result.state.rawSizeMeasuring)
+        assertEquals(6L, result.state.rawSizeGeneration)
+    }
+
+    @Test
     fun imageThatDoesNotFitFromStartIsRejectedBeforeConfirmation() {
         val result = UiReducer.reduce(ready(), UiIntent.RequestRawWrite(130_000UL))
         assertNull(result.state.pendingConfirmation)
