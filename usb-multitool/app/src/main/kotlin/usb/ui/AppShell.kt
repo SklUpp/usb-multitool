@@ -67,6 +67,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -2166,53 +2168,41 @@ internal fun SectionCard(
     titleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    // Uppercase must follow the in-app language, not the system one: a Turkish device
-    // with the English UI would otherwise render "EFİ". LocalResources is the localized
-    // context provided by AppShell, so its configuration carries the chosen language.
-    val locale = LocalResources.current.configuration.locales[0]
-    Surface(
+    Card(
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
         modifier = modifier.fillMaxWidth(),
     ) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = titleColor,
+                    modifier = Modifier.semantics { heading() },
+                )
+            },
+            supportingContent = subtitle?.let {
+                {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            trailingContent = trailing,
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = title.uppercase(locale),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 0.5.sp,
-                    color = titleColor,
-                    modifier = Modifier
-                        .weight(1f)
-                        .semantics { heading() },
-                )
-                trailing?.invoke()
-            }
-            subtitle?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                content()
-            }
+            content()
         }
     }
 }
