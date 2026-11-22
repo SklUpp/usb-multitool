@@ -26,6 +26,13 @@ internal object RawTransitions {
                 )
             else -> {
                 val sourceBytes = state.rawWriteDecodedBytes()
+                val contentNeedsDigest =
+                    state.imageUri != null && state.stagedRawImagePath == null
+                if (contentNeedsDigest && state.rawDecodedSha256 == null) {
+                    return ReduceResult(
+                        state.withStatus(UiMessage.Key(UiMessageKey.RawRangeInvalid)),
+                    )
+                }
                 val plan =
                     usb.partition.RawRangePlan.planFromSourceSize(
                         startLba = intent.startLba,

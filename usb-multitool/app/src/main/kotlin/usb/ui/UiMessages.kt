@@ -641,6 +641,9 @@ fun confirmationLines(confirmation: DestructiveConfirmation): List<ConfirmationL
                 (start + count - 1UL).toLong(),
                 count.toLong(),
             )
+            if (start == 0UL) {
+                lines += stringResource(R.string.raw_write_whole_disk_warning)
+            }
         }
         val rawLabel =
             confirmation.rawSourceName?.takeIf { it.isNotBlank() }

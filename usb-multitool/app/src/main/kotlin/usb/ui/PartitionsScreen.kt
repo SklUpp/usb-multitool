@@ -718,12 +718,13 @@ fun PartitionsScreen(
     val screenScroll = rememberScrollState()
     val latestState by rememberUpdatedState(state)
     var viewportTop by remember { mutableFloatStateOf(0f) }
-    var selectedRowBottomWindow by remember(state.selectedPartitionId) { mutableFloatStateOf(0f) }
+    var selectedRowBottomWindow by remember(state.selectedPartitionId) {
+        mutableFloatStateOf(Float.POSITIVE_INFINITY)
+    }
     // The pinned copy is a second rendering only while the real row is above the
     // viewport; at rest the list owns the only visible row.
     val pinnedVisible =
-        selected != null && selectedRowBottomWindow > 0f &&
-            selectedRowBottomWindow <= viewportTop
+        selected != null && selectedRowBottomWindow <= viewportTop
 
     LaunchedEffect(
         state.device,
@@ -1762,6 +1763,13 @@ private fun RawWriteSection(
                         label = { Text(stringResource(R.string.partitions_raw_target_custom)) },
                     )
                 }
+                if (rawTargetMode == RawTargetMode.WholeDisk) {
+                    Text(
+                        text = stringResource(R.string.raw_write_whole_disk_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
 
                 val geometry = state.rawGeometry
                 var customStart by remember(
@@ -1791,10 +1799,15 @@ private fun RawWriteSection(
                     val plan = draftStart?.let {
                         RawRangePlan.planFromSourceSize(it, sourceBytes, geometry)
                     }
-                    // A content URI does not need a precomputed digest to be written;
-                    // the decoded size is enough to plan and the optional hash is
-                    // carried into confirmation when measurement produced one.
-                    val planRange = (plan as? RawWritePlan.Ready)?.range
+                    val planRange =
+                        if (state.imageUri != null &&
+                            state.stagedRawImagePath == null &&
+                            state.rawDecodedSha256 == null
+                        ) {
+                            null
+                        } else {
+                            (plan as? RawWritePlan.Ready)?.range
+                        }
                     val planProblems =
                         ((plan as? RawWritePlan.Rejected)?.problems ?: emptySet())
                             .filterNot { sourceBytes == null && it == RawRangeProblem.SourceSizeUnknown }

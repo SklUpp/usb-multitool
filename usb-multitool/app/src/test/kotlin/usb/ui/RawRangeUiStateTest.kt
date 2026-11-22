@@ -443,19 +443,6 @@ class RawRangeUiStateTest {
     }
 
     @Test
-    fun contentUriWithoutDigestCanStillBeWritten() {
-        val result =
-            UiReducer.reduce(
-                ready().copy(rawDecodedSha256 = null),
-                UiIntent.RequestRawWrite(2048UL),
-            )
-        val pending = result.state.pendingConfirmation
-        assertNotNull(pending)
-        assertEquals(2048UL, pending!!.rawStartLba)
-        assertEquals(4096UL, pending.rawSectorCount)
-    }
-
-    @Test
     fun retryRestartsTerminalMeasurementForSelectedSource() {
         val failed =
             ready().copy(

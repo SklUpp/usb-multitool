@@ -24,6 +24,7 @@
     <string name="partitions_raw_source_phone">На телефоне</string>
     <string name="partitions_raw_source_stick">На накопителе</string>
     <string name="partitions_raw_target_whole">Весь диск (LBA 0)</string>
+    <string name="raw_write_whole_disk_warning">Цель — весь диск: таблица разделов и загрузочные секторы будут перезаписаны.</string>
     <string name="partitions_raw_target_partition">Раздел %1$d</string>
     <string name="partitions_raw_target_custom">Свой LBA</string>
     <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>

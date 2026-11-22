@@ -24,6 +24,7 @@
     <string name="partitions_raw_source_phone">On the phone</string>
     <string name="partitions_raw_source_stick">On the drive</string>
     <string name="partitions_raw_target_whole">Whole disk (LBA 0)</string>
+    <string name="raw_write_whole_disk_warning">Whole-disk target: the partition table and boot sectors will be overwritten.</string>
     <string name="partitions_raw_target_partition">Partition %1$d</string>
     <string name="partitions_raw_target_custom">Custom LBA</string>
     <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>
