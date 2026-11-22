@@ -488,24 +488,11 @@ int ext_engine_list(uint64_t vol_handle, const char *path,
 		arr[n].is_directory = (de->inode_type == EXT4_DE_DIR);
 		arr[n].size = 0;
 		if (!arr[n].is_directory) {
-			char child[EXT_PATH_MAX];
-			/* full may already end with '/' (root = mount_point). */
-			size_t flen = strlen(full);
-			int cn;
-			if (flen > 0 && full[flen - 1] == '/') {
-				cn = snprintf(child, sizeof(child), "%s%s", full,
-					      arr[n].name);
-			} else {
-				cn = snprintf(child, sizeof(child), "%s/%s", full,
-					      arr[n].name);
-			}
-			if (cn > 0 && (size_t)cn < sizeof(child)) {
-				ext4_file f;
-				if (ext4_fopen(&f, child, "r") == EOK) {
-					arr[n].size = ext4_fsize(&f);
-					ext4_fclose(&f);
-				}
-			}
+			uint64_t size = 0;
+			/* The iterator already carries the inode number; reading it
+			 * directly avoids a per-entry path walk over USB. */
+			if (ext4_dir_entry_get_size(&dir, de->inode, &size) == EOK)
+				arr[n].size = size;
 		}
 		n++;
 	}

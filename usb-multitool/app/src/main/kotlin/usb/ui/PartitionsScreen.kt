@@ -850,7 +850,7 @@ fun PartitionsScreen(
                 }
                 if (!state.partitionTableRecognized &&
                     state.partitionTableRecognition != usb.partition.TableRecognition.SUPERFLOPPY &&
-                    state.tableValid && !state.partitionTableAmbiguous
+                    !state.partitionTableAmbiguous
                 ) {
                     val segmentHaptic = LocalHapticFeedback.current
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -874,7 +874,7 @@ fun PartitionsScreen(
                         onClick = {
                             onIntent(UiIntent.RequestInitializePartitionTable(initializeScheme))
                         },
-                        enabled = state.actionsEnabled && !schemeBlocked,
+                        enabled = state.actionsEnabled && !state.partitionTableDamaged,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(stringResource(R.string.partitions_scheme_initialize_action))

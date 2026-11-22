@@ -513,6 +513,17 @@ class UsbDeviceRecoveryAndLifecycleTest {
         assertEquals("phase error on READ CAPACITY(16)", cap16Ex.message)
         assertEquals(1, cap16Phase.resetCount)
 
+        val cap16Io = FakeBotSession(
+            capacityLastLba10 = 0xFFFF_FFFFUL,
+            capacity16LastLba = 2047UL,
+            stallOnOps = setOf(ScsiCommand.OP_READ_CAPACITY16),
+        )
+        val cap16IoEx = assertThrows(DiskException.IoFailure::class.java) {
+            UsbDisk.probeCapacity(cap16Io)
+        }
+        assertEquals("simulated STALL on op ${ScsiCommand.OP_READ_CAPACITY16}", cap16IoEx.message)
+        assertEquals(1, cap16Io.resetCount)
+
         val cap16Fail = FakeBotSession(
             capacityLastLba10 = 0xFFFF_FFFFUL,
             capacity16LastLba = 2047UL,

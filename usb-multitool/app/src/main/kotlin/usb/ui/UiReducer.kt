@@ -2250,7 +2250,6 @@ object UiReducer {
                             pending.initialDiskSectorSize != state.diskSectorSize ||
                             pending.initialDiskSectorCount !=
                                 state.device?.capacityBytes?.div(state.diskSectorSize.coerceAtLeast(1).toULong()) ||
-                            !state.tableValid ||
                             state.partitionTableAmbiguous ||
                             state.partitionTableDamaged ||
                             state.rawGeometry?.metadataProblem == RawSchemeProblem.GptBackupMetadataUnknown ||

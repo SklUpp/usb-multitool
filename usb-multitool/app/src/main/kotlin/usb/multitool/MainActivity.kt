@@ -3610,7 +3610,6 @@ class MainViewModel(
                         volume = volume,
                         operation = operation,
                         chunkBytes = TransferTuning.jniCapBytes,
-                        filesDir = getApplication<Application>().filesDir,
                         onCleanupFailure = { cleanupError ->
                             // Engine already adds the cleanup failure as suppressed to the
                             // primary upload error; keep a persistent log line as well so the
@@ -6406,7 +6405,6 @@ class MainViewModel(
                             volume = volume,
                             operation = operation,
                             chunkBytes = TransferTuning.jniCapBytes,
-                            filesDir = getApplication<Application>().filesDir,
                             conflict = { conflict ->
                                 val park =
                                     FilesBatchConflictPark(
@@ -6629,7 +6627,6 @@ class MainViewModel(
                         volume = volume,
                         operation = operation,
                         chunkBytes = TransferTuning.jniCapBytes,
-                        filesDir = getApplication<Application>().filesDir,
                         conflict = { conflict ->
                             if (first && conflict.pathLabel == conflictLabel) {
                                 first = false

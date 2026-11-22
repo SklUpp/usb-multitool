@@ -43,12 +43,16 @@ open class UsbDisk(
         require(blocks > 0)
         requireNoOverflow(lba, blocks)
 
-        val parts = TransferPlan.plan(bytes.toLong(), sectorSize, scsiChunkBytes)
+        val chunk = scsiChunkBytes - scsiChunkBytes % sectorSize
+        require(chunk > 0) { "SCSI chunk $scsiChunkBytes is smaller than sector $sectorSize" }
+        var remaining = bytes
         var offsetBlocks = 0
-        for (part in parts) {
+        while (remaining > 0) {
+            val part = if (remaining > chunk) chunk else remaining
             val partBlocks = part / sectorSize
             transfer(ScsiCommand.read(lba + offsetBlocks.toULong(), partBlocks, sectorSize), destination, part)
             offsetBlocks += partBlocks
+            remaining -= part
         }
     }
 
@@ -62,12 +66,16 @@ open class UsbDisk(
         require(blocks > 0)
         requireNoOverflow(lba, blocks)
 
-        val parts = TransferPlan.plan(bytes.toLong(), sectorSize, scsiChunkBytes)
+        val chunk = scsiChunkBytes - scsiChunkBytes % sectorSize
+        require(chunk > 0) { "SCSI chunk $scsiChunkBytes is smaller than sector $sectorSize" }
+        var remaining = bytes
         var offsetBlocks = 0
-        for (part in parts) {
+        while (remaining > 0) {
+            val part = if (remaining > chunk) chunk else remaining
             val partBlocks = part / sectorSize
             transfer(ScsiCommand.write(lba + offsetBlocks.toULong(), partBlocks, sectorSize), source, part)
             offsetBlocks += partBlocks
+            remaining -= part
         }
     }
 
@@ -407,6 +415,9 @@ open class UsbDisk(
                     recoverAfterInvalidCsw(session, e)
                 } catch (e: DiskException.NonMeaningfulCsw) {
                     recoverAfterInvalidCsw(session, e)
+                } catch (e: DiskException.IoFailure) {
+                    resetOrClose(session)
+                    throw e
                 } catch (e: DiskException.Disconnected) {
                     throw e
                 }

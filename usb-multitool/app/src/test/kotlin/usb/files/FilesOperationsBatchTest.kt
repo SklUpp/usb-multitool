@@ -387,7 +387,6 @@ class FilesOperationsBatchTest {
             volume = volume,
             operation = DiskOperation("up-tree"),
             chunkBytes = 16,
-            filesDir = filesDir,
             conflict = { error("unexpected $it") },
         )
         assertEquals(byteArrayOf(7, 7).toList(), volume.read("/dest/docs/nested/a.bin", 0, 2).toList())
@@ -412,7 +411,6 @@ class FilesOperationsBatchTest {
                 volume = volume,
                 operation = DiskOperation("up-nonempty"),
                 chunkBytes = 8,
-                filesDir = filesDir,
                 conflict = { FilesConflictDecision.ReplaceFile },
             )
         }
@@ -438,7 +436,6 @@ class FilesOperationsBatchTest {
             volume = volume,
             operation = DiskOperation("up-docs"),
             chunkBytes = 8,
-            filesDir = filesDir,
             conflict = {
                 seen++
                 if (it.name == "a.bin") FilesConflictDecision.ReplaceFile else FilesConflictDecision.Skip
@@ -468,7 +465,6 @@ class FilesOperationsBatchTest {
             volume = volume,
             operation = DiskOperation("up-padded"),
             chunkBytes = 8,
-            filesDir = filesDir,
             conflict = { FilesConflictDecision.ReplaceFile },
         )
         assertEquals(byteArrayOf(9).toList(), volume.read("/docs /a.bin", 0, 1).toList())
@@ -736,7 +732,6 @@ class FilesOperationsBatchTest {
                 destDir = "/",
                 volume = volume,
                 operation = op,
-                filesDir = filesDir,
                 chunkBytes = 8,
                 conflict = { FilesConflictDecision.ReplaceFile },
             )
@@ -759,7 +754,6 @@ class FilesOperationsBatchTest {
             FilesOperations.uploadDocuments(
                 resolver = resolver.resolver, uris = listOf(uri), destDir = "/",
                 volume = volume, operation = op, chunkBytes = 8,
-                filesDir = filesDir,
                 conflict = { FilesConflictDecision.ReplaceFile },
             )
         }
@@ -771,7 +765,7 @@ class FilesOperationsBatchTest {
 
 
     @Test
-    fun uploadReplaceOriginalSurvivesCancelDuringStaging() {
+    fun uploadReplaceOriginalSurvivesCancelDuringStreaming() {
         val volume = MemoryVolume()
         volume.write("/a.bin", byteArrayOf(4, 5), create = true)
         val a = Uri.parse("content://usb.batch.test.doc/a-cancel")
@@ -780,7 +774,7 @@ class FilesOperationsBatchTest {
             contents = mapOf(a to payload),
             names = mapOf(a to "a.bin"),
         )
-        // Cancel after first staged chunk on temp (not the original).
+        // Cancel after first payload chunk on temp (not the original).
         val op = DiskOperation("up-replace-cancel", active = {
             // allow exclusive create empty write + first payload write, then cancel
             val tempWrites = volume.events.count { it.startsWith("write:/.up-t") }
@@ -792,7 +786,6 @@ class FilesOperationsBatchTest {
                 uris = listOf(a),
                 destDir = "/",
                 volume = volume,
-                filesDir = filesDir,
                 operation = op,
                 chunkBytes = 16,
                 conflict = { FilesConflictDecision.ReplaceFile },
@@ -805,7 +798,7 @@ class FilesOperationsBatchTest {
     }
 
     @Test
-    fun uploadReplaceOriginalSurvivesNoSpaceBeforeStaging() {
+    fun uploadReplaceOriginalSurvivesNoSpaceBeforeStreaming() {
         val volume = object : MemoryVolume(), usb.fs.UsbFsUsageVolume {
             override fun space() = usb.fs.FilesystemSpace(totalBytes = 10uL, freeBytes = 2uL)
         }
@@ -822,7 +815,6 @@ class FilesOperationsBatchTest {
                 uris = listOf(a),
                 destDir = "/",
                 volume = volume,
-                filesDir = filesDir,
                 operation = op,
                 chunkBytes = 8,
                 conflict = { FilesConflictDecision.ReplaceFile },
@@ -851,7 +843,6 @@ class FilesOperationsBatchTest {
             uris = listOf(a),
             destDir = "/",
             volume = volume,
-            filesDir = filesDir,
             operation = DiskOperation("up-replace-ok"),
             chunkBytes = 8,
             conflict = { FilesConflictDecision.ReplaceFile },
@@ -893,7 +884,6 @@ class FilesOperationsBatchTest {
                 uris = listOf(a),
                 destDir = "/",
                 volume = volume,
-                filesDir = filesDir,
                 operation = op,
                 chunkBytes = 8,
                 conflict = { FilesConflictDecision.ReplaceFile },
@@ -923,7 +913,6 @@ class FilesOperationsBatchTest {
                 uris = remaining.map(Uri::parse),
                 destDir = "/",
                 volume = volume,
-                filesDir = filesDir,
                 operation = op,
                 chunkBytes = 8,
                 conflict = {

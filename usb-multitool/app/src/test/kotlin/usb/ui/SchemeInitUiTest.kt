@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 
 import org.junit.Assert.assertNull
 import org.junit.Test
+import usb.partition.TableRecognition
 import usb.partition.TableScheme
 
 /** Empty-table initialization and scheme replacement: pinned confirmation, fail-closed guards. */
@@ -80,6 +81,26 @@ class SchemeInitUiTest {
         assertEquals(
             UiMessage.Key(UiMessageKey.PartitionGeometryUnknown),
             noGeometry.state.statusMessage,
+        )
+    }
+
+    @Test
+    fun unrecognizedTableCanBeInitializedAfterConfirmation() {
+        val blank = ready(TableScheme.MBR).copy(
+            tableValid = false,
+            partitionTableRecognized = false,
+            partitionTableRecognition = TableRecognition.UNRECOGNIZED,
+        )
+        val result = pending(blank, PartitionScheme.Gpt)
+        val confirmation = requireNotNull(result.state.pendingConfirmation)
+        assertEquals(DestructiveAction.INITIALIZE_PARTITION_TABLE, confirmation.action)
+        assertEquals(false, confirmation.initialTableRecognized)
+
+        val confirmed = UiReducer.reduce(result.state, UiIntent.ConfirmDestructive)
+        assertNull(confirmed.state.pendingConfirmation)
+        assertEquals(
+            DestructiveAction.INITIALIZE_PARTITION_TABLE,
+            (confirmed.effects.single() as UiEffect.SubmitDestructive).action,
         )
     }
 

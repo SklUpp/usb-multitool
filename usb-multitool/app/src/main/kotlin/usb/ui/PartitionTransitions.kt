@@ -198,7 +198,6 @@ internal object PartitionTransitions {
             device == null || !state.actionsEnabled -> UiReducer.presenceMessage(state.presence)
             state.partitionTableAmbiguous -> UiMessage.Key(UiMessageKey.PartitionTableAmbiguous)
             state.partitionTableDamaged -> UiMessage.Key(UiMessageKey.GptPrimaryDamaged)
-            !state.tableValid -> UiMessage.Key(UiMessageKey.TableDamaged)
             state.rawGeometry?.metadataProblem == RawSchemeProblem.GptBackupMetadataUnknown ->
                 UiMessage.Key(UiMessageKey.SchemeBackupMetadataUnknown)
             state.partitionTableRecognition == TableRecognition.SUPERFLOPPY ->

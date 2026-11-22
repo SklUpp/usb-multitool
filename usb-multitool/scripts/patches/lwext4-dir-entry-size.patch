@@ -1,0 +1,46 @@
+--- a/include/ext4.h
++++ b/include/ext4.h
+@@ -611,6 +611,15 @@
+  * @return  Directory entry id (NULL if no entry)*/
+ const ext4_direntry *ext4_dir_entry_next(ext4_dir *dir);
+ 
++/**@brief   Get size of a directory entry's inode without resolving its path.
++ *
++ * @param   dir   Directory handle used for the iteration.
++ * @param   inode Inode number from ext4_direntry.
++ * @param   size  Receives the inode size on success.
++ *
++ * @return  Standard error code.*/
++int ext4_dir_entry_get_size(ext4_dir *dir, uint32_t inode, uint64_t *size);
++
+ /**@brief   Rewine directory entry offset.
+  *
+  * @param   dir Directory handle.*/
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -2054,7 +2054,25 @@
+ 	return file->fsize;
+ }
+ 
++int ext4_dir_entry_get_size(ext4_dir *dir, uint32_t inode, uint64_t *size)
++{
++	struct ext4_inode_ref inode_ref;
++	int r;
+ 
++	if (!dir || !size)
++		return EINVAL;
++
++	EXT4_MP_LOCK(dir->f.mp);
++	r = ext4_fs_get_inode_ref(&dir->f.mp->fs, inode, &inode_ref);
++	if (r == EOK) {
++		*size = ext4_inode_get_size(&dir->f.mp->fs.sb, inode_ref.inode);
++		ext4_fs_put_inode_ref(&inode_ref);
++	}
++	EXT4_MP_UNLOCK(dir->f.mp);
++	return r;
++}
++
++
+ static int ext4_trans_get_inode_ref(const char *path,
+ 				    struct ext4_mountpoint *mp,
+ 				    struct ext4_inode_ref *inode_ref)

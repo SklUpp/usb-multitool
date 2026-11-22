@@ -44,6 +44,7 @@ patches remain separate from the adapter code and are applied by the fetch scrip
 - License: GPL-2.0-or-later
 - Local patches (via `scripts/fetch-third-party.sh`): `scripts/patches/lwext4-umount-teardown-on-fini-fail.patch` — `ext4_umount` always tears down in-memory mountpoint/bcache when `ext4_fs_fini` fails so free of the blockdev cannot UAF on remount.
 - `scripts/patches/lwext4-o-excl-existing.patch` — preserve upstream's nullable `parent_inode` guard and make `O_CREAT|O_EXCL` return `EEXIST` for an existing entry.
+- `scripts/patches/lwext4-dir-entry-size.patch` — expose `ext4_dir_entry_get_size` so directory listings read sizes by inode number instead of reopening every path.
 
 ## SectorForge (`sf-core` rescue engine)
 
