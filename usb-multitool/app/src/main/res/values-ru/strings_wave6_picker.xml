@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Persistent file-picker footer confirm labels. -->
+    <string name="files_pick_confirm">Выбрать</string>
+    <string name="files_pick_confirm_windows_image">Выбрать образ Windows</string>
+</resources>

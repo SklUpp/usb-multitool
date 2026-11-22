@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -647,42 +648,35 @@ fun FilesScreen(
     }
 }
 
-@Composable
-private fun filesPickTitle(mode: FilesPickMode): String =
-    stringResource(
-        when (mode.purpose) {
-            FilesPickPurpose.WindowsImage -> R.string.files_pick_title_image
-            FilesPickPurpose.RawSource -> R.string.files_pick_title_raw
-            FilesPickPurpose.VentoyConfig -> R.string.files_pick_title_ventoy
-            FilesPickPurpose.WindowsTemplate -> R.string.files_pick_title_template
-        },
-    )
-
 /**
- * Fixed picker header: names the task and keeps the exit reachable above the scrolling
- * folder card. Cancellation still goes through the reducer, so a running operation and an
- * open confirmation keep their guards: the header only submits the same intent as Back.
+ * Fixed picker header: clickable path + close. Cancellation still goes through the
+ * reducer, so a running operation and an open confirmation keep their guards: the
+ * header only submits the same intent as Back. Height is locked so path/font cannot
+ * bounce the chrome.
  */
 @Composable
-private fun FilesPickHeader(mode: FilesPickMode, onCancel: () -> Unit) {
-    val title = filesPickTitle(mode)
+private fun FilesPickHeader(
+    path: String,
+    enabled: Boolean,
+    onOpen: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
     val closeDescription = stringResource(R.string.files_pick_close)
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
-                .padding(start = 16.dp, end = 4.dp),
+                .height(56.dp)
+                .padding(start = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { heading() },
+            FolderBreadcrumbs(
+                path = path,
+                enabled = enabled,
+                onOpen = onOpen,
+                modifier = Modifier.weight(1f),
             )
             IconButton(
                 onClick = onCancel,
@@ -775,8 +769,33 @@ private fun FilesPickScreen(
 
     // Same fade-through as the normal browser: no horizontal translation; reduced motion
     // is flat.
+    val pathEnabled = canAct && !state.isRunning
+    val showDeviceImage =
+        mode.purpose == FilesPickPurpose.WindowsImage &&
+            mode.target == FilesPickTarget.File &&
+            mode.partitionId == ventoyDataPartitionId
+    val deviceImageEnabled =
+        canAct && !state.isRunning &&
+            state.isoImportSafInFlight == null &&
+            state.isoImportUsbInFlight == null &&
+            state.pendingIsoImport == null
+    val confirmEnabled = canAct && listingUsable && !state.isRunning
+    val fileConfirmLabel =
+        stringResource(
+            if (mode.purpose == FilesPickPurpose.WindowsImage) {
+                R.string.files_pick_confirm_windows_image
+            } else {
+                R.string.files_pick_confirm
+            },
+        )
+    val deviceImageDescription = stringResource(R.string.files_pick_device)
     Column(modifier = modifier.fillMaxSize()) {
-    FilesPickHeader(mode = mode, onCancel = { onIntent(UiIntent.CancelFilesPick) })
+        FilesPickHeader(
+            path = state.currentPath,
+            enabled = pathEnabled,
+            onOpen = { path -> onIntent(UiIntent.OpenDirectory(path)) },
+            onCancel = { onIntent(UiIntent.CancelFilesPick) },
+        )
         // The selector is part of the fixed chrome, not the scrolling list: scrolling a deep
         // folder must not hide the partition the pick belongs to.
         Box(
@@ -827,55 +846,6 @@ private fun FilesPickScreen(
             contentPadding = PaddingValues(bottom = 16.dp),
             userScrollEnabled = true
         ) {
-            item(key = "pick-folder") {
-                SectionCard(
-                    title = stringResource(R.string.files_section_folder),
-                    titleColor = MaterialTheme.colorScheme.onSurface,
-                ) {
-                    FolderBreadcrumbs(
-                        path = target.path,
-                        enabled = canAct && !state.isRunning,
-                        onOpen = { path -> onIntent(UiIntent.OpenDirectory(path)) },
-                    )
-                    Text(
-                        text = hint,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                    ) {
-                        if (mode.target == FilesPickTarget.Folder) {
-                            FilledTonalButton(
-                                onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
-                                enabled = canAct && listingUsable && !state.isRunning,
-                            ) {
-                                Text(stringResource(R.string.import_folder_use))
-                            }
-                        }
-                        if (mode.purpose == FilesPickPurpose.WindowsImage &&
-                            mode.target == FilesPickTarget.File &&
-                            mode.partitionId == ventoyDataPartitionId
-                        ) {
-                            FilledTonalButton(
-                                onClick = {
-                                    onRequestDeviceImage(state.currentPath, mode.sessionId)
-                                },
-                                enabled =
-                                    canAct && !state.isRunning &&
-                                        state.isoImportSafInFlight == null &&
-                                        state.isoImportUsbInFlight == null &&
-                                        state.pendingIsoImport == null,
-                            ) {
-                                Text(stringResource(R.string.files_pick_device))
-                            }
-                        }
-                    }
-                }
-            }
-
             if (copying != null) {
                 item(key = "pick-copy") {
                     SectionCard(
@@ -1079,35 +1049,69 @@ private fun FilesPickScreen(
             }
         }
         }
-        if (selectsFile && selectedPickEntry != null) {
-            Surface(
-                tonalElevation = 3.dp,
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
+        Surface(
+            tonalElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = folderPathLabel(state.currentPath) + selectedPickEntry.name,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                        ),
+                        text = hint,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    Button(
-                        onClick = {
-                            // The reducer revalidates the name against live files.
-                            onIntent(UiIntent.ConfirmFilesPickFile(selectedPickEntry.name))
-                        },
-                        enabled = canAct && listingUsable && !state.isRunning,
+                    if (selectsFile) {
+                        selectedPickEntry?.let { selected ->
+                            Text(
+                                text = folderPathLabel(state.currentPath) + selected.name,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+                if (showDeviceImage) {
+                    IconButton(
+                        onClick = { onRequestDeviceImage(state.currentPath, mode.sessionId) },
+                        enabled = deviceImageEnabled,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = deviceImageDescription },
                     ) {
-                        Text(stringResource(R.string.files_pick_use_file))
+                        GlyphIcon(Glyph.File, size = 22.dp)
+                    }
+                }
+                if (selectsFile) {
+                    TextButton(
+                        onClick = {
+                            val selected = selectedPickEntry ?: return@TextButton
+                            // The reducer revalidates the name against live files.
+                            onIntent(UiIntent.ConfirmFilesPickFile(selected.name))
+                        },
+                        enabled = confirmEnabled && selectedPickEntry != null,
+                    ) {
+                        Text(fileConfirmLabel)
+                    }
+                } else {
+                    TextButton(
+                        onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
+                        enabled = confirmEnabled,
+                    ) {
+                        Text(stringResource(R.string.import_folder_use))
                     }
                 }
             }
