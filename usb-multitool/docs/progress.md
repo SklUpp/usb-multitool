@@ -5,12 +5,12 @@
 
 ## Последняя проверка
 
-- CI `45042535766` (`e930753`): `verify` и `fatfs-host` — success;
+- CI `45045431486` (`621113a`): `verify` и `fatfs-host` — success;
   unit tests, APK, 16 KB alignment, lint и Kotlin compile прошли.
-- APK artifact `app-debug-apk` (id `14763095373`), локально
-  `/data/data/com.termux/files/home/apk-e930753/app-debug.apk`,
+- APK artifact `app-debug-apk` (id `14763452667`), локально
+  `/data/data/com.termux/files/home/apk-621113a/app-debug.apk`,
   `87 054 099` байт, SHA-256
-  `b56a2e89b242af6fd0d4568497c8a68c15a7328d8da3628d96cad0e870fd0438`.
+  `9b384068627c9bfcf50371fed46269b9f8972cc64956140583832f7d8ba17a71`.
   `unzip -t` и `aapt2 dump badging` — без ошибок; package
   `usb.multitool 0.1.0`, minSdk 28, target 36.
 - Локально до CI: Kotlin compile — success; targeted JVM
@@ -20,10 +20,11 @@
 
 ## Текущий срез
 
-- Ветка: `feature/android-usb-multitool`, HEAD `e930753`; SMART —
+- Ветка: `feature/android-usb-multitool`, HEAD `621113a`; SMART —
   `f504ddf`, raw-write и разделы — `b85755f`, единый picker/format —
   `065bc83`, Windows/Ventoy — `6798692`, недостающие RU-строки — `003355b`,
-  скруглённые блоки выбора в popup — `e930753`.
+  скруглённые блоки выбора в popup — `e930753`, удаление дубля
+  picker-листа — `621113a`.
 - Последняя волна: SMART diagnostics; UI-полировка (IME, сортировка Files,
   прогресс, переходы, haptics, read-only Settings/Diagnostics), общий JNI
   thread-attach helper, FAT streaming с retry close/pending unlink и

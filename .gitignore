@@ -1,2 +1,5 @@
 
 .worktrees/
+
+# Local agent trash never belongs in the tree
+.trash-*/
