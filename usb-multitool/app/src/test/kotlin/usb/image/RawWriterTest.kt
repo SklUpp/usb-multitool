@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Test
 import kotlinx.coroutines.test.runTest
 import usb.device.TransferPlan
@@ -21,6 +22,9 @@ import usb.operation.OperationState
 import usb.testutil.RecordingDisk
 
 class RawWriterTest {
+    @Before
+    fun freshBudget() = awaitFreshBudget()
+
     private val identity = "RAW-TEST"
 
     private fun conf(disk: RecordingDisk) =
