@@ -690,6 +690,7 @@ internal fun GlobalSettingsCard(
     var sourceMenuOpen by remember { mutableStateOf(false) }
     var editorOpen by remember { mutableStateOf(false) }
     var editorBaseline by remember { mutableStateOf<List<VentoyControlSetting>?>(null) }
+    var applyReviewOpen by remember { mutableStateOf(false) }
     LaunchedEffect(state.operation?.state, state.operation?.title) {
         if (editorOpen &&
             state.operation?.title == OperationTitle.SetVentoyGlobalSetting &&
@@ -811,57 +812,25 @@ internal fun GlobalSettingsCard(
             )
         }
         if (!settingsGone) {
-            Row(
+            FilledTonalButton(
+                onClick = {
+                    editorBaseline = state.pendingVentoyControls
+                    editorOpen = true
+                },
+                enabled = state.actionsEnabled && settings != null,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .heightIn(min = 48.dp),
             ) {
-                FilledTonalButton(
-                    onClick = {
-                        editorBaseline = state.pendingVentoyControls
-                        editorOpen = true
-                    },
-                    enabled = state.actionsEnabled && settings != null,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .heightIn(min = 48.dp),
-                ) {
-                    Text(
-                        stringResource(R.string.wave4_editor),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (hasPendingWrite) {
-                    Button(
-                        onClick = { onIntent(UiIntent.RequestApplyVentoyControls) },
-                        enabled = state.actionsEnabled,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .heightIn(min = 48.dp),
-                    ) {
-                        Text(
-                            stringResource(
-                                when {
-                                    state.operation?.state == OperationState.Partial &&
-                                        state.operation?.title in setOf(
-                                            OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                                            OperationTitle.Destructive(DestructiveAction.VENTOY_UPDATE),
-                                        ) -> R.string.settings_retry_pending_action
-                                    pending.isEmpty() &&
-                                        source is VentoySettingsSource.Document ->
-                                        R.string.settings_import_apply
-                                    pending.isEmpty() && customPath ->
-                                        R.string.settings_import_copy_to_default
-                                    else -> R.string.wave4_write
-                                },
-                            ),
-                        )
-                    }
-                }
+                Text(
+                    stringResource(R.string.wave4_editor),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val fileEntries = (settings as? VentoyGlobalSettings.Present)?.entries.orEmpty()
+            if (fileEntries.isNotEmpty()) {
+                VentoyFileSettingsPreview(fileEntries)
             }
         }
         if (editorOpen) {
@@ -877,6 +846,18 @@ internal fun GlobalSettingsCard(
                     // Staged successfully; keep pending and drop the cancel baseline.
                     editorOpen = false
                     editorBaseline = null
+                    applyReviewOpen = true
+                },
+            )
+        }
+        if (applyReviewOpen) {
+            VentoyApplyDialog(
+                pending = pending,
+                enabled = state.actionsEnabled,
+                onDismiss = { applyReviewOpen = false },
+                onWrite = {
+                    applyReviewOpen = false
+                    onIntent(UiIntent.RequestApplyVentoyControls)
                 },
             )
         }
@@ -1857,6 +1838,96 @@ private fun CompactStagedControls(
     }
 }
 
+
+/** One-line preview of the controls read from the selected ventoy.json. */
+@Composable
+private fun VentoyFileSettingsPreview(entries: List<VentoySetting>) {
+    var expanded by remember(entries) { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.settings_file_preview_title),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            if (entries.size > 1) {
+                TextButton(
+                    onClick = { expanded = !expanded },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        stringResource(
+                            if (expanded) R.string.settings_file_preview_less
+                            else R.string.settings_file_preview_more,
+                        ),
+                    )
+                }
+            }
+        }
+        val visible = if (expanded) entries else entries.take(1)
+        visible.forEachIndexed { index, setting ->
+            Text(
+                text = "${index + 1}. ${setting.key} = ${setting.rawValue}",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Confirms the exact staged control list before the destructive USB write. */
+@Composable
+private fun VentoyApplyDialog(
+    pending: List<VentoyControlSetting>,
+    enabled: Boolean,
+    onDismiss: () -> Unit,
+    onWrite: () -> Unit,
+) {
+    if (pending.isEmpty()) return
+    val removeLabel = stringResource(R.string.settings_remove)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_apply_review_title)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                pending.forEach { setting ->
+                    Text(
+                        text = "${setting.key} = ${setting.value ?: removeLabel}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onWrite, enabled = enabled) {
+                Text(stringResource(R.string.settings_apply_review_write))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_cancel))
+            }
+        },
+    )
+}
 
 /**
  * Shared selected-file row for ventoy.json / unattend.xml / Windows image:

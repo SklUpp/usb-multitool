@@ -775,6 +775,11 @@
     <string name="settings_disabled">Выключено</string>
     <string name="settings_default_on">По умолчанию (включено)</string>
     <string name="settings_reset_default">Сбросить по умолчанию</string>
+    <string name="settings_file_preview_title">Настройки в файле</string>
+    <string name="settings_file_preview_more">Показать все</string>
+    <string name="settings_file_preview_less">Свернуть</string>
+    <string name="settings_apply_review_title">Применить эти настройки?</string>
+    <string name="settings_apply_review_write">Записать</string>
     <string name="settings_discard">Отменить</string>
     <string name="settings_apply_now">Обновить выбранный файл</string>
     <string name="settings_retry_pending">Ventoy установлен или обновлён, но эти настройки не сохранены. Причина показана выше; повторите ниже.</string>

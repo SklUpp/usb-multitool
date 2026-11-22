@@ -774,6 +774,11 @@
     <string name="settings_disabled">Disabled</string>
     <string name="settings_default_on">Default (enabled)</string>
     <string name="settings_reset_default">Reset to default</string>
+    <string name="settings_file_preview_title">Settings in the file</string>
+    <string name="settings_file_preview_more">Show all</string>
+    <string name="settings_file_preview_less">Collapse</string>
+    <string name="settings_apply_review_title">Apply these settings?</string>
+    <string name="settings_apply_review_write">Write</string>
     <string name="settings_discard">Discard</string>
     <string name="settings_apply_now">Update the selected file</string>
     <string name="settings_retry_pending">Ventoy was installed or updated but these settings were not saved. The cause is shown above; retry below.</string>
