@@ -62,23 +62,46 @@ internal class UsbOpenBoundary(
         // Pin check before the USB claim: a paused operation must not open another stick.
         requireAttachment(pin, device)
         val disk = openDisk(manager, device, lease)
-        lateinit var mountedPartition: usb.partition.Partition
+        var mountedStart = 0UL
+        var mountedCount = 0UL
         val volume = try {
-            val index = partitionId.toIntOrNull()
-                ?: throw IllegalArgumentException("invalid partition id $partitionId")
-            val table = PartitionTable.read(disk)
+            val wholeDisk = partitionId == WHOLE_DISK_VOLUME_ID
+            // Raw image sectors may not form a valid MBR; the whole-volume path needs only
+            // enough geometry to prove no table owns the data before mounting LBA 0.
+            val table = if (wholeDisk) {
+                runCatching { PartitionTable.read(disk) }.getOrNull()
+            } else {
+                PartitionTable.read(disk)
+            }
             // A detach/re-attach can happen during the claim or table read: re-verify the pin
             // against the live attachment before trusting this geometry or partition range.
             requireAttachment(pin, device)
-            if (writable) requireWritableMountAllowed(table)
-            mountedPartition = table.partitions.getOrNull(index - 1)
-                ?: throw IllegalArgumentException("partition $partitionId no longer exists")
-            PartitionVolumeSession.open(
-                disk,
-                mountedPartition.startLba,
-                mountedPartition.sectorCount,
-                readOnly = !writable,
-            )
+            if (wholeDisk) {
+                require(!writable) { "whole-disk image volumes are read-only" }
+                mountedStart = 0UL
+                mountedCount = disk.sectorCount
+                PartitionVolumeSession.open(
+                    disk,
+                    mountedStart,
+                    mountedCount,
+                    readOnly = true,
+                )
+            } else {
+                val index = partitionId.toIntOrNull()
+                    ?: throw IllegalArgumentException("invalid partition id $partitionId")
+                val partitionTable = requireNotNull(table)
+                if (writable) requireWritableMountAllowed(partitionTable)
+                val mountedPartition = partitionTable.partitions.getOrNull(index - 1)
+                    ?: throw IllegalArgumentException("partition $partitionId no longer exists")
+                mountedStart = mountedPartition.startLba
+                mountedCount = mountedPartition.sectorCount
+                PartitionVolumeSession.open(
+                    disk,
+                    mountedStart,
+                    mountedCount,
+                    readOnly = !writable,
+                )
+            }
         } catch (failure: Throwable) {
             // PartitionVolumeSession already closes on mount failure; a second close is
             // idempotent, but if it still throws keep the mount cause and suppress close.
@@ -104,6 +127,7 @@ internal class UsbOpenBoundary(
             }
             is ExtVolume -> FilesystemId.EXT
             is NtfsVolume -> FilesystemId.NTFS
+            is usb.fs.IsoVolume -> FilesystemId.ISO
             else -> null
         }
         return MountedFilesVolume(
@@ -111,8 +135,8 @@ internal class UsbOpenBoundary(
             disk,
             volume,
             writable = writable,
-            startLba = mountedPartition.startLba,
-            sectorCount = mountedPartition.sectorCount,
+            startLba = mountedStart,
+            sectorCount = mountedCount,
             sectorSize = disk.sectorSize,
             filesystemId = mountedFilesystem,
         )

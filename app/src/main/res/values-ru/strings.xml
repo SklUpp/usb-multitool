@@ -101,6 +101,7 @@
     <string name="partitions_format_sheet_title">Форматировать раздел</string>
     <string name="partitions_format_fat_desc">FAT32: файлы ≤ 4 ГиБ (макс. совместимость со старыми ПК и ТВ)</string>
     <string name="partitions_format_exfat_desc">exFAT: файлы > 4 ГиБ (для флешек на Windows, macOS и Linux)</string>
+    <string name="partitions_format_iso_desc">Образ ISO9660 только для чтения</string>
     <string name="partitions_format_ext_desc">ext4: для Linux (с поддержкой прав доступа POSIX)</string>
     <string name="partitions_format_ntfs_desc">NTFS: для Windows (с поддержкой сжатия и списков ACL)</string>
     <string name="theme_label">Тема</string>
@@ -446,6 +447,9 @@
     <string name="diagnostics_pick_image_folder">Выбрать папку</string>
     <string name="diagnostics_restore_image">Восстановить образ и карту</string>
     <string name="diagnostics_selected_file">Выбранный файл</string>
+    <string name="diagnostics_rescue_image_file">Образ восстановления</string>
+    <string name="diagnostics_rescue_map_file">Карта секторов</string>
+    <string name="diagnostics_gpt_backup_file">Резервная копия GPT</string>
     <string name="diagnostics_restore_map_missing">В выбранной папке нет карты восстановления (.map)</string>
     <string name="diagnostics_no_gpt_file">Файл GPT не выбран</string>
     <string name="diagnostics_pick_gpt_file">Выбрать файл</string>
@@ -834,7 +838,8 @@
     <string name="unattend_problem_computer">Имя компьютера недопустимо</string>
     <string name="unattend_problem_image_install">Установка системы на раздел данных Ventoy не поддерживается.</string>
     <string name="unattend_choose_image">Выбрать образ Windows</string>
-    <string name="unattend_add_image">Добавить образ</string>
+    <string name="unattend_add_image">Добавить образы</string>
+    <string name="unattend_remove_image">Убрать образ</string>
     <string name="unattend_xml_not_selected">XML не выбран</string>
     <string name="unattend_show_all">Показать все</string>
     <string name="unattend_collapse">Свернуть</string>
@@ -877,6 +882,7 @@
     <string name="windows_copying_generic">Копируется образ на раздел ventoy…</string>
     <string name="windows_template_choose_source">Источник шаблона</string>
     <string name="raw_choose_stick">Выбрать файл на флешке…</string>
+    <string name="config_use_default">Файл по умолчанию</string>
     <string name="raw_choose_phone">Выбрать файл на телефоне…</string>
     <string name="raw_stick_title">Файлы на флешке</string>
     <string name="raw_stick_loading">Чтение списка файлов…</string>

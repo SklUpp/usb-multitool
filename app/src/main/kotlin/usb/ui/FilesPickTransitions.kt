@@ -42,10 +42,10 @@ internal object FilesPickTransitions {
         val explicit = intent.partitionId
         val partition =
             when {
-                explicit != null -> state.partitions.firstOrNull { it.id == explicit }
+                explicit != null -> state.filesVolumes.firstOrNull { it.id == explicit }
                 intent.purpose == FilesPickPurpose.RawSource ->
                     state.selectedPartitionId?.let { id ->
-                        state.partitions.firstOrNull { it.id == id }
+                        state.filesVolumes.firstOrNull { it.id == id }
                     }
                 else -> state.ventoyDataPartition()
             }
@@ -132,7 +132,7 @@ internal object FilesPickTransitions {
         if (!state.actionsEnabled) {
             return ReduceResult(state.withStatus(UiReducer.presenceMessage(state.presence)))
         }
-        val partition = state.partitions.firstOrNull { it.id == partitionId }
+        val partition = state.filesVolumes.firstOrNull { it.id == partitionId }
             ?: return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
         if (partition.startLba == null || partition.sectorCount == null) {
             return ReduceResult(state.withStatus(UiMessage.Key(UiMessageKey.PartitionGeometryUnknown)))

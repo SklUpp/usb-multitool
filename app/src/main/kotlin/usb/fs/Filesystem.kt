@@ -16,6 +16,8 @@ object Filesystem {
                 )
             FilesystemId.NTFS -> NtfsFs.getLabel(partition)
             FilesystemId.EXT -> extVolumeLabel(partition)
+            FilesystemId.ISO -> runCatching { IsoVolume(partition).volumeLabel }
+                .getOrNull()
         }?.trim()?.takeIf { it.isNotEmpty() }
 
     fun probe(partition: VirtualPartition): FilesystemId {
@@ -26,6 +28,7 @@ object Filesystem {
         if (isExfat(sector)) return FilesystemId.EXFAT
         if (isFat(sector)) return FilesystemId.FAT
         if (isNtfs(sector)) return FilesystemId.NTFS
+        if (IsoVolume.probe(partition)) return FilesystemId.ISO
         if (isExt(partition)) return FilesystemId.EXT
         throw UnsupportedFilesystemException("no supported filesystem signature")
     }

@@ -68,9 +68,10 @@ class PartitionNameTest {
 
     @Test
     fun labelCapabilitiesMatchTheEngines() {
-        FilesystemId.entries.forEach {
+        FilesystemId.entries.filterNot { it == FilesystemId.ISO }.forEach {
             assertTrue("$it must accept a label at mkfs", FormatCatalog.supportsVolumeLabel(it))
         }
+        assertFalse(FormatCatalog.supportsVolumeLabel(FilesystemId.ISO))
         assertTrue(FormatCatalog.supportsVolumeLabelRename(FilesystemId.FAT))
         assertTrue(FormatCatalog.supportsVolumeLabelRename(FilesystemId.EXFAT))
         assertTrue(FormatCatalog.supportsVolumeLabelRename(FilesystemId.NTFS))

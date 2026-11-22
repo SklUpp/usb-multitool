@@ -5,6 +5,7 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import kotlin.math.roundToInt
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -1442,42 +1443,16 @@ private fun OperationStatusLine(
     state: AppUiState,
     onOpenDetails: () -> Unit,
 ) {
-    val facts = operationStatusFacts(state)
     val operation = state.operation
     val running = operation?.state == OperationState.Running ||
         operation?.state == OperationState.Queued
-    val newerStandalone = newerStandaloneStatusMessage(state)
-    val newerStandaloneText = newerStandalone?.localized()
-    val standaloneMessage = facts == null && state.statusMessage != null
+    val facts = operationStatusFacts(state)
+    val newerStandaloneText = newerStandaloneStatusMessage(state)?.localized()
+    val lineText = newerStandaloneText ?: state.statusMessage
+        ?.takeIf { facts == null }
+        ?.localized()
+    val progressDescription = stringResource(R.string.shell_status_progress)
     val openLabel = stringResource(R.string.shell_status_open_details)
-    val titleText = when {
-        facts != null -> stringResource(
-            R.string.shell_status_headline,
-            facts.name,
-            facts.state,
-        )
-        state.statusMessage != null -> stringResource(
-            R.string.shell_status_title,
-            state.statusMessage.localized(),
-        )
-        else -> stringResource(
-            R.string.shell_status_title,
-            stringResource(R.string.shell_status_ready),
-        )
-    }
-    // Idle / standalone: neutral ink. Active error: error ink. Else onSurface.
-    val titleColor = when {
-        facts == null -> MaterialTheme.colorScheme.onSurfaceVariant
-        facts.tone == StatusTone.Error -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    // Passive idle / standalone message: quieter low container. Active/terminal: high.
-    // Never errorContainer — failure is ink, not a banner.
-    val containerColor = if (facts == null) {
-        MaterialTheme.colorScheme.surfaceContainerLow
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
 
     Surface(
         modifier = Modifier
@@ -1490,7 +1465,7 @@ private fun OperationStatusLine(
                 onClick = onOpenDetails,
             )
             .heightIn(min = 48.dp, max = 64.dp),
-        color = containerColor,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.small,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
@@ -1502,95 +1477,72 @@ private fun OperationStatusLine(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                if (facts != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(
-                                if (running || standaloneMessage) {
-                                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = facts.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = titleColor,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = facts.state,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = titleColor,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+            Text(
+                text = stringResource(R.string.status_dialog_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = lineText.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (facts?.tone == StatusTone.Error) {
+                    MaterialTheme.colorScheme.error
                 } else {
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = titleColor,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(
-                                if (running || standaloneMessage) {
-                                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    )
-                }
-                if (newerStandaloneText != null) {
-                    Text(
-                        text = newerStandaloneText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { liveRegion = LiveRegionMode.Polite },
-                    )
-                }
-            }
+                    MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .then(
+                        if (lineText != null) {
+                            Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            )
             if (running) {
                 val total = operation?.bytesTotal ?: 0L
                 val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
-                val progressModifier = Modifier.size(24.dp)
-                if (total > 0L) {
-                    CircularProgressIndicator(
-                        progress = { fraction },
-                        modifier = progressModifier,
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 3.dp,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    )
-                } else {
-                    // Running without a known total: real indeterminate ring, never on Ready.
-                    CircularProgressIndicator(
-                        modifier = progressModifier,
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 3.dp,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    )
+                val animatedFraction by animateFloatAsState(
+                    targetValue = fraction,
+                    animationSpec = tween(240),
+                    label = "status-progress",
+                )
+                val percent = "${(animatedFraction * 100f).roundToInt()}%"
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .semantics { contentDescription = progressDescription },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (total > 0L) {
+                        CircularProgressIndicator(
+                            progress = { animatedFraction },
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        )
+                    } else {
+                        CircularProgressIndicator(
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        )
+                    }
+                    if (total > 0L) {
+                        Text(
+                            text = percent,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         }

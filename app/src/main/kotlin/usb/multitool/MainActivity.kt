@@ -2740,6 +2740,7 @@ class MainViewModel(
                     val failurePresence = ProbeFailureClassifier.presenceOf(failure)
                     val isTransport = failurePresence == DevicePresence.Disconnected
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
+                    val wholeDiskVolume = mapWholeDiskTab(disk)
                     val installedRelease =
                         if (isTransport) {
                             usb.ventoy.VentoyInstalledVersion.Present(null)
@@ -2773,6 +2774,7 @@ class MainViewModel(
                                 presence = if (failure == null) DevicePresence.Ready else failurePresence,
                                 device = if (isTransport) identity else probedIdentity,
                                 partitions = partitions,
+                                wholeDiskVolume = wholeDiskVolume,
                                 freeRegions = tableResult.getOrNull()?.freeRegions?.map { usb.ui.FreeRegionUi(it.startLba, it.sectorCount) } ?: emptyList(),
                                 sectorSize = disk.sectorSize,
                                 files = emptyList(),
@@ -2960,6 +2962,7 @@ class MainViewModel(
                     val failurePresence = ProbeFailureClassifier.presenceOf(failure)
                     val isTransport = failurePresence == DevicePresence.Disconnected
                     val partitions = tableResult.getOrNull()?.let { mapPartitionTabs(disk, it.partitions) } ?: emptyList()
+                    val wholeDiskVolume = mapWholeDiskTab(disk)
                     val installedRelease =
                         if (isTransport) {
                             usb.ventoy.VentoyInstalledVersion.Present(null)
@@ -2990,6 +2993,7 @@ class MainViewModel(
                                 presence = if (failure == null) DevicePresence.Ready else failurePresence,
                                 device = identity,
                                 partitions = partitions,
+                                wholeDiskVolume = wholeDiskVolume,
                                 freeRegions = tableResult.getOrNull()?.freeRegions?.map { usb.ui.FreeRegionUi(it.startLba, it.sectorCount) } ?: emptyList(),
                                 sectorSize = disk.sectorSize,
                                 files = emptyList(),

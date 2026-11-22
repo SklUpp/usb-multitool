@@ -22,6 +22,8 @@ internal fun ConfigSourceSheet(
     onStick: () -> Unit,
     onPhone: () -> Unit,
     onDismiss: () -> Unit,
+    defaultPath: String? = null,
+    onDefault: (() -> Unit)? = null,
     stickEnabled: Boolean = true,
 ) {
     ModalBottomSheet(
@@ -34,6 +36,23 @@ internal fun ConfigSourceSheet(
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
         )
+        if (defaultPath != null && onDefault != null) {
+            PopupChoiceBlock(enabled = stickEnabled, onClick = onDefault) {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.config_use_default)) },
+                    supportingContent = { Text(defaultPath) },
+                    leadingContent = {
+                        Icon(
+                            painterResource(R.drawable.ic_pick_file_usb_duotone),
+                            contentDescription = null,
+                        )
+                    },
+                    colors = androidx.compose.material3.ListItemDefaults.colors(
+                        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                    ),
+                )
+            }
+        }
         PopupChoiceBlock(enabled = stickEnabled, onClick = onStick) {
             ListItem(
                 headlineContent = { Text(stringResource(R.string.raw_choose_stick)) },

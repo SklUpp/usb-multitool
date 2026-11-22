@@ -101,6 +101,7 @@
     <string name="partitions_format_sheet_title">Format partition</string>
     <string name="partitions_format_fat_desc">FAT32: files ≤ 4 GiB (widest compatibility with legacy PCs, TVs, and UEFI)</string>
     <string name="partitions_format_exfat_desc">exFAT: files > 4 GiB (for USB drives on Windows, macOS, Android, and Linux)</string>
+    <string name="partitions_format_iso_desc">Read-only ISO9660 image</string>
     <string name="partitions_format_ext_desc">ext4: for Linux (with POSIX permissions and symlinks)</string>
     <string name="partitions_format_ntfs_desc">NTFS: for Windows (with compression and ACLs)</string>
     <string name="theme_label">Theme</string>
@@ -445,6 +446,9 @@
     <string name="diagnostics_pick_image_folder">Choose folder</string>
     <string name="diagnostics_restore_image">Restore image and map</string>
     <string name="diagnostics_selected_file">Selected file</string>
+    <string name="diagnostics_rescue_image_file">Rescue image</string>
+    <string name="diagnostics_rescue_map_file">Sector map</string>
+    <string name="diagnostics_gpt_backup_file">GPT backup</string>
     <string name="diagnostics_restore_map_missing">No rescue map (.map) found in the selected folder</string>
     <string name="diagnostics_no_gpt_file">No GPT file selected</string>
     <string name="diagnostics_pick_gpt_file">Choose file</string>
@@ -833,7 +837,8 @@
     <string name="unattend_problem_computer">The computer name is not valid</string>
     <string name="unattend_problem_image_install">Installing Windows directly to the Ventoy data partition is not supported.</string>
     <string name="unattend_choose_image">Choose Windows image</string>
-    <string name="unattend_add_image">Add image</string>
+    <string name="unattend_add_image">Add images</string>
+    <string name="unattend_remove_image">Remove image</string>
     <string name="unattend_xml_not_selected">XML not selected</string>
     <string name="unattend_show_all">Show all</string>
     <string name="unattend_collapse">Collapse</string>
@@ -876,6 +881,7 @@
     <string name="windows_copying_generic">Copying image to Ventoy partition…</string>
     <string name="windows_template_choose_source">Template source</string>
     <string name="raw_choose_stick">Choose a file on the stick…</string>
+    <string name="config_use_default">Default file</string>
     <string name="raw_choose_phone">Choose a file on the phone…</string>
     <string name="raw_stick_title">Files on the stick</string>
     <string name="raw_stick_loading">Reading the file list…</string>

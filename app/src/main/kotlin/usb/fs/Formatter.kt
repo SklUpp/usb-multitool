@@ -39,6 +39,7 @@ object Formatter {
             }
             FilesystemId.NTFS -> NtfsFs.mkfs(partition, normalizedLabel)
             FilesystemId.EXT -> ExtFs.mkfs(partition, normalizedLabel)
+            FilesystemId.ISO -> error("ISO9660 is read-only and not a format target")
         }
     }
 
@@ -63,6 +64,8 @@ object Formatter {
             FilesystemId.NTFS -> NtfsFs.setLabel(partition, normalizedLabel)
             FilesystemId.EXT ->
                 throw IllegalArgumentException("the EXT volume label can only be written while formatting")
+            FilesystemId.ISO ->
+                throw IllegalArgumentException("the ISO9660 volume label is read-only")
         }
     }
 

@@ -93,6 +93,27 @@ internal fun normalizeDocumentPath(raw: String): String {
     return if (normalized.isEmpty()) "/" else "/" + normalized.joinToString("/")
 }
 
+@Composable
+private fun RestorePathLine(label: String, path: String?) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = path ?: stringResource(R.string.wave4_file_not_selected),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /** One line: canonical path and filename, with no provider/volume prefix. */
 private fun restorePathText(uri: String?, fallback: String?): String {
     val path = uri?.let(::normalizedRestorePath)
@@ -341,6 +362,20 @@ fun DiagnosticsScreen(
                     }
                 },
             )
+            RestorePathLine(
+                label = stringResource(R.string.diagnostics_rescue_image_file),
+                path = restorePathText(
+                    state.rescueImageUri,
+                    state.rescueImageInspection?.displayName,
+                ),
+            )
+            RestorePathLine(
+                label = stringResource(R.string.diagnostics_rescue_map_file),
+                path = restorePathText(
+                    state.rescueMapUri,
+                    state.rescueMapInspection?.displayName,
+                ),
+            )
             val rescueImage = state.rescueImageInspection
                 ?.takeIf { it.uri == state.rescueImageUri }
             val rescueMap = state.rescueMapInspection
@@ -403,21 +438,6 @@ fun DiagnosticsScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         if (state.rescueImageUri != null) {
-                            Text(
-                                text = stringResource(R.string.diagnostics_selected_file),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = restorePathText(
-                                    state.rescueImageUri,
-                                    state.rescueImageInspection?.displayName,
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                            )
                             InspectionText(
                                 rescueImageInspectionLines(
                                     state.rescueImageInspection?.takeIf {
@@ -434,21 +454,6 @@ fun DiagnosticsScreen(
                             )
                         }
                         if (state.rescueMapUri != null) {
-                            Text(
-                                text = stringResource(R.string.diagnostics_selected_file),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = restorePathText(
-                                    state.rescueMapUri,
-                                    state.rescueMapInspection?.displayName,
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                            )
                             InspectionText(
                                 rescueMapInspectionLines(
                                     state.rescueMapInspection?.takeIf {
@@ -490,6 +495,13 @@ fun DiagnosticsScreen(
                         }
                     }
                 },
+            )
+            RestorePathLine(
+                label = stringResource(R.string.diagnostics_gpt_backup_file),
+                path = restorePathText(
+                    state.backupUri,
+                    state.backupInspection?.displayName,
+                ),
             )
             val gptRestoreReady = state.backupUri != null &&
                 state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
@@ -546,21 +558,6 @@ fun DiagnosticsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text(
-                            text = stringResource(R.string.diagnostics_selected_file),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = restorePathText(
-                                state.backupUri,
-                                state.backupInspection?.displayName,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
                         InspectionText(
                             gptBackupInspectionLines(
                                 state.backupInspection?.takeIf { it.uri == state.backupUri },

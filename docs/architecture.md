@@ -80,7 +80,7 @@ Reducer (`usb.ui.UiReducer.reduce`) чистый: он меняет состоя
 
 ```
 UI -> FilesOperationRunner -> FilesOperations -> MountedFilesVolume
-   -> UsbFsVolume (FatFs/NtfsFs/ExtFs) -> BlockDevice -> UsbDisk -> BOT/SCSI
+   -> UsbFsVolume (FatFs/NtfsFs/ExtFs/IsoVolume) -> BlockDevice -> UsbDisk -> BOT/SCSI
 ```
 
 `FilesVolumeSession` сериализует mount/close/usage/files bodies. Кэш

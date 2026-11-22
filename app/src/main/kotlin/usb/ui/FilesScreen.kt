@@ -224,7 +224,7 @@ fun FilesScreen(
     ) { mutableStateOf<FileEntry?>(null) }
 
 
-    val selected = state.selectedPartition()
+    val selected = state.selectedFilesVolume()
     val canAct = state.actionsEnabled && selected != null
     // partitionWriteAccess already folds EFI policy before driver mount facts.
     val writeAccess = selected?.let(state::partitionWriteAccess) ?: PartitionWriteAccess.Unknown
@@ -244,7 +244,7 @@ fun FilesScreen(
         ?.takeIf { it.key == UiMessageKey.VolumeSyncUnconfirmed }
     val systemBlocked = state.presence == DevicePresence.Busy &&
         (state.operation == null || state.operation.state.isTerminal()) && blockedRelease != null
-    if (state.partitions.isEmpty()) {
+    if (state.filesVolumes.isEmpty()) {
         if (!systemBlocked) {
             Column(
                 modifier = modifier.fillMaxWidth(),
@@ -295,7 +295,7 @@ fun FilesScreen(
                     .verticalScroll(rememberScrollState()),
             ) {
                 PartitionDropdown(
-                    partitions = state.partitions,
+                    partitions = state.filesVolumes,
                     selectedId = selected?.id,
                     writeAccessOf = state::partitionWriteAccess,
                     usageOf = state::partitionUsageSnapshot,
@@ -341,7 +341,7 @@ fun FilesScreen(
                 onOpenPath = { path -> onIntent(UiIntent.OpenDirectory(path)) },
                 onNewFolder = {
                     val device = state.device
-                    val partition = state.selectedPartition()
+                    val partition = state.selectedFilesVolume()
                     if (device != null && partition != null) {
                         newFolderPath = state.currentPath
                         newFolderBinding = PartitionBinding(
@@ -356,7 +356,7 @@ fun FilesScreen(
                 },
                 onSaveToPhone = {
                     val device = state.device
-                    val partition = state.selectedPartition()
+                    val partition = state.selectedFilesVolume()
                     if (device == null || partition == null || selectedEntries.isEmpty()) return@FolderCard
                     if (!filesBatchDownloadEnabled(canAct, selectedEntries.map { it.toBatchItem() })) {
                         return@FolderCard
@@ -390,7 +390,7 @@ fun FilesScreen(
                 },
                 onRename = {
                     val device = state.device
-                    val partition = state.selectedPartition()
+                    val partition = state.selectedFilesVolume()
                     val target = singleSelection
                     if (device != null &&
                         partition != null &&
@@ -447,7 +447,7 @@ fun FilesScreen(
             onDownload = {
                 actionEntry = null
                 val device = state.device
-                val partition = state.selectedPartition()
+                val partition = state.selectedFilesVolume()
                 if (device != null && partition != null) {
                     onRequestDownload(
                         FilesDownloadBinding(
@@ -727,7 +727,7 @@ private fun FilesPickScreen(
     onRequestDeviceImage: (String, String) -> Unit,
     modifier: Modifier,
 ) {
-    val partition = state.partitions.firstOrNull { it.id == mode.partitionId }
+    val partition = state.filesVolumes.firstOrNull { it.id == mode.partitionId }
     val ventoyDataPartitionId = state.ventoyDataPartition()?.id
     val canAct = state.actionsEnabled && partition != null
     val copying = state.operation?.takeIf { it.title is OperationTitle.ImportTarget }
@@ -824,7 +824,7 @@ private fun FilesPickScreen(
                 .padding(bottom = 8.dp),
         ) {
             PartitionDropdown(
-                partitions = state.partitions,
+                partitions = state.filesVolumes,
                 selectedId = mode.partitionId,
                 writeAccessOf = state::partitionWriteAccess,
                 usageOf = state::partitionUsageSnapshot,
@@ -1535,13 +1535,16 @@ private fun FolderBreadcrumbs(
         var current = ""
         parts.forEach { part ->
             current = if (current.isEmpty()) "/$part" else "$current/$part"
+            // Capture a fresh val per segment; lambdas over the mutable `current` would all
+            // open the deepest path after the loop finishes.
+            val target = current
             Text(
                 text = "/",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             TextButton(
-                onClick = { onOpen(current) },
+                onClick = { onOpen(target) },
                 enabled = enabled,
                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                 modifier = Modifier.heightIn(min = 48.dp),
@@ -2083,7 +2086,7 @@ internal fun filesBatchSelectionOrNull(
     entries: List<FileEntry>,
 ): FilesBatchSelection? {
     val device = state.device ?: return null
-    val partition = state.selectedPartition() ?: return null
+    val partition = state.selectedFilesVolume() ?: return null
     if (entries.isEmpty()) return null
     return FilesBatchSelection(
         directory = state.currentPath,

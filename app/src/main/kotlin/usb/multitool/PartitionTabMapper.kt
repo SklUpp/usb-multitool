@@ -16,13 +16,39 @@ internal fun mapPartitionTabs(
     PartitionTab(
         id = (index + 1).toString(),
         name = partition.name.ifBlank { "Partition ${index + 1}" },
-        readOnly = isProtectedSystemPartition(partition),
+        readOnly = isProtectedSystemPartition(partition) ||
+            filesystemId == usb.fs.FilesystemId.ISO,
         isEfiType = isEfiSystemType(partition),
         startLba = partition.startLba,
         sectorCount = partition.sectorCount,
         filesystemId = filesystemId,
         volumeLabel = volumeLabelProbe(partition, filesystemId),
         bootable = partition.bootable,
+    )
+}
+
+/** Synthetic Files-tab id; never a partition-table slot and never a mutation target. */
+internal const val WHOLE_DISK_VOLUME_ID = "whole"
+
+/**
+ * Read-only Files-tab view for a Rufus/DD image with no usable partition table. Probe is
+ * metadata-only and returns null when no supported filesystem starts at LBA 0.
+ */
+internal fun mapWholeDiskTab(disk: UsbDisk): PartitionTab? {
+    // Hybrid Rufus images can carry a partition table and an ISO filesystem at LBA 0 at
+    // the same time. Probe LBA 0 independently; the synthetic tab is read-only.
+    val volume = VirtualPartition(0UL, disk.sectorCount, disk)
+    val filesystem = runCatching { usb.fs.Filesystem.probe(volume) }.getOrNull() ?: return null
+    val label = runCatching { usb.fs.Filesystem.readLabel(volume, filesystem) }.getOrNull()
+    return PartitionTab(
+        id = WHOLE_DISK_VOLUME_ID,
+        name = label.orEmpty().ifBlank { "ISO/IMG" },
+        readOnly = true,
+        filesystemId = filesystem,
+        volumeLabel = label,
+        startLba = 0UL,
+        sectorCount = disk.sectorCount,
+        wholeDisk = true,
     )
 }
 

@@ -225,7 +225,7 @@ internal object OperationTransitions {
             state.presence == DevicePresence.Ready &&
                 state.actionsEnabled &&
                 state.tab == ShellTab.Files &&
-                state.selectedPartition() != null
+                state.selectedFilesVolume() != null
         return if (!canStart || state.filesListingState == FilesListingState.Loading) {
             ReduceResult(state)
         } else {

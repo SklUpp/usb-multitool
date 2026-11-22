@@ -452,6 +452,7 @@ internal fun AutounattendSection(
                 }
             }
             val links = state.windowsImageLinks.orEmpty()
+            val removeImageDescription = stringResource(R.string.unattend_remove_image)
             val boundPaths = links.map { it.image }.toSet()
             val rows = (links.map { it.image to it.templates.firstOrNull() } +
                 state.windowsSelectedImages.filter { it !in boundPaths }.map { it to null })
@@ -472,7 +473,19 @@ internal fun AutounattendSection(
                             onIntent(UiIntent.SetWindowsLinkTarget(image))
                             onIntent(UiIntent.BeginFilesPick(FilesPickPurpose.WindowsTemplate, ShellTab.Ventoy, FilesPickTarget.File, initialPath = "/ventoy", expectedIdentity = state.device?.identity, expectedAttachGeneration = state.device?.attachGeneration))
                         }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.File, size = 20.dp) }
-                        if (xml != null) IconButton(onClick = { onIntent(UiIntent.RequestUnlinkWindowsImages(listOf(image))) }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.Close, size = 20.dp) }
+                        IconButton(
+                            onClick = {
+                                if (xml != null) {
+                                    onIntent(UiIntent.RequestUnlinkWindowsImages(listOf(image)))
+                                } else {
+                                    onIntent(UiIntent.ToggleWindowsImage(image))
+                                }
+                            },
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = removeImageDescription
+                            },
+                        ) { GlyphIcon(Glyph.Close, size = 20.dp) }
                     }
                 }
                 if (rows.size > 3) TextButton(onClick = { showAllImages = !showAllImages }) { Text(stringResource(if (showAllImages) R.string.unattend_collapse else R.string.unattend_show_all)) }
@@ -560,6 +573,16 @@ internal fun AutounattendSection(
         ConfigSourceSheet(
             title = stringResource(R.string.windows_template_choose_source),
             onDismiss = { templateSourcePrompt = false },
+            defaultPath = VentoySetup.resolveXmlPath("autounattend.xml"),
+            onDefault = {
+                templateSourcePrompt = false
+                onIntent(UiIntent.SetWindowsLinkTarget(null))
+                onIntent(
+                    UiIntent.LoadAutounattend(
+                        VentoySetup.resolveXmlPath("autounattend.xml"),
+                    ),
+                )
+            },
             stickEnabled = !xmlGone,
             onStick = {
                 templateSourcePrompt = false
@@ -861,6 +884,11 @@ internal fun GlobalSettingsCard(
         ConfigSourceSheet(
             title = stringResource(R.string.settings_source_choose),
             onDismiss = { sourceMenuOpen = false },
+            defaultPath = usb.ventoy.DEFAULT_VENTOY_CONFIG_PATH,
+            onDefault = {
+                sourceMenuOpen = false
+                onIntent(UiIntent.UseDefaultVentoySettingsFile)
+            },
             stickEnabled = !settingsGone,
             onStick = {
                 sourceMenuOpen = false
@@ -1014,6 +1042,12 @@ private fun GlobalSettingsEditorDialog(
     }
     val closeLabel = stringResource(R.string.settings_cancel)
     val applyLabel = stringResource(R.string.settings_apply)
+    val listState = rememberLazyListState()
+    val officialKeySet = remember(state.ventoyControlKeyCatalog) {
+        state.ventoyControlKeyCatalog?.keys?.map { it.key }?.toSet().orEmpty()
+    }
+    val officialDrafts = drafts.filter { it.key in officialKeySet }
+    val customDrafts = drafts.filter { it.key !in officialKeySet }
     Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier.fillMaxSize(),
@@ -1057,19 +1091,25 @@ private fun GlobalSettingsEditorDialog(
                             modifier = Modifier.bringIntoViewRequester(applyProblemRequester),
                         )
                     }
-                    Column(
+                    LazyColumn(
+                        state = listState,
                         modifier = Modifier
                             .weight(1f, fill = true)
-                            .verticalScroll(rememberScrollState())
                             .imePadding(),
+                        contentPadding = PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(
-                            text = stringResource(R.string.wave4_win11_section),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        VentoyControlCatalog.known.forEach { known ->
+                        item(key = "known-title") {
+                            Text(
+                                text = stringResource(R.string.wave4_win11_section),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        items(
+                            items = VentoyControlCatalog.known,
+                            key = { "known:${it.key}" },
+                        ) { known ->
                             KnownControlRow(
                                 known,
                                 entries,
@@ -1078,70 +1118,78 @@ private fun GlobalSettingsEditorDialog(
                                 onIntent,
                             )
                         }
-                        val officialKeySet = remember(state.ventoyControlKeyCatalog) {
-                            state.ventoyControlKeyCatalog?.keys?.map { it.key }?.toSet().orEmpty()
-                        }
-                        val officialDrafts = drafts.filter { it.key in officialKeySet }
-                        val customDrafts = drafts.filter { it.key !in officialKeySet }
 
-                        Text(
-                            text = stringResource(R.string.wave4_official_section),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = stringResource(R.string.wave4_official_section_hint),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        officialDrafts.forEach { draft ->
-                            key(draft.id) {
-                                EditablePairRow(
-                                    draft = draft,
-                                    actionsEnabled = state.actionsEnabled,
-                                    onChange = { changed ->
-                                        val i = drafts.indexOfFirst { it.id == draft.id }
-                                        if (i >= 0) drafts[i] = changed
-                                    },
-                                    onDelete = { drafts.removeAll { it.id == draft.id } },
-                                    keyReadOnly = true,
-                                    description = ventoyKeyShortDescription(draft.key),
+                        item(key = "official-title") {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = stringResource(R.string.wave4_official_section),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = stringResource(R.string.wave4_official_section_hint),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
-                        FilledTonalButton(
-                            onClick = { officialPickerOpen = true },
-                            enabled = state.actionsEnabled,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp),
-                        ) {
-                            Text(stringResource(R.string.wave4_add_official))
+                        items(
+                            items = officialDrafts,
+                            key = { "official:${it.id}" },
+                        ) { draft ->
+                            EditablePairRow(
+                                draft = draft,
+                                actionsEnabled = state.actionsEnabled,
+                                onChange = { changed ->
+                                    val i = drafts.indexOfFirst { it.id == draft.id }
+                                    if (i >= 0) drafts[i] = changed
+                                },
+                                onDelete = { drafts.removeAll { it.id == draft.id } },
+                                keyReadOnly = true,
+                                description = ventoyKeyShortDescription(draft.key),
+                            )
+                        }
+                        item(key = "official-add") {
+                            FilledTonalButton(
+                                onClick = { officialPickerOpen = true },
+                                enabled = state.actionsEnabled,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp),
+                            ) {
+                                Text(stringResource(R.string.wave4_add_official))
+                            }
                         }
 
-                        Text(
-                            text = stringResource(R.string.wave4_custom_section),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = stringResource(R.string.wave4_custom_section_hint),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        customDrafts.forEach { draft ->
-                            key(draft.id) {
-                                EditablePairRow(
-                                    draft = draft,
-                                    actionsEnabled = state.actionsEnabled,
-                                    onChange = { changed ->
-                                        val i = drafts.indexOfFirst { it.id == draft.id }
-                                        if (i >= 0) drafts[i] = changed
-                                    },
-                                    onDelete = { drafts.removeAll { it.id == draft.id } },
+                        item(key = "custom-title") {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = stringResource(R.string.wave4_custom_section),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = stringResource(R.string.wave4_custom_section_hint),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
+                        items(
+                            items = customDrafts,
+                            key = { "custom:${it.id}" },
+                        ) { draft ->
+                            EditablePairRow(
+                                draft = draft,
+                                actionsEnabled = state.actionsEnabled,
+                                onChange = { changed ->
+                                    val i = drafts.indexOfFirst { it.id == draft.id }
+                                    if (i >= 0) drafts[i] = changed
+                                },
+                                onDelete = { drafts.removeAll { it.id == draft.id } },
+                            )
+                        }
+                        item(key = "custom-add") {
                         if (customAddOpen) {
                             val existingKeys = drafts.map { it.key }.filter { it.isNotBlank() }.toSet() +
                                 VentoyControlCatalog.known.map { it.key }.toSet() +
@@ -1235,6 +1283,7 @@ private fun GlobalSettingsEditorDialog(
                             ) {
                                 Text(stringResource(R.string.wave4_add_custom))
                             }
+                        }
                         }
                     }
                 }

@@ -2,6 +2,7 @@
 <resources>
     <!-- Permanent status block subject while idle. -->
     <string name="shell_status_ready">Ready</string>
+    <string name="shell_status_progress">Operation progress</string>
     <!-- Status block title: Status: &lt;operation|message|Ready&gt;. -->
     <string name="shell_status_title">%1$s</string>
     <!-- Accessibility action label: the block opens the status dialog (idle too). -->

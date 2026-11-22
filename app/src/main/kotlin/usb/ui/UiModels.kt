@@ -705,7 +705,7 @@ fun FilesDownloadBinding.matches(state: AppUiState): Boolean {
     val device = state.device ?: return false
     if (device.identity != identity || device.attachGeneration != attachGeneration) return false
     if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
-    val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    val partition = state.filesVolumes.firstOrNull { it.id == partitionId } ?: return false
     if (partition.startLba != startLba || partition.sectorCount != sectorCount) return false
     if (name.isBlank() || name == "." || name == ".." || '/' in name || '\\' in name || '\u0000' in name) return false
     val entry = state.files.singleOrNull { it.name == name && !it.isDirectory } ?: return false
@@ -739,7 +739,7 @@ fun FilesBatchSelection.matches(state: AppUiState): Boolean {
     val device = state.device ?: return false
     if (device.identity != identity || device.attachGeneration != attachGeneration) return false
     if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
-    val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    val partition = state.filesVolumes.firstOrNull { it.id == partitionId } ?: return false
     if (partition.startLba != startLba || partition.sectorCount != sectorCount) return false
     if (items.isEmpty()) return false
     val seen = HashSet<String>(items.size)
@@ -795,6 +795,8 @@ data class PartitionTab(
     val sectorCount: ULong? = null,
     /** Legacy BIOS bootable flag as stored on disk (MBR 0x80 / GPT attribute bit 2). */
     val bootable: Boolean = false,
+    /** Synthetic Files-tab volume spanning the whole medium; never a table partition. */
+    val wholeDisk: Boolean = false,
 ) {
     /**
      * Display-only: Ventoy's VTOYEFI role/name is the boot ESP even when the on-disk type
@@ -826,6 +828,7 @@ data class PartitionTab(
             FilesystemId.EXFAT -> "exFAT"
             FilesystemId.NTFS -> "NTFS"
             FilesystemId.EXT -> "EXT"
+            FilesystemId.ISO -> "ISO9660"
             null -> ""
         }
 }
@@ -1330,6 +1333,8 @@ data class AppUiState(
     val tab: ShellTab = ShellTab.Files,
     val language: AppLanguage = AppLanguage.System,
     val partitions: List<PartitionTab> = emptyList(),
+    /** Read-only LBA-0 volume for ISO/DD images, including hybrid images with a table. */
+    val wholeDiskVolume: PartitionTab? = null,
     val freeRegions: List<FreeRegionUi> = emptyList(),
     /** True after this attachment has produced an explicit partition result. */
     val partitionSelectionInitialized: Boolean = false,
@@ -1544,6 +1549,8 @@ data class AppUiState(
     val windowsTemplatePin: FilesPickSelection? = null,
     /** Bindings selected for removal; confirmation only edits ventoy.json. */
     val pendingWindowsUnlink: List<String>? = null,
+    /** Images to drop from selection only after a successful unlink reload. */
+    val windowsPendingRemoval: Set<String> = emptySet(),
     /** Reader result for the selected XML; Missing/Parsed/Unreadable. */
     val autounattendState: AutounattendState = AutounattendState.Missing,
     val autounattendBindings: List<AutounattendBinding>? = null,
@@ -1798,6 +1805,14 @@ data class AppUiState(
     fun selectedPartition(): PartitionTab? =
         selectedPartitionId?.let { id -> partitions.firstOrNull { it.id == id } }
 
+    /** Files-tab volumes: real partitions plus the read-only whole-disk image volume. */
+    val filesVolumes: List<PartitionTab>
+        get() = partitions + listOfNotNull(wholeDiskVolume)
+
+    fun selectedFilesVolume(): PartitionTab? =
+        selectedPartitionId?.let { id -> filesVolumes.firstOrNull { it.id == id } }
+            ?: filesVolumes.firstOrNull()
+
     /**
      * Ventoy data partition: fixed part1 of the Ventoy layout, never the EFI part. Geometry
      * is required, so a pick session cannot pin a partition whose sectors are unknown.
@@ -1837,6 +1852,9 @@ data class AppUiState(
      * report only access from a matching mounted-handle measurement (map or selected).
      */
     fun partitionWriteAccess(partition: PartitionTab): PartitionWriteAccess {
+        if (partition.filesystemId == FilesystemId.ISO) {
+            return PartitionWriteAccess.ReadOnly
+        }
         if (!isEfiWriteAllowed(partition)) return PartitionWriteAccess.ReadOnly
         val access = partitionUsageSnapshot(partition)?.access
         return when (access) {
@@ -1872,7 +1890,7 @@ fun FilesPickMode.matches(state: AppUiState): Boolean {
     if (device.identity != identity) return false
     if (device.attachGeneration != attachGeneration) return false
     if (state.selectedPartitionId != partitionId) return false
-    val live = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    val live = state.filesVolumes.firstOrNull { it.id == partitionId } ?: return false
     return live.startLba == startLba && live.sectorCount == sectorCount
 }
 
@@ -1881,7 +1899,7 @@ fun PartitionBinding.matches(state: AppUiState): Boolean {
     val device = state.device ?: return false
     if (device != this.device) return false
     if (state.selectedPartitionId != partitionId) return false
-    val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
+    val partition = state.filesVolumes.firstOrNull { it.id == partitionId } ?: return false
     return partition.startLba == startLba && partition.sectorCount == sectorCount
 }
 

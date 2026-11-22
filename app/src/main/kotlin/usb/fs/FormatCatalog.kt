@@ -22,6 +22,7 @@ object FormatCatalog {
             FilesystemId.EXFAT -> "exFAT"
             FilesystemId.EXT -> "EXT4"
             FilesystemId.NTFS -> "NTFS"
+            FilesystemId.ISO -> "ISO9660"
         }
 
     /**
@@ -143,6 +144,7 @@ object VolumeLabel {
             FilesystemId.NTFS -> NTFS_MAX_CHARS
             // ext4 stores the label in bytes, not characters.
             FilesystemId.EXT -> EXT_MAX_UTF8_BYTES
+            FilesystemId.ISO -> 0
         }
 
     /**
@@ -181,6 +183,7 @@ object VolumeLabel {
                 } else {
                     null
                 }
+            FilesystemId.ISO -> null
         }
     }
 }

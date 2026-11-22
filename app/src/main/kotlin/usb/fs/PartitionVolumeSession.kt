@@ -69,6 +69,7 @@ object PartitionVolumeSession {
             FilesystemId.FAT, FilesystemId.EXFAT -> "FatFs"
             FilesystemId.EXT -> "lwext4"
             FilesystemId.NTFS -> "ntfs-3g"
+            FilesystemId.ISO -> "ISO9660"
         }
 
     internal fun mountProbed(
@@ -76,7 +77,9 @@ object PartitionVolumeSession {
         partition: VirtualPartition,
         readOnly: Boolean,
     ): UsbFsVolume =
-        requireLinkedEngine(engineFor(id)) {
+        if (id == FilesystemId.ISO) {
+            IsoVolume(partition)
+        } else requireLinkedEngine(engineFor(id)) {
             when (id) {
                 FilesystemId.FAT, FilesystemId.EXFAT ->
                     FatFs.mount(
@@ -86,6 +89,7 @@ object PartitionVolumeSession {
                     )
                 FilesystemId.EXT -> ExtFs.mount(partition, readOnly = readOnly)
                 FilesystemId.NTFS -> NtfsFs.mount(partition, readOnly = readOnly)
+                FilesystemId.ISO -> error("ISO is handled before the native engine gate")
             }
         }
 }

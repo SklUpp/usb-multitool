@@ -2472,16 +2472,15 @@ private fun PartitionSelectStrip(
     if (segments.isEmpty()) return
     val selectedFill = MaterialTheme.colorScheme.primary
     val selectedContent = MaterialTheme.colorScheme.onPrimary
-    // Full container roles keep every legend class distinct from the section
-    // surface and from each other in both themes. Alpha tints disappeared on
-    // dark surfaces and looked like one unlabeled band.
-    val partitionFill = MaterialTheme.colorScheme.primaryContainer
-    val partitionInk = MaterialTheme.colorScheme.onPrimaryContainer
-    val specialFill = MaterialTheme.colorScheme.tertiaryContainer
-    val specialInk = MaterialTheme.colorScheme.onTertiaryContainer
-    val reservedFill = MaterialTheme.colorScheme.secondaryContainer
-    val reservedInk = MaterialTheme.colorScheme.onSecondaryContainer
-    val freeFill = MaterialTheme.colorScheme.surfaceContainerHighest
+    // Saturated hue tints stay visible in both themes without turning the strip into
+    // a row of near-black blocks. Selected remains the sole full-primary fill.
+    val partitionFill = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+    val partitionInk = MaterialTheme.colorScheme.onSurface
+    val specialFill = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)
+    val specialInk = MaterialTheme.colorScheme.onSurface
+    val reservedFill = MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f)
+    val reservedInk = MaterialTheme.colorScheme.onSurface
+    val freeFill = MaterialTheme.colorScheme.surfaceContainerHigh
     val gapFill = MaterialTheme.colorScheme.outlineVariant
     val outline = MaterialTheme.colorScheme.outline
     val hasSpecial = segments.any { it.partition?.special == true }
@@ -2837,5 +2836,6 @@ private fun formatDescription(id: FilesystemId): String = stringResource(
         FilesystemId.EXFAT -> R.string.partitions_format_exfat_desc
         FilesystemId.EXT -> R.string.partitions_format_ext_desc
         FilesystemId.NTFS -> R.string.partitions_format_ntfs_desc
+        FilesystemId.ISO -> R.string.partitions_format_iso_desc
     },
 )

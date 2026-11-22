@@ -104,6 +104,7 @@ sealed class UiIntent {
         val presence: DevicePresence,
         val device: DeviceIdentity? = null,
         val partitions: List<PartitionTab> = emptyList(),
+        val wholeDiskVolume: PartitionTab? = null,
         val files: List<FileEntry> = emptyList(),
         val freeRegions: List<FreeRegionUi> = emptyList(),
         val sectorSize: Int = 512,
@@ -1476,12 +1477,19 @@ object UiReducer {
                     } else {
                         intent.partitions
                     }
+                val wholeDiskVolume =
+                    if (probingRetain && intent.wholeDiskVolume == null) {
+                        state.wholeDiskVolume
+                    } else {
+                        intent.wholeDiskVolume
+                    }
+                val filesVolumes = partitions + listOfNotNull(wholeDiskVolume)
                 // A refresh on the same attachment may not silently retarget actions. Keep
                 // selection only when stable ID and exact geometry both match; a new attachment
-                // starts with the first partition as its initial, explicit screen target.
+                // starts with the first volume as its initial, explicit screen target.
                 val retainedSelection = state.selectedPartitionId?.let { id ->
-                    val previousPartition = state.partitions.firstOrNull { it.id == id }
-                    val refreshedPartition = partitions.firstOrNull { it.id == id }
+                    val previousPartition = state.filesVolumes.firstOrNull { it.id == id }
+                    val refreshedPartition = filesVolumes.firstOrNull { it.id == id }
                     refreshedPartition?.takeIf {
                         previousPartition?.startLba != null &&
                             previousPartition.sectorCount != null &&
@@ -1491,17 +1499,17 @@ object UiReducer {
                 }
                 val initialSelection =
                     intent.presence == DevicePresence.Ready &&
-                        partitions.isNotEmpty() &&
+                        filesVolumes.isNotEmpty() &&
                         (!sameStick ||
                             (!state.partitionSelectionInitialized && state.selectedPartitionId == null))
                 val selected = when {
                     probingRetain -> state.selectedPartitionId?.takeIf { id ->
-                        partitions.any { it.id == id }
-                    } ?: partitions.firstOrNull()?.id
-                    initialSelection -> partitions.firstOrNull()?.id
+                        filesVolumes.any { it.id == id }
+                    } ?: filesVolumes.firstOrNull()?.id
+                    initialSelection -> filesVolumes.firstOrNull()?.id
                     // A vanished or re-geometried target must not leave Files with no
-                    // selectable partition: fall back to the first live one.
-                    sameStick -> retainedSelection ?: partitions.firstOrNull()?.id
+                    // selectable volume: fall back to the first live one.
+                    sameStick -> retainedSelection ?: filesVolumes.firstOrNull()?.id
                     else -> null
                 }
                 // Ventoy/XML is scoped to the current attachment.
@@ -1668,6 +1676,7 @@ object UiReducer {
                             else -> state.partitionSelectionInitialized
                         },
                         partitions = partitions,
+                        wholeDiskVolume = wholeDiskVolume,
                         freeRegions =
                             if (probingRetain && intent.partitions.isEmpty()) {
                                 state.freeRegions
@@ -1853,6 +1862,8 @@ object UiReducer {
                             if (keepVentoy) state.windowsSelectedImages else emptyList(),
                         windowsLinkTargetImage =
                             if (keepVentoy) state.windowsLinkTargetImage else null,
+                        windowsPendingRemoval =
+                            if (keepVentoy) state.windowsPendingRemoval else emptySet(),
                         windowsTemplatePath =
                             if (templatePinValid) state.windowsTemplatePath else null,
                         windowsImageLinks =
@@ -3332,7 +3343,7 @@ object UiReducer {
                 val device = state.device
                 val livePartition =
                     picked?.let { selection ->
-                        state.partitions.firstOrNull {
+                        state.filesVolumes.firstOrNull {
                             it.id == selection.partitionId &&
                                 it.startLba == selection.startLba &&
                                 it.sectorCount == selection.sectorCount
@@ -3570,9 +3581,20 @@ object UiReducer {
                                 it.image != "/" &&
                                 it.templates.isNotEmpty()
                         }
+                    val pendingRemoval = state.windowsPendingRemoval
+                    val removed = if (intent.error == null) {
+                        pendingRemoval - links.map { it.image }.toSet()
+                    } else {
+                        emptySet()
+                    }
                     ReduceResult(
                         state.copy(
                             windowsImageLinks = links,
+                            windowsSelectedImages = state.windowsSelectedImages - removed,
+                            windowsLinkTargetImage =
+                                state.windowsLinkTargetImage?.takeUnless { it in removed },
+                            windowsPendingRemoval =
+                                if (intent.error == null) emptySet() else pendingRemoval,
                             // Only a new error bumps; null keeps the carried message and sequence.
                             statusMessage = intent.error?.let(UiMessage::Raw) ?: state.statusMessage,
                             statusSequence =
@@ -3629,6 +3651,8 @@ object UiReducer {
                         ReduceResult(
                             state.copy(
                                 pendingWindowsUnlink = null,
+                                windowsPendingRemoval =
+                                    state.windowsPendingRemoval + paths.toSet(),
                             ).withStatus(UiMessage.Raw(
                                     "Removing ${paths.size} binding(s); files stay on the stick",
                                 )),
@@ -4982,7 +5006,7 @@ object UiReducer {
             state.presence != DevicePresence.Ready ||
             !state.actionsEnabled ||
             state.isoImportUsbInFlight != null ||
-            state.selectedPartition() == null ||
+            state.selectedFilesVolume() == null ||
             result.effects.isNotEmpty()
         ) {
             return result

@@ -94,13 +94,13 @@ internal fun RawPlanMap(
     val maxStart = if (count == null || count >= disk) 0UL else disk - count
     val overlaps = count?.let { geometry.overlaps(startLba, it) }.orEmpty()
     val rangeColor = MaterialTheme.colorScheme.primary
-    // Distinct container roles, not alpha tints: adjacent object classes must stay
-    // distinguishable on both light and dark surfaces and match their legend swatches.
-    val partitionColor = MaterialTheme.colorScheme.secondaryContainer
-    val bootColor = MaterialTheme.colorScheme.tertiaryContainer
-    val tableColor = MaterialTheme.colorScheme.primaryContainer
+    // Hue tints instead of dark containers: object classes stay distinguishable on both
+    // themes and remain visible against the track.
+    val partitionColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.55f)
+    val bootColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.70f)
+    val tableColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
     val trackColor = MaterialTheme.colorScheme.surfaceContainerLowest
-    val freeColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val freeColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val snapTickColor = MaterialTheme.colorScheme.outline
 
     val partitionLabels = remember(geometry) {

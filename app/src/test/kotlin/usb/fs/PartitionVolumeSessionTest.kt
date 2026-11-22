@@ -48,6 +48,7 @@ class PartitionVolumeSessionTest {
         assertEquals("FatFs", PartitionVolumeSession.engineFor(FilesystemId.EXFAT))
         assertEquals("lwext4", PartitionVolumeSession.engineFor(FilesystemId.EXT))
         assertEquals("ntfs-3g", PartitionVolumeSession.engineFor(FilesystemId.NTFS))
+        assertEquals("ISO9660", PartitionVolumeSession.engineFor(FilesystemId.ISO))
     }
 
     @Test
@@ -148,6 +149,8 @@ class PartitionVolumeSessionTest {
             FilesystemId.EXFAT -> session.putSector(0UL, exfatBootSector())
             FilesystemId.NTFS -> session.putSector(0UL, ntfsBootSector())
             FilesystemId.EXT -> session.putSector(2UL, extSuperblockSector())
+            // ISO mounts through IsoVolume and never reaches the native engine gate.
+            FilesystemId.ISO -> Unit
         }
     }
 
