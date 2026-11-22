@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -191,6 +192,8 @@ fun DiagnosticsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = folderStatusColor,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (!backupFolderReady) {
                     // Folder choice lives in Settings; create actions stay blocked until a
@@ -204,6 +207,8 @@ fun DiagnosticsScreen(
                     )
                     val openSettingsLabel =
                         stringResource(R.string.diagnostics_backup_open_settings)
+                    val chooseFolderLabel =
+                        stringResource(R.string.diagnostics_backup_choose_folder)
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -224,16 +229,13 @@ fun DiagnosticsScreen(
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(
+                            FilledTonalIconButton(
                                 onClick = onPickBackupFolder,
-                                modifier = Modifier.heightIn(min = 48.dp),
+                                modifier = Modifier.semantics {
+                                    contentDescription = chooseFolderLabel
+                                },
                             ) {
                                 GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = stringResource(R.string.diagnostics_backup_choose_folder),
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                )
                             }
                             TextButton(
                                 onClick = onOpenBackupSettings,
@@ -312,6 +314,8 @@ fun DiagnosticsScreen(
                     ) + "\n" + state.rescueImageUri.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 InspectionText(
                     rescueImageInspectionLines(
@@ -335,6 +339,8 @@ fun DiagnosticsScreen(
                     ) + "\n" + state.rescueMapUri.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 InspectionText(
                     rescueMapInspectionLines(

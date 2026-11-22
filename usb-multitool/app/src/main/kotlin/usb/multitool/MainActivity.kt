@@ -4907,7 +4907,9 @@ class MainViewModel(
                                 isActive = { isActive() },
                             )
                             val bindings =
-                                listing.candidates.map { file ->
+                                listing.candidates
+                                    .filter { it.path.endsWith(".iso", ignoreCase = true) }
+                                    .map { file ->
                                     val linked =
                                         links.any { link ->
                                             link.image.equals(file.path, ignoreCase = true) &&

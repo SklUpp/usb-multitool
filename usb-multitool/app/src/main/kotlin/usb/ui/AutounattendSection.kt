@@ -504,13 +504,6 @@ internal fun AutounattendSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    FilledTonalButton(
-                        onClick = { onIntent(UiIntent.ClearWindowsSelection) },
-                        enabled = selectedPaths.isNotEmpty(),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.unattend_clear_selection))
-                    }
                     Button(
                         onClick = {
                             onIntent(
@@ -1607,6 +1600,11 @@ private fun KnownControlRow(
         "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_hint
         else -> null
     }
+    val shortHint = when (known.key) {
+        "VTOY_WIN11_BYPASS_CHECK" -> R.string.settings_win11_short
+        "VTOY_WIN11_BYPASS_NRO" -> R.string.settings_win11_nro_short
+        else -> null
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         if (booleanKey) {
             Row(
@@ -1638,6 +1636,13 @@ private fun KnownControlRow(
                         ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    shortHint?.let {
+                        Text(
+                            text = stringResource(it),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
                         text = stringResource(R.string.settings_current, current),
                         style = MaterialTheme.typography.labelSmall,
@@ -1668,6 +1673,13 @@ private fun KnownControlRow(
                         ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    shortHint?.let {
+                        Text(
+                            text = stringResource(it),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
                         text = stringResource(R.string.settings_current, current),
                         style = MaterialTheme.typography.labelSmall,
@@ -1784,6 +1796,24 @@ private fun StagedControlsHints(state: AppUiState) {
     }
 }
 
+private val BooleanControlKeys = setOf(
+    "VTOY_WIN11_BYPASS_CHECK",
+    "VTOY_WIN11_BYPASS_NRO",
+)
+
+@Composable
+private fun controlValueText(key: String, value: String?, removedLabel: String): String =
+    if (key in BooleanControlKeys) {
+        when (value) {
+            null -> stringResource(R.string.settings_default_on)
+            "1" -> stringResource(R.string.settings_enabled)
+            "0" -> stringResource(R.string.settings_disabled)
+            else -> value
+        }
+    } else {
+        value ?: removedLabel
+    }
+
 /** Compact pending-control rows with 48 dp discard. */
 @Composable
 private fun CompactStagedControls(
@@ -1815,7 +1845,7 @@ private fun CompactStagedControls(
                         text = stringResource(
                             R.string.settings_staged_row,
                             setting.key,
-                            setting.value ?: removeLabel,
+                            controlValueText(setting.key, setting.value, removeLabel),
                         ),
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
@@ -1873,7 +1903,9 @@ private fun VentoyFileSettingsPreview(entries: List<VentoySetting>) {
         val visible = if (expanded) entries else entries.take(1)
         visible.forEachIndexed { index, setting ->
             Text(
-                text = "${index + 1}. ${setting.key} = ${setting.rawValue}",
+                text = "${index + 1}. ${setting.key} = ${
+                    controlValueText(setting.key, setting.rawValue, "")
+                }",
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontFamily = FontFamily.Monospace,
                 ),
@@ -1908,7 +1940,7 @@ private fun VentoyApplyDialog(
             ) {
                 pending.forEach { setting ->
                     Text(
-                        text = "${setting.key} = ${setting.value ?: removeLabel}",
+                        text = "${setting.key} = ${controlValueText(setting.key, setting.value, removeLabel)}",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontFamily = FontFamily.Monospace,
                         ),
@@ -2069,18 +2101,19 @@ private fun OfficialControlKeyPickerDialog(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
-                    FilledTonalButton(
+                    val refreshLabel = stringResource(
+                        if (state.ventoyControlKeyCatalogLoading) {
+                            R.string.wave4_catalog_refreshing
+                        } else {
+                            R.string.wave4_catalog_refresh
+                        },
+                    )
+                    FilledTonalIconButton(
                         onClick = { onIntent(UiIntent.RefreshVentoyControlKeyCatalog) },
                         enabled = !state.ventoyControlKeyCatalogLoading,
-                        modifier = Modifier.heightIn(min = 48.dp),
+                        modifier = Modifier.semantics { contentDescription = refreshLabel },
                     ) {
-                        Text(
-                            if (state.ventoyControlKeyCatalogLoading) {
-                                stringResource(R.string.wave4_catalog_refreshing)
-                            } else {
-                                stringResource(R.string.wave4_catalog_refresh)
-                            },
-                        )
+                        GlyphIcon(glyph = Glyph.Refresh, size = 20.dp)
                     }
                 }
                 when {
