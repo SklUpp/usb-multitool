@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Diagnostics: pick restore files/folder from rescue or GPT subsection headers. -->
+    <string name="diagnostics_choose_restore_folder">Выбрать папку восстановления</string>
+</resources>

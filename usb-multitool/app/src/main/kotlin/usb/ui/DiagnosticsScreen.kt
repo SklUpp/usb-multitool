@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -217,6 +218,8 @@ fun DiagnosticsScreen(
             val resetSelectionLabel = stringResource(R.string.diagnostics_reset_selection)
             val chooseFolderLabel =
                 stringResource(R.string.diagnostics_backup_choose_folder)
+            val chooseRestoreFolderLabel =
+                stringResource(R.string.diagnostics_choose_restore_folder)
             val folderStatusText = when {
                 state.backupFolderUri == null ->
                     stringResource(R.string.diagnostics_backup_folder_none)
@@ -313,15 +316,31 @@ fun DiagnosticsScreen(
                 title = stringResource(R.string.diagnostics_rescue_backup),
                 hint = stringResource(R.string.diagnostics_rescue_backup_hint),
                 trailing = {
-                    IconButton(
-                        onClick = { onIntent(UiIntent.ResetRescueSelection) },
-                        enabled = state.actionsEnabled &&
-                            (state.rescueImageUri != null || state.rescueMapUri != null),
-                        modifier = Modifier.semantics {
-                            contentDescription = resetSelectionLabel
-                        },
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        GlyphIcon(glyph = Glyph.Close, size = 18.dp)
+                        IconButton(
+                            onClick = onPickBackupFolder,
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics {
+                                    contentDescription = chooseRestoreFolderLabel
+                                },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                        }
+                        IconButton(
+                            onClick = { onIntent(UiIntent.ResetRescueSelection) },
+                            enabled = state.actionsEnabled &&
+                                (state.rescueImageUri != null || state.rescueMapUri != null),
+                            modifier = Modifier.semantics {
+                                contentDescription = resetSelectionLabel
+                            },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Close, size = 18.dp)
+                        }
                     }
                 },
             )
@@ -439,14 +458,30 @@ fun DiagnosticsScreen(
                 title = stringResource(R.string.diagnostics_gpt_copy),
                 hint = stringResource(R.string.diagnostics_gpt_copy_hint),
                 trailing = {
-                    IconButton(
-                        onClick = { onIntent(UiIntent.ResetGptSelection) },
-                        enabled = state.actionsEnabled && state.backupUri != null,
-                        modifier = Modifier.semantics {
-                            contentDescription = resetSelectionLabel
-                        },
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        GlyphIcon(glyph = Glyph.Close, size = 18.dp)
+                        IconButton(
+                            onClick = onPickBackupFolder,
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics {
+                                    contentDescription = chooseRestoreFolderLabel
+                                },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                        }
+                        IconButton(
+                            onClick = { onIntent(UiIntent.ResetGptSelection) },
+                            enabled = state.actionsEnabled && state.backupUri != null,
+                            modifier = Modifier.semantics {
+                                contentDescription = resetSelectionLabel
+                            },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Close, size = 18.dp)
+                        }
                     }
                 },
             )
