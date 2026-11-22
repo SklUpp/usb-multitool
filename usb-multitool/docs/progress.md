@@ -5,10 +5,12 @@
 
 ## Текущий срез
 
-- Ветка: `feature/android-usb-multitool`, HEAD `c5e916b`.
-- Последняя волна: UI-полировка (IME, сортировка Files, прогресс, переходы,
-  haptics, read-only Settings/Diagnostics), общий JNI thread-attach helper,
-  FAT streaming с retry close/pending unlink и когерентным read-after-write.
+- Ветка: `feature/android-usb-multitool`, HEAD `7fae2c4`; SMART и CI-fix —
+  `f504ddf`, изоляция бюджетного теста — `7fae2c4`.
+- Последняя волна: SMART diagnostics; UI-полировка (IME, сортировка Files,
+  прогресс, переходы, haptics, read-only Settings/Diagnostics), общий JNI
+  thread-attach helper, FAT streaming с retry close/pending unlink и
+  когерентным read-after-write.
 - Кандидаты в SMART/f3probe/persistence/восстановление/TRIM разобраны
   отдельно: [feature-candidates.md](feature-candidates.md); реализован только
   SMART, остальные отложены или сняты.
@@ -42,8 +44,23 @@
 - CI [44960993460](https://github.com/SklUpp/usb-multitool/actions/runs/44960993460)
   — success для предыдущего среза: FatFs host, NTFS host, ext4 host, exFAT fsck
   host, usb_block registry, unit tests, debug APK, 16 KiB alignment, lint,
-  Kotlin compile. Для HEAD `c5e916b` CI-прогон ещё не зафиксирован в этом
-  документе.
+  Kotlin compile.
+- CI [44978454387](https://github.com/SklUpp/usb-multitool/actions/runs/44978454387)
+  (`f504ddf`) — `fatfs-host` success, `verify` failed только на
+  `RawWriterTest.compressedSourceIsDecodedCountedThenWrittenStreamingly`:
+  глобальный бюджет measurement-close был временно занят, readback получил
+  `Incomplete` и результат стал `Partial`. Исправлено изоляцией теста
+  (`@Before` ждёт свежий бюджет) в `7fae2c4`; локальный `RawWriterTest` —
+  BUILD SUCCESSFUL.
+- CI [44979578629](https://github.com/SklUpp/usb-multitool/actions/runs/44979578629)
+  (`7fae2c4`) — **success**: `fatfs-host` и `verify` (SectorForge, exFAT/NTFS/
+  ext4/FAT/usb_block host tests, unit tests, APK, 16 KiB alignment, lint,
+  Kotlin compile).
+- APK `7fae2c4` из CI `44979578629`: `/data/data/com.termux/files/home/apk-7fae2c4/app-debug.apk`,
+  `86 790 027` байт, SHA-256
+  `b041471e951a00101a073dfbdadbb995db4027361986543a17d968c2d5ecce33`.
+  `unzip -t` и `aapt2 dump badging` — без ошибок; package `usb.multitool 0.1.0`,
+  minSdk 28, target 36.
 - APK предыдущего среза: artifact `app-debug-apk` (id `14730001315`), локально
   `/data/data/com.termux/files/home/apk-779f49a/app-debug.apk`,
   `86 700 491` байт, SHA-256
