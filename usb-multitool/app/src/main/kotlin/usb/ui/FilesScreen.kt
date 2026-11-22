@@ -175,10 +175,20 @@ fun FilesScreen(
     ) {
         mutableStateOf(emptySet<String>())
     }
-    var showNewFolderDialog by remember { mutableStateOf(false) }
-    var newFolderName by remember { mutableStateOf("") }
-    var newFolderPath by remember { mutableStateOf<String?>(null) }
-    var newFolderBinding by remember { mutableStateOf<PartitionBinding?>(null) }
+    var showNewFolderDialog by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf(false) }
+    var newFolderName by remember(state.currentPath) { mutableStateOf("") }
+    var newFolderPath by remember(state.currentPath) { mutableStateOf<String?>(null) }
+    var newFolderBinding by remember(
+        state.selectedPartitionId,
+        state.currentPath,
+        state.device?.identity,
+        state.device?.attachGeneration,
+    ) { mutableStateOf<PartitionBinding?>(null) }
     // Capture the exact batch pin at confirm-open time so refresh/navigation cannot retarget.
     var pendingDeleteSelection by remember(
         state.selectedPartitionId,
@@ -204,7 +214,7 @@ fun FilesScreen(
     ) {
         mutableStateOf<PartitionBinding?>(null)
     }
-    var renameName by remember { mutableStateOf("") }
+    var renameName by remember(renameTarget, renameBinding) { mutableStateOf("") }
     var actionEntry by remember(
         state.selectedPartitionId,
         state.currentPath,
@@ -528,7 +538,16 @@ fun FilesScreen(
         )
     }
 
-    renameTarget?.let { target ->
+    val liveRenameTarget = renameTarget?.let { target ->
+        state.files.firstOrNull { it.name == target.name && it.isDirectory == target.isDirectory }
+    }
+    LaunchedEffect(renameTarget, liveRenameTarget) {
+        if (renameTarget != null && liveRenameTarget == null) {
+            renameTarget = null
+            renameBinding = null
+        }
+    }
+    liveRenameTarget?.let { target ->
         val binding = renameBinding
         AlertDialog(
             onDismissRequest = { renameTarget = null; renameBinding = null },

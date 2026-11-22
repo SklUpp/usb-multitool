@@ -4,6 +4,7 @@
     <string name="partitions_strip_legend_special">Special</string>
     <!-- Strip legend: no filesystem id, not special. -->
     <string name="partitions_strip_legend_reserved">Reserved</string>
+    <string name="partitions_format_sheet_title_named">Format partition: %1$s</string>
     <!-- Layout subtitle: exact MiB · LBA start–end · count (special). -->
     <string name="partitions_layout_subtitle">%1$s · LBA %2$s–%3$s · %4$s</string>
     <!-- Exact whole-MiB capacity for the layout subtitle. -->

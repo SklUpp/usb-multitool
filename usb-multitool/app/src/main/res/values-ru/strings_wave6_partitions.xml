@@ -4,6 +4,7 @@
     <string name="partitions_strip_legend_special">Спец.</string>
     <!-- Легенда полосы: без filesystem id, не спец. -->
     <string name="partitions_strip_legend_reserved">Резерв.</string>
+    <string name="partitions_format_sheet_title_named">Форматировать раздел: %1$s</string>
     <!-- Подзаголовок разметки: точные MiB · LBA start–end · счётчик (спец.). -->
     <string name="partitions_layout_subtitle">%1$s · LBA %2$s–%3$s · %4$s</string>
     <!-- Точная ёмкость в целых MiB для подзаголовка. -->

@@ -143,7 +143,11 @@ fun PartitionsScreen(
     val partitionGeometryKey = state.partitions.map { it.id to (it.startLba to it.sectorCount) }
     // Raw image writing is whole-device semantics; the chart and confirmation still
     // make the overwritten range explicit before anything is submitted.
-    var rawTargetMode by remember(state.device?.identity) { mutableStateOf(RawTargetMode.WholeDisk) }
+    var rawTargetMode by remember(
+        state.device?.identity,
+        state.device?.attachGeneration,
+        state.selectedPartitionId,
+    ) { mutableStateOf(RawTargetMode.WholeDisk) }
     var initializeScheme by remember(state.device, state.partitionScheme, partitionGeometryKey) {
         mutableStateOf(PartitionScheme.Gpt)
     }
@@ -634,8 +638,8 @@ fun PartitionsScreen(
     val labelTarget = labelBinding?.takeIf { it.matches(state) }
         ?.let { binding -> state.partitions.firstOrNull { it.id == binding.partitionId } }
     val labelFs = labelTarget?.filesystemId
-    LaunchedEffect(labelBinding, labelTarget) {
-        if (labelBinding != null && labelTarget == null) {
+    LaunchedEffect(labelBinding, labelTarget, labelFs) {
+        if (labelBinding != null && (labelTarget == null || labelFs == null)) {
             labelTargetId = null
             labelBinding = null
         }
@@ -1249,7 +1253,10 @@ private fun SelectedPartitionCard(
         trailing = {
             InfoHelpButton(
                 infoTitle = stringResource(R.string.partitions_info_help_title),
-                infoText = stringResource(R.string.partitions_info_help_text),
+                infoText = listOf(
+                    stringResource(R.string.partitions_info_help_text),
+                    stringResource(R.string.partitions_vtoyefi_role_derived),
+                ).joinToString("\n\n"),
             )
         },
         modifier = modifier,
@@ -1367,13 +1374,6 @@ private fun SelectedPartitionCard(
                 hint = null,
             )
         }
-        if (vtoyRoleDerived) {
-            Text(
-                text = stringResource(R.string.partitions_vtoyefi_role_derived),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         val bootableToggleEnabled = editRoleEnabled && !vtoyRoleDerived
         val bootableToggleState =
             stringResource(if (selected.displayBootable) R.string.answer_yes else R.string.answer_no)
@@ -1400,8 +1400,18 @@ private fun SelectedPartitionCard(
                 }
             } else null,
         )
-        val formatTarget = filesystemMenuTarget
+        val formatTarget = filesystemMenuTarget?.takeIf { it.matches(latestState) }
+        if (filesystemMenuTarget != null && formatTarget == null) {
+            LaunchedEffect(filesystemMenuTarget) { onFilesystemMenu(null) }
+        }
         if (formatTarget != null) {
+            var formatChoice by remember(formatTarget) {
+                mutableStateOf(
+                    selected.filesystemId
+                        ?.takeIf { it in FormatCatalog.supportedFormatIds() }
+                        ?: state.selectedFormatId,
+                )
+            }
             ModalBottomSheet(
                 onDismissRequest = { onFilesystemMenu(null) },
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1416,19 +1426,16 @@ private fun SelectedPartitionCard(
                         .padding(bottom = 16.dp),
                 ) {
                     Text(
-                        text = stringResource(R.string.partitions_format_sheet_title),
+                        text = stringResource(
+                            R.string.partitions_format_sheet_title_named,
+                            selected.name.ifBlank { selected.id },
+                        ),
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                     )
-                    Text(
-                        text = selected.name.ifBlank { selected.id },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-                    )
                     Column(modifier = Modifier.selectableGroup()) {
                         FormatCatalog.supportedFormatIds().forEach { formatId ->
-                            val formatSelected = state.selectedFormatId == formatId
+                            val formatSelected = formatChoice == formatId
                             ListItem(
                                 headlineContent = {
                                     Text(FormatCatalog.label(formatId))
@@ -1451,6 +1458,7 @@ private fun SelectedPartitionCard(
                                         onClick = {
                                             onFilesystemMenu(null)
                                             if (formatTarget.matches(latestState)) {
+                                                formatChoice = formatId
                                                 onIntent(
                                                     UiIntent.SelectFormatFilesystem(formatId),
                                                 )
@@ -1572,7 +1580,14 @@ private fun RawWriteSection(
     onRawTargetMode: (RawTargetMode) -> Unit,
     orderedPartitions: List<PartitionTab>,
 ) {
-    var sourceSheetOpen by remember { mutableStateOf(false) }
+    var sourceSheetOpen by remember(
+        state.device?.identity,
+        state.device?.attachGeneration,
+        state.selectedPartitionId,
+    ) { mutableStateOf(false) }
+    LaunchedEffect(state.actionsEnabled, sourceSheetOpen) {
+        if (!state.actionsEnabled) sourceSheetOpen = false
+    }
     val rawName = state.stagedRawImageLabel
         ?: state.imageName?.takeIf { it.isNotBlank() }
         ?: rawSourceName(state.imageUri)
@@ -1781,6 +1796,8 @@ private fun RawWriteSection(
                 val geometry = state.rawGeometry
                 var customStart by remember(
                     state.device?.identity,
+                    state.device?.attachGeneration,
+                    state.selectedPartitionId,
                     state.imageUri,
                     state.stagedRawImagePath,
                 ) { mutableStateOf("0") }
