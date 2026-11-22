@@ -289,6 +289,7 @@ class MainViewModel(
     private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private val backupFolderScanGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    private var currentBackupFolderUri: String? = null
     @Volatile
     var usbManager: UsbManager? = null
         private set
@@ -386,6 +387,7 @@ class MainViewModel(
                 val storedUri = Uri.parse(stored)
                 // The shared folder survives restarts; restore its paired artifacts
                 // without forcing the user to pick it again.
+                currentBackupFolderUri = stored
                 scope.launch {
                     onRescueArchiveFolderPicked(storedUri, quiet = true)
                     scanGptBackupInFolder(storedUri)
@@ -618,8 +620,23 @@ class MainViewModel(
         onIntent(UiIntent.SetBackupFolder(uri.toString(), name, usable))
         trace.log("picker.backup_folder", "uri" to uri.toString(), "usable" to usable)
         onIntent(UiIntent.AppendLog(logLine("Backup folder: ${name ?: "unnamed"}")))
+        currentBackupFolderUri = null
+        backupFolderScanGeneration.incrementAndGet()
+        // Drop old paired artifacts immediately so a slow inspection from the
+        // previous folder cannot win, even if the new folder is unusable.
+        onIntent(
+            UiIntent.SetBackupFile(
+                null,
+                null,
+                gptPickGeneration.incrementAndGet(),
+            ),
+        )
+        val clearedGeneration = rescueArchivePickGeneration.incrementAndGet()
+        onIntent(UiIntent.SetRescueArchiveTree(null))
+        onIntent(UiIntent.SetRescueImage(null, null, clearedGeneration))
+        onIntent(UiIntent.SetRescueMap(null, null, clearedGeneration))
         if (usable) {
-            // One folder drives both backup and restore; refresh its paired artifacts.
+            currentBackupFolderUri = uri.toString()
             onRescueArchiveFolderPicked(uri, quiet = true)
             scanGptBackupInFolder(uri)
         }
@@ -2312,7 +2329,11 @@ class MainViewModel(
                 .filter { !it.isDirectory && isGptBackupName(it.name) }
                 .maxByOrNull { it.name }
             withContext(Dispatchers.Main.immediate) {
-                if (scanGeneration != backupFolderScanGeneration.get()) return@withContext
+                if (scanGeneration != backupFolderScanGeneration.get() ||
+                    currentBackupFolderUri != folderUri.toString()
+                ) {
+                    return@withContext
+                }
                 if (candidate == null) {
                     onIntent(
                         UiIntent.SetBackupFile(
@@ -2390,12 +2411,51 @@ class MainViewModel(
                     .sortedByDescending { it.name }
                     .map { entriesOf(folder.listChildren(it.uri)) }
                 val candidates = listOf(rootEntries) + archives
-                val selection = candidates
-                    .map { BackupArchive.select(it) }
-                    .firstOrNull { it is BackupArchive.Selection.Ready }
-                    ?: candidates
-                        .map { BackupArchive.select(it) }
-                        .firstOrNull { it is BackupArchive.Selection.Invalid && it.problem != BackupArchive.Problem.Empty }
+                val selections = candidates.map { BackupArchive.select(it) }
+                // A filename-complete but corrupt newest map must not hide an older
+                // usable archive; validate the map before accepting the pair.
+                val selection = selections
+                    .filterIsInstance<BackupArchive.Selection.Ready>()
+                    .firstOrNull { ready ->
+                        ready.pair.maps.any { candidate ->
+                            runCatching {
+                                RestoreSourceInspector.inspectMap(
+                                    uri = candidate.uri,
+                                    name = candidate.name,
+                                    sizeBytes = candidate.sizeBytes,
+                                    text = folder.readText(
+                                        Uri.parse(candidate.uri),
+                                        RescueMap.MAX_ENCODED_CHARS,
+                                    ),
+                                )
+                            }.getOrNull()?.let { inspection ->
+                                val summary = inspection.summary
+                                if (inspection.error != null || summary == null) {
+                                    false
+                                } else {
+                                    val sectorSize =
+                                        summary.sectorSize ?: state.diskSectorSize.takeIf { it > 0 }
+                                    val format = classifyRescueImage(
+                                        resolver,
+                                        Uri.parse(ready.pair.image.uri),
+                                        ready.pair.image.name,
+                                    )
+                                    (summary.kind != usb.diagnostics.MapKind.COPY ||
+                                        summary.nonTriedSectors == 0UL) &&
+                                        (sectorSize == null ||
+                                            usb.ui.rescueImageLengthIssue(
+                                                ready.pair.image.sizeBytes,
+                                                summary.sectorCount,
+                                                sectorSize,
+                                                format,
+                                            ) == null)
+                                }
+                            } == true
+                        }
+                    }
+                    ?: selections
+                        .filterIsInstance<BackupArchive.Selection.Invalid>()
+                        .firstOrNull { it.problem != BackupArchive.Problem.Empty }
                     ?: BackupArchive.select(emptyList())
                 when (selection) {
                     is BackupArchive.Selection.Invalid -> invalid = selection
@@ -3010,7 +3070,22 @@ class MainViewModel(
                 activeHandles.remove(handle)
             }
         }
+        rescanPersistedBackupFolderIfNeeded()
     }
+
+    /** A folder restore scan can lose its attach ticket; retry once USB is live. */
+    private fun rescanPersistedBackupFolderIfNeeded() {
+        val stored = state.backupFolderUri ?: return
+        if (!state.backupFolderUsable) return
+        if (state.rescueImageUri != null && state.backupUri != null) return
+        val storedUri = Uri.parse(stored)
+        currentBackupFolderUri = stored
+        scope.launch {
+            onRescueArchiveFolderPicked(storedUri, quiet = true)
+            scanGptBackupInFolder(storedUri)
+        }
+    }
+
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
         val live = attachment.snapshot()
         if (device == null && live.device == null) return
