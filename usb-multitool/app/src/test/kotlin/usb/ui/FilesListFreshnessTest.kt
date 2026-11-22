@@ -101,7 +101,7 @@ class FilesListFreshnessTest {
     }
 
     @Test
-    fun deviceChangedDropsPathWhenSelectedPartitionGone() {
+    fun deviceChangedSelectsFirstWhenSelectedPartitionGone() {
         val base = ready(path = "/deep")
         val onlyOther =
             UiReducer.reduce(
@@ -113,14 +113,14 @@ class FilesListFreshnessTest {
                 ),
             )
 
-        // Missing selected partition must stay unselected; never retarget to another entry.
-        assertNull(onlyOther.state.selectedPartitionId)
+        // Missing selected partition falls back to the first live one, not an empty pane.
+        assertEquals(other.id, onlyOther.state.selectedPartitionId)
         assertEquals("/", onlyOther.state.currentPath)
-        assertEquals(FilesListingState.Stale, onlyOther.state.filesListingState)
-        assertTrue(onlyOther.effects.none { it is UiEffect.LoadFiles })
+        assertEquals(FilesListingState.Loading, onlyOther.state.filesListingState)
+        assertTrue(onlyOther.effects.any { it is UiEffect.LoadFiles })
     }
     @Test
-    fun deviceChangedDropsSelectionWhenGeometryChanged() {
+    fun deviceChangedSelectsFirstWhenGeometryChanged() {
         val base = ready()
         val changed = UiReducer.reduce(
             base,
@@ -130,9 +130,9 @@ class FilesListFreshnessTest {
                 partitions = listOf(data.copy(startLba = 4096uL), other),
             ),
         )
-        assertNull(changed.state.selectedPartitionId)
-        assertEquals(FilesListingState.Stale, changed.state.filesListingState)
-        assertTrue(changed.effects.none { it is UiEffect.LoadFiles })
+        assertEquals(data.id, changed.state.selectedPartitionId)
+        assertEquals(FilesListingState.Loading, changed.state.filesListingState)
+        assertTrue(changed.effects.any { it is UiEffect.LoadFiles })
     }
 
     @Test

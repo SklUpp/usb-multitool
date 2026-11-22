@@ -288,6 +288,7 @@ class MainViewModel(
     /** Pick generations make slow SAF inspections lose to the newest selection. */
     private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    private val backupFolderScanGeneration = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile
     var usbManager: UsbManager? = null
         private set
@@ -380,6 +381,17 @@ class MainViewModel(
         // Seed the handle so a kill before any SelectTab still restores the same tab.
         ShellTabPersistence.write(savedStateHandle, restoredTab)
         DiskService.initialize(application)
+        if (folder.usable) {
+            folder.uri?.let { stored ->
+                val storedUri = Uri.parse(stored)
+                // The shared folder survives restarts; restore its paired artifacts
+                // without forcing the user to pick it again.
+                scope.launch {
+                    onRescueArchiveFolderPicked(storedUri, quiet = true)
+                    scanGptBackupInFolder(storedUri)
+                }
+            }
+        }
         // Fail closed: never auto-delete staging after restart (name ≠ proof of ownership).
         // Leftovers stay on disk; user must re-stage in this process. Notify only.
         runCatching {
@@ -1806,6 +1818,9 @@ class MainViewModel(
                         val note = if (copyMap.partial) {
                             " (partial/incomplete — map kept; re-run backup)"
                         } else ""
+                        scope.launch(Dispatchers.Main.immediate) {
+                            onRescueArchiveFolderPicked(folder.treeUri, quiet = true)
+                        }
                         "Rescue backup: archive ${archiveUri.lastPathSegment}: " +
                             "(${BackupArchive.IMAGE_NAME} + ${BackupArchive.MAP_NAME}): " +
                             "$copied copied, $unreadable unreadable of ${copyMap.sectorCount} sectors$note"
@@ -1870,6 +1885,9 @@ class MainViewModel(
                         throw failure
                     } finally {
                         if (!closed) runCatching { output.close() }
+                    }
+                    scope.launch(Dispatchers.Main.immediate) {
+                        scanGptBackupInFolder(folder.treeUri)
                     }
                     "GPT critical backup saved: $name (${blob.size} bytes, " +
                         "${info.partitions} partitions, backup header at LBA " +
@@ -2285,6 +2303,7 @@ class MainViewModel(
     /** Newest GPT critical backup in the shared folder, or clear the stale selection. */
     private fun scanGptBackupInFolder(folderUri: Uri) {
         val resolver = getApplication<Application>().contentResolver
+        val scanGeneration = backupFolderScanGeneration.incrementAndGet()
         scope.launch(Dispatchers.IO) {
             val entries = runCatching {
                 SafBackupFolder(resolver, folderUri).listRootFiles()
@@ -2293,6 +2312,7 @@ class MainViewModel(
                 .filter { !it.isDirectory && isGptBackupName(it.name) }
                 .maxByOrNull { it.name }
             withContext(Dispatchers.Main.immediate) {
+                if (scanGeneration != backupFolderScanGeneration.get()) return@withContext
                 if (candidate == null) {
                     onIntent(
                         UiIntent.SetBackupFile(
@@ -2348,7 +2368,7 @@ class MainViewModel(
             var failureMessage: String? = null
             try {
                 val folder = SafBackupFolder(resolver, uri)
-                val entries = folder.listRootFiles().map {
+                fun entriesOf(documents: List<usb.saf.SafDocument>) = documents.map {
                     BackupArchive.Entry(
                         name = it.name,
                         uri = it.uri.toString(),
@@ -2356,10 +2376,28 @@ class MainViewModel(
                         sizeBytes = it.sizeBytes,
                     )
                 }
+                val rootDocuments = folder.listRootFiles()
                 // The shared folder may also hold GPT critical backups; they are not
                 // part of the image+map pair and must not reject it as unexpected.
-                val restoreEntries = entries.filterNot { isGptBackupName(it.name) }
-                when (val selection = BackupArchive.select(restoreEntries)) {
+                val rootEntries = entriesOf(rootDocuments).filterNot { isGptBackupName(it.name) }
+                // Image creation publishes `usb-rescue-*/disk.img`; scan those archives
+                // too, newest first, so one folder still drives create and restore.
+                val archives = rootDocuments
+                    .filter {
+                        it.isDirectory &&
+                            it.name.startsWith("usb-rescue-", ignoreCase = true)
+                    }
+                    .sortedByDescending { it.name }
+                    .map { entriesOf(folder.listChildren(it.uri)) }
+                val candidates = listOf(rootEntries) + archives
+                val selection = candidates
+                    .map { BackupArchive.select(it) }
+                    .firstOrNull { it is BackupArchive.Selection.Ready }
+                    ?: candidates
+                        .map { BackupArchive.select(it) }
+                        .firstOrNull { it is BackupArchive.Selection.Invalid && it.problem != BackupArchive.Problem.Empty }
+                    ?: BackupArchive.select(emptyList())
+                when (selection) {
                     is BackupArchive.Selection.Invalid -> invalid = selection
                     is BackupArchive.Selection.Ready -> {
                         val pair = selection.pair
@@ -2473,7 +2511,9 @@ class MainViewModel(
             }
             withContext(Dispatchers.Main.immediate) {
                 if (generation != rescueArchivePickGeneration.get()) return@withContext
-                if (state.device?.attachGeneration != expectedAttachGeneration) {
+                if (expectedAttachGeneration != null &&
+                    state.device?.attachGeneration != expectedAttachGeneration
+                ) {
                     onIntent(UiIntent.SetRescueArchiveTree(null))
                     onIntent(UiIntent.SetRescueImage(null, null, generation))
                     onIntent(UiIntent.SetRescueMap(null, null, generation))

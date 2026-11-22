@@ -325,16 +325,26 @@ fun PartitionsScreen(
                         val maxMibFloat = availableMib.toFloat()
                         val safeStart = sliderStart.toFloat()
                         val safeEnd = sliderEnd.toFloat()
-                        val magnetPoints = remember(availableMib, mibSectors, state.partitions) {
+                        val partitionSizesMib = state.partitions.mapNotNull { part ->
+                            part.sectorCount?.div(mibSectors)?.takeIf { it > 0UL }
+                        }
+                        val baseMagnetPoints = remember(availableMib, mibSectors, regionBase) {
                             PartitionRangeMath.snapPoints(
                                 availableMib = availableMib,
                                 firstAligned = regionBase,
                                 sectorsPerMib = mibSectors,
-                                otherPartitionSizesMib = state.partitions.mapNotNull { part ->
-                                    part.sectorCount?.div(mibSectors)?.takeIf { it > 0UL }
-                                },
                             )
                         }
+                        // Size magnets are relative to the opposite thumb: moving the
+                        // start keeps the end fixed, moving the end keeps the start fixed.
+                        val startMagnetPoints = baseMagnetPoints +
+                            PartitionRangeMath.sizePointsBelow(sliderEnd, partitionSizesMib)
+                        val endMagnetPoints = baseMagnetPoints +
+                            PartitionRangeMath.sizePointsAbove(
+                                sliderStart,
+                                availableMib,
+                                partitionSizesMib,
+                            )
                         val magnetHaptic = LocalHapticFeedback.current
                         var lastStartMagnet by remember { mutableStateOf<ULong?>(null) }
                         var lastEndMagnet by remember { mutableStateOf<ULong?>(null) }
@@ -361,13 +371,13 @@ fun PartitionsScreen(
                                     val startMagnet = PartitionRangeMath.nearestMagnet(
                                         position = range.start,
                                         maxMib = availableMib,
-                                        snapPoints = magnetPoints,
+                                        snapPoints = startMagnetPoints,
                                         thresholdMib = MAGNET_THRESHOLD_MIB,
                                     )
                                     val endMagnet = PartitionRangeMath.nearestMagnet(
                                         position = range.endInclusive,
                                         maxMib = availableMib,
-                                        snapPoints = magnetPoints,
+                                        snapPoints = endMagnetPoints,
                                         thresholdMib = MAGNET_THRESHOLD_MIB,
                                     )
                                     if (startMagnet != null && startMagnet != lastStartMagnet) {
@@ -915,6 +925,28 @@ fun PartitionsScreen(
                             }
                         },
                     )
+                    val overlaps = remember(state.partitions) {
+                        overlappingPartitions(state.partitions)
+                    }
+                    if (overlaps.isNotEmpty()) {
+                        Text(
+                            text = stringResource(R.string.partitions_overlap_heading),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        overlaps.forEach { (first, second, sectors) ->
+                            Text(
+                                text = stringResource(
+                                    R.string.partitions_overlap_line,
+                                    first.name.ifBlank { first.id },
+                                    second.name.ifBlank { second.id },
+                                    sectors.toLong(),
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
                 }
 
                 CancelOperationButton(state = state, onIntent = onIntent)
@@ -2210,6 +2242,37 @@ private fun segmentEnd(segment: StripSegment): ULong =
         val span = segmentSpan(segment)
         if (start > ULong.MAX_VALUE - span) ULong.MAX_VALUE else start + span
     }
+
+/** Exact pairwise intersections of live partitions, using their exclusive end LBAs. */
+private fun overlappingPartitions(
+    partitions: List<PartitionTab>,
+): List<Triple<PartitionTab, PartitionTab, ULong>> {
+    data class Range(val partition: PartitionTab, val start: ULong, val end: ULong)
+    val ranges = partitions.mapNotNull { partition ->
+        val start = partition.startLba ?: return@mapNotNull null
+        val count = partition.sectorCount?.takeIf { it > 0UL } ?: return@mapNotNull null
+        if (start > ULong.MAX_VALUE - count) return@mapNotNull null
+        Range(partition, start, start + count)
+    }.sortedBy { it.start }
+    val result = mutableListOf<Triple<PartitionTab, PartitionTab, ULong>>()
+    for (i in ranges.indices) {
+        for (j in i + 1 until ranges.size) {
+            val first = ranges[i]
+            val second = ranges[j]
+            if (second.start >= first.end) break
+            val overlapStart = maxOf(first.start, second.start)
+            val overlapEnd = minOf(first.end, second.end)
+            if (overlapEnd > overlapStart) {
+                result += Triple(
+                    first.partition,
+                    second.partition,
+                    overlapEnd - overlapStart,
+                )
+            }
+        }
+    }
+    return result
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

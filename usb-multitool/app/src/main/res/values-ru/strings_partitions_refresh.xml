@@ -18,6 +18,9 @@
     <string name="partitions_badge_efi">EFI</string>
     <!-- Критическая загрузочная роль: общий бейдж Files/Partitions. -->
     <string name="partitions_badge_boot">BOOT</string>
+    <!-- Точные пересечения разделов под полосой. -->
+    <string name="partitions_overlap_heading">Пересечения разделов</string>
+    <string name="partitions_overlap_line">%1$s / %2$s: %3$d секторов</string>
     <!-- Компактная подпись под переключателем записи. -->
     <string name="partitions_efi_ro_caption">Разрешение действует только для этого раздела и подключения; при переподключении сбрасывается.</string>
     <!-- a11y кнопки раскрытия sticky. -->
