@@ -27,10 +27,12 @@ Repository layout:
 
 | Path | Contents |
 | --- | --- |
-| `usb-multitool/app/` | Kotlin/Compose app and JNI bridges |
-| `usb-multitool/app/src/main/cpp/` | FAT/exFAT, NTFS, and EXT4 engines with the block-device adapter |
-| `usb-multitool/scripts/` | pinned upstream fetching, host tests, and the APK alignment check |
-| `usb-multitool/third_party/` | third-party sources and notices |
+| `app/` | Kotlin/Compose app and JNI bridges |
+| `app/src/main/cpp/` | FAT/exFAT, NTFS, and EXT4 engines with the block-device adapter |
+| `scripts/` | pinned upstream fetching, host tests, and the APK alignment check |
+| `third_party/` | third-party sources and notices |
+| `native-tests/` | host tests for the native engines |
+| `docs/` | architecture, UI, filesystems, build, and tests |
 | `.github/workflows/android-debug.yml` | the only place for Gradle/NDK builds |
 
 ## Features
@@ -89,7 +91,7 @@ The UI has four tabs: Files, Ventoy, Partitions, Diagnostics. This section lists
 - A rescue image stays a dense file with a map. Unreadable sectors stay visible. The app never shows a partial image as a full copy. A rescue copy needs a stable device serial.
 - The app collects no telemetry. It uses the network only to check and download Ventoy releases from GitHub.
 
-The app declares these permissions in `usb-multitool/app/src/main/AndroidManifest.xml`:
+The app declares these permissions in `app/src/main/AndroidManifest.xml`:
 
 | Permission | Purpose |
 | --- | --- |
@@ -112,11 +114,11 @@ The repository does not establish compatibility with specific USB drives, OTG ad
 
 The project has no releases and no Google Play publication. GitHub Actions builds the debug APK.
 
-1. Open the [`android-debug` workflow](../../actions/workflows/android-debug.yml).
+1. Open the [`android-debug` workflow](actions/workflows/android-debug.yml).
 2. Run the workflow manually with `workflow_dispatch`, or push to the `feature/android-usb-multitool` branch.
 3. Download the `app-debug-apk` artifact. The `unit-test-reports` artifact holds the test reports.
 
-The build signs the APK with a debug key for testing only. Do not distribute it. The project does not support local Gradle or NDK builds. See `usb-multitool/CONVENTIONS.md`. This README does not assert a successful final CI run or device checks.
+The build signs the APK with a debug key for testing only. Do not distribute it. The project does not support local Gradle or NDK builds. This README does not assert a successful final CI run or device checks.
 
 ## Limitations
 
@@ -125,11 +127,11 @@ The build signs the APK with a debug key for testing only. Do not distribute it.
 - The app does not use root, FUSE, loop devices, or UAS. It does not resume an operation after a disconnect.
 - CI checks the code and the host engines. It does not test real USB permissions, on-device behavior, boot from the drive, or Windows installation.
 - CI checks APK and ELF alignment for 16 KB pages with a script. The project has no on-device alignment check.
-- The repository has no root `LICENSE` file yet. The code declares the license in `usb-multitool/app/src/main/kotlin/usb/BuildFacts.kt`.
+- The repository has no root `LICENSE` file yet. The code declares the license in `app/src/main/kotlin/usb/BuildFacts.kt`.
 
 ## Build and checks
 
-Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-debug.yml`). The working directory is `usb-multitool`. The `verify` job runs these steps:
+Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-debug.yml`). The working directory is the repository root. The `verify` job runs these steps:
 
 ```bash
 ./scripts/fetch-third-party.sh
@@ -153,7 +155,7 @@ The separate `fatfs-host` job has no Android SDK. It builds and runs the FatFs h
 make -C native-tests/fatfs test
 ```
 
-You can run these static checks locally: `sh -n gradlew`, `git grep` for pinned values, and `sh scripts/run-ui-host-check.sh`. The last script expects Termux paths and needs `kotlinc`. If you need upstream sources, run `scripts/fetch-third-party.sh` and the host tests deliberately. They download and build sources in `usb-multitool/third_party/`.
+You can run these static checks locally: `sh -n gradlew`, `git grep` for pinned values, and `sh scripts/run-ui-host-check.sh`. The last script expects Termux paths and needs `kotlinc`. If you need upstream sources, run `scripts/fetch-third-party.sh` and the host tests deliberately. They download and build sources in `third_party/`.
 
 | What CI proves | What CI does not prove |
 | --- | --- |
@@ -163,14 +165,13 @@ You can run these static checks locally: `sh -n gradlew`, `git grep` for pinned 
 
 ## Development
 
-- `AGENTS.md` — architecture, safety rules, and commands.
-- `.github/workflows/android-debug.yml` — the exact CI command order. `usb-multitool/CONVENTIONS.md` — where the project allows builds.
-- `usb-multitool/third_party/README.md` — pinned engine versions and licenses.
-- `usb-multitool/docs/superpowers/specs/2026-11-01-android-usb-multitool-design.md` — approved design.
+- `.github/workflows/android-debug.yml` — the exact CI command order.
+- `third_party/README.md` — pinned engine versions and licenses.
+- `docs/README.md` — architecture, UI, filesystem, build, and test index.
 
 ### App versions
 
-`defaultConfig` in `usb-multitool/app/build.gradle.kts` is the only source of the version (currently `versionCode = 1`, `versionName = "0.1.0"`).
+`defaultConfig` in `app/build.gradle.kts` is the only source of the version (currently `versionCode = 1`, `versionName = "0.1.0"`).
 
 - `versionCode` increases by 1 when a new installable version is released, not on every CI run: verification builds keep the version unchanged. Released `versionCode` values never repeat or decrease, otherwise Android cannot compare two installs.
 - `versionName` follows MAJOR.MINOR.PATCH and never decreases; a release tag, once tags exist, is `v<versionName>`.
@@ -182,7 +183,7 @@ The project uses Kotlin 2.2.10, Jetpack Compose (BOM 2025.12.01), AGP 8.13.2, Gr
 
 Application license: GPL-3.0-or-later (`usb.BuildFacts.LICENSE`). License text: <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-Third-party components keep their own licenses. `usb-multitool/third_party/README.md` pins the versions and the links:
+Third-party components keep their own licenses. `third_party/README.md` pins the versions and the links:
 
 | Component | Use | License |
 | --- | --- | --- |

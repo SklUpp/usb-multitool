@@ -9,8 +9,7 @@
 - FatFs R0.16 с патчами; `FF_VOLUMES=4`, сектор 512..4096, exFAT включён,
   `FF_LFN_UNICODE=2` (UTF-8), `FF_MAX_LFN=255`, `FF_LFN_BUF=768`.
 - `FF_USE_EXPAND=0`: `f_expand` присутствует в исходниках, но вырезан
-  препроцессором; JNI-API для persistence нет (см.
-  [feature-candidates.md](feature-candidates.md)).
+  препроцессором; JNI-API для persistence нет.
 - 255 UTF-16 units в худшем случае — 765 UTF-8 байт; буфер 768 вмещает имя и NUL.
   JNI/struct буферы (`FatDirEnt`, `FatStat`) имеют тот же предел.
 - Native volume pool переиспользует первый свободный logical drive; закрытие

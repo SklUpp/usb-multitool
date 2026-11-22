@@ -15,10 +15,7 @@ class VentoyProvenanceTest {
         var dir: File? = File("").absoluteFile
         repeat(8) {
             val current = dir ?: return@repeat
-            for (candidate in listOf(
-                File(current, "usb-multitool/app/src/main/assets/ventoy"),
-                File(current, "app/src/main/assets/ventoy"),
-            )) {
+            for (candidate in listOf(File(current, "app/src/main/assets/ventoy"))) {
                 if (candidate.isDirectory) return candidate
             }
             dir = current.parentFile

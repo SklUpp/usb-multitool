@@ -29,10 +29,12 @@ Android-приложение для работы с USB-накопителями
 
 | Путь | Содержимое |
 | --- | --- |
-| `usb-multitool/app/` | Kotlin/Compose-приложение и JNI-мосты |
-| `usb-multitool/app/src/main/cpp/` | движки FAT/exFAT, NTFS, EXT4 и адаптер блочного устройства |
-| `usb-multitool/scripts/` | загрузка закреплённых upstream-исходников, host-тесты и проверка выравнивания APK |
-| `usb-multitool/third_party/` | исходники и уведомления сторонних компонентов |
+| `app/` | Kotlin/Compose-приложение и JNI-мосты |
+| `app/src/main/cpp/` | движки FAT/exFAT, NTFS, EXT4 и адаптер блочного устройства |
+| `scripts/` | загрузка закреплённых upstream-исходников, host-тесты и проверка выравнивания APK |
+| `third_party/` | исходники и уведомления сторонних компонентов |
+| `native-tests/` | host-тесты native-движков |
+| `docs/` | архитектура, UI, ФС, сборка и тесты |
 | `.github/workflows/android-debug.yml` | единственное место, где выполняются Gradle/NDK-сборки |
 
 ## Возможности
@@ -91,7 +93,7 @@ Android-приложение для работы с USB-накопителями
 - Rescue-образ остаётся плотным файлом с картой; непрочитанные сектора видны в карте, частичный образ не выдаётся за полную копию. Для rescue-копии требуется стабильный серийный номер устройства.
 - Приложение не собирает телеметрию. Сеть используется только для проверки/скачивания релизов Ventoy с GitHub.
 
-Объявленные разрешения (`usb-multitool/app/src/main/AndroidManifest.xml`):
+Объявленные разрешения (`app/src/main/AndroidManifest.xml`):
 
 | Разрешение | Зачем |
 | --- | --- |
@@ -114,11 +116,11 @@ Android-приложение для работы с USB-накопителями
 
 Релизов и публикации в Google Play нет. Debug-APK собирается в GitHub Actions:
 
-1. Открыть [workflow `android-debug`](../../actions/workflows/android-debug.yml).
+1. Открыть [workflow `android-debug`](actions/workflows/android-debug.yml).
 2. Запустить его вручную (`workflow_dispatch`) или дождаться запуска по push в ветку `feature/android-usb-multitool`.
 3. В артефактах запуска скачать `app-debug-apk` (там же `unit-test-reports`).
 
-APK подписан debug-ключом и предназначен для тестирования, а не для распространения. Локальная сборка Gradle/NDK в проекте не предусмотрена — см. `usb-multitool/CONVENTIONS.md`. Этот README не подтверждает успешный финальный CI-прогон или проверку на устройствах.
+APK подписан debug-ключом и предназначен для тестирования, а не для распространения. Локальная сборка Gradle/NDK в проекте не предусмотрена. Этот README не подтверждает успешный финальный CI-прогон или проверку на устройствах.
 
 ## Ограничения
 
@@ -127,11 +129,11 @@ APK подписан debug-ключом и предназначен для те�
 - Нет root, FUSE, loop-устройств и UAS; нет автоматического восстановления операции после обрыва.
 - CI проверяет код и host-движки, но не реальные USB-разрешения, поведение на телефоне, загрузку с флешки и установку Windows.
 - Выравнивание APK и ELF под 16 KB проверяет скрипт в CI; проверки на устройстве нет.
-- Отдельного файла `LICENSE` в корне пока нет: лицензия зафиксирована в коде (`usb-multitool/app/src/main/kotlin/usb/BuildFacts.kt`).
+- Отдельного файла `LICENSE` в корне пока нет: лицензия зафиксирована в коде (`app/src/main/kotlin/usb/BuildFacts.kt`).
 
 ## Сборка и проверки
 
-Все Gradle/NDK-команды выполняются только в GitHub Actions (`.github/workflows/android-debug.yml`), рабочий каталог — `usb-multitool`. Порядок шагов джобы `verify`:
+Все Gradle/NDK-команды выполняются только в GitHub Actions (`.github/workflows/android-debug.yml`), рабочий каталог — корень репозитория. Порядок шагов джобы `verify`:
 
 ```bash
 ./scripts/fetch-third-party.sh
@@ -155,7 +157,7 @@ APK подписан debug-ключом и предназначен для те�
 make -C native-tests/fatfs test
 ```
 
-Локально допустимы статические проверки: `sh -n gradlew`, `git grep` по закреплённым значениям, `sh scripts/run-ui-host-check.sh` (скрипт рассчитан на пути Termux и требует `kotlinc`). Скрипты `fetch-third-party.sh` и host-тесты скачивают и собирают upstream-исходники в `usb-multitool/third_party/` — запускать только осознанно.
+Локально допустимы статические проверки: `sh -n gradlew`, `git grep` по закреплённым значениям, `sh scripts/run-ui-host-check.sh` (скрипт рассчитан на пути Termux и требует `kotlinc`). Скрипты `fetch-third-party.sh` и host-тесты скачивают и собирают upstream-исходники в `third_party/` — запускать только осознанно.
 
 | Что CI доказывает | Чего CI не доказывает |
 | --- | --- |
@@ -165,16 +167,13 @@ make -C native-tests/fatfs test
 
 ## Разработка
 
-- `AGENTS.md` — архитектура, правила безопасности и команды.
-- `.github/workflows/android-debug.yml` — точный порядок команд CI; `usb-multitool/CONVENTIONS.md` — где разрешено выполнять сборки.
-- `usb-multitool/third_party/README.md` — закреплённые версии и лицензии движков.
-- `usb-multitool/docs/README.md` — актуальный индекс архитектуры, UI, ФС, сборки и прогресса.
-- `usb-multitool/docs/feature-candidates.md` — критическая оценка SMART/f3probe/persistence/восстановления/TRIM.
-- `usb-multitool/docs/implementation-research.md` — планы внедрения, anchors, оценки объёма и блокеры.
+- `.github/workflows/android-debug.yml` — точный порядок команд CI.
+- `third_party/README.md` — закреплённые версии и лицензии движков.
+- `docs/README.md` — индекс архитектуры, UI, ФС и сборки.
 
 ### Версии приложения
 
-Единственный источник версии — `defaultConfig` в `usb-multitool/app/build.gradle.kts` (сейчас `versionCode = 1`, `versionName = "0.1.0"`).
+Единственный источник версии — `defaultConfig` в `app/build.gradle.kts` (сейчас `versionCode = 1`, `versionName = "0.1.0"`).
 
 - `versionCode` увеличивается на 1 при выпуске новой устанавливаемой версии, а не на каждом прогоне CI: проверочные сборки версию не меняют. Выпущенные значения `versionCode` не повторяются и не уменьшаются, иначе Android не сможет сравнить две установки.
 - `versionName` следует MAJOR.MINOR.PATCH и не убывает; тег, когда теги появятся, — `v<versionName>`.
@@ -186,7 +185,7 @@ make -C native-tests/fatfs test
 
 Приложение: **GPL-3.0-or-later** (`usb.BuildFacts.LICENSE`). Текст лицензии — <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-Сторонние компоненты сохраняют собственные лицензии; версии и ссылки закреплены в `usb-multitool/third_party/README.md`:
+Сторонние компоненты сохраняют собственные лицензии; версии и ссылки закреплены в `third_party/README.md`:
 
 | Компонент | Использование | Лицензия |
 | --- | --- | --- |
@@ -197,7 +196,7 @@ make -C native-tests/fatfs test
 | [Ventoy 1.1.18](https://github.com/ventoy/Ventoy) | загрузочные файлы | GPL-3.0-or-later |
 | [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/), [XZ for Java](https://tukaani.org/xz/java.html) | распаковка образов | Apache-2.0 / public domain |
 
-В дереве лежат FatFs (пропатченный R0.16), `exfatprogs` и часть `ntfs-3g` без `ntfsprogs`. `scripts/fetch-third-party.sh` догружает полное дерево `ntfs-3g` (включая `ntfsprogs`), а также lwext4 и F3 по закреплённым URL и ревизиям; ddrescue скрипт пытается скачать, если доступен `lzip`; FatFs скрипт пропускает, если `ff.c` уже есть. Подробности — `usb-multitool/third_party/README.md`. При распространении APK действуют обязательства GPL по предоставлению исходников.
+В дереве лежат FatFs (пропатченный R0.16), `exfatprogs` и часть `ntfs-3g` без `ntfsprogs`. `scripts/fetch-third-party.sh` догружает полное дерево `ntfs-3g` (включая `ntfsprogs`), а также lwext4 и F3 по закреплённым URL и ревизиям; ddrescue скрипт пытается скачать, если доступен `lzip`; FatFs скрипт пропускает, если `ff.c` уже есть. Подробности — `third_party/README.md`. При распространении APK действуют обязательства GPL по предоставлению исходников.
 
 Проект не связан с Ventoy, Tuxera, EtchDroid и другими упомянутыми проектами.
 

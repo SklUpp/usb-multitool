@@ -40,7 +40,7 @@ SectorForge bridge собирается Gradle-задачей `buildSfBridge`:
 
 ## Локальные команды
 
-Из `usb-multitool/`:
+Из корня репозитория:
 
 ```bash
 ./gradlew :app:compileDebugKotlin

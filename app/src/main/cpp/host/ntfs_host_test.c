@@ -115,7 +115,7 @@ typedef struct NtfsVolumeContext {
 
 int main(int argc, char **argv)
 {
-    const char *fixture_xz = (argc > 1) ? argv[1] : "usb-multitool/third_party/ntfs-3g/testdata/ntfs.img.xz";
+    const char *fixture_xz = (argc > 1) ? argv[1] : "third_party/ntfs-3g/testdata/ntfs.img.xz";
     char tmp_img[] = "/tmp/ntfs_host_test_XXXXXX.img";
     int tmp_fd = mkstemps(tmp_img, 4);
     if (tmp_fd < 0) {

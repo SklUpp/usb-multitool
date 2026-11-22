@@ -27,7 +27,7 @@ class ShellLogBehaviorTest {
         var dir: File? = File("").absoluteFile
         repeat(6) {
             val current = dir ?: return@repeat
-            for (candidate in listOf(File(current, relative), File(current, "usb-multitool/$relative"))) {
+            for (candidate in listOf(File(current, relative))) {
                 if (candidate.isFile) return candidate
             }
             dir = current.parentFile

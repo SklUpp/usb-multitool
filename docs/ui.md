@@ -152,4 +152,4 @@ non-cancelable.
 - Status использует live region только для running/standalone; journal не
   превращается в live region.
 - Проверка TalkBack, IME, fontScale 2.0, RTL и переходов pin-селектора требует
-  устройства; см. [progress.md](progress.md).
+  устройства.
