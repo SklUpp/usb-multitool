@@ -826,6 +826,13 @@
     <string name="unattend_problem_account">Имя учётной записи недопустимо</string>
     <string name="unattend_problem_computer">Имя компьютера недопустимо</string>
     <string name="unattend_problem_image_install">Установка системы на раздел данных Ventoy не поддерживается.</string>
+    <string name="unattend_choose_image">Выбрать образ Windows</string>
+    <string name="unattend_add_image">Добавить образ</string>
+    <string name="unattend_xml_not_selected">XML не выбран</string>
+    <string name="unattend_show_all">Показать все</string>
+    <string name="unattend_unlink">Удалить привязки образов</string>
+    <string name="unattend_unlink_confirm">Удалить выбранные привязки образов? Файлы останутся на флешке.</string>
+    <string name="unattend_custom_value">Своё значение</string>
     <string name="unattend_problem_language">Тег языка недопустим</string>
     <string name="unattend_problem_layout_disk_size_missing">Введите заявленный размер целевого диска для проверки разметки</string>
     <string name="unattend_problem_layout_exceeds">Разделы больше заявленного целевого диска</string>

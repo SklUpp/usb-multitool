@@ -282,12 +282,6 @@ fun VentoyScreen(
                 onIntent = onIntent,
                 onPickVentoySettingsFile = onPickVentoySettingsFile,
                 onPickWindowsFile = onPickWindowsFile,
-                leadingContent = {
-                    WindowsImageBlock(
-                        state = state,
-                        onIntent = onIntent,
-                    )
-                },
             )
         }
     }

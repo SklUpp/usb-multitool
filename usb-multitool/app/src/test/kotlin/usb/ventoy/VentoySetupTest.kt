@@ -598,6 +598,85 @@ class VentoySetupTest {
     }
 
     @Test
+    fun rawWriteRenamesXmlAndRejectsStaleSourceDigest() {
+        val original =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        val edited =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend">
+              <settings pass="specialize"/>
+            </unattend>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/old.xml" to original))
+
+        VentoySetup.writeAutounattendRaw(
+            volume = volume,
+            xmlName = "new.xml",
+            rawBytes = edited,
+            overwriteXml = true,
+            expectedTemplateSha256 = WindowsTemplate.sha256(original),
+            renameFromXmlName = "old.xml",
+        )
+
+        assertArrayEquals(edited, requireNotNull(volume.fileBytes("/ventoy/new.xml")))
+        assertNull(volume.fileBytes("/ventoy/old.xml"))
+    }
+
+    @Test
+    fun rawWriteRenameUpdatesAutoInstallReferences() {
+        val original =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(
+            mapOf(
+                "/ventoy/old.xml" to original,
+                "/ventoy/ventoy.json" to
+                    """{"auto_install":[{"image":"/ISO/a.iso","template":"/ventoy/old.xml"}]}"""
+                        .toByteArray(),
+            ),
+        )
+
+        VentoySetup.writeAutounattendRaw(
+            volume = volume,
+            xmlName = "new.xml",
+            rawBytes = original,
+            overwriteXml = true,
+            expectedTemplateSha256 = WindowsTemplate.sha256(original),
+            renameFromXmlName = "old.xml",
+        )
+
+        val links = WindowsSetup.parseLinks(
+            requireNotNull(volume.fileBytes("/ventoy/ventoy.json")).decodeToString(),
+        )
+        assertEquals(listOf("/ventoy/new.xml"), links.single().templates)
+    }
+
+    @Test
+    fun renameRefusesSourceChangedAfterInspection() {
+        val original =
+            """
+            <unattend xmlns="urn:schemas-microsoft-com:unattend"/>
+            """.trimIndent().toByteArray()
+        val volume = InMemoryUsbVolume(mapOf("/ventoy/old.xml" to original))
+        volume.putFile("/ventoy/old.xml", original + byteArrayOf(0x20))
+
+        assertThrows(VentoySetup.TemplateChangedException::class.java) {
+            VentoySetup.writeAutounattendRaw(
+                volume = volume,
+                xmlName = "new.xml",
+                rawBytes = original,
+                overwriteXml = true,
+                expectedTemplateSha256 = WindowsTemplate.sha256(original),
+                renameFromXmlName = "old.xml",
+            )
+        }
+        assertNull(volume.fileBytes("/ventoy/new.xml"))
+    }
+
+    @Test
     fun importXmlUsesShortTempsAndSelectedImageStem() {
         // Mimic MainActivity inspect: allocate from selected image, then import under that name.
         val selectedImage = "/ISO/Win11.iso"

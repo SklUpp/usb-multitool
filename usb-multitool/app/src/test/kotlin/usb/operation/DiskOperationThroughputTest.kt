@@ -50,6 +50,18 @@ class DiskOperationThroughputTest {
         assertEquals(250L, op.bytesPerSecond)
     }
 
+    @Test fun phaseSnapshotResetsCountersTogether() {
+        val op = DiskOperation("t")
+        op.beginCurrentFile(1_000L)
+        op.report(1_000L, 1_000_000_000L)
+        op.beginPhase(DiskOperationPhase.Verify, 2_000L)
+        val snapshot = op.progressSnapshot()
+        assertEquals(0L, snapshot.bytesDone)
+        assertEquals(2_000L, snapshot.bytesTotal)
+        assertEquals(DiskOperationPhase.Verify, snapshot.phase)
+        assertEquals(0L, snapshot.bytesPerSecond)
+    }
+
     @Test fun largeDeltasDoNotOverflow() {
         val op = DiskOperation("t")
         op.report(0L, 0L)

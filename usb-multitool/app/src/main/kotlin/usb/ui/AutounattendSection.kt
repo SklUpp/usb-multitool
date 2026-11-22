@@ -193,6 +193,10 @@ internal fun AutounattendSection(
             xmlEditorOpen = false
         }
     }
+    LaunchedEffect(state.device?.identity, state.device?.attachGeneration) {
+        generateOpen = false
+        xmlEditorOpen = false
+    }
     // Keys = external readiness only. Missing/inFlight stay in the body guard:
     // Loaded(Missing) clears inFlight and would re-fire forever if those were keys.
     // presence/actionsEnabled: Busy→Ready after open-during-scan must retry once.
@@ -379,156 +383,114 @@ internal fun AutounattendSection(
         }
     }
 
-    if (template != null && !xmlGone) {
+    if (!xmlGone) {
         val candidates = state.autounattendCandidates
+        var showAllImages by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf(false) }
+        var pendingImageTarget by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf<String?>(null) }
+        var addImagesOpen by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf(false) }
+        var destructiveBindAck by remember(state.device?.identity, state.device?.attachGeneration, document?.templateSha256) { mutableStateOf(false) }
+        val loadedTemplateHasMarkers = document?.destructiveMarkers?.isNotEmpty() == true
+        LaunchedEffect(state.device?.identity, state.device?.attachGeneration, state.autounattendCandidates, state.actionsEnabled) {
+            if (state.autounattendCandidates == null && state.actionsEnabled) onIntent(UiIntent.LoadAutounattendCandidatesOnly)
+        }
+        LaunchedEffect(state.device?.identity, state.device?.attachGeneration, state.windowsImageLinks, state.actionsEnabled) {
+            if (state.windowsImageLinks == null && state.actionsEnabled) onIntent(UiIntent.LoadWindowsImageLinks)
+        }
+        val pickedTemplate = state.filesPickSelections[FilesPickPurpose.WindowsTemplate]
+        LaunchedEffect(pickedTemplate, pendingImageTarget) {
+            val picked = pickedTemplate ?: return@LaunchedEffect
+            if (picked.isDirectory) return@LaunchedEffect
+            val target = pendingImageTarget
+            pendingImageTarget = null
+            if (target != null) {
+                onIntent(UiIntent.ClearFilesPickSelection(FilesPickPurpose.WindowsTemplate))
+                val sameLoaded = document?.sourcePath?.equals(picked.path, true) == true
+                onIntent(UiIntent.RequestBindAutounattend(
+                    picked.path,
+                    listOf(target),
+                    allowDestructiveTemplate = sameLoaded && loadedTemplateHasMarkers && destructiveBindAck,
+                    expectedTemplateSha256 = if (sameLoaded) document?.templateSha256 else null,
+                    overwrite = true,
+                ))
+            } else {
+                onIntent(UiIntent.SelectWindowsTemplate)
+            }
+        }
+        LaunchedEffect(state.filesPickMode, pickedTemplate) {
+            if (state.filesPickMode == null && pickedTemplate == null) pendingImageTarget = null
+        }
         SectionCard(
             title = stringResource(R.string.unattend_bindings_title),
             subtitle = stringResource(R.string.unattend_bindings_subtitle),
         ) {
-            if (candidates == null) {
-                EmptyHint(stringResource(R.string.unattend_bindings_loading))
-            } else {
-                candidates.scopeLimitedBy?.let { limited ->
-                    Text(
-                        text = stringResource(R.string.unattend_scope_limited, limited),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (candidates.error != null) {
-                    Text(
-                        text = stringResource(R.string.raw_stick_incomplete),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (candidates.truncated) {
-                    Text(
-                        text = stringResource(R.string.unattend_truncated),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (candidates.images.isEmpty()) {
-                    EmptyHint(stringResource(R.string.unattend_no_candidates))
-                }
-                candidates.images.forEach { image ->
-                    val selected = state.windowsSelectedImages.any { it == image.imagePath }
-                    val imageSelectable =
-                        state.actionsEnabled && image.problem == null && !image.bound
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .toggleable(
-                                value = selected || image.bound,
-                                enabled = imageSelectable,
-                                role = Role.Checkbox,
-                                onValueChange = {
-                                    onIntent(UiIntent.ToggleWindowsImage(image.imagePath))
-                                },
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Checkbox(
-                            checked = selected || image.bound,
-                            onCheckedChange = null,
-                            enabled = imageSelectable,
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = image.imagePath,
-                                style = MaterialTheme.typography.bodySmall,
-                                softWrap = true,
-                            )
-                            if (image.bound) {
-                                Text(
-                                    text = stringResource(R.string.unattend_bound),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else {
-                                image.problem?.let { problem ->
-                                    Text(
-                                        text = stringResource(bindProblemText(problem)),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                }
-                            }
-                        }
-                        if (image.bound) {
-                            TextButton(
-                                onClick = {
-                                    onIntent(
-                                        UiIntent.RequestUnbindAutounattend(template, image.imagePath),
-                                    )
-                                },
-                                enabled = state.actionsEnabled,
-                            ) {
-                                Text(stringResource(R.string.unattend_unbind))
-                            }
-                        }
-                    }
-                }
-                val selectedPaths = state.windowsSelectedImages
-                val templateMarkers = document?.destructiveMarkers.orEmpty()
-                var bindDestructiveAck by remember(template, document) {
-                    mutableStateOf(false)
-                }
-                if (templateMarkers.isNotEmpty()) {
-                    // The backend refuses a destructive template without an explicit opt-in and
-                    // the exact inspected digest; the same numbers travel with the request.
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .toggleable(
-                                value = bindDestructiveAck,
-                                enabled = state.actionsEnabled,
-                                role = Role.Checkbox,
-                                onValueChange = { bindDestructiveAck = it },
-                            ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Checkbox(
-                            checked = bindDestructiveAck,
-                            onCheckedChange = null,
-                            enabled = state.actionsEnabled,
-                        )
-                        Text(
-                            text = stringResource(R.string.unattend_ack_destructive),
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                val bindAllowed = state.actionsEnabled &&
-                    selectedPaths.isNotEmpty() &&
-                    (templateMarkers.isEmpty() || bindDestructiveAck)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Button(
-                        onClick = {
-                            onIntent(
-                                UiIntent.RequestBindAutounattend(
-                                    xmlName = template,
-                                    imagePaths = selectedPaths,
-                                    allowDestructiveTemplate = templateMarkers.isNotEmpty() &&
-                                        bindDestructiveAck,
-                                    expectedTemplateSha256 = document?.templateSha256,
-                                ),
-                            )
-                        },
-                        enabled = bindAllowed,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.unattend_bind))
-                    }
+            if (loadedTemplateHasMarkers) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = destructiveBindAck, onCheckedChange = { destructiveBindAck = it }, enabled = state.actionsEnabled)
+                    Text(stringResource(R.string.unattend_ack_destructive), style = MaterialTheme.typography.labelSmall)
                 }
             }
+            val links = state.windowsImageLinks.orEmpty()
+            val boundPaths = links.map { it.image }.toSet()
+            val rows = (links.map { it.image to it.templates.firstOrNull() } +
+                state.windowsSelectedImages.filter { it !in boundPaths }.map { it to null })
+                .distinctBy { it.first }
+            if (rows.isEmpty()) {
+                TextButton(
+                    onClick = { addImagesOpen = true },
+                    enabled = state.actionsEnabled && candidates?.images?.isNotEmpty() == true,
+                ) { Text(stringResource(R.string.unattend_choose_image)) }
+            } else {
+                rows.take(if (showAllImages) rows.size else 3).forEach { (image, xml) ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(image, style = MaterialTheme.typography.bodySmall)
+                            Text(xml ?: stringResource(R.string.unattend_xml_not_selected), style = MaterialTheme.typography.labelSmall)
+                        }
+                        IconButton(onClick = {
+                            pendingImageTarget = image
+                            onIntent(UiIntent.BeginFilesPick(FilesPickPurpose.WindowsTemplate, ShellTab.Ventoy, FilesPickTarget.File, initialPath = "/ventoy", expectedIdentity = state.device?.identity, expectedAttachGeneration = state.device?.attachGeneration))
+                        }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.File, size = 20.dp) }
+                        if (xml != null) IconButton(onClick = { onIntent(UiIntent.RequestUnlinkWindowsImages(listOf(image))) }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.Close, size = 20.dp) }
+                    }
+                }
+                if (rows.size > 3) TextButton(onClick = { showAllImages = !showAllImages }) { Text(stringResource(if (showAllImages) R.string.unattend_collapse else R.string.unattend_show_all)) }
+            }
+            if (rows.isNotEmpty()) {
+                Button(onClick = { addImagesOpen = true }, enabled = state.actionsEnabled && candidates?.images?.isNotEmpty() == true) { Text(stringResource(R.string.unattend_add_image)) }
+            }
+        }
+        if (addImagesOpen) {
+            var selected by remember(state.windowsSelectedImages) { mutableStateOf(state.windowsSelectedImages.toSet()) }
+            ModalBottomSheet(onDismissRequest = { addImagesOpen = false }) {
+                Text(stringResource(R.string.unattend_choose_image), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
+                candidates?.scopeLimitedBy?.let { Text(stringResource(R.string.unattend_scope_limited, it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp)) }
+                if (candidates?.truncated == true) Text(stringResource(R.string.unattend_truncated), modifier = Modifier.padding(horizontal = 24.dp))
+                candidates?.error?.let { Text(stringResource(R.string.raw_stick_incomplete), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp)) }
+                candidates?.images.orEmpty().forEach { image ->
+                    Row(Modifier.fillMaxWidth().clickable { if (image.problem == null && !image.bound) selected = if (image.imagePath in selected) selected - image.imagePath else selected + image.imagePath }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = image.imagePath in selected, onCheckedChange = null, enabled = image.problem == null && !image.bound)
+                        Column(Modifier.padding(8.dp)) {
+                            Text(image.imagePath)
+                            image.problem?.let { Text(stringResource(bindProblemText(it)), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+                        }
+                    }
+                }
+                Button(onClick = {
+                    val old = state.windowsSelectedImages.toSet()
+                    (old - selected).forEach { onIntent(UiIntent.ToggleWindowsImage(it)) }
+                    (selected - old).forEach { onIntent(UiIntent.ToggleWindowsImage(it)) }
+                    addImagesOpen = false
+                }, enabled = state.actionsEnabled, modifier = Modifier.padding(24.dp)) { Text(stringResource(R.string.action_confirm)) }
+            }
+        }
+        state.pendingWindowsUnlink?.let {
+            AlertDialog(
+                onDismissRequest = { onIntent(UiIntent.CancelWindowsUnlink) },
+                title = { Text(stringResource(R.string.unattend_unlink)) },
+                text = { Text(stringResource(R.string.unattend_unlink_confirm)) },
+                confirmButton = { TextButton(onClick = { onIntent(UiIntent.ConfirmWindowsUnlink) }) { Text(stringResource(R.string.action_confirm)) } },
+                dismissButton = { TextButton(onClick = { onIntent(UiIntent.CancelWindowsUnlink) }) { Text(stringResource(R.string.action_cancel)) } },
+            )
         }
     }
 
@@ -546,63 +508,27 @@ internal fun AutounattendSection(
     // Stick templates browse the shared Files picker: tap marks, explicit button confirms.
     // The reducer atomically consumes filesPickSelections[WindowsTemplate], so this intent
     // carries no path and cannot inject one. Phone flow uses SAF import below; nothing copies here.
-    LaunchedEffect(state.filesPickSelections[FilesPickPurpose.WindowsTemplate]) {
-        if (state.filesPickSelections[FilesPickPurpose.WindowsTemplate] == null) {
-            return@LaunchedEffect
-        }
-        onIntent(UiIntent.SelectWindowsTemplate)
-    }
     if (templateSourcePrompt) {
-        ModalBottomSheet(
-            onDismissRequest = { templateSourcePrompt = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            tonalElevation = 1.dp,
-        ) {
-            Text(
-                text = stringResource(R.string.windows_template_choose_source),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-            )
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.raw_choose_stick)) },
-                leadingContent = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_pick_file_usb_duotone),
-                        contentDescription = null,
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(role = Role.Button) {
-                        templateSourcePrompt = false
-                        onIntent(
-                            UiIntent.BeginFilesPick(
-                                purpose = FilesPickPurpose.WindowsTemplate,
-                                returnTab = ShellTab.Ventoy,
-                                target = FilesPickTarget.File,
-                                initialPath = "/ventoy",
-                                expectedIdentity = templateSourceIdentity,
-                                expectedAttachGeneration = templateSourceGeneration,
-                            ),
-                        )
-                    },
-            )
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.raw_choose_phone)) },
-                leadingContent = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_pick_file_phone_duotone),
-                        contentDescription = null,
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(role = Role.Button) {
-                        templateSourcePrompt = false
-                        folderKind = WindowsImportKind.XmlTemplate
-                    },
-            )
-        }
+        ConfigSourceSheet(
+            title = stringResource(R.string.windows_template_choose_source),
+            onDismiss = { templateSourcePrompt = false },
+            stickEnabled = !xmlGone,
+            onStick = {
+                templateSourcePrompt = false
+                onIntent(UiIntent.BeginFilesPick(
+                    purpose = FilesPickPurpose.WindowsTemplate,
+                    returnTab = ShellTab.Ventoy,
+                    target = FilesPickTarget.File,
+                    initialPath = "/ventoy",
+                    expectedIdentity = templateSourceIdentity,
+                    expectedAttachGeneration = templateSourceGeneration,
+                ))
+            },
+            onPhone = {
+                templateSourcePrompt = false
+                folderKind = WindowsImportKind.XmlTemplate
+            },
+        )
     }
 
     folderKind?.let {
@@ -640,18 +566,18 @@ internal fun AutounattendSection(
             document = document,
             selectedImages = state.windowsSelectedImages,
             actionsEnabled = state.actionsEnabled,
-            onGenerate = { params, allowDestructive, sha ->
-                onIntent(
-                    UiIntent.RequestGenerateAutounattend(
-                        // Create-new reseals name via allocateXmlPath when overwriteXml=false.
-                        xmlName = generateTarget,
-                        params = params,
-                        imagePaths = state.windowsSelectedImages,
-                        overwriteXml = template != null && document != null,
-                        allowDestructiveTemplate = allowDestructive,
-                        expectedTemplateSha256 = sha,
-                    ),
-                )
+            onGenerate = { params, allowDestructive, sha, chosenName ->
+                val directory = template?.substringBeforeLast('/', "/") ?: "/ventoy"
+                val chosenPath = "$directory/$chosenName"
+                onIntent(UiIntent.RequestGenerateAutounattend(
+                    xmlName = chosenPath,
+                    params = params,
+                    imagePaths = state.windowsSelectedImages,
+                    overwriteXml = template != null && document != null,
+                    allowDestructiveTemplate = allowDestructive,
+                    expectedTemplateSha256 = sha,
+                    renameFromXmlName = template?.takeUnless { it == chosenPath },
+                ))
                 generateOpen = false
             },
             onDismiss = { generateOpen = false },
@@ -690,14 +616,20 @@ internal fun GlobalSettingsCard(
     var editorOpen by remember { mutableStateOf(false) }
     var editorBaseline by remember { mutableStateOf<List<VentoyControlSetting>?>(null) }
     var applyReviewOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(state.pendingVentoyControls) {
+        if (state.pendingVentoyControls.isEmpty()) applyReviewOpen = false
+    }
     LaunchedEffect(state.operation?.state, state.operation?.title) {
-        if (editorOpen &&
-            state.operation?.title == OperationTitle.SetVentoyGlobalSetting &&
-            state.operation?.state == OperationState.Completed
-        ) {
+        if (editorOpen && state.operation?.title == OperationTitle.SetVentoyGlobalSetting && state.operation?.state == OperationState.Completed) {
             editorOpen = false
             editorBaseline = null
         }
+    }
+    LaunchedEffect(state.device?.identity, state.device?.attachGeneration) {
+        sourceMenuOpen = false
+        editorOpen = false
+        applyReviewOpen = false
+        editorBaseline = null
     }
     // unrelated selection cannot re-apply here.
     LaunchedEffect(state.filesPickSelections) {
@@ -876,24 +808,18 @@ internal fun GlobalSettingsCard(
         }
     }
     if (sourceMenuOpen) {
-        SettingsSourceDialog(
+        ConfigSourceSheet(
+            title = stringResource(R.string.settings_source_choose),
+            onDismiss = { sourceMenuOpen = false },
+            stickEnabled = !settingsGone,
             onStick = {
                 sourceMenuOpen = false
-                onIntent(
-                    UiIntent.BeginFilesPick(
-                        purpose = FilesPickPurpose.VentoyConfig,
-                        returnTab = ShellTab.Ventoy,
-                        target = FilesPickTarget.File,
-                        initialPath = "/ventoy",
-                    ),
-                )
+                onIntent(UiIntent.BeginFilesPick(FilesPickPurpose.VentoyConfig, ShellTab.Ventoy, FilesPickTarget.File, initialPath = "/ventoy"))
             },
             onPhone = {
                 sourceMenuOpen = false
                 onPickVentoySettingsFile()
             },
-            onDismiss = { sourceMenuOpen = false },
-            stickEnabled = !settingsGone,
         )
     }
 }
@@ -1293,6 +1219,7 @@ private fun AutounattendRawEditorDialog(
     onCancel: () -> Unit,
 ) {
     val sourceText = requireNotNull(document.sourceText)
+    var xmlName by remember(template) { mutableStateOf(template.substringAfterLast('/')) }
     var draft by remember(sourceText) { mutableStateOf(sourceText) }
     var applyProblem by remember { mutableStateOf<String?>(null) }
     var destructiveAck by remember(document.templateSha256) { mutableStateOf(false) }
@@ -1316,7 +1243,12 @@ private fun AutounattendRawEditorDialog(
     val xmlFieldDescription = stringResource(R.string.unattend_editor_title)
     val closeLabel = stringResource(R.string.settings_cancel)
     val saveLabel = stringResource(R.string.settings_save)
+    val invalidNameMessage = stringResource(R.string.unattend_xml_name_invalid)
     fun commitDraft() {
+        if (xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName) {
+            applyProblem = invalidNameMessage
+            return
+        }
         val charset = runCatching {
             document.sourceCharsetName?.let(Charset::forName)
         }.getOrNull() ?: StandardCharsets.UTF_8
@@ -1342,13 +1274,14 @@ private fun AutounattendRawEditorDialog(
         applyProblem = null
         onIntent(
             UiIntent.RequestWriteAutounattendRaw(
-                xmlName = template,
+                xmlName = template.substringBeforeLast('/', "/") + "/" + xmlName,
                 rawBytes = encoded,
                 overwriteXml = true,
                 allowDestructiveTemplate = needsDestructive && destructiveAck,
                 expectedTemplateSha256 = document.templateSha256,
                 identity = device?.identity,
                 attachGeneration = device?.attachGeneration ?: 0L,
+                renameFromXmlName = template,
             ),
         )
     }
@@ -1392,6 +1325,14 @@ private fun AutounattendRawEditorDialog(
                     Text(
                         stringResource(R.string.unattend_editor_help),
                         style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = xmlName,
+                        onValueChange = { xmlName = it },
+                        label = { Text(stringResource(R.string.unattend_xml_name)) },
+                        singleLine = true,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 applyProblem?.let {
                     Text(
@@ -2586,6 +2527,9 @@ private fun LayoutConfirmDialog(
     )
 }
 
+private val windowsLanguageChoices = listOf("en-US", "ru-RU", "de-DE", "fr-FR", "es-ES", "ja-JP")
+private val windowsLocaleChoices = listOf("en-US", "ru-RU", "de-DE", "fr-FR", "es-ES", "ja-JP")
+
 /** Parameter editor: every block is opt-in and off by default; off means "not written". */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -2594,15 +2538,20 @@ private fun GenerateDialog(
     document: AutounattendDocument?,
     selectedImages: List<String>,
     actionsEnabled: Boolean,
-    onGenerate: (AutounattendParams, Boolean, String?) -> Unit,
+    onGenerate: (AutounattendParams, Boolean, String?, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val existing = document?.existing
     val existingAccount = existing?.localAccount
     val existingLayout = existing?.diskLayout
     var language by remember(document) { mutableStateOf(existing?.languageTag ?: "en-US") }
+    var languageCustom by remember(document) { mutableStateOf(existing?.languageTag !in windowsLanguageChoices) }
     var localeOn by remember(document) { mutableStateOf(existing?.localeId != null) }
     var locale by remember(document) { mutableStateOf(existing?.localeId.orEmpty()) }
+    var localeCustom by remember(document) { mutableStateOf(existing?.localeId !in windowsLocaleChoices) }
+    var languageMenuOpen by remember { mutableStateOf(false) }
+    var localeMenuOpen by remember { mutableStateOf(false) }
+    var xmlName by remember(document, template) { mutableStateOf(template.substringAfterLast('/').ifBlank { "autounattend.xml" }) }
     var computerOn by remember(document) { mutableStateOf(existing?.computerName != null) }
     var computer by remember(document) { mutableStateOf(existing?.computerName.orEmpty()) }
     var accountOn by remember(document) { mutableStateOf(existingAccount != null) }
@@ -2651,7 +2600,8 @@ private fun GenerateDialog(
     // Destructive markers are only accepted with an explicit tick; a null digest would be
     // refused by the backend, so the button stays disabled instead.
     val digestReady = markers.isEmpty() || (destructiveAck && document?.templateSha256 != null)
-    val canGenerate = actionsEnabled && language.isNotBlank() && layoutValid && accountValid &&
+    val validXmlName = xmlName.isNotBlank() && xmlName.endsWith(".xml", true) && '/' !in xmlName && ".." !in xmlName
+    val canGenerate = actionsEnabled && validXmlName && language.isNotBlank() && layoutValid && accountValid &&
         digestReady
 
     AlertDialog(
@@ -2680,26 +2630,31 @@ private fun GenerateDialog(
                     )
                 }
                 OutlinedTextField(
-                    value = language,
-                    onValueChange = { language = it },
-                    label = { Text(stringResource(R.string.params_language)) },
+                    value = xmlName,
+                    onValueChange = { xmlName = it },
+                    label = { Text(stringResource(R.string.unattend_xml_name)) },
                     singleLine = true,
+                    isError = xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                SwitchRow(
-                    label = stringResource(R.string.params_locale),
-                    checked = localeOn,
-                    onCheckedChange = { localeOn = it },
-                    enabled = actionsEnabled,
-                )
+                Box {
+                    TextButton(onClick = { languageMenuOpen = true }, enabled = actionsEnabled) { Text(language) }
+                    DropdownMenu(expanded = languageMenuOpen, onDismissRequest = { languageMenuOpen = false }) {
+                        val custom = stringResource(R.string.unattend_custom_value)
+                        (windowsLanguageChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { languageMenuOpen = false; languageCustom = choice == custom; if (!languageCustom) language = choice }) }
+                    }
+                }
+                if (languageCustom) OutlinedTextField(value = language, onValueChange = { language = it }, label = { Text(stringResource(R.string.params_language)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                SwitchRow(label = stringResource(R.string.params_locale), checked = localeOn, onCheckedChange = { localeOn = it }, enabled = actionsEnabled)
                 if (localeOn) {
-                    OutlinedTextField(
-                        value = locale,
-                        onValueChange = { locale = it },
-                        label = { Text(stringResource(R.string.params_locale_value)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Box {
+                        TextButton(onClick = { localeMenuOpen = true }, enabled = actionsEnabled) { Text(locale) }
+                        DropdownMenu(expanded = localeMenuOpen, onDismissRequest = { localeMenuOpen = false }) {
+                            val custom = stringResource(R.string.unattend_custom_value)
+                            (windowsLocaleChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { localeMenuOpen = false; localeCustom = choice == custom; if (!localeCustom) locale = choice }) }
+                        }
+                    }
+                    if (localeCustom) OutlinedTextField(value = locale, onValueChange = { locale = it }, label = { Text(stringResource(R.string.params_locale_value)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
                 SwitchRow(
                     label = stringResource(R.string.params_computer),
@@ -2951,6 +2906,7 @@ private fun GenerateDialog(
         confirmButton = {
             Button(
                 onClick = {
+                    if (xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName) return@Button
                     val accountValue = if (accountOn) {
                         val existingValue = existingAccount
                         val groupChanged = existingValue == null || accountAdmin != (existingValue.inAdministrators == true)
@@ -3017,6 +2973,7 @@ private fun GenerateDialog(
                         ),
                         markers.isNotEmpty() && destructiveAck,
                         document?.templateSha256,
+                        xmlName,
                     )
                 },
                 enabled = canGenerate,

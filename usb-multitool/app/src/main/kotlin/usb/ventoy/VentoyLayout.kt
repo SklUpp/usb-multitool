@@ -1336,6 +1336,29 @@ object WindowsSetup {
         root["auto_install"] = kept
         return MiniJson.stringify(root)
     }
+    /** Replace renamed XML references while preserving all unrelated ventoy.json data. */
+    fun renameTemplateReferences(existingJson: String?, oldPath: String, newPath: String): String? {
+        if (existingJson.isNullOrBlank() || oldPath.equals(newPath, true)) return null
+        val root = parseRootOrThrow(existingJson)
+        val entries = root["auto_install"] as? List<*> ?: return null
+        var changed = false
+        val updated = entries.map { raw ->
+            val entry = raw as? Map<*, *> ?: return@map raw
+            val mutable = entry.toMutableMap()
+            when (val templates = entry["template"]) {
+                is String -> if (templates.equals(oldPath, true)) { mutable["template"] = newPath; changed = true }
+                is List<*> -> {
+                    val replaced = templates.map { value -> if (value?.toString()?.equals(oldPath, true) == true) { changed = true; newPath } else value }
+                    mutable["template"] = replaced
+                }
+            }
+            mutable
+        }
+        if (!changed) return null
+        root["auto_install"] = updated
+        return MiniJson.stringify(root)
+    }
+
 
     /**
      * Update only the global `control` array. No auto_install entries, images, or XML

@@ -620,6 +620,7 @@ object VentoySetup {
         expectedPlanSha256: String? = null,
         requireDeclaredDiskSize: Boolean = false,
         options: SetupOptions = SetupOptions(),
+        renameFromXmlName: String? = null,
         onMutation: () -> Unit = {},
     ): GenerateResult =
         withVolume(disk) { volume ->
@@ -634,6 +635,7 @@ object VentoySetup {
                 expectedPlanSha256 = expectedPlanSha256,
                 requireDeclaredDiskSize = requireDeclaredDiskSize,
                 options = options,
+                renameFromXmlName = renameFromXmlName,
                 onMutation = onMutation,
             )
         }
@@ -650,24 +652,23 @@ object VentoySetup {
         expectedPlanSha256: String? = null,
         requireDeclaredDiskSize: Boolean = false,
         options: SetupOptions = SetupOptions(),
+        renameFromXmlName: String? = null,
         onMutation: () -> Unit = {},
     ): GenerateResult {
         val path = requireXmlName(xmlName)
+        val sourcePath = renameFromXmlName?.let(::requireXmlName)
+        if (sourcePath != null && !sourcePath.equals(path, true) && readBytes(volume, path) != null) {
+            throw XmlOverwriteRequiredException("$path already exists; choose another XML name")
+        }
         val validation =
             Autounattend.validate(
                 params,
                 requireDeclaredDiskSize = requireDeclaredDiskSize &&
                     params.intents.diskLayout == XmlFieldIntent.Set,
             )
-        if (validation.problems.isNotEmpty()) {
-            throw UnattendValidationException(validation)
-        }
-        val existing = readBytes(volume, path)
-        if (existing != null && !overwriteXml) {
-            throw XmlOverwriteRequiredException(
-                "$path already exists; the XML write needs its own confirmation",
-            )
-        }
+        if (validation.problems.isNotEmpty()) throw UnattendValidationException(validation)
+        val existing = readBytes(volume, sourcePath ?: path)
+        if (existing != null && !overwriteXml) throw XmlOverwriteRequiredException("$path already exists; the XML write needs its own confirmation")
         val existingInspection =
             existing?.takeIf { it.isNotEmpty() }?.let { WindowsTemplate.inspect(it) }
         if (existingInspection != null) {
@@ -702,18 +703,9 @@ object VentoySetup {
             existingJsonBytes = readTextBytes(volume, CONFIG_PATH)
             existingJson = existingJsonBytes?.let { String(it, Charsets.UTF_8) }
         }
-        val mergedJson =
-            if (imagePaths.isEmpty()) {
-                existingJson
-            } else {
-                WindowsSetup.mergeAutoInstall(
-                    existingJson = existingJson,
-                    imagePaths = imagePaths,
-                    templatePath = path,
-                    options = options,
-                    overwrite = false,
-                )
-            }
+        val renamedJson = renameFromXmlName?.let { WindowsSetup.renameTemplateReferences(existingJson, it, path) }
+        val configJson = renamedJson ?: existingJson
+        val mergedJson = if (imagePaths.isEmpty()) configJson else WindowsSetup.mergeAutoInstall(configJson, imagePaths, path, options, false)
         val generated = Autounattend.generate(existing, params)
         val markers = WindowsTemplate.inspect(generated).destructiveMarkers
         if (markers.isNotEmpty()) {
@@ -746,6 +738,13 @@ object VentoySetup {
         onMutation()
         ensureDirectory(volume, VENTOY_DIR)
         ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
+        if (renameFromXmlName != null && !renameFromXmlName.equals(path, ignoreCase = true)) {
+            val oldPath = requireXmlName(renameFromXmlName)
+            val oldBytes = readBytes(volume, oldPath) ?: throw TemplateChangedException("The original XML was removed before rename")
+            require(expectedTemplateSha256 == null || WindowsTemplate.sha256(oldBytes).equals(expectedTemplateSha256, true)) { "The XML changed after inspection; review it again" }
+            if (readBytes(volume, path) != null) throw XmlOverwriteRequiredException("$path already exists; choose another XML name")
+            volume.rename(oldPath, path)
+        }
         backupGenerationFiles(
             volume = volume,
             xmlPath = path,
@@ -758,10 +757,11 @@ object VentoySetup {
         } else {
             replaceFile(volume, path, generated)
         }
-        if (imagePaths.isNotEmpty() && mergedJson != null) {
-            replaceFile(volume, CONFIG_PATH, mergedJson.toByteArray(Charsets.UTF_8))
+        val configToWrite = mergedJson ?: renamedJson ?: existingJson
+        if ((renamedJson != null || imagePaths.isNotEmpty()) && configToWrite != null) {
+            replaceFile(volume, CONFIG_PATH, configToWrite.toByteArray(Charsets.UTF_8))
         }
-        val links = WindowsSetup.parseLinks(mergedJson)
+        val links = WindowsSetup.parseLinks(configToWrite)
         val bindings =
             links
                 .filter { link -> link.templates.any { it.equals(path, ignoreCase = true) } }
@@ -795,6 +795,7 @@ object VentoySetup {
         overwriteXml: Boolean = false,
         allowDestructiveTemplate: Boolean = false,
         expectedTemplateSha256: String? = null,
+        renameFromXmlName: String? = null,
         onMutation: () -> Unit = {},
     ): RawWriteResult =
         withVolume(disk) { volume ->
@@ -805,6 +806,7 @@ object VentoySetup {
                 overwriteXml = overwriteXml,
                 allowDestructiveTemplate = allowDestructiveTemplate,
                 expectedTemplateSha256 = expectedTemplateSha256,
+                renameFromXmlName = renameFromXmlName,
                 onMutation = onMutation,
             )
         }
@@ -817,6 +819,7 @@ object VentoySetup {
         overwriteXml: Boolean = false,
         allowDestructiveTemplate: Boolean = false,
         expectedTemplateSha256: String? = null,
+        renameFromXmlName: String? = null,
         onMutation: () -> Unit = {},
     ): RawWriteResult {
         require(rawBytes.isNotEmpty()) { "XML body is empty" }
@@ -824,47 +827,46 @@ object VentoySetup {
             "XML is ${rawBytes.size} bytes; limit is $MAX_TEMPLATE_BYTES"
         }
         val path = requireXmlName(xmlName)
+        val oldPath = renameFromXmlName?.let(::requireXmlName)
         val inspection = WindowsTemplate.inspect(rawBytes, requireUnattendRoot = true)
         WindowsTemplate.requireAllowed(inspection, allowDestructiveTemplate)
         val existing = readBytes(volume, path)
+        val oldBytes = oldPath?.let { readBytes(volume, it) }
+        if (oldPath != null && !oldPath.equals(path, ignoreCase = true) && existing != null) {
+            throw XmlOverwriteRequiredException("$path already exists; choose another XML name")
+        }
         if (existing != null && !overwriteXml) {
             throw XmlOverwriteRequiredException(
                 "$path already exists; the XML write needs its own confirmation",
             )
         }
         if (existing != null) {
-            val existingInspection =
-                if (existing.isEmpty()) {
-                    TemplateInspection(emptyList())
-                } else {
-                    WindowsTemplate.inspect(existing)
-                }
-            requireAcknowledgedTemplate(
-                inspection = existingInspection,
-                bytes = existing,
-                allowDestructive = allowDestructiveTemplate,
-                expectedSha256 = expectedTemplateSha256,
-            )
-        } else if (expectedTemplateSha256 != null) {
-            throw TemplateChangedException(
-                "The XML was removed after inspection; re-open it before writing",
-            )
+            val existingInspection = if (existing.isEmpty()) TemplateInspection(emptyList()) else WindowsTemplate.inspect(existing)
+            requireAcknowledgedTemplate(inspection = existingInspection, bytes = existing, allowDestructive = allowDestructiveTemplate, expectedSha256 = expectedTemplateSha256)
+        } else if (expectedTemplateSha256 != null && oldBytes == null) {
+            throw TemplateChangedException("The XML was removed after inspection; re-open it before writing")
         }
+        val existingJson = readText(volume, CONFIG_PATH)
+        val renamedJson = oldPath?.let { WindowsSetup.renameTemplateReferences(existingJson, it, path) }
+        if (renamedJson != null && WindowsSetup.parseLinks(renamedJson).any { link -> link.templates.any { it.equals(oldPath ?: "", true) } }) throw TemplateChangedException("The old XML path remains in ventoy.json")
         onMutation()
         ensureDirectory(volume, VENTOY_DIR)
         ensurePathDirectory(volume, path.substringBeforeLast('/', "/"))
-        if (existing != null) {
+        if (oldPath != null && !oldPath.equals(path, ignoreCase = true)) {
+            if (oldBytes == null) throw TemplateChangedException("The original XML was removed before rename")
+            if (expectedTemplateSha256 != null && !WindowsTemplate.sha256(oldBytes).equals(expectedTemplateSha256, ignoreCase = true)) {
+                throw TemplateChangedException("The XML changed after inspection; review it again")
+            }
+            volume.rename(oldPath, path)
+            replaceFile(volume, path, rawBytes)
+        } else if (existing != null) {
             backupBeforeReplace(volume, path, existing)
             replaceFile(volume, path, rawBytes)
         } else {
             createNewFile(volume, path, rawBytes)
         }
-        return RawWriteResult(
-            xmlName = path.substringAfterLast('/'),
-            path = path,
-            sha256 = WindowsTemplate.sha256(rawBytes),
-            destructiveMarkers = inspection.destructiveMarkers,
-        )
+        if (renamedJson != null) replaceFile(volume, CONFIG_PATH, renamedJson.toByteArray(Charsets.UTF_8))
+        return RawWriteResult(xmlName = path.substringAfterLast('/'), path = path, sha256 = WindowsTemplate.sha256(rawBytes), destructiveMarkers = inspection.destructiveMarkers)
     }
 
 
@@ -904,6 +906,7 @@ object VentoySetup {
         options: SetupOptions = SetupOptions(),
         allowDestructiveTemplate: Boolean = false,
         expectedTemplateSha256: String? = null,
+        overwrite: Boolean = false,
         onMutation: () -> Unit = {},
     ): List<AutounattendBinding> =
         withVolume(disk) { volume ->
@@ -940,7 +943,7 @@ object VentoySetup {
                     imagePaths = normalizedImages,
                     templatePath = templatePath,
                     options = options,
-                    overwrite = false,
+                    overwrite = overwrite,
                 )
             onMutation()
             ensureDirectory(volume, VENTOY_DIR)

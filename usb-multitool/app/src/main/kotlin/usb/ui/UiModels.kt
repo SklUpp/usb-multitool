@@ -2263,6 +2263,7 @@ data class PendingAutounattendGeneration(
     val attachGeneration: Long = 0L,
     val expectedTemplateSha256: String? = null,
     val expectedPlanSha256: String? = null,
+    val renameFromXmlName: String? = null,
 )
 
 /** Raw XML text apply waiting only for overwrite acknowledgement. */
@@ -2274,6 +2275,7 @@ data class PendingAutounattendRawWrite(
     val identity: String? = null,
     val attachGeneration: Long = 0L,
     val expectedTemplateSha256: String? = null,
+    val renameFromXmlName: String? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -2284,7 +2286,8 @@ data class PendingAutounattendRawWrite(
             allowDestructiveTemplate == other.allowDestructiveTemplate &&
             identity == other.identity &&
             attachGeneration == other.attachGeneration &&
-            expectedTemplateSha256 == other.expectedTemplateSha256
+            expectedTemplateSha256 == other.expectedTemplateSha256 &&
+            renameFromXmlName == other.renameFromXmlName
     }
 
     override fun hashCode(): Int {
@@ -2295,6 +2298,7 @@ data class PendingAutounattendRawWrite(
         result = 31 * result + (identity?.hashCode() ?: 0)
         result = 31 * result + attachGeneration.hashCode()
         result = 31 * result + (expectedTemplateSha256?.hashCode() ?: 0)
+        result = 31 * result + (renameFromXmlName?.hashCode() ?: 0)
         return result
     }
 }

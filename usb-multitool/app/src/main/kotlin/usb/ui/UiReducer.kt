@@ -374,7 +374,7 @@ sealed class UiIntent {
     data object ConfirmWindowsUnlink : UiIntent()
     data object CancelWindowsUnlink : UiIntent()
 
-    /** Read `/ventoy/<xmlName>` and its bindings; non-destructive. */
+    data object LoadAutounattendCandidatesOnly : UiIntent()
     data class LoadAutounattend(val xmlName: String) : UiIntent()
     data class AutounattendLoaded(
         val xmlName: String,
@@ -382,17 +382,12 @@ sealed class UiIntent {
         val bindings: List<AutounattendBinding> = emptyList(),
         val generation: Long = 0L,
     ) : UiIntent()
-
     data class AutounattendCandidatesLoaded(
         val xmlName: String,
         val candidates: AutounattendImageCandidates,
         val generation: Long = 0L,
     ) : UiIntent()
 
-    /**
-     * Validate and generate. When [params].diskLayout.writeLayout is true this only opens
-     * [diskLayoutConfirmation]; generation happens on ConfirmDiskLayout (acknowledged).
-     */
     data class RequestGenerateAutounattend(
         val xmlName: String,
         val params: AutounattendParams,
@@ -401,6 +396,7 @@ sealed class UiIntent {
         val allowDestructiveTemplate: Boolean = false,
         val expectedTemplateSha256: String? = null,
         val planSha256: String? = null,
+        val renameFromXmlName: String? = null,
     ) : UiIntent()
 
     /**
@@ -415,6 +411,7 @@ sealed class UiIntent {
         val expectedTemplateSha256: String? = null,
         val identity: String? = null,
         val attachGeneration: Long = 0L,
+        val renameFromXmlName: String? = null,
     ) : UiIntent() {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -425,7 +422,8 @@ sealed class UiIntent {
                 allowDestructiveTemplate == other.allowDestructiveTemplate &&
                 expectedTemplateSha256 == other.expectedTemplateSha256 &&
                 identity == other.identity &&
-                attachGeneration == other.attachGeneration
+                attachGeneration == other.attachGeneration &&
+                renameFromXmlName == other.renameFromXmlName
         }
 
         override fun hashCode(): Int {
@@ -436,6 +434,7 @@ sealed class UiIntent {
             result = 31 * result + (expectedTemplateSha256?.hashCode() ?: 0)
             result = 31 * result + (identity?.hashCode() ?: 0)
             result = 31 * result + attachGeneration.hashCode()
+            result = 31 * result + (renameFromXmlName?.hashCode() ?: 0)
             return result
         }
     }
@@ -606,6 +605,7 @@ sealed class UiIntent {
         val imagePaths: List<String>,
         val allowDestructiveTemplate: Boolean = false,
         val expectedTemplateSha256: String? = null,
+        val overwrite: Boolean = false,
     ) : UiIntent()
     data class RequestUnbindAutounattend(
         val xmlName: String,
@@ -1084,6 +1084,7 @@ sealed interface UiEffect {
         val allowDestructiveTemplate: Boolean,
         val expectedTemplateSha256: String?,
         val expectedPlanSha256: String?,
+        val renameFromXmlName: String? = null,
     ) : UiEffect
 
     data class WriteAutounattendRaw(
@@ -1092,6 +1093,7 @@ sealed interface UiEffect {
         val overwriteXml: Boolean,
         val allowDestructiveTemplate: Boolean,
         val expectedTemplateSha256: String?,
+        val renameFromXmlName: String? = null,
     ) : UiEffect {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -1100,7 +1102,8 @@ sealed interface UiEffect {
                 rawBytes.contentEquals(other.rawBytes) &&
                 overwriteXml == other.overwriteXml &&
                 allowDestructiveTemplate == other.allowDestructiveTemplate &&
-                expectedTemplateSha256 == other.expectedTemplateSha256
+                expectedTemplateSha256 == other.expectedTemplateSha256 &&
+                renameFromXmlName == other.renameFromXmlName
         }
 
         override fun hashCode(): Int {
@@ -1109,6 +1112,7 @@ sealed interface UiEffect {
             result = 31 * result + overwriteXml.hashCode()
             result = 31 * result + allowDestructiveTemplate.hashCode()
             result = 31 * result + (expectedTemplateSha256?.hashCode() ?: 0)
+            result = 31 * result + (renameFromXmlName?.hashCode() ?: 0)
             return result
         }
     }
@@ -1162,6 +1166,7 @@ sealed interface UiEffect {
         val imagePaths: List<String>,
         val allowDestructiveTemplate: Boolean,
         val expectedTemplateSha256: String?,
+        val overwrite: Boolean = false,
     ) : UiEffect
 
     data class UnbindAutounattend(
@@ -2423,6 +2428,7 @@ object UiReducer {
                                         overwriteXml = true,
                                         allowDestructiveTemplate = pendingRaw.allowDestructiveTemplate,
                                         expectedTemplateSha256 = pendingRaw.expectedTemplateSha256,
+                                        renameFromXmlName = pendingRaw.renameFromXmlName,
                                     ),
                                 ),
                             )
@@ -2486,6 +2492,7 @@ object UiReducer {
                                         allowDestructiveTemplate = pendingGen.allowDestructiveTemplate,
                                         expectedTemplateSha256 = pendingGen.expectedTemplateSha256,
                                         expectedPlanSha256 = pendingGen.expectedPlanSha256,
+                                        renameFromXmlName = pendingGen.renameFromXmlName,
                                     ),
                                 ),
                             )
@@ -3624,6 +3631,13 @@ object UiReducer {
             UiIntent.CancelWindowsUnlink ->
                 ReduceResult(state.copy(pendingWindowsUnlink = null))
 
+            UiIntent.LoadAutounattendCandidatesOnly -> {
+                if (!state.actionsEnabled || state.device == null) ReduceResult(state)
+                else {
+                    val generation = state.autounattendRequestGeneration + 1
+                    ReduceResult(state.copy(autounattendRequestGeneration = generation, autounattendLoadInFlight = true), effects = listOf(UiEffect.LoadAutounattendCandidates("/ventoy/autounattend.xml", generation)))
+                }
+            }
             is UiIntent.LoadAutounattend ->
                 if (!state.actionsEnabled) {
                     ReduceResult(state.withStatus(presenceMessage(state.presence)))
@@ -3634,6 +3648,8 @@ object UiReducer {
                     // result is dropped as stale and the tab claims the file does not exist.
                     ReduceResult(
                         state.copy(
+                            windowsTemplatePath = intent.xmlName,
+                            windowsTemplatePin = state.windowsTemplatePin?.takeIf { it.path.equals(intent.xmlName, true) },
                             autounattendRequestGeneration = generation,
                             autounattendLoadInFlight = true,
                         ),
@@ -3772,6 +3788,7 @@ object UiReducer {
                                         attachGeneration = device.attachGeneration,
                                         expectedTemplateSha256 = intent.expectedTemplateSha256,
                                         expectedPlanSha256 = planSha256,
+                                        renameFromXmlName = intent.renameFromXmlName,
                                     ),
                                 diskLayoutConfirmation =
                                     layoutConfirmation(layout, planSha256),
@@ -3793,6 +3810,7 @@ object UiReducer {
                                     allowDestructiveTemplate = intent.allowDestructiveTemplate,
                                     expectedTemplateSha256 = intent.expectedTemplateSha256,
                                     expectedPlanSha256 = planSha256,
+                                    renameFromXmlName = intent.renameFromXmlName,
                                 ),
                             ),
                         )
@@ -3866,6 +3884,7 @@ object UiReducer {
                                     overwriteXml = intent.overwriteXml,
                                     allowDestructiveTemplate = intent.allowDestructiveTemplate,
                                     expectedTemplateSha256 = intent.expectedTemplateSha256,
+                                    renameFromXmlName = intent.renameFromXmlName,
                                 ),
                             ),
                         )
@@ -3946,6 +3965,7 @@ object UiReducer {
                                         allowDestructiveTemplate = pending.allowDestructiveTemplate,
                                         expectedTemplateSha256 = pending.expectedTemplateSha256,
                                         expectedPlanSha256 = pending.expectedPlanSha256,
+                                        renameFromXmlName = pending.renameFromXmlName,
                                     ),
                                 ),
                             )
@@ -4254,6 +4274,7 @@ object UiReducer {
                                 imagePaths = intent.imagePaths,
                                 allowDestructiveTemplate = intent.allowDestructiveTemplate,
                                 expectedTemplateSha256 = intent.expectedTemplateSha256,
+                                overwrite = intent.overwrite,
                             ),
                         ),
                     )

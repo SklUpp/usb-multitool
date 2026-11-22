@@ -2193,6 +2193,7 @@ class MainViewModel(
                         effect.imagePaths,
                         effect.allowDestructiveTemplate,
                         effect.expectedTemplateSha256,
+                        effect.overwrite,
                     )
                 }
             }
@@ -5163,6 +5164,7 @@ class MainViewModel(
 
     private fun writeAutounattendRaw(effect: UiEffect.WriteAutounattendRaw) {
         val xmlName = effect.xmlName
+        val renameFromXmlName = effect.renameFromXmlName
         val expected = attachment.snapshot()
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
@@ -5182,6 +5184,7 @@ class MainViewModel(
                         overwriteXml = effect.overwriteXml,
                         allowDestructiveTemplate = effect.allowDestructiveTemplate,
                         expectedTemplateSha256 = effect.expectedTemplateSha256,
+                        renameFromXmlName = renameFromXmlName,
                         onMutation = { mutationAttempted = true },
                     )
                     if (mutationAttempted) commitReached = true
@@ -5216,6 +5219,7 @@ class MainViewModel(
 
     private fun generateAutounattend(effect: UiEffect.GenerateAutounattend) {
         val xmlName = effect.xmlName
+        val renameFromXmlName = effect.renameFromXmlName
         val params = effect.autounattendParams
         val imagePaths = effect.imagePaths
         val overwriteXml = effect.overwriteXml
@@ -5270,12 +5274,7 @@ class MainViewModel(
                     }
                     val writeName: String =
                         if (!overwriteXml) {
-                            // WIN-06 create-new: allocate under /ventoy from selected image stem.
-                            val imageHint = imagePaths.firstOrNull() ?: xmlName
-                            usb.ventoy.VentoySetup.allocateXmlPath(
-                                disk = disk,
-                                imagePath = imageHint,
-                            )
+                            xmlName
                         } else {
                             xmlName
                         }
@@ -5300,6 +5299,7 @@ class MainViewModel(
                         overwriteXml = overwriteXml,
                         allowDestructiveTemplate = effect.allowDestructiveTemplate,
                         expectedTemplateSha256 = effect.expectedTemplateSha256,
+                        renameFromXmlName = renameFromXmlName,
                         expectedPlanSha256 = writePlan,
                         // Preserve imported layouts without editor-only capacity metadata; validate size only on explicit layout Set.
                         requireDeclaredDiskSize = params.intents.diskLayout == usb.ventoy.XmlFieldIntent.Set,
@@ -6222,6 +6222,7 @@ class MainViewModel(
         imagePaths: List<String>,
         allowDestructiveTemplate: Boolean,
         expectedTemplateSha256: String?,
+        overwrite: Boolean,
     ) {
         // Pinned like generate and raw write: a different stick between tap and run must fail,
         // not silently edit another disk that happens to hold the same path.
@@ -6244,6 +6245,7 @@ class MainViewModel(
                         imagePaths = imagePaths,
                         allowDestructiveTemplate = allowDestructiveTemplate,
                         expectedTemplateSha256 = expectedTemplateSha256,
+                        overwrite = overwrite,
                         onMutation = { mutationAttempted = true },
                     )
                     if (mutationAttempted) commitReached = true
