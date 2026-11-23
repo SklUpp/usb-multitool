@@ -1644,6 +1644,8 @@ data class AppUiState(
     val windowsImageLinks: List<WindowsImageLink>? = null,
     val windowsImageLinksGeneration: Long = 0L,
     val windowsImageLinksIdentity: String? = null,
+    /** [VentoySettingsSource.cacheKey] that produced [windowsImageLinks]. */
+    val windowsImageLinksSource: String? = null,
     /** XML template file on the stick; never generated or rewritten by the app. */
     val windowsTemplatePath: String? = null,
     /** Provenance of [windowsTemplatePath]; null when no template is selected. */

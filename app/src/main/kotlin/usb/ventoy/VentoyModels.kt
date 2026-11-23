@@ -49,6 +49,16 @@ sealed interface VentoySettingsSource {
             is Document -> displayName?.takeIf { it.isNotBlank() } ?: uri
         }
 
+    /** Stable key for caches tied to this exact source; display names may collide. */
+    fun cacheKey(): String =
+        when (this) {
+            Default -> "default"
+            is UsbFile ->
+                if (isDefaultPath()) "default"
+                else "usb:" + path.lowercase(java.util.Locale.ROOT)
+            is Document -> "doc:" + uri
+        }
+
     /**
      * Same underlying file. A phone document is identified by its URI, not by the provider's
      * display name, so renaming the document must not discard staged edits. Stick paths are
