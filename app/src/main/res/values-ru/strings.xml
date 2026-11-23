@@ -148,6 +148,7 @@
 
     <string name="diagnostics_checks_title">Проверки</string>
     <string name="diagnostics_checks_subtitle">Чтение без изменения данных</string>
+    <string name="diagnostics_info_empty">Для этой операции пока нет данных.</string>
     <string name="diagnostics_perf_title">Производительность</string>
     <string name="diagnostics_perf_subtitle">Параметры вступят в силу со следующей операции.</string>
     <string name="diagnostics_perf_scsi_title">Размер блока SCSI</string>
