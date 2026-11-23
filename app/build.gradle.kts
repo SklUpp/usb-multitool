@@ -66,13 +66,38 @@ android {
         }
     }
 
+    val releaseKeystorePath = System.getenv("USB_KEYSTORE_PATH")
+    val releaseKeystorePassword = System.getenv("USB_KEYSTORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("USB_KEY_ALIAS")
+    val releaseKeyPassword = System.getenv("USB_KEY_PASSWORD")
+
+    val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() &&
+        !releaseKeystorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
+    val releaseSigning = if (hasReleaseSigning) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseKeystorePath)
+            storePassword = releaseKeystorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    } else {
+        null
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (releaseSigning != null) {
+                signingConfig = releaseSigning
+            }
         }
     }
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- USB Plug Connector Shield -->
+    <path
+        android:fillColor="#E6E6EA"
+        android:pathData="M46,30h16v12h-16z" />
+    <!-- Connector Port Cutouts -->
+    <path
+        android:fillColor="#0E1E4A"
+        android:pathData="M49,34h3v4h-3z M56,34h3v4h-3z" />
+    <!-- USB Drive Body -->
+    <path
+        android:fillColor="#F7F7FA"
+        android:pathData="M42,42h24a4,4 0 0 1 4,4v28a4,4 0 0 1 -4,4h-24a4,4 0 0 1 -4,-4v-28a4,4 0 0 1 4,-4z" />
+    <!-- LED Status Indicator -->
+    <path
+        android:fillColor="#2D55C8"
+        android:pathData="M54,49m-2.5,0a2.5,2.5 0 1 1 5,0a2.5,2.5 0 1 1 -5,0" />
+    <!-- Partition Segments / Multitool Blocks -->
+    <path
+        android:fillColor="#2D55C8"
+        android:pathData="M45,54h18a1,1 0 0 1 1,1v2a1,1 0 0 1 -1,1h-18a1,1 0 0 1 -1,-1v-2a1,1 0 0 1 1,-1z" />
+    <path
+        android:fillColor="#E8C48A"
+        android:pathData="M45,60h12a1,1 0 0 1 1,1v2a1,1 0 0 1 -1,1h-12a1,1 0 0 1 -1,-1v-2a1,1 0 0 1 1,-1z" />
+    <path
+        android:fillColor="#B4C5FF"
+        android:pathData="M45,66h6a1,1 0 0 1 1,1v2a1,1 0 0 1 -1,1h-6a1,1 0 0 1 -1,-1v-2a1,1 0 0 1 1,-1z" />
+    <!-- Bottom Lanyard Slot -->
+    <path
+        android:fillColor="#DCDCE4"
+        android:pathData="M50,73h8a1,1 0 0 1 1,1v1a1,1 0 0 1 -1,1h-8a1,1 0 0 1 -1,-1v-1a1,1 0 0 1 1,-1z" />
+</vector>
