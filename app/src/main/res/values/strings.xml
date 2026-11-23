@@ -336,6 +336,7 @@
     <string name="raw_readback_skipped">Readback verification was disabled.</string>
     <string name="raw_readback_verified">Verified by readback.</string>
     <string name="raw_readback_verified_partial">Readback verified: written data matches, range partially written (%1$d bytes).</string>
+    <string name="raw_average_speed">Average %1$s</string>
     <string name="raw_readback_mismatch">Readback mismatch: %1$d sectors differ, first at LBA %2$d.</string>
     <string name="raw_readback_incomplete">Verification not possible: %1$s.</string>
     <string name="raw_readback_reason_cancelled">cancelled</string>
@@ -841,6 +842,7 @@
     <string name="unattend_problem_computer">The computer name is not valid</string>
     <string name="unattend_problem_image_install">Installing Windows directly to the Ventoy data partition is not supported.</string>
     <string name="unattend_choose_image">Choose Windows image</string>
+    <string name="unattend_no_images_add_to_ventoy">No images found. Add images to the Ventoy partition, then return to bind them.</string>
     <string name="unattend_add_image">Add images</string>
     <string name="unattend_remove_image">Remove image</string>
     <string name="unattend_xml_not_selected">XML not selected</string>

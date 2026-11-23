@@ -3881,7 +3881,7 @@ class MainViewModel(
                 val name = FilesOperationPolicy.requireChildName(rawName, uri)
                 uploaded = name
                 val target = fatChildPath(path, name)
-                operation.bytesTotal = reportedSize ?: -1L
+                operation.bytesTotal = reportedSize?.takeIf { it > 0L } ?: -1L
 
                 filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     FilesOperations.upload(

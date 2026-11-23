@@ -336,6 +336,7 @@
     <string name="raw_readback_skipped">Проверка чтением отключена.</string>
     <string name="raw_readback_verified">Проверено обратным чтением.</string>
     <string name="raw_readback_verified_partial">Верификация пройдена: записанные данные проверены, диапазон записан частично (%1$d байт).</string>
+    <string name="raw_average_speed">Средняя %1$s</string>
     <string name="raw_readback_mismatch">Расхождение при обратном чтении: %1$d секторов, первый на LBA %2$d.</string>
     <string name="raw_readback_incomplete">Проверка невозможна: %1$s.</string>
     <string name="raw_readback_reason_cancelled">отменено</string>
@@ -842,6 +843,7 @@
     <string name="unattend_problem_computer">Имя компьютера недопустимо</string>
     <string name="unattend_problem_image_install">Установка системы на раздел данных Ventoy не поддерживается.</string>
     <string name="unattend_choose_image">Выбрать образ Windows</string>
+    <string name="unattend_no_images_add_to_ventoy">Образов нет. Добавьте образы на раздел Ventoy, затем вернитесь к привязке.</string>
     <string name="unattend_add_image">Добавить образы</string>
     <string name="unattend_remove_image">Убрать образ</string>
     <string name="unattend_xml_not_selected">XML не выбран</string>

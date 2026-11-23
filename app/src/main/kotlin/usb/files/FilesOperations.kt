@@ -56,7 +56,9 @@ object FilesOperations {
         chunkBytes: Int,
         onCleanupFailure: (Throwable) -> Unit = {},
     ) {
-        val expected = openableSizeBytes(resolver, uri)
+        // Providers often report 0 for documents whose size is not known yet. A real
+        // empty file still works through the unknown-size path (stream ends at once).
+        val expected = openableSizeBytes(resolver, uri)?.takeIf { it > 0L }
         val handle = MeasurementHandle()
         val cancelSource: () -> Unit = { handle.cancel() }
         operation.onInactive(cancelSource)

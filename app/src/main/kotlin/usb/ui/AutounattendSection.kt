@@ -389,11 +389,30 @@ internal fun AutounattendSection(
         var addImagesOpen by remember(state.device?.identity, state.device?.attachGeneration) { mutableStateOf(false) }
         var destructiveBindAck by remember(state.device?.identity, state.device?.attachGeneration, document?.templateSha256) { mutableStateOf(false) }
         val loadedTemplateHasMarkers = document?.destructiveMarkers?.isNotEmpty() == true
-        LaunchedEffect(state.device?.identity, state.device?.attachGeneration, state.autounattendCandidates, state.actionsEnabled) {
-            if (state.autounattendCandidates == null && state.actionsEnabled) onIntent(UiIntent.LoadAutounattendCandidatesOnly)
+        val configSourceKey = state.ventoySettingsSource.cacheKey()
+        var candidatesSourceKey by remember(state.device?.identity, state.device?.attachGeneration) {
+            mutableStateOf<String?>(null)
         }
-        LaunchedEffect(state.device?.identity, state.device?.attachGeneration, state.windowsImageLinks, state.actionsEnabled) {
-            if (state.windowsImageLinks == null && state.actionsEnabled) onIntent(UiIntent.LoadWindowsImageLinks)
+        LaunchedEffect(state.device?.identity, state.device?.attachGeneration, configSourceKey, state.actionsEnabled) {
+            if (state.actionsEnabled && candidatesSourceKey != configSourceKey) {
+                candidatesSourceKey = configSourceKey
+                onIntent(UiIntent.LoadAutounattendCandidatesOnly)
+            }
+        }
+        LaunchedEffect(
+            state.device?.identity,
+            state.device?.attachGeneration,
+            state.windowsImageLinks,
+            state.windowsImageLinksSource,
+            configSourceKey,
+            state.actionsEnabled,
+        ) {
+            if (state.actionsEnabled &&
+                (state.windowsImageLinks == null ||
+                    state.windowsImageLinksSource != configSourceKey)
+            ) {
+                onIntent(UiIntent.LoadWindowsImageLinks)
+            }
         }
         val pickedTemplate = state.filesPickSelections[FilesPickPurpose.WindowsTemplate]
         val linkTarget = state.windowsLinkTargetImage
@@ -458,6 +477,13 @@ internal fun AutounattendSection(
                 state.windowsSelectedImages.filter { it !in boundPaths }.map { it to null })
                 .distinctBy { it.first }
             if (rows.isEmpty()) {
+                if (candidates?.images.isNullOrEmpty()) {
+                    Text(
+                        text = stringResource(R.string.unattend_no_images_add_to_ventoy),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 TextButton(
                     onClick = { addImagesOpen = true },
                     enabled = state.actionsEnabled && candidates?.images?.isNotEmpty() == true,
@@ -1654,6 +1680,7 @@ private fun KnownControlRow(
         else -> null
     }
     val shortHint = ventoyKeyShortDescription(known.key)
+    var optionsExpanded by remember(known.key) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth()) {
         if (booleanKey) {
             Row(
@@ -1708,7 +1735,14 @@ private fun KnownControlRow(
                 }
             }
         } else {
+            val expandLabel = stringResource(
+                if (optionsExpanded) R.string.diagnostics_collapse
+                else R.string.diagnostics_expand,
+            )
             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClickLabel = expandLabel) { optionsExpanded = !optionsExpanded },
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1737,28 +1771,35 @@ private fun KnownControlRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.End,
-                ) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
-                        verticalArrangement = Arrangement.spacedBy(0.dp),
-                    ) {
-                        known.allowed.forEach { option ->
-                            TextButton(
-                                onClick = {
-                                    onIntent(UiIntent.StageVentoyControl(known.key, option))
-                                },
-                                enabled = actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) { Text(knownOptionLabel(known.key, option)) }
+                    if (optionsExpanded) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(0.dp),
+                            modifier = Modifier.padding(top = 4.dp),
+                        ) {
+                            known.allowed.forEach { option ->
+                                TextButton(
+                                    onClick = {
+                                        onIntent(UiIntent.StageVentoyControl(known.key, option))
+                                    },
+                                    enabled = actionsEnabled,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                ) { Text(knownOptionLabel(known.key, option)) }
+                            }
                         }
                     }
-                    keyHint?.let {
-                        InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
-                    }
+                }
+                IconButton(
+                    onClick = { optionsExpanded = !optionsExpanded },
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    GlyphIcon(
+                        glyph = if (optionsExpanded) Glyph.ChevronUp else Glyph.ChevronDown,
+                        size = 18.dp,
+                    )
+                }
+                keyHint?.let {
+                    InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
                 }
             }
         }
@@ -2137,12 +2178,6 @@ private fun OfficialControlKeyPickerDialog(
     val resources = LocalContext.current.resources
     val listState = rememberLazyListState()
     val selected = defs.firstOrNull { it.key == selectedKey }
-    val valueEditorIndex = defs.size
-    LaunchedEffect(selectedKey) {
-        if (selectedKey != null) {
-            listState.animateScrollToItem(valueEditorIndex)
-        }
-    }
     LaunchedEffect(defs) {
         if (selectedKey != null && defs.none { it.key == selectedKey }) {
             selectedKey = null
@@ -2290,23 +2325,6 @@ private fun OfficialControlKeyPickerDialog(
                                     )
                                 }
                             }
-                            Text(
-                                text = if (def.allowed.isNotEmpty()) {
-                                    def.allowed.joinToString()
-                                } else {
-                                    kindLabel(def.kind)
-                                },
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                ),
-                                color = if (def.allowed.isNotEmpty()) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
                             ventoyKeyShortDescription(def.key)?.let { description ->
                                 Text(
                                     text = description,
@@ -2316,58 +2334,55 @@ private fun OfficialControlKeyPickerDialog(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                        }
-                        }
-                    }
-                    val selectedDef = selected
-                    if (selectedDef != null) {
-                        item(key = "value-editor") {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.wave4_catalog_value_title,
-                                        selectedDef.key,
-                                    ),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                if (selectedDef.allowed.isNotEmpty()) {
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                    ) {
-                                        selectedDef.allowed.forEach { option ->
-                                            FilterChip(
-                                                selected = value == option,
-                                                onClick = {
-                                                    value = option
-                                                    problem = null
-                                                },
-                                                enabled = state.actionsEnabled,
-                                                label = { Text(option) },
-                                                modifier = Modifier.heightIn(min = 48.dp),
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    OutlinedTextField(
-                                        value = value,
-                                        onValueChange = {
-                                            value = it
-                                            problem = null
-                                        },
-                                        label = { Text(stringResource(R.string.settings_value_label)) },
-                                        singleLine = true,
-                                        enabled = state.actionsEnabled,
-                                        keyboardOptions = if (selectedDef.kind == VentoyControlKeyKind.INTEGER) {
-                                            KeyboardOptions(keyboardType = KeyboardType.Number)
-                                        } else {
-                                            KeyboardOptions.Default
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
+                            if (selectedRow) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.wave4_catalog_value_title,
+                                            def.key,
+                                        ),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
                                     )
+                                    if (def.allowed.isNotEmpty()) {
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            def.allowed.forEach { option ->
+                                                FilterChip(
+                                                    selected = value == option,
+                                                    onClick = {
+                                                        value = option
+                                                        problem = null
+                                                    },
+                                                    enabled = state.actionsEnabled,
+                                                    label = { Text(option) },
+                                                    modifier = Modifier.heightIn(min = 48.dp),
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        OutlinedTextField(
+                                            value = value,
+                                            onValueChange = {
+                                                value = it
+                                                problem = null
+                                            },
+                                            label = { Text(stringResource(R.string.settings_value_label)) },
+                                            singleLine = true,
+                                            enabled = state.actionsEnabled,
+                                            keyboardOptions = if (def.kind == VentoyControlKeyKind.INTEGER) {
+                                                KeyboardOptions(keyboardType = KeyboardType.Number)
+                                            } else {
+                                                KeyboardOptions.Default
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
                                 }
                             }
+                        }
                         }
                     }
                 }

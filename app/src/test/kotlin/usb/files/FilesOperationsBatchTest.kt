@@ -852,6 +852,27 @@ class FilesOperationsBatchTest {
     }
 
     @Test
+    fun uploadTreatsZeroReportedSizeAsUnknown() {
+        val volume = MemoryVolume()
+        val uri = Uri.parse("content://usb.batch.test.doc/zero-size")
+        val resolver = RecordingResolver(
+            contents = mapOf(uri to byteArrayOf(1, 2, 3, 4)),
+            names = mapOf(uri to "phone.bin"),
+        )
+        resolver.reportSize(uri, 0L)
+        val op = DiskOperation("upload-zero-size")
+        FilesOperations.upload(
+            resolver = resolver.resolver,
+            uri = uri,
+            target = "/phone.bin",
+            volume = volume,
+            operation = op,
+            chunkBytes = 2,
+        )
+        assertEquals(byteArrayOf(1, 2, 3, 4).toList(), volume.read("/phone.bin", 0, 4).toList())
+    }
+
+    @Test
     fun uploadReplaceSucceedsAndRemovesTemps() {
         val volume = MemoryVolume()
         volume.write("/a.bin", byteArrayOf(1), create = true)
@@ -1201,6 +1222,11 @@ class FilesOperationsBatchTest {
         private fun seedInput(uri: Uri, bytes: ByteArray, name: String?) {
             provider.meta[uri] = BatchOpenableProvider.Meta(name, bytes.size.toLong())
             shadow.registerInputStreamSupplier(uri) { ByteArrayInputStream(bytes) }
+        }
+
+        fun reportSize(uri: Uri, size: Long?) {
+            provider.meta[uri] =
+                BatchOpenableProvider.Meta(provider.meta[uri]?.displayName, size)
         }
 
         fun failAfterFirstRead(uri: Uri) {

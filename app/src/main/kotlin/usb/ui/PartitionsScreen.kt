@@ -47,7 +47,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
@@ -144,11 +143,6 @@ fun PartitionsScreen(
     val partitionGeometryKey = state.partitions.map { it.id to (it.startLba to it.sectorCount) }
     // Raw image writing is whole-device semantics; the chart and confirmation still
     // make the overwritten range explicit before anything is submitted.
-    var rawTargetMode by remember(
-        state.device?.identity,
-        state.device?.attachGeneration,
-        state.selectedPartitionId,
-    ) { mutableStateOf(RawTargetMode.WholeDisk) }
     var initializeScheme by remember(state.device, state.partitionScheme, partitionGeometryKey) {
         mutableStateOf(PartitionScheme.Gpt)
     }
@@ -956,8 +950,6 @@ fun PartitionsScreen(
                     }
                 }
 
-                CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Partitions)
-
                 Box {
                     PartitionDropdown(
                         partitions = orderedPartitions,
@@ -1076,9 +1068,6 @@ fun PartitionsScreen(
                 state = state,
                 onIntent = onIntent,
                 onPickImage = onPickImage,
-                rawTargetMode = rawTargetMode,
-                onRawTargetMode = { rawTargetMode = it },
-                orderedPartitions = orderedPartitions,
             )
         }
         androidx.compose.animation.AnimatedVisibility(
@@ -1111,12 +1100,6 @@ fun PartitionsScreen(
         }
         }
     }
-}
-
-private enum class RawTargetMode {
-    WholeDisk,
-    Partition,
-    Custom,
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1466,9 +1449,6 @@ private fun RawWriteSection(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     onPickImage: () -> Unit,
-    rawTargetMode: RawTargetMode,
-    onRawTargetMode: (RawTargetMode) -> Unit,
-    orderedPartitions: List<PartitionTab>,
 ) {
     var sourceSheetOpen by remember(
         state.device?.identity,
@@ -1645,45 +1625,6 @@ private fun RawWriteSection(
                 }
 
                 val selected = state.selectedPartition()
-                val selectedIndex = orderedPartitions.indexOfFirst { it.id == selected?.id }
-                    .takeIf { it >= 0 }?.plus(1)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = rawTargetMode == RawTargetMode.WholeDisk,
-                        onClick = { onRawTargetMode(RawTargetMode.WholeDisk) },
-                        label = { Text(stringResource(R.string.partitions_raw_target_whole)) },
-                    )
-                    FilterChip(
-                        selected = rawTargetMode == RawTargetMode.Partition,
-                        onClick = { onRawTargetMode(RawTargetMode.Partition) },
-                        enabled = selected?.startLba != null,
-                        label = {
-                            Text(
-                                stringResource(
-                                    R.string.partitions_raw_target_partition,
-                                    selectedIndex ?: 0,
-                                ),
-                            )
-                        },
-                    )
-                    FilterChip(
-                        selected = rawTargetMode == RawTargetMode.Custom,
-                        onClick = { onRawTargetMode(RawTargetMode.Custom) },
-                        label = { Text(stringResource(R.string.partitions_raw_target_custom)) },
-                    )
-                }
-                if (rawTargetMode == RawTargetMode.WholeDisk) {
-                    Text(
-                        text = stringResource(R.string.raw_write_whole_disk_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
 
                 val geometry = state.rawGeometry
                 var customStart by remember(
@@ -1707,19 +1648,15 @@ private fun RawWriteSection(
                 }
                 val rawSectorSize = (state.rawGeometry?.sectorSize ?: state.diskSectorSize)
                     .takeIf { it > 0 }
-                val modeStart = when (rawTargetMode) {
-                    RawTargetMode.WholeDisk -> 0UL
-                    RawTargetMode.Partition -> selected?.startLba
-                    RawTargetMode.Custom -> alignedCustomStart
+                val lbaValue = customStart
+                val mibValue = customStartMib
+                if (alignedCustomStart == 0UL) {
+                    Text(
+                        text = stringResource(R.string.raw_write_whole_disk_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
-                val lbaValue =
-                    if (rawTargetMode == RawTargetMode.Custom) customStart
-                    else modeStart?.toString().orEmpty()
-                val mibValue =
-                    if (rawTargetMode == RawTargetMode.Custom) customStartMib
-                    else modeStart?.let { start ->
-                        rawSectorSize?.let { formatMibInput(start, it) }
-                    }.orEmpty()
                 val typedMib = mibValue.replace(',', '.').toBigDecimalOrNull()
                 val mibError = mibValue.isNotBlank() &&
                     (typedMib == null ||
@@ -1733,7 +1670,6 @@ private fun RawWriteSection(
                     OutlinedTextField(
                         value = lbaValue,
                         onValueChange = { text ->
-                            onRawTargetMode(RawTargetMode.Custom)
                             val digits = text.filter { ch -> ch.isDigit() }
                             customStart = digits
                             customStartMib = digits.toULongOrNull()?.let { typed ->
@@ -1766,7 +1702,6 @@ private fun RawWriteSection(
                     OutlinedTextField(
                         value = mibValue,
                         onValueChange = { text ->
-                            onRawTargetMode(RawTargetMode.Custom)
                             val normalized = text
                                 .filter { ch -> ch.isDigit() || ch == '.' || ch == ',' }
                                 .replace(',', '.')
@@ -1785,7 +1720,6 @@ private fun RawWriteSection(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (rawTargetMode == RawTargetMode.Custom) {
                     alignedCustomStart
                         ?.takeIf { it != typedCustomStart }
                         ?.let { aligned ->
@@ -1798,8 +1732,6 @@ private fun RawWriteSection(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                }
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1818,11 +1750,7 @@ private fun RawWriteSection(
                 if (geometry == null) {
                     EmptyHint(stringResource(R.string.raw_write_geometry_unavailable))
                 } else {
-                    val draftStart: ULong? = when (rawTargetMode) {
-                        RawTargetMode.WholeDisk -> 0UL
-                        RawTargetMode.Partition -> selected?.startLba
-                        RawTargetMode.Custom -> alignedCustomStart
-                    }
+                    val draftStart: ULong? = alignedCustomStart
                     val plan = draftStart?.let {
                         RawRangePlan.planFromSourceSize(it, sourceBytes, geometry)
                     }
@@ -1898,45 +1826,8 @@ private fun RawWriteSection(
                             rangeStart = range.startLba,
                             rangeCount = range.sectorCount,
                             selected = selected,
-                            wholeDisk = rawTargetMode == RawTargetMode.WholeDisk,
+                            wholeDisk = range.startLba == 0UL,
                         )
-                    }
-
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(16.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                    ) {
-                        val diskSectors = geometry.diskSectorCount.coerceAtLeast(1UL)
-                        val rangeStart = planRange?.startLba ?: 0UL
-                        val rangeCount = planRange?.sectorCount ?: 0UL
-                        val rangeEnd = if (rangeStart <= ULong.MAX_VALUE - rangeCount) {
-                            rangeStart + rangeCount
-                        } else {
-                            ULong.MAX_VALUE
-                        }
-                        val startFraction = (rangeStart.toDouble() / diskSectors.toDouble())
-                            .coerceIn(0.0, 1.0)
-                        val endFraction = (rangeEnd.toDouble() / diskSectors.toDouble())
-                            .coerceIn(startFraction, 1.0)
-                        val spanFraction = (endFraction - startFraction).coerceAtLeast(0.0)
-                        if (planRange != null && rangeAssessment != null && spanFraction > 0.0) {
-                            Box(
-                                modifier = Modifier
-                                    .offset(x = maxWidth * startFraction.toFloat())
-                                    .width(maxWidth * spanFraction.toFloat())
-                                    .fillMaxHeight()
-                                    .background(
-                                        if (rangeAssessment.ok) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.error
-                                        },
-                                    ),
-                            )
-                        }
                     }
 
                     planRange?.let { range ->
@@ -1947,42 +1838,29 @@ private fun RawWriteSection(
                         val startLbaText = formatGroupedULong(range.startLba)
                         val endLbaText = formatGroupedULong(end)
                         val countText = formatGroupedULong(range.sectorCount)
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            RawFactPill(
-                                stringResource(
-                                    R.string.partitions_raw_pill_start_lba,
-                                    startLbaText,
-                                ),
-                            )
-                            RawFactPill(
-                                stringResource(
-                                    R.string.partitions_raw_pill_end_lba,
-                                    endLbaText,
-                                ),
-                            )
-                            RawFactPill(
-                                stringResource(
-                                    R.string.partitions_raw_pill_sector_count,
-                                    countText,
-                                ),
-                            )
-                            RawFactPill(
-                                stringResource(
-                                    R.string.partitions_raw_pill_start_mib,
-                                    startMibText,
-                                ),
-                            )
-                            RawFactPill(
-                                stringResource(
-                                    R.string.partitions_raw_pill_end_mib,
-                                    endMibText,
-                                ),
-                            )
-                        }
+                        val monoFacts = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontFeatureSettings = "tnum",
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.partitions_raw_binding_lba,
+                                startLbaText,
+                                endLbaText,
+                                countText,
+                            ),
+                            style = monoFacts,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.partitions_raw_binding_mib,
+                                startMibText,
+                                endMibText,
+                            ),
+                            style = monoFacts,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         rangeAssessment?.message?.let { warning ->
                             Text(
                                 text = warning,
@@ -2140,27 +2018,6 @@ private fun RawWriteSection(
         }
     }
 }
-
-@Composable
-private fun RawFactPill(text: String) {
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontFamily = FontFamily.Monospace,
-                fontFeatureSettings = "tnum",
-            ),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
-}
-
 
 private data class RawRangeAssessment(
     val ok: Boolean,
