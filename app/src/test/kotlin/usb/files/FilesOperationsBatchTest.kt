@@ -296,6 +296,28 @@ class FilesOperationsBatchTest {
         assertEquals(OperationState.Queued, op.state)
     }
     @Test
+    fun downloadUsesPinnedSizeWhenSourceStatReportsZero() {
+        val volume = object : MemoryVolume() {
+            override fun stat(path: String): UsbFsDirEntry = super.stat(path).copy(size = 0L)
+        }
+        volume.write("/a.bin", byteArrayOf(1, 2, 3, 4), create = true)
+        val uri = Uri.parse("content://usb.batch.test.doc/download-zero-stat")
+        val resolver = RecordingResolver()
+        resolver.trackOutput(uri, reportedSize = 4L)
+        val op = DiskOperation("download-zero-stat")
+        FilesOperations.download(
+            resolver = resolver.resolver,
+            target = "/a.bin",
+            destination = uri,
+            volume = volume,
+            operation = op,
+            expectedSize = 4L,
+        )
+        assertEquals(byteArrayOf(1, 2, 3, 4).toList(), resolver.written.getValue(uri).toList())
+        assertEquals(4L, op.bytesTotal)
+    }
+
+    @Test
     fun downloadUsbReadFailureDeletesCreatedSafDestination() {
         val volume = object : MemoryVolume() {
             override fun read(path: String, offset: Long, length: Int): ByteArray =
@@ -1157,13 +1179,14 @@ class FilesOperationsBatchTest {
             requireNotNull(outputFiles[uri]) { "no output registered for $uri" }.writeBytes(bytes)
         }
 
-        fun trackOutput(uri: Uri) {
+        fun trackOutput(uri: Uri, reportedSize: Long? = null) {
             val file = java.io.File.createTempFile("batch-out-", ".bin")
             file.deleteOnExit()
             // Truncate so mode "wt" starts empty even if the temp file had a previous length.
             java.io.FileOutputStream(file).close()
             outputFiles[uri] = file
             provider.outputFiles[uri] = file
+            provider.meta[uri] = BatchOpenableProvider.Meta("out.bin", reportedSize)
             provider.onOpenWrite = onWrite
             shadow.registerOutputStreamSupplier(uri) {
                 onWrite?.invoke()

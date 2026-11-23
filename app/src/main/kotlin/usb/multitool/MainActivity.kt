@@ -139,6 +139,7 @@ import usb.ui.PartitionRef
 import usb.ui.PartitionRole
 import usb.ui.PartitionTab
 import usb.ui.matches
+import usb.ui.matchesAttachment
 import usb.ui.safePickPath
 import usb.ui.toTableScheme
 import usb.partition.GptBackup
@@ -6459,17 +6460,30 @@ class MainViewModel(
     internal fun submitDownloadResult(binding: FilesDownloadBinding, uri: Uri): Boolean {
         if (pendingDownloadBinding != binding) {
             pickerLaunchFailed(binding)
+            deletePickedDownload(uri)
             return false
         }
-        if (state.filesPickMode != null || !state.actionsEnabled || !binding.matches(state)) {
+        if (state.filesPickMode != null || !state.actionsEnabled || !binding.matchesAttachment(state)) {
             pickerLaunchFailed(binding)
+            deletePickedDownload(uri)
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return false
         }
         val requestId = pendingDownloadRequestId
-        onIntent(UiIntent.DownloadFile(binding, uri.toString()))
+        onIntent(UiIntent.DownloadFile(binding, uri.toString(), fromPicker = true))
         clearPendingDownload(requestId)
         return true
+    }
+
+    /** A CreateDocument result that will not be streamed must not leave an empty file. */
+    internal fun discardPickedDownload(uri: Uri) {
+        deletePickedDownload(uri)
+    }
+
+    private fun deletePickedDownload(uri: Uri) {
+        val resolver = getApplication<Application>().contentResolver
+        val deleted = runCatching { DocumentsContract.deleteDocument(resolver, uri) }.getOrDefault(false)
+        if (!deleted) runCatching { resolver.delete(uri, null, null) }
     }
 
 
@@ -6482,15 +6496,22 @@ class MainViewModel(
                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(binding.name))))
             },
         ) { operation ->
-            require(binding.matches(state)) { "download target changed" }
-            val volume = filesSession.volumeForLocked(pin, binding.partitionId)
-            FilesOperations.download(
-                resolver = resolver,
-                target = binding.targetPath,
-                destination = Uri.parse(uri),
-                volume = volume,
-                operation = operation,
-            )
+            val destination = Uri.parse(uri)
+            try {
+                require(binding.matchesAttachment(state)) { "download attachment changed" }
+                val volume = filesSession.volumeForLocked(pin, binding.partitionId)
+                FilesOperations.download(
+                    resolver = resolver,
+                    target = binding.targetPath,
+                    destination = destination,
+                    volume = volume,
+                    operation = operation,
+                    expectedSize = binding.sizeBytes.toLong(),
+                )
+            } catch (failure: Throwable) {
+                if (!operation.mutationAttempted) deletePickedDownload(destination)
+                throw failure
+            }
         }
     }
 
@@ -8043,6 +8064,7 @@ class MainActivity : ComponentActivity() {
     ) { uri: Uri? ->
         val binding = viewModel.pendingDownloadBinding
         if (binding == null) {
+            if (uri != null) viewModel.discardPickedDownload(uri)
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.StaleStagedImage)))
             return@registerForActivityResult
         }

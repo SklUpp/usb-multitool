@@ -3,6 +3,7 @@ package usb.files
 import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -280,12 +281,21 @@ object FilesOperations {
         destination: Uri,
         volume: UsbFsVolume,
         operation: DiskOperation,
+        expectedSize: Long? = null,
     ) {
-        val size = volume.stat(target).size
-        operation.beginCurrentFile(size)
         var offset = 0L
+        var size = 0L
         var reportedSize: Long? = null
         try {
+            val source = volume.stat(target)
+            require(!source.isDirectory) { "download source is a directory: $target" }
+            val statSize = source.size
+            // A stale driver stat must not turn a nonempty source into an empty export.
+            size = if (statSize == 0L && expectedSize != null && expectedSize > 0L) expectedSize else statSize
+            operation.beginCurrentFile(size)
+            if (expectedSize != null && expectedSize > 0L && statSize > 0L && statSize != expectedSize) {
+                error("source size changed: listed $expectedSize, now $statSize")
+            }
             if (!operation.isActive()) throw CancellationException("Download cancelled")
             operation.mutationAttempted = true
             writeSyncedDownload(resolver, destination) { stream ->
@@ -297,12 +307,15 @@ object FilesOperations {
                 error("provider reports empty destination after $size bytes")
             }
         } catch (failure: Throwable) {
-            val emptyDestination = offset == 0L || reportedSize == 0L
+            val emptyDestination =
+                offset == 0L ||
+                    (reportedSize == 0L && destinationHasData(resolver, destination) == false)
             val cleanupNote = if (emptyDestination) {
-                val deleted = runCatching { resolver.delete(destination, null, null) }
-                    .onFailure(failure::addSuppressed)
-                    .getOrDefault(0) > 0
-                if (deleted) "empty destination deleted" else "destination retained"
+                if (deleteDownloadedDocument(resolver, destination, failure)) {
+                    "empty destination deleted"
+                } else {
+                    "destination retained"
+                }
             } else {
                 "destination retained"
             }
@@ -313,6 +326,27 @@ object FilesOperations {
             )
             throw failure
         }
+    }
+
+    /** True/false when the provider can be opened; null when the check itself failed. */
+    private fun destinationHasData(resolver: ContentResolver, destination: Uri): Boolean? =
+        runCatching {
+            resolver.openInputStream(destination)?.use { it.read() != -1 }
+        }.getOrNull()
+
+    /** Remove a destination this download created but did not fill. */
+    private fun deleteDownloadedDocument(
+        resolver: ContentResolver,
+        destination: Uri,
+        failure: Throwable,
+    ): Boolean {
+        val byDocuments = runCatching {
+            DocumentsContract.deleteDocument(resolver, destination)
+        }.onFailure(failure::addSuppressed).getOrDefault(false)
+        if (byDocuments) return true
+        return runCatching { resolver.delete(destination, null, null) }
+            .onFailure(failure::addSuppressed)
+            .getOrDefault(0) > 0
     }
 
     /** Copy [size] bytes from [volume] to [stream], reporting progress. */
@@ -904,19 +938,32 @@ object FilesOperations {
     private fun openDownloadDescriptor(
         resolver: ContentResolver,
         destination: Uri,
-    ): ParcelFileDescriptor {
+    ): ParcelFileDescriptor? {
         // Some providers reject the non-standard "t" flag. Every destination is a fresh
-        // CreateDocument, so "w" is already truncated; retry only on FileNotFound.
+        // CreateDocument, so "w" is already truncated; retry only on open failure.
         val truncating = try {
             resolver.openFileDescriptor(destination, "wt")
         } catch (_: FileNotFoundException) {
             null
         } catch (_: IllegalArgumentException) {
             null
+        } catch (_: SecurityException) {
+            null
+        } catch (_: UnsupportedOperationException) {
+            null
         }
-        return truncating
-            ?: resolver.openFileDescriptor(destination, "w")
-            ?: error("cannot open $destination for writing")
+        if (truncating != null) return truncating
+        return try {
+            resolver.openFileDescriptor(destination, "w")
+        } catch (_: FileNotFoundException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        } catch (_: SecurityException) {
+            null
+        } catch (_: UnsupportedOperationException) {
+            null
+        }
     }
 
     private fun writeSyncedDownload(
@@ -925,6 +972,19 @@ object FilesOperations {
         write: (OutputStream) -> Unit,
     ) {
         val descriptor = openDownloadDescriptor(resolver, destination)
+        if (descriptor == null) {
+            // Last provider route: openOutputStream handles providers whose document
+            // descriptor rejects both "wt" and "w" but still accepts a write stream.
+            val stream = resolver.openOutputStream(destination, "w")
+                ?: error("cannot open $destination for writing")
+            try {
+                write(stream)
+                stream.flush()
+            } finally {
+                stream.close()
+            }
+            return
+        }
         val stream = try {
             ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
         } catch (failure: Throwable) {

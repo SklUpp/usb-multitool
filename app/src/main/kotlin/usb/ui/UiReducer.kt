@@ -373,6 +373,7 @@ sealed class UiIntent {
         val identity: String?,
         val links: List<WindowsImageLink>,
         val error: String? = null,
+        val sourceKey: String? = null,
     ) : UiIntent()
 
     /** Remove auto_install entries only; image and XML files stay on the stick. */
@@ -749,6 +750,8 @@ sealed class UiIntent {
     data class DownloadFile(
         val binding: FilesDownloadBinding,
         val uri: String,
+        /** Destination already picked; listing may be stale after process death. */
+        val fromPicker: Boolean = false,
     ) : UiIntent()
 
     /** Delete every entry in [selection] after UI confirmation; reducer re-checks pin/write. */
@@ -3610,6 +3613,7 @@ object UiReducer {
                                 windowsImageLinks = null,
                                 windowsImageLinksGeneration = generation,
                                 windowsImageLinksIdentity = device.identity,
+                                windowsImageLinksSource = null,
                             ),
                             effects = listOf(
                                 UiEffect.LoadWindowsLinks(
@@ -3625,7 +3629,9 @@ object UiReducer {
                 val device = state.device
                 if (device == null ||
                     intent.generation != state.windowsImageLinksGeneration ||
-                    intent.identity != device.identity
+                    intent.identity != device.identity ||
+                    (intent.sourceKey != null &&
+                        intent.sourceKey != state.ventoySettingsSource.cacheKey())
                 ) {
                     ReduceResult(state)
                 } else {
@@ -3644,6 +3650,8 @@ object UiReducer {
                     ReduceResult(
                         state.copy(
                             windowsImageLinks = links,
+                            windowsImageLinksSource =
+                                intent.sourceKey ?: state.ventoySettingsSource.cacheKey(),
                             windowsSelectedImages = state.windowsSelectedImages - removed,
                             windowsLinkTargetImage =
                                 state.windowsLinkTargetImage?.takeUnless { it in removed },
@@ -4631,7 +4639,13 @@ object UiReducer {
                 }
             }
 
-            is UiIntent.DownloadFile ->
+            is UiIntent.DownloadFile -> {
+                val bindingValid =
+                    if (intent.fromPicker) {
+                        intent.binding.matchesAttachment(state) && !intent.binding.listedSizeChanged(state)
+                    } else {
+                        intent.binding.matches(state)
+                    }
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
@@ -4639,7 +4653,7 @@ object UiReducer {
                         )
                     !state.actionsEnabled ->
                         ReduceResult(state.withStatus(presenceMessage(state.presence)))
-                    !intent.binding.matches(state) ->
+                    !bindingValid ->
                         ReduceResult(
                             state.withStatus(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)),
                         )
@@ -4648,8 +4662,8 @@ object UiReducer {
                             state,
                             effects = listOf(UiEffect.DownloadFile(intent.binding, intent.uri))
                         )
-
                 }
+            }
 
             is UiIntent.DeleteBatch -> {
                 val block = writeBlockMessage(state)

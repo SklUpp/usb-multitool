@@ -703,18 +703,38 @@ data class FilesDownloadBinding(
     val targetPath: String get() = fatChildPath(directory, name)
 }
 
+/**
+ * Attachment pin only: enough to service a destination already chosen in the picker.
+ * Listing/current path may be empty after process death; the operation re-stats the
+ * exact path before reading, so a stale listing must not discard the picked file.
+ */
+fun FilesDownloadBinding.matchesAttachment(state: AppUiState): Boolean {
+    val device = state.device ?: return false
+    if (device.identity != identity || device.attachGeneration != attachGeneration) return false
+    if (state.selectedPartitionId != partitionId) return false
+    val partition = state.filesVolumes.firstOrNull { it.id == partitionId } ?: return false
+    if (partition.startLba != startLba || partition.sectorCount != sectorCount) return false
+    return name.isNotBlank() && name != "." && name != ".." &&
+        '/' !in name && '\\' !in name && '\u0000' !in name
+}
+
 /** True when binding still names exact visible file on current attachment/partition. */
 fun FilesDownloadBinding.matches(state: AppUiState): Boolean {
     if (state.filesListingState != FilesListingState.Loaded) return false
-    val device = state.device ?: return false
-    if (device.identity != identity || device.attachGeneration != attachGeneration) return false
-    if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
-    val partition = state.filesVolumes.firstOrNull { it.id == partitionId } ?: return false
-    if (partition.startLba != startLba || partition.sectorCount != sectorCount) return false
-    if (name.isBlank() || name == "." || name == ".." || '/' in name || '\\' in name || '\u0000' in name) return false
+    if (!matchesAttachment(state)) return false
+    if (state.currentPath != directory) return false
     val entry = state.files.singleOrNull { it.name == name && !it.isDirectory } ?: return false
     return entry.sizeBytes == sizeBytes
 }
+
+/**
+ * A loaded listing that still names the file but reports another size: the source
+ * changed while the picker was open, so the pinned byte count is no longer valid.
+ * An absent entry is not evidence of a change (listing may still be loading).
+ */
+fun FilesDownloadBinding.listedSizeChanged(state: AppUiState): Boolean =
+    state.files.singleOrNull { it.name == name && !it.isDirectory }
+        ?.let { it.sizeBytes != sizeBytes } == true
 
 /** One selected listing entry captured before a batch picker or confirmation. */
 data class FilesBatchItem(

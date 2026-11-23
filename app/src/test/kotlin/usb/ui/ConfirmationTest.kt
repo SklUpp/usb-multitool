@@ -359,6 +359,28 @@ class UiStateMachineTest {
     }
 
     @Test
+    fun pickedDownloadSurvivesEmptyListingButNotAttachmentSwap() {
+        val binding =
+            FilesDownloadBinding("/docs", "manual.pdf", 42uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+        val restarted =
+            ready().copy(
+                currentPath = "/",
+                files = emptyList(),
+                filesListingState = FilesListingState.Loading,
+            )
+        val resumed = UiReducer.reduce(restarted, UiIntent.DownloadFile(binding, "content://out/7", fromPicker = true))
+        assertEquals(binding, (resumed.effects.single() as UiEffect.DownloadFile).binding)
+
+        val swapped =
+            UiReducer.reduce(
+                restarted.copy(device = device.copy(attachGeneration = 1L)),
+                UiIntent.DownloadFile(binding, "content://out/7", fromPicker = true),
+            )
+        assertTrue(swapped.effects.isEmpty())
+        assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), swapped.state.statusMessage)
+    }
+
+    @Test
     fun staleDownloadBindingFailsClosedAfterDirectoryOrAttachmentChange() {
         val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
         val binding = FilesDownloadBinding("/docs", "manual.pdf", 42uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
