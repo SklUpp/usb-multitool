@@ -30,6 +30,14 @@ typedef struct UsbBlockOps {
 
 uint64_t usb_block_register(UsbBlockOps *ops);
 UsbBlockOps *usb_block_ops(uint64_t handle);
+/*
+ * Atomically claim and remove a registered handle. On success copies its ops
+ * into *out and clears the slot before returning, so a concurrent close/reuse
+ * cannot redirect the caller to a newer registration. Waits for in-flight
+ * callback dispatch because dispatch holds the registry mutex.
+ * Returns 0, or -EINVAL for an unknown/stale handle or null out.
+ */
+int usb_block_take(uint64_t handle, UsbBlockOps *out);
 
 /*
  * Slot-based register for exFAT fsck (handles 1..64).
@@ -37,9 +45,10 @@ UsbBlockOps *usb_block_ops(uint64_t handle);
  * Thread-safe: the slot tables and callback dispatch are guarded by a
  * recursive mutex, so callbacks may call back into usb_block_read/write/sync
  * on the same thread. Registering a handle that is already in use returns
- * -EBUSY; call usb_block_unregister() first. Unregistering does not wait for
- * an in-flight callback on another thread beyond the call already dispatched,
- * so the owner must not free the callback context while a transfer is running.
+ * -EBUSY; call usb_block_unregister() first. Unregister/take waits for an
+ * in-flight callback dispatch because dispatch holds the registry mutex; after
+ * it returns no new dispatch can reach the callback context. Owners should use
+ * usb_block_take() when they free that context, not usb_block_ops().
  */
 int usb_block_register_raw(
         uint64_t handle,

@@ -158,18 +158,29 @@ int usb_block_register_raw(
 	return 0;
 }
 
-void usb_block_unregister(uint64_t handle)
+int usb_block_take(uint64_t handle, UsbBlockOps *out)
 {
 	size_t index;
 	uint64_t generation;
 
+	if (!out) return -EINVAL;
 	lock_tables();
-	if (decode_handle(handle, &index, &generation) &&
-	    g_slot_used[index] && g_slot_generation[index] == generation) {
-		memset(&g_slots[index], 0, sizeof(UsbBlockOps));
-		g_slot_used[index] = 0;
+	if (!decode_handle(handle, &index, &generation) ||
+	    !g_slot_used[index] || g_slot_generation[index] != generation) {
+		unlock_tables();
+		return -EINVAL;
 	}
+	*out = g_slots[index];
+	memset(&g_slots[index], 0, sizeof(UsbBlockOps));
+	g_slot_used[index] = 0;
 	unlock_tables();
+	return 0;
+}
+
+void usb_block_unregister(uint64_t handle)
+{
+	UsbBlockOps discarded;
+	(void)usb_block_take(handle, &discarded);
 }
 
 int usb_block_read(uint64_t handle, uint64_t lba, void *buf, uint32_t sectors)

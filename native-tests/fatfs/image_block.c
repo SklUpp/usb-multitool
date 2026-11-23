@@ -114,10 +114,10 @@ uint64_t image_block_open(const char *path, uint32_t sector_size, uint64_t secto
 
 void image_block_close(uint64_t handle)
 {
-	UsbBlockOps *ops = usb_block_ops(handle);
+	UsbBlockOps ops;
 	ImageCtx *img;
-	if (!ops) return;
-	img = ops->ctx;
+	if (usb_block_take(handle, &ops) != 0) return;
+	img = ops.ctx;
 	if (!img) return;
 	close(img->fd);
 	free(img);

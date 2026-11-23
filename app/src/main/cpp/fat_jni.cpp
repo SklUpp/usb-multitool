@@ -228,10 +228,9 @@ Java_usb_fs_FatFsNative_nativeCloseBlock(JNIEnv *env, jclass, jlong handle)
 {
 	if (handle <= 0) return;
 	uint64_t bhandle = static_cast<uint64_t>(handle);
-	UsbBlockOps *ops = usb_block_ops(bhandle);
-	if (!ops) return;
-	auto *ctx = static_cast<JniBlockCtx *>(ops->ctx);
-	usb_block_unregister(bhandle);
+	UsbBlockOps ops;
+	if (usb_block_take(bhandle, &ops) != 0) return;
+	auto *ctx = static_cast<JniBlockCtx *>(ops.ctx);
 	if (ctx) {
 		if (ctx->scratch) {
 			env->DeleteGlobalRef(ctx->scratch);

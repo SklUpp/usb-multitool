@@ -177,17 +177,11 @@ static s64 dev_op_pread(struct ntfs_device *dev, void *buf, s64 count, s64 offse
     if (ctx->sector_count > 0 && (uint64_t)offset >= total) {
         return 0; /* EOF */
     }
-    if (count > INT64_MAX - offset) {
-        if (ctx->sector_count > 0) {
-            uint64_t available = total - (uint64_t)offset;
-            count = available > INT64_MAX ? INT64_MAX : (s64)available;
-        } else {
-            errno = EINVAL;
-            return -1;
-        }
-    } else if (ctx->sector_count > 0 && (uint64_t)offset + (uint64_t)count > total) {
+    if (ctx->sector_count > 0) {
         uint64_t available = total - (uint64_t)offset;
-        count = available > INT64_MAX ? INT64_MAX : (s64)available;
+        if ((uint64_t)count > available) {
+            count = available > INT64_MAX ? INT64_MAX : (s64)available;
+        }
     }
     uint32_t ss = ctx->sector_size;
     uint64_t first_lba = (uint64_t)offset / ss;

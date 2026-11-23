@@ -180,6 +180,17 @@ static void check_pointer_mode(void)
 	usb_block_unregister(handles[0]); /* stale close must not free recycled slot */
 	assert(usb_block_ops(recycled) != NULL);
 	usb_block_unregister(recycled);
+
+	/* Atomic take removes the slot and returns a copy; repeat take is invalid. */
+	uint64_t claimed_handle = usb_block_register(&ops);
+	assert(claimed_handle != 0);
+	UsbBlockOps claimed;
+	assert(usb_block_take(claimed_handle, NULL) == -EINVAL);
+	assert(usb_block_take(claimed_handle, &claimed) == 0);
+	assert(claimed.ctx == g_slot_store);
+	assert(claimed.read == slot_read);
+	assert(usb_block_ops(claimed_handle) == NULL);
+	assert(usb_block_take(claimed_handle, &claimed) == -EINVAL);
 	for (int i = 1; i < 64; i++) {
 		usb_block_unregister(handles[i]);
 	}
