@@ -956,7 +956,7 @@ fun PartitionsScreen(
                     }
                 }
 
-                CancelOperationButton(state = state, onIntent = onIntent)
+                CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Partitions)
 
                 Box {
                     PartitionDropdown(
@@ -2134,7 +2134,7 @@ private fun RawWriteSection(
                     ) {
                         Text(stringResource(R.string.partitions_raw_write_sectors))
                     }
-                    CancelOperationButton(state = state, onIntent = onIntent)
+                    CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Partitions)
                 }
             }
         }

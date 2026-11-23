@@ -415,7 +415,7 @@ fun OperationTitle.localized(): String =
             stringResource(R.string.op_bind_images_unattend)
         OperationTitle.UnbindImageFromUnattendXml ->
             stringResource(R.string.op_unbind_image_unattend)
-        is OperationTitle.ListPath -> stringResource(R.string.op_list, path)
+        is OperationTitle.ListPath -> stringResource(R.string.op_list, normalizeFatPath(path))
         is OperationTitle.NewFolder -> stringResource(R.string.op_new_folder, name)
         is OperationTitle.DeleteEntry -> stringResource(R.string.op_delete, name)
         is OperationTitle.RenameEntry -> stringResource(R.string.op_rename, from)

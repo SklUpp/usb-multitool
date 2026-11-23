@@ -1708,7 +1708,10 @@ private fun KnownControlRow(
                 }
             }
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = humanTitle,
@@ -1734,7 +1737,15 @@ private fun KnownControlRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.End,
+                ) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
                         known.allowed.forEach { option ->
                             TextButton(
                                 onClick = {
@@ -1745,9 +1756,9 @@ private fun KnownControlRow(
                             ) { Text(knownOptionLabel(known.key, option)) }
                         }
                     }
-                }
-                keyHint?.let {
-                    InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
+                    keyHint?.let {
+                        InfoHelpButton(infoTitle = humanTitle, infoText = stringResource(it))
+                    }
                 }
             }
         }

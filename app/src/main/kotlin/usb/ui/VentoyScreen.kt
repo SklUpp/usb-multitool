@@ -523,6 +523,7 @@ private fun VentoyVersionRow(
             CancelOperationButton(
                 state = state,
                 onIntent = onIntent,
+                ownerTab = ShellTab.Ventoy,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

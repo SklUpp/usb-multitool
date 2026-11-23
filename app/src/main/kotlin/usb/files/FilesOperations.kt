@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.OutputStream
 import kotlinx.coroutines.CancellationException
@@ -283,6 +284,7 @@ object FilesOperations {
         val size = volume.stat(target).size
         operation.beginCurrentFile(size)
         var offset = 0L
+        var reportedSize: Long? = null
         try {
             if (!operation.isActive()) throw CancellationException("Download cancelled")
             operation.mutationAttempted = true
@@ -290,10 +292,23 @@ object FilesOperations {
                 offset = streamVolume(volume, target, size, stream, operation)
             }
             if (offset != size) error("download size mismatch: got $offset, expected $size")
+            reportedSize = openableSizeBytes(resolver, destination)
+            if (size > 0L && reportedSize == 0L) {
+                error("provider reports empty destination after $size bytes")
+            }
         } catch (failure: Throwable) {
+            val emptyDestination = offset == 0L || reportedSize == 0L
+            val cleanupNote = if (emptyDestination) {
+                val deleted = runCatching { resolver.delete(destination, null, null) }
+                    .onFailure(failure::addSuppressed)
+                    .getOrDefault(0) > 0
+                if (deleted) "empty destination deleted" else "destination retained"
+            } else {
+                "destination retained"
+            }
             operation.state = OperationState.Partial
             operation.failureCause = usb.device.DiskException.IoFailure(
-                "Download failed after $offset of $size bytes; destination retained",
+                "Download failed after $offset of $size bytes; $cleanupNote",
                 failure,
             )
             throw failure
@@ -860,6 +875,9 @@ object FilesOperations {
                 offset = streamVolume(volume, sourcePath, size, stream, operation)
             }
             if (offset != size) error("download size mismatch: got $offset, expected $size")
+            if (size > 0L && openableSizeBytes(resolver, target.uri) == 0L) {
+                error("provider reports empty destination after $size bytes")
+            }
         } catch (failure: Throwable) {
             val cleanupNote =
                 if (target.created) {
@@ -880,18 +898,31 @@ object FilesOperations {
     }
 
     /**
-     * Truncating write + flush + fd.sync before close. Mirrors [usb.saf.SafSyncedOutput]
-     * but keeps mode `wt` so a replaced SAF document never retains a stale tail.
-     * [ParcelFileDescriptor.AutoCloseOutputStream] owns the descriptor after construction;
-     * never close the PFD twice.
+     * Opens a fresh download destination for truncating writes. Mirrors
+     * [usb.saf.SafSyncedOutput] but tolerates providers that reject `wt`.
      */
+    private fun openDownloadDescriptor(
+        resolver: ContentResolver,
+        destination: Uri,
+    ): ParcelFileDescriptor {
+        // Some providers reject the non-standard "t" flag. Every destination is a fresh
+        // CreateDocument, so "w" is already truncated; retry only on FileNotFound.
+        val truncating = try {
+            resolver.openFileDescriptor(destination, "wt")
+        } catch (_: FileNotFoundException) {
+            null
+        }
+        return truncating
+            ?: resolver.openFileDescriptor(destination, "w")
+            ?: error("cannot open $destination for writing")
+    }
+
     private fun writeSyncedDownload(
         resolver: ContentResolver,
         destination: Uri,
         write: (OutputStream) -> Unit,
     ) {
-        val descriptor = resolver.openFileDescriptor(destination, "wt")
-            ?: error("cannot open $destination for writing")
+        val descriptor = openDownloadDescriptor(resolver, destination)
         val stream = try {
             ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
         } catch (failure: Throwable) {

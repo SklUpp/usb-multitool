@@ -110,4 +110,16 @@ class OperationProgressMapperTest {
         assertEquals("Import win.iso", OperationTitle.ImportTarget("win.iso").logLabel)
         assertEquals("Format DATA", OperationTitle.FormatTarget("DATA").logLabel)
     }
+
+    @Test fun originTabMatchesOwningScreen() {
+        assertEquals(ShellTab.Files, OperationTitle.DownloadEntry("x.iso").originTab())
+        assertEquals(ShellTab.Files, OperationTitle.Upload.originTab())
+        assertEquals(ShellTab.Ventoy, OperationTitle.SetVentoyGlobalSetting.originTab())
+        assertEquals(ShellTab.Ventoy, OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL).originTab())
+        assertEquals(ShellTab.Diagnostics, OperationTitle.RescueBackup.originTab())
+        assertEquals(ShellTab.Diagnostics, OperationTitle.Destructive(DestructiveAction.GPT_RESTORE).originTab())
+        assertEquals(ShellTab.Partitions, OperationTitle.Destructive(DestructiveAction.RAW_WRITE).originTab())
+        assertEquals(ShellTab.Partitions, OperationTitle.ProbeDevice.originTab())
+        assertNull(OperationTitle.EjectDevice.originTab())
+    }
 }

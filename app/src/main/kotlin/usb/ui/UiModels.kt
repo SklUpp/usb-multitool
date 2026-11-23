@@ -1206,6 +1206,83 @@ sealed interface OperationTitle {
         this is DownloadBatch || this is UploadBatch
 }
 
+/** Tab whose section owns [this] operation; null for global-only actions. */
+fun OperationTitle.originTab(): ShellTab? =
+    when (this) {
+        is OperationTitle.ListPath,
+        is OperationTitle.NewFolder,
+        is OperationTitle.DeleteEntry,
+        is OperationTitle.RenameEntry,
+        is OperationTitle.DownloadEntry,
+        is OperationTitle.StageForRawWrite,
+        is OperationTitle.FormatTarget,
+        is OperationTitle.ImportTarget,
+        is OperationTitle.DownloadBatch,
+        is OperationTitle.UploadBatch,
+        is OperationTitle.DeleteBatch,
+        OperationTitle.Upload,
+        OperationTitle.ListDataPartitionFiles,
+        -> ShellTab.Files
+
+        OperationTitle.AutounattendXmlLink,
+        OperationTitle.ReadXmlBindings,
+        OperationTitle.RemoveXmlBindings,
+        OperationTitle.SaveGlobalWindowsControls,
+        OperationTitle.ReadUnattendXml,
+        OperationTitle.ListVentoyImages,
+        OperationTitle.GenerateUnattendXml,
+        OperationTitle.WriteUnattendXml,
+        OperationTitle.ReadVentoyGlobalSettings,
+        OperationTitle.ListVentoyFolders,
+        OperationTitle.SetVentoyGlobalSetting,
+        OperationTitle.BindImagesToUnattendXml,
+        OperationTitle.UnbindImageFromUnattendXml,
+        -> ShellTab.Ventoy
+
+        OperationTitle.ReadScan,
+        OperationTitle.SmartRead,
+        OperationTitle.RescueBackup,
+        OperationTitle.GptCriticalBackup,
+        OperationTitle.SelfTest,
+        OperationTitle.SelfTestRunning,
+        -> ShellTab.Diagnostics
+
+        OperationTitle.ProbeDevice,
+        OperationTitle.RefreshPartitions,
+        OperationTitle.CheckRawRange,
+        OperationTitle.ListRawSources,
+        -> ShellTab.Partitions
+
+        OperationTitle.EjectDevice -> null
+
+        is OperationTitle.Destructive ->
+            when (action) {
+                DestructiveAction.VENTOY_INSTALL,
+                DestructiveAction.VENTOY_UPDATE,
+                DestructiveAction.VENTOY_LINK_XML,
+                DestructiveAction.VENTOY_UNATTEND_XML_WRITE,
+                DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT,
+                -> ShellTab.Ventoy
+
+                DestructiveAction.GPT_RESTORE,
+                DestructiveAction.RESCUE_RESTORE,
+                -> ShellTab.Diagnostics
+
+                DestructiveAction.WIPE,
+                DestructiveAction.RAW_WRITE,
+                DestructiveAction.FORMAT_PARTITION,
+                DestructiveAction.DELETE_PARTITION,
+                DestructiveAction.CREATE_PARTITION,
+                DestructiveAction.GPT_REPAIR,
+                DestructiveAction.SET_PARTITION_ROLE,
+                DestructiveAction.SET_PARTITION_BOOTABLE,
+                DestructiveAction.RENAME_PARTITION,
+                DestructiveAction.RENAME_VOLUME_LABEL,
+                DestructiveAction.INITIALIZE_PARTITION_TABLE,
+                -> ShellTab.Partitions
+            }
+    }
+
 data class OperationProgress(
     val state: OperationState,
     val title: OperationTitle,

@@ -304,7 +304,7 @@ fun FilesScreen(
                     enabled = state.actionsEnabled,
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
-                CancelOperationButton(state = state, onIntent = onIntent)
+                CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Files)
                 // Matches the empty-partitions branch below: the same known blocked
                 // release state renders the localized card here too, since partitions
                 // can be retained while the volume refuses to remount.

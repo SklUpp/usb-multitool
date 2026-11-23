@@ -1085,10 +1085,13 @@ private fun DeviceHeader(
 ) {
     val device = state.device
     val operationLocked = state.deviceBusy
+    val serialLabel = device?.serialNumber?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { stringResource(R.string.header_serial, it) }
     val subtitle = when (state.presence) {
         DevicePresence.Ready -> buildString {
             append(device?.capacityLabel ?: "USB")
             state.partitionScheme?.name?.let { append(", ").append(it) }
+            serialLabel?.let { append(" · ").append(it) }
         }
         DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
         DevicePresence.Busy -> stringResource(R.string.header_busy)
@@ -1416,9 +1419,11 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
 internal fun CancelOperationButton(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
+    ownerTab: ShellTab? = null,
     modifier: Modifier = Modifier,
 ) {
     val operation = state.operation ?: return
+    if (ownerTab != null && operation.title.originTab() != ownerTab) return
     if (!operation.cancelable ||
         (operation.state != OperationState.Running && operation.state != OperationState.Queued)
     ) {
@@ -1453,9 +1458,9 @@ private fun OperationStatusLine(
         operation?.state == OperationState.Queued
     val facts = operationStatusFacts(state)
     val newerStandaloneText = newerStandaloneStatusMessage(state)?.localized()
-    val lineText = newerStandaloneText ?: state.statusMessage
-        ?.takeIf { facts == null }
-        ?.localized()
+    val lineText = newerStandaloneText
+        ?: facts?.summary
+        ?: state.statusMessage?.localized()
     val progressDescription = stringResource(R.string.shell_status_progress)
     val openLabel = stringResource(R.string.shell_status_open_details)
 

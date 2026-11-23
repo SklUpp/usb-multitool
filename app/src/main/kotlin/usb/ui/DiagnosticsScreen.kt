@@ -224,7 +224,7 @@ fun DiagnosticsScreen(
                 state.smartResult?.let { outcome ->
                     InspectionText(smartInspectionLines(outcome))
                 }
-                CancelOperationButton(state = state, onIntent = onIntent)
+                CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Diagnostics)
             }
         }
 
@@ -243,8 +243,6 @@ fun DiagnosticsScreen(
             val resetSelectionLabel = stringResource(R.string.diagnostics_reset_selection)
             val chooseFolderLabel =
                 stringResource(R.string.diagnostics_backup_choose_folder)
-            val chooseRestoreFolderLabel =
-                stringResource(R.string.diagnostics_choose_restore_folder)
             val folderStatusText = when {
                 state.backupFolderUri == null ->
                     stringResource(R.string.diagnostics_backup_folder_none)
@@ -344,16 +342,6 @@ fun DiagnosticsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        IconButton(
-                            onClick = onPickBackupFolder,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .semantics {
-                                    contentDescription = chooseRestoreFolderLabel
-                                },
-                        ) {
-                            GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
-                        }
                         IconButton(
                             onClick = onPickRescueFile,
                             modifier = Modifier
@@ -488,16 +476,6 @@ fun DiagnosticsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        IconButton(
-                            onClick = onPickBackupFolder,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .semantics {
-                                    contentDescription = chooseRestoreFolderLabel
-                                },
-                        ) {
-                            GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
-                        }
                         IconButton(
                             onClick = onPickGptFile,
                             modifier = Modifier
