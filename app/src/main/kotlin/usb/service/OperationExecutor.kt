@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -76,6 +77,9 @@ class OperationExecutor(
     private val outstanding = AtomicInteger(0)
     /** Set under [mutex] by [stopIfIdleLocked]; cleared on bind/unbind and on enqueue. */
     @Volatile private var idleStopSignalled = false
+    /** Serializes foreground readiness in submit order; see [submit]. */
+    private val foregroundOrderLock = Any()
+    private var lastForegroundGate: CompletableDeferred<Unit>? = null
 
     /** Rebind wake/service control. Not a public field write. */
     fun bind(wakeLock: OperationWakeLock, serviceControl: ServiceControl) {
@@ -129,20 +133,55 @@ class OperationExecutor(
         handle.markCounted()
         outstanding.incrementAndGet()
 
-        scope.launch {
-            val startFailure = if (handle.operation.foregroundService &&
-                !disconnected.get() && connectionGeneration.get() == submitGen &&
-                !handle.cancelled.get() && handle.operation.isActive()
-            ) {
-                try {
-                    serviceControl.startForeground()
-                    null
-                } catch (t: Throwable) {
-                    t
-                }
-            } else {
-                null
+        // Readiness must not share the single-thread disk dispatcher: a blocking
+        // metadata operation can otherwise delay the readiness timeout even though
+        // the service has already started. A per-submit gate keeps foreground
+        // operations in submission order while they wait off that dispatcher.
+        val gate = if (handle.operation.foregroundService) {
+            synchronized(foregroundOrderLock) {
+                val previous = lastForegroundGate
+                val mine = CompletableDeferred<Unit>()
+                lastForegroundGate = mine
+                previous to mine
             }
+        } else {
+            null
+        }
+
+        if (gate != null) {
+            scope.launch(Dispatchers.Default) {
+                try {
+                    gate.first?.await()
+                    val startFailure = if (disconnected.get() ||
+                        connectionGeneration.get() != submitGen ||
+                        handle.cancelled.get() || !handle.operation.isActive()
+                    ) {
+                        null
+                    } else {
+                        try {
+                            serviceControl.startForeground()
+                            null
+                        } catch (t: Throwable) {
+                            t
+                        }
+                    }
+                    schedule(handle, submitGen, startFailure)
+                } finally {
+                    gate.second.complete(Unit)
+                }
+            }
+        } else {
+            schedule(handle, submitGen, null)
+        }
+        return handle
+    }
+
+    /**
+     * Queue in submission order on the disk dispatcher. Callers must already
+     * hold the foreground gate when readiness was required.
+     */
+    private fun schedule(handle: QueuedOp, submitGen: Long, startFailure: Throwable?) {
+        scope.launch {
             val startWorker = mutex.withLock {
                 if (disconnected.get() || connectionGeneration.get() != submitGen) {
                     handle.complete(OperationState.Failed(DiskException.Disconnected()))
@@ -174,7 +213,6 @@ class OperationExecutor(
             }
             if (startWorker) drain()
         }
-        return handle
     }
 
     fun onDisconnected() {

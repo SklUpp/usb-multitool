@@ -40,13 +40,16 @@ class DiskService : Service() {
                 if (controller.executor.hasOutstandingWork()) {
                     return START_NOT_STICKY
                 }
+                // Drop the foreground flag before the final admission check so a
+                // racing submit requests a fresh start instead of trusting a
+                // service that is already tearing down.
+                isForeground = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 if (controller.executor.hasOutstandingWork()) {
                     startForegroundInternal()
                     isForeground = true
                     return START_NOT_STICKY
                 }
-                isForeground = false
                 stopSelfResult(startId)
             }
             return START_NOT_STICKY
@@ -59,16 +62,22 @@ class DiskService : Service() {
         }
         if (!controller.executor.hasOutstandingWork()) {
             synchronized(Companion) {
-                if (!controller.executor.hasOutstandingWork()) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    if (controller.executor.hasOutstandingWork()) {
-                        startForegroundInternal()
-                        isForeground = true
-                        return START_NOT_STICKY
-                    }
-                    isForeground = false
-                    stopSelfResult(startId)
+                // Clear admission first: a submit that races this teardown then
+                // either counts before the check below (restart) or observes
+                // isForeground == false and requests a fresh start.
+                isForeground = false
+                if (controller.executor.hasOutstandingWork()) {
+                    startForegroundInternal()
+                    isForeground = true
+                    return START_NOT_STICKY
                 }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                if (controller.executor.hasOutstandingWork()) {
+                    startForegroundInternal()
+                    isForeground = true
+                    return START_NOT_STICKY
+                }
+                stopSelfResult(startId)
             }
         }
         return START_NOT_STICKY

@@ -1,10 +1,19 @@
 package usb.service
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -624,6 +633,88 @@ class OperationExecutorTest {
         ready.complete(Unit)
         assertEquals(OperationState.Completed, foreground.await())
         assertEquals(1, wakeAcquires)
+    }
+
+    @Test fun foregroundReadinessRunsWhileDiskWorkerIsBlocked() = runBlocking {
+        val diskDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + diskDispatcher)
+        val metadataStarted = CountDownLatch(1)
+        val releaseMetadata = CountDownLatch(1)
+        try {
+            val startCalled = CompletableDeferred<Unit>()
+            val control = object : ServiceControl {
+                override suspend fun startForeground() {
+                    startCalled.complete(Unit)
+                }
+
+                override fun stopWhenIdle() = Unit
+            }
+            val executor = OperationExecutor(scope, serviceControl = control)
+            val metadata = executor.submit(
+                object : DiskOperation("probe") {
+                    override val foregroundService: Boolean = false
+                    override suspend fun run() {
+                        metadataStarted.countDown()
+                        check(releaseMetadata.await(10, TimeUnit.SECONDS))
+                    }
+                },
+            )
+            assertTrue(metadataStarted.await(2, TimeUnit.SECONDS))
+            val foreground = executor.submit(object : DiskOperation("write") {
+                override suspend fun run() = Unit
+            })
+            // The single disk thread is blocked in metadata; readiness must still
+            // be requested from its own dispatcher.
+            withTimeout(2_000) { startCalled.await() }
+            releaseMetadata.countDown()
+            assertEquals(OperationState.Completed, metadata.await())
+            assertEquals(OperationState.Completed, foreground.await())
+        } finally {
+            releaseMetadata.countDown()
+            scope.cancel()
+            diskDispatcher.close()
+        }
+    }
+
+    @Test fun foregroundReadinessKeepsSubmissionOrder() = runBlocking {
+        val diskDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + diskDispatcher)
+        val firstStartEntered = CompletableDeferred<Unit>()
+        val releaseFirstStart = CompletableDeferred<Unit>()
+        val starts = AtomicInteger(0)
+        val order = mutableListOf<String>()
+        try {
+            val control = object : ServiceControl {
+                override suspend fun startForeground() {
+                    if (starts.getAndIncrement() == 0) {
+                        firstStartEntered.complete(Unit)
+                        releaseFirstStart.await()
+                    }
+                }
+
+                override fun stopWhenIdle() = Unit
+            }
+            val executor = OperationExecutor(scope, serviceControl = control)
+            val first = executor.submit(object : DiskOperation("write A") {
+                override suspend fun run() { order.add("A") }
+            })
+            withTimeout(2_000) { firstStartEntered.await() }
+            val second = executor.submit(object : DiskOperation("write B") {
+                override suspend fun run() { order.add("B") }
+            })
+            // A's readiness is blocked; B must not overtake it. Give an
+            // independent readiness lane time to run before asserting.
+            delay(200)
+            assertEquals(1, starts.get())
+            releaseFirstStart.complete(Unit)
+            assertEquals(OperationState.Completed, first.await())
+            assertEquals(OperationState.Completed, second.await())
+            assertEquals(listOf("A", "B"), order)
+        } finally {
+            releaseFirstStart.complete(Unit)
+            scope.cancel()
+            diskDispatcher.close()
+        }
     }
 
     @Test fun foregroundServiceStartFailureFailsOperation() = runTest {

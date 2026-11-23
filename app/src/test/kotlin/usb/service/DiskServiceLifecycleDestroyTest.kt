@@ -91,6 +91,24 @@ class DiskServiceLifecycleDestroyTest {
         assertEquals(1, starts.get())
     }
     @Test
+    fun completedReadinessDoesNotSuppressNextStart() = runBlocking {
+        var starts = 0
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = { starts++; CompletableDeferred(Unit) },
+            stopService = {},
+            hasOutstandingWork = { false },
+            isServiceForeground = { false },
+        )
+
+        lifecycle.startForeground()
+        assertEquals(1, starts)
+        // After an idle teardown isForeground is false but the service instance
+        // still exists; a later submit must request a fresh start.
+        lifecycle.startForeground()
+        assertEquals(2, starts)
+    }
+
+    @Test
     fun concurrentStartsWaitForSameReadiness() = runTest {
         val ready = CompletableDeferred<Unit>()
         var starts = 0

@@ -42,6 +42,11 @@ class DiskServiceLifecycle(
             withTimeout(5_000L) {
                 if (owner) {
                     requestStart().await()
+                    // Drop the completed gate before publishing so a submit that
+                    // races an idle teardown cannot reuse stale readiness.
+                    synchronized(lock) {
+                        if (pendingStart === ready) pendingStart = null
+                    }
                     ready.complete(Unit)
                 } else {
                     ready.await()
