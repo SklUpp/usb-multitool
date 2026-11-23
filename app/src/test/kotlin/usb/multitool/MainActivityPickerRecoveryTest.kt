@@ -207,7 +207,7 @@ class MainActivityPickerRecoveryTest {
         }
     }
     @Test
-    fun downloadBindingWithoutOwnedStageIsNotRestoredAfterProcessDeath() {
+    fun downloadBindingIsRestoredWithoutLocalStageAfterProcessDeath() {
         val saved = Bundle().apply {
             putString("usb.multitool.PENDING_DOWNLOAD_DIRECTORY", "/ISO")
             putString("usb.multitool.PENDING_DOWNLOAD_NAME", "win11.iso")
@@ -219,10 +219,11 @@ class MainActivityPickerRecoveryTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).create(saved)
         try {
             val vm = ViewModelProvider(controller.get())[MainViewModel::class.java]
-            assertEquals(UiMessage.Key(UiMessageKey.StaleStagedImage), vm.state.statusMessage)
+            assertEquals("win11.iso", vm.pendingDownloadBinding?.name)
+            assertEquals(1L, vm.pendingDownloadRequestId)
             val out = Bundle()
             controller.saveInstanceState(out)
-            assertFalse(out.containsKey("usb.multitool.PENDING_DOWNLOAD_NAME"))
+            assertEquals("win11.iso", out.getString("usb.multitool.PENDING_DOWNLOAD_NAME"))
             assertFalse(out.containsKey("usb.multitool.PENDING_DOWNLOAD_STAGED"))
         } finally {
             controller.destroy()
