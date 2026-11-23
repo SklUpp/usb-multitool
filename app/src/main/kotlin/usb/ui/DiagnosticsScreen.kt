@@ -407,24 +407,7 @@ fun DiagnosticsScreen(
                 rescueMap != null &&
                 rescueMap.error == null &&
                 rescueMap.summary?.sectorSize != null
-            val restoreOperation = state.operation?.takeIf { op ->
-                op.cancelable &&
-                    (op.state == OperationState.Running || op.state == OperationState.Queued) &&
-                    (
-                        op.title == OperationTitle.RescueBackup ||
-                            op.title == OperationTitle.Destructive(DestructiveAction.RESCUE_RESTORE)
-                        )
-            }
-            if (restoreOperation != null) {
-                Button(
-                    onClick = { onIntent(UiIntent.CancelOperation(restoreOperation.token)) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
-                ) { Text(stringResource(R.string.action_cancel)) }
-            } else Column(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -443,27 +426,25 @@ fun DiagnosticsScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Button(
+                ApplyCancelButton(
+                    state = state,
+                    onIntent = onIntent,
+                    ownerTab = ShellTab.Diagnostics,
+                    label = stringResource(R.string.diagnostics_restore_image),
+                    enabled = state.actionsEnabled && rescueReady,
                     onClick = {
                         onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
                     },
-                    enabled = state.actionsEnabled && rescueReady,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
                     ),
-                ) {
-                    GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.diagnostics_restore_image),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                    matchesTitle = { title ->
+                        title == OperationTitle.RescueBackup ||
+                            title == OperationTitle.Destructive(DestructiveAction.RESCUE_RESTORE)
+                    },
+                )
             }
             if (state.rescueImageUri != null || state.rescueMapUri != null) {
                 val restoreLines = buildList {

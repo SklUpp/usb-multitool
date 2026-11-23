@@ -1392,11 +1392,13 @@ internal fun ApplyCancelButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     colors: ButtonColors = ButtonDefaults.buttonColors(),
+    matchesTitle: (OperationTitle) -> Boolean = { true },
 ) {
     val operation = state.operation
     val cancelable = operation != null &&
         operation.cancelable &&
         operation.title.originTab() == ownerTab &&
+        matchesTitle(operation.title) &&
         (operation.state == OperationState.Running || operation.state == OperationState.Queued)
     if (cancelable) {
         Button(
