@@ -90,4 +90,21 @@ class VentoySettingsSourceTest {
             normalizeVentoyFilePath("/custom/../config.json")
         }
     }
+
+    @Test
+    fun cacheKeyTracksTheExactSelectedConfig() {
+        assertEquals("default", VentoySettingsSource.Default.cacheKey())
+        assertEquals(
+            "default",
+            VentoySettingsSource.UsbFile("/VENTOY/Ventoy.JSON").cacheKey(),
+        )
+        assertEquals(
+            "usb:/custom/config.json",
+            VentoySettingsSource.UsbFile("/custom/config.json").cacheKey(),
+        )
+        assertEquals(
+            "doc:content://provider/config.json",
+            VentoySettingsSource.Document("content://provider/config.json").cacheKey(),
+        )
+    }
 }

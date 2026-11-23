@@ -381,6 +381,17 @@ class UiStateMachineTest {
     }
 
     @Test
+    fun attachmentPinMatchesGeometryAndOptionalDirectory() {
+        val state = ready().copy(currentPath = "/docs", files = emptyList())
+        val pin = UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+        assertTrue(pin.matches(state, "/docs"))
+        assertTrue(pin.matches(state))
+        assertTrue(!pin.matches(state, "/other"))
+        assertTrue(!pin.copy(sectorCount = 1024uL).matches(state))
+        assertTrue(!pin.copy(attachGeneration = 1L).matches(state))
+    }
+
+    @Test
     fun staleDownloadBindingFailsClosedAfterDirectoryOrAttachmentChange() {
         val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
         val binding = FilesDownloadBinding("/docs", "manual.pdf", 42uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)

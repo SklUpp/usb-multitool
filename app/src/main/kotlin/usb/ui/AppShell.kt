@@ -50,6 +50,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -77,7 +79,6 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.darkColorScheme
@@ -316,29 +317,8 @@ fun AppShell(
                 operationOriginToken = operationToken
             }
         }
-        // Strip opens the status dialog; picker ownership still forces it closed.
-        var operationDetailsOpen by rememberSaveable { mutableStateOf(false) }
+        // Strip is read-only: the former details dialog is gone.
         val compactHeight = LocalConfiguration.current.screenHeightDp < 480
-        // Terminal results get one short snackbar in addition to the permanent block;
-        // status spam while running stays out (the block is the only live surface).
-        val shellSnackbar = remember { SnackbarHostState() }
-        var snackbarToken by rememberSaveable { mutableStateOf<Long?>(null) }
-        val shellFacts = if (state.operation?.state?.isTerminal() == true) {
-            operationStatusFacts(state)
-        } else {
-            null
-        }
-        val snackbarText = shellFacts?.let { fact ->
-            listOfNotNull(fact.name, fact.result ?: fact.state).joinToString(", ")
-        } ?: state.statusMessage?.localized()
-        LaunchedEffect(state.operation?.token, state.operation?.state) {
-            val operation = state.operation ?: return@LaunchedEffect
-            if (!operation.state.isTerminal() || snackbarToken == operation.token.value) {
-                return@LaunchedEffect
-            }
-            snackbarToken = operation.token.value
-            snackbarText?.let { shellSnackbar.showSnackbar(it, duration = SnackbarDuration.Short) }
-        }
         // Modal pick task owns Back: cancel routes through the reducer, and Back stays
         // inert while a copy runs or a confirmation is open (the reducer keeps the
         // picker and reports why). Journal/Settings handlers are disabled while pickOpen.
@@ -424,7 +404,7 @@ fun AppShell(
             }
         }
         LaunchedEffect(pickOpen) {
-            if (pickOpen) operationDetailsOpen = false
+            if (pickOpen) focusManager.clearFocus(force = true)
         }
         Scaffold(
             modifier = modifier.fillMaxSize(),
@@ -434,7 +414,6 @@ fun AppShell(
             contentWindowInsets = WindowInsets.safeDrawing.only(
                 WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
             ),
-            snackbarHost = { SnackbarHost(shellSnackbar) },
             bottomBar = {
                 if (compactHeight) {
                     Box(
@@ -584,10 +563,7 @@ fun AppShell(
                             )
                         }
                         if (!panels.journalScreenOpen) {
-                            OperationStatusLine(
-                                state = state,
-                                onOpenDetails = { operationDetailsOpen = true },
-                            )
+                            OperationStatusLine(state = state)
                         }
                     }
                     // Tab content and the journal share this weight box: the journal covers
@@ -803,16 +779,6 @@ fun AppShell(
             }
         }
         }
-        }
-
-        if (operationDetailsOpen && !pickOpen) {
-            // Centred status dialog: works idle and during an operation. Closing never
-            // cancels; only the explicit cancel button reaches the reducer.
-            StatusDialog(
-                state = state,
-                onIntent = onIntent,
-                onDismiss = { operationDetailsOpen = false },
-            )
         }
 
         state.linkOverwriteCandidate
@@ -1305,8 +1271,8 @@ private data class OperationStatusFacts(
     val resultTone: StatusTone,
     val tone: StatusTone,
 ) {
-    /** The one-line strip text: `name, state, progress`, blanks omitted. */
-    val summary: String get() = listOfNotNull(name, state, progress).joinToString(FACT_SEPARATOR)
+    /** One-line strip text; the progress dialog owns the percentage. */
+    val summary: String get() = listOfNotNull(name, state).joinToString(" — ")
 }
 
 internal fun newerStandaloneStatusMessage(state: AppUiState): UiMessage? =
@@ -1369,7 +1335,10 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
             is ReadbackVerdict.Unverified, ReadbackVerdict.Skipped -> StatusTone.Warning
             ReadbackVerdict.Verified -> StatusTone.Success
         }
-        text to tone
+        val average = result.averageBytesPerSecond?.let {
+            stringResource(R.string.raw_average_speed, usb.formatBinaryBytesPerSecond(it))
+        }
+        listOfNotNull(text, average).joinToString(" ") to tone
     }
     // Terminal outcome (error, read-scan summary or result); it must outlive the
     // operation, so it cannot be a snackbar.
@@ -1407,6 +1376,49 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
         },
         tone = tone,
     )
+}
+
+/**
+ * One button for both halves of a serialized operation: Apply when idle/disabled,
+ * Cancel while the owning tab has a cancelable queued/running operation.
+ */
+@Composable
+internal fun ApplyCancelButton(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    ownerTab: ShellTab,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    colors: ButtonColors = ButtonDefaults.buttonColors(),
+) {
+    val operation = state.operation
+    val cancelable = operation != null &&
+        operation.cancelable &&
+        operation.title.originTab() == ownerTab &&
+        (operation.state == OperationState.Running || operation.state == OperationState.Queued)
+    if (cancelable) {
+        Button(
+            onClick = { onIntent(UiIntent.CancelOperation(operation.token)) },
+            modifier = modifier,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error,
+                contentColor = MaterialTheme.colorScheme.onError,
+            ),
+        ) {
+            Text(stringResource(R.string.action_cancel))
+        }
+    } else {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier,
+            colors = colors,
+        ) {
+            Text(label)
+        }
+    }
 }
 
 /**
@@ -1451,7 +1463,6 @@ internal fun CancelOperationButton(
 @Composable
 private fun OperationStatusLine(
     state: AppUiState,
-    onOpenDetails: () -> Unit,
 ) {
     val operation = state.operation
     val running = operation?.state == OperationState.Running ||
@@ -1459,22 +1470,26 @@ private fun OperationStatusLine(
     val facts = operationStatusFacts(state)
     val newerStandaloneText = newerStandaloneStatusMessage(state)?.localized()
     val lineText = newerStandaloneText
-        ?: facts?.summary
+        ?: facts?.let { fact ->
+            if (running) {
+                fact.summary
+            } else {
+                if (fact.tone == StatusTone.Error) {
+                    fact.result ?: fact.readback ?: fact.summary
+                } else {
+                    fact.readback ?: fact.result ?: fact.summary
+                }
+            }
+        }
         ?: state.statusMessage?.localized()
     val progressDescription = stringResource(R.string.shell_status_progress)
-    val openLabel = stringResource(R.string.shell_status_open_details)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(top = 4.dp, bottom = 4.dp)
-            .clickable(
-                role = Role.Button,
-                onClickLabel = openLabel,
-                onClick = onOpenDetails,
-            )
-            .heightIn(min = 48.dp, max = 64.dp),
+            .heightIn(min = 48.dp, max = 76.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.small,
         tonalElevation = 0.dp,
@@ -1502,7 +1517,7 @@ private fun OperationStatusLine(
                 } else {
                     MaterialTheme.colorScheme.onSurface
                 },
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
@@ -1586,7 +1601,7 @@ private fun StatusDialog(
     // running; otherwise the localized readback / terminal result. Never invent a percent.
     val compactStatus = facts?.let { fact ->
         val progressLine = listOfNotNull(fact.state, fact.progress)
-            .joinToString(FACT_SEPARATOR)
+            .joinToString(" ")
             .takeIf { it.isNotEmpty() }
         val output = fact.readback ?: fact.result
         val statusLine = when {
@@ -1603,7 +1618,7 @@ private fun StatusDialog(
         }
         val detail = newerStatusText ?: statusLine
         listOf(
-            listOfNotNull(fact.name, detail).joinToString(FACT_SEPARATOR) to statusTone,
+            listOfNotNull(fact.name, detail).joinToString(" ") to statusTone,
         )
     } ?: state.statusMessage?.let {
         listOf(it.localized() to StatusTone.Neutral)
@@ -1643,43 +1658,38 @@ private fun StatusDialog(
             }
         },
         text = {
-            val scrollState = rememberScrollState()
-            LaunchedEffect(techLines.lastOrNull(), scrollState.maxValue) {
-                if (scrollState.maxValue > 0) scrollState.scrollTo(scrollState.maxValue)
-            }
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                // Temporary operation journal — same JournalLine renderer as the full log.
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    shape = MaterialTheme.shapes.small,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 0.dp,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
+                if (techLines.isEmpty()) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.log_empty),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = dialogTextColor,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        if (techLines.isEmpty()) {
-                            Text(
-                                text = stringResource(R.string.log_empty),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                ),
-                                color = dialogTextColor,
-                            )
-                        } else {
-                            techLines.forEach { line ->
-                                JournalLine(line = line)
-                            }
+                        items(techLines.size) { index ->
+                            JournalLine(line = techLines[index])
                         }
                     }
                 }

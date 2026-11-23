@@ -3733,8 +3733,19 @@ object UiReducer {
             UiIntent.LoadAutounattendCandidatesOnly -> {
                 if (!state.actionsEnabled || state.device == null) ReduceResult(state)
                 else {
-                    val generation = state.autounattendRequestGeneration + 1
-                    ReduceResult(state.copy(autounattendRequestGeneration = generation, autounattendLoadInFlight = true), effects = listOf(UiEffect.LoadAutounattendCandidates("/ventoy/autounattend.xml", generation)))
+                    // Candidates refresh shares the template generation: bumping it here
+                    // would discard an in-flight AutounattendLoaded result.
+                    val generation = state.autounattendRequestGeneration
+                    val xmlName = state.windowsTemplatePath ?: "/ventoy/autounattend.xml"
+                    ReduceResult(
+                        state.copy(autounattendCandidates = null),
+                        effects = listOf(
+                            UiEffect.LoadAutounattendCandidates(
+                                xmlName,
+                                generation,
+                            ),
+                        ),
+                    )
                 }
             }
             is UiIntent.LoadAutounattend ->
@@ -5551,21 +5562,17 @@ object UiReducer {
             null
         }
 
-    /** True when UploadBatchDocs still names the live directory + partition geometry. */
+    /** True when UploadBatchDocs still names the live partition geometry. */
     private fun uploadBatchDocsPinMatches(
         state: AppUiState,
         intent: UiIntent.UploadBatchDocs,
-    ): Boolean {
-        val device = state.device ?: return false
-        if (device.identity != intent.identity || device.attachGeneration != intent.attachGeneration) {
-            return false
-        }
-        if (state.selectedPartitionId != intent.partitionId || state.currentPath != intent.directory) {
-            return false
-        }
-        val partition = state.partitions.firstOrNull { it.id == intent.partitionId } ?: return false
-        return partition.startLba == intent.startLba && partition.sectorCount == intent.sectorCount
-    }
+    ): Boolean = UiAttachmentPin(
+        identity = intent.identity,
+        attachGeneration = intent.attachGeneration,
+        partitionId = intent.partitionId,
+        startLba = intent.startLba,
+        sectorCount = intent.sectorCount,
+    ).matches(state)
 
 
 

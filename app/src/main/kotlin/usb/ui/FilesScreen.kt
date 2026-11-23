@@ -53,6 +53,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -231,9 +232,7 @@ fun FilesScreen(
     val volumeWritable = writeAccess != PartitionWriteAccess.ReadOnly &&
         writeAccess != PartitionWriteAccess.DriverReadOnly
     val canWrite = canAct && volumeWritable
-    val selection = resolveListingSelection(state.files, selectedNames)
-    val selectedEntries = selection.entries
-    val singleSelection = selection.single
+    val uploading = state.operation?.takeIf { it.title is OperationTitle.UploadBatch }
     val uploadDescription = stringResource(R.string.files_copy_from_phone)
 
     // Blocked release marks an unconfirmed volume close/sync after a failed probe
@@ -304,7 +303,9 @@ fun FilesScreen(
                     enabled = state.actionsEnabled,
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
-                CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Files)
+                if (uploading == null) {
+                    CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Files)
+                }
                 // Matches the empty-partitions branch below: the same known blocked
                 // release state renders the localized card here too, since partitions
                 // can be retained while the volume refuses to remount.
@@ -327,16 +328,12 @@ fun FilesScreen(
                 state = state,
                 canAct = canAct,
                 canWrite = canWrite,
-                selection = selection,
-                selectedNames = selectedNames,
-                onToggleSelect = { entry ->
-                    selectedNames = toggleSelectedName(selectedNames, entry.name)
-                },
+                selectedNames = emptySet(),
+                onToggleSelect = { actionEntry = it },
                 onAction = { actionEntry = it },
                 onNavigate = { entry ->
                     onIntent(UiIntent.OpenDirectory(fatChildPath(state.currentPath, entry.name)))
                 },
-                onClearSelection = { selectedNames = emptySet() },
                 onRefresh = { onIntent(UiIntent.RefreshFiles) },
                 onOpenPath = { path -> onIntent(UiIntent.OpenDirectory(path)) },
                 onNewFolder = {
@@ -354,76 +351,26 @@ fun FilesScreen(
                         showNewFolderDialog = true
                     }
                 },
-                onSaveToPhone = {
-                    val device = state.device
-                    val partition = state.selectedFilesVolume()
-                    if (device == null || partition == null || selectedEntries.isEmpty()) return@FolderCard
-                    if (!filesBatchDownloadEnabled(canAct, selectedEntries.map { it.toBatchItem() })) {
-                        return@FolderCard
-                    }
-                    val batch = FilesBatchSelection(
-                        directory = state.currentPath,
-                        items = selectedEntries.map { it.toBatchItem() },
-                        identity = device.identity,
-                        attachGeneration = device.attachGeneration,
-                        partitionId = partition.id,
-                        startLba = partition.startLba,
-                        sectorCount = partition.sectorCount,
-                    )
-                    if (batch.requiresTreeDestination()) {
-                        onRequestBatchDownload(batch)
-                    } else {
-                        val entry = selectedEntries.single()
-                        onRequestDownload(
-                            FilesDownloadBinding(
-                                directory = state.currentPath,
-                                name = entry.name,
-                                sizeBytes = entry.sizeBytes,
-                                identity = device.identity,
-                                attachGeneration = device.attachGeneration,
-                                partitionId = partition.id,
-                                startLba = partition.startLba,
-                                sectorCount = partition.sectorCount,
-                            ),
-                        )
-                    }
-                },
-                onRename = {
-                    val device = state.device
-                    val partition = state.selectedFilesVolume()
-                    val target = singleSelection
-                    if (device != null &&
-                        partition != null &&
-                        target != null &&
-                        filesBatchRenameEnabled(canWrite, selectedEntries.map { it.toBatchItem() })
-                    ) {
-                        renameTarget = target
-                        renameName = target.name
-                        renameBinding = PartitionBinding(
-                            device = device,
-                            partitionId = partition.id,
-                            startLba = partition.startLba,
-                            sectorCount = partition.sectorCount,
-                        )
-                    }
-                },
-                onDelete = {
-                    val items = selectedEntries.map { it.toBatchItem() }
-                    if (!filesBatchDeleteEnabled(canWrite, items)) return@FolderCard
-                    val pinned = filesBatchSelectionOrNull(state, selectedEntries)
-                    if (pinned == null) {
-                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SelectedFileMissing)))
-                        return@FolderCard
-                    }
-                    pendingDeleteSelection = pinned
-                },
                 isLoading = state.filesListingState == FilesListingState.Loading,
                 modifier = Modifier
                     .weight(1f)
                     .padding(bottom = 12.dp),
             )
         }
-        if (canWrite) {
+        val uploadOp = uploading?.takeIf {
+            it.cancelable &&
+                (it.state == OperationState.Running || it.state == OperationState.Queued)
+        }
+        if (uploadOp != null) {
+            ExtendedFloatingActionButton(
+                onClick = { onIntent(UiIntent.CancelOperation(uploadOp.token)) },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+                icon = { GlyphIcon(Glyph.Close, size = 18.dp) },
+                text = { Text(stringResource(R.string.action_cancel)) },
+            )
+        } else if (canWrite) {
             FloatingActionButton(
                 onClick = onRequestBatchUpload,
                 modifier = Modifier
@@ -449,18 +396,32 @@ fun FilesScreen(
                 val device = state.device
                 val partition = state.selectedFilesVolume()
                 if (device != null && partition != null) {
-                    onRequestDownload(
-                        FilesDownloadBinding(
-                            directory = state.currentPath,
-                            name = entry.name,
-                            sizeBytes = entry.sizeBytes,
-                            identity = device.identity,
-                            attachGeneration = device.attachGeneration,
-                            partitionId = partition.id,
-                            startLba = partition.startLba,
-                            sectorCount = partition.sectorCount,
-                        ),
-                    )
+                    if (entry.isDirectory) {
+                        onRequestBatchDownload(
+                            FilesBatchSelection(
+                                directory = state.currentPath,
+                                items = listOf(entry.toBatchItem()),
+                                identity = device.identity,
+                                attachGeneration = device.attachGeneration,
+                                partitionId = partition.id,
+                                startLba = partition.startLba,
+                                sectorCount = partition.sectorCount,
+                            ),
+                        )
+                    } else {
+                        onRequestDownload(
+                            FilesDownloadBinding(
+                                directory = state.currentPath,
+                                name = entry.name,
+                                sizeBytes = entry.sizeBytes,
+                                identity = device.identity,
+                                attachGeneration = device.attachGeneration,
+                                partitionId = partition.id,
+                                startLba = partition.startLba,
+                                sectorCount = partition.sectorCount,
+                            ),
+                        )
+                    }
                 }
             },
             onRename = {
@@ -1155,17 +1116,12 @@ private fun FolderCard(
     state: AppUiState,
     canAct: Boolean,
     canWrite: Boolean,
-    selection: ListingSelection,
     selectedNames: Set<String>,
     onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
-    onClearSelection: () -> Unit,
     onRefresh: () -> Unit,
     onOpenPath: (String) -> Unit,
     onNewFolder: () -> Unit,
-    onSaveToPhone: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
     onAction: (FileEntry) -> Unit,
     isLoading: Boolean,
     modifier: Modifier = Modifier,
@@ -1208,39 +1164,6 @@ private fun FolderCard(
     val rowsError = state.filesError
     val locked = state.deviceBusy
     Column(modifier = modifier.fillMaxSize()) {
-        if (selection.entries.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FolderActionButton(
-                    glyph = Glyph.Download,
-                    description = stringResource(R.string.files_save_to_phone),
-                    enabled = filesBatchDownloadEnabled(canAct, selection.entries.map { it.toBatchItem() }) && !locked,
-                    onClick = onSaveToPhone,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Pencil,
-                    description = stringResource(R.string.files_rename),
-                    enabled = filesBatchRenameEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
-                    onClick = onRename,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Trash,
-                    description = stringResource(R.string.action_delete),
-                    enabled = filesBatchDeleteEnabled(canWrite, selection.entries.map { it.toBatchItem() }) && !locked,
-                    onClick = onDelete,
-                    tint = MaterialTheme.colorScheme.error,
-                )
-                FolderActionButton(
-                    glyph = Glyph.Close,
-                    description = stringResource(R.string.files_clear_selection),
-                    enabled = canAct && !locked,
-                    onClick = onClearSelection,
-                )
-            }
-        }
         Surface(
             shape = MaterialTheme.shapes.medium,
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -1798,10 +1721,10 @@ private fun FileRow(
 ) {
     val moreActionsDescription = stringResource(R.string.files_more_actions)
     val clickLabel = when {
-        multiSelectActive || !entry.isDirectory -> stringResource(R.string.files_select_file)
+        multiSelectActive || !entry.isDirectory -> stringResource(R.string.files_more_actions)
         else -> stringResource(R.string.files_open_folder)
     }
-    val longClickLabel = stringResource(R.string.files_select_file)
+    val longClickLabel = stringResource(R.string.files_more_actions)
     val contentColor = when {
         !actionsEnabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
         isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
@@ -2152,14 +2075,12 @@ private fun FileActionSheet(
                     supportingColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),
             )
-            if (!entry.isDirectory) {
-                sheetActionRow(
-                    label = stringResource(R.string.files_save_to_phone),
-                    glyph = Glyph.Download,
-                    enabled = canDownload,
-                    onClick = onDownload,
-                )
-            }
+            sheetActionRow(
+                label = stringResource(R.string.files_save_to_phone),
+                glyph = Glyph.Download,
+                enabled = canDownload,
+                onClick = onDownload,
+            )
             sheetActionRow(
                 label = stringResource(R.string.files_rename),
                 glyph = Glyph.Pencil,

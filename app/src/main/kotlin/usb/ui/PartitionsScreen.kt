@@ -1483,6 +1483,11 @@ private fun RawWriteSection(
                 .animateContentSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Text(
+                text = stringResource(R.string.raw_write_not_partition_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (!hasImage) {
                 Button(
                     onClick = { sourceSheetOpen = true },
@@ -1993,26 +1998,25 @@ private fun RawWriteSection(
                         )
                     }
 
-                    Button(
+                    ApplyCancelButton(
+                        state = state,
+                        onIntent = onIntent,
+                        ownerTab = ShellTab.Partitions,
+                        label = stringResource(R.string.partitions_raw_write_sectors),
+                        enabled = state.actionsEnabled && planRange != null &&
+                            planProblems.isEmpty() &&
+                            rangeAssessment?.ok == true,
                         onClick = {
                             draftStart?.let { start ->
                                 onIntent(UiIntent.RequestRawWrite(start))
                             }
                         },
-                        enabled = state.actionsEnabled && planRange != null &&
-                            planProblems.isEmpty() &&
-                            rangeAssessment?.ok == true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer,
                             contentColor = MaterialTheme.colorScheme.onErrorContainer,
                         ),
-                    ) {
-                        Text(stringResource(R.string.partitions_raw_write_sectors))
-                    }
-                    CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Partitions)
+                    )
                 }
             }
         }

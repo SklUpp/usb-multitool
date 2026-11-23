@@ -133,11 +133,13 @@ import usb.ui.FilesDownloadBinding
 import usb.ui.FilesBatchSelection
 import usb.ui.FilesBatchItem
 import usb.ui.FilesConflict
+import usb.ui.UiAttachmentPin
 import usb.ui.FilesConflictDecision
 import usb.ui.PartitionBinding
 import usb.ui.PartitionRef
 import usb.ui.PartitionRole
 import usb.ui.PartitionTab
+import usb.ui.listedSizeChanged
 import usb.ui.matches
 import usb.ui.matchesAttachment
 import usb.ui.safePickPath
@@ -1658,8 +1660,9 @@ class MainViewModel(
                                     cancelable = isCooperative,
                                     phase = sample.phase,
                                 )))
+                                val phaseName = sample.phase?.let { " [${it.name}]" }.orEmpty()
                                 val progress = if (total > 0) " ${(done.toDouble() / total * 100).toInt().coerceIn(0, 100)}%" else " $done bytes"
-                                val message = "$actionName$progress"
+                                val message = "$actionName$phaseName$progress"
                                 if (state.operation?.token == token) {
                                     android.util.Log.i("UsbMultitool", message)
                                     onIntent(UiIntent.AppendLog(logLine(message)))
@@ -4298,33 +4301,48 @@ class MainViewModel(
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
         val identity = state.device?.identity
+        val source = state.ventoySettingsSource
+        val sourceKey = source.cacheKey()
         val op = object : DiskOperation(OperationTitle.ReadXmlBindings.logLabel) {
             override val foregroundService: Boolean = false
 
             override suspend fun run() {
-                val raw = openRawDisk { live ->
-                    require(live.generation == expectedAttach) { "USB attach generation changed" }
-                    require(deviceKey(live.device) == expectedKey) { "USB device changed" }
-                    live.device ?: throw DiskException.Disconnected()
-                } ?: throw AttachmentChangedException()
-                val disk = raw.disk
-                try {
-                    val links = usb.ventoy.VentoySetup.readLinks(disk)
-                    if (attachmentMatches(expectedAttach, expectedKey) &&
-                        this@MainViewModel.state.device?.identity == identity
-                    ) {
-                        post(
-                            UiIntent.WindowsImageLinksLoaded(
-                                generation = generation,
-                                identity = identity,
-                                links = links.map {
-                                    usb.ui.WindowsImageLink(it.image, it.templates)
-                                },
-                            ),
+                val links =
+                    if (source is VentoySettingsSource.Document) {
+                        usb.ventoy.WindowsSetup.parseLinks(
+                            strictUtf8(readSettingsDocumentBytes(source)),
                         )
+                    } else {
+                        val raw = openRawDisk { live ->
+                            require(live.generation == expectedAttach) { "USB attach generation changed" }
+                            require(deviceKey(live.device) == expectedKey) { "USB device changed" }
+                            live.device ?: throw DiskException.Disconnected()
+                        } ?: throw AttachmentChangedException()
+                        val disk = raw.disk
+                        try {
+                            when (source) {
+                                is VentoySettingsSource.UsbFile ->
+                                    usb.ventoy.VentoySetup.readLinksAt(disk, source.path)
+                                else -> usb.ventoy.VentoySetup.readLinks(disk)
+                            }
+                        } finally {
+                            disk.close()
+                        }
                     }
-                } finally {
-                    disk.close()
+                if (attachmentMatches(expectedAttach, expectedKey) &&
+                    this@MainViewModel.state.device?.identity == identity &&
+                    this@MainViewModel.state.ventoySettingsSource.sameTarget(source)
+                ) {
+                    post(
+                        UiIntent.WindowsImageLinksLoaded(
+                            generation = generation,
+                            identity = identity,
+                            links = links.map {
+                                usb.ui.WindowsImageLink(it.image, it.templates)
+                            },
+                            sourceKey = sourceKey,
+                        ),
+                    )
                 }
             }
         }
@@ -4336,7 +4354,8 @@ class MainViewModel(
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
                     attachmentMatches(expectedAttach, expectedKey) &&
-                    state.device?.identity == identity
+                    state.device?.identity == identity &&
+                    state.ventoySettingsSource.sameTarget(source)
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
@@ -4345,6 +4364,7 @@ class MainViewModel(
                             identity = identity,
                             links = emptyList(),
                             error = message,
+                            sourceKey = sourceKey,
                         ),
                     )
                 }
@@ -5147,10 +5167,15 @@ class MainViewModel(
         }
     }
 
+    private fun isVentoyImagePath(path: String): Boolean =
+        path.substringAfterLast('.', "").lowercase(Locale.ROOT) in
+            setOf("iso", "img", "vhd", "vhdx", "wim")
+
     private fun loadAutounattendCandidates(xmlName: String, generation: Long) {
         val expected = attachment.snapshot()
         val expectedAttach = expected.generation
         val expectedKey = deviceKey(expected.device)
+        val source = state.ventoySettingsSource
         val op = object : DiskOperation(OperationTitle.ListVentoyImages.logLabel) {
             override val foregroundService: Boolean = false
 
@@ -5163,7 +5188,17 @@ class MainViewModel(
                 val disk = raw.disk
                 try {
                     val templatePath = usb.ventoy.VentoySetup.xmlPath(xmlName)
-                    val links = usb.ventoy.VentoySetup.readLinks(disk)
+                    val links =
+                        when (source) {
+                            is VentoySettingsSource.Document ->
+                                usb.ventoy.WindowsSetup.parseLinks(
+                                    strictUtf8(readSettingsDocumentBytes(source)),
+                                )
+                            is VentoySettingsSource.UsbFile ->
+                                usb.ventoy.VentoySetup.readLinksAt(disk, source.path)
+                            VentoySettingsSource.Default ->
+                                usb.ventoy.VentoySetup.readLinks(disk)
+                        }
                     val result =
                         usb.ventoy.VentoySetup.withDataVolume(disk) { volume ->
                             val (roots, limitedBy) =
@@ -5177,7 +5212,7 @@ class MainViewModel(
                             )
                             val bindings =
                                 listing.candidates
-                                    .filter { it.path.endsWith(".iso", ignoreCase = true) }
+                                    .filter { isVentoyImagePath(it.path) }
                                     .map { file ->
                                     val linked =
                                         links.any { link ->
@@ -5202,7 +5237,9 @@ class MainViewModel(
                                     },
                             )
                         }
-                    if (attachmentMatches(expectedAttach, expectedKey)) {
+                    if (attachmentMatches(expectedAttach, expectedKey) &&
+                        this@MainViewModel.state.ventoySettingsSource.sameTarget(source)
+                    ) {
                         post(
                             UiIntent.AutounattendCandidatesLoaded(
                                 xmlName,
@@ -5223,7 +5260,8 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 if (outcome is usb.operation.OperationState.Failed &&
-                    attachmentMatches(expectedAttach, expectedKey)
+                    attachmentMatches(expectedAttach, expectedKey) &&
+                    this@MainViewModel.state.ventoySettingsSource.sameTarget(source)
                 ) {
                     val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
                     post(
@@ -6463,7 +6501,9 @@ class MainViewModel(
             deletePickedDownload(uri)
             return false
         }
-        if (state.filesPickMode != null || !state.actionsEnabled || !binding.matchesAttachment(state)) {
+        if (state.filesPickMode != null || !state.actionsEnabled ||
+            !binding.matchesAttachment(state) || binding.listedSizeChanged(state)
+        ) {
             pickerLaunchFailed(binding)
             deletePickedDownload(uri)
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
@@ -6595,13 +6635,13 @@ class MainViewModel(
         directory: String,
         startLba: ULong?,
         sectorCount: ULong?,
-    ): Boolean {
-        val device = state.device ?: return false
-        if (device.identity != identity || device.attachGeneration != attachGeneration) return false
-        if (state.selectedPartitionId != partitionId || state.currentPath != directory) return false
-        val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
-        return partition.startLba == startLba && partition.sectorCount == sectorCount
-    }
+    ): Boolean = UiAttachmentPin(
+        identity = identity,
+        attachGeneration = attachGeneration,
+        partitionId = partitionId,
+        startLba = startLba,
+        sectorCount = sectorCount,
+    ).matches(state)
 
     private fun uploadBatchDocs(effect: UiEffect.UploadBatchDocs) {
         if (!uploadBatchDocsPinMatches(
@@ -6628,6 +6668,7 @@ class MainViewModel(
             val pin = currentAttachmentPin()
             submitFilesOperation(
                 title = OperationTitle.UploadBatch(effect.uris.size),
+                onTerminal = { _, _ -> onIntent(UiIntent.RefreshFiles) },
                 onSuccess = {
                     onIntent(
                         UiIntent.Status(
@@ -7998,6 +8039,14 @@ class MainActivity : ComponentActivity() {
         pendingBatchUploadStart = null
         pendingBatchUploadCount = null
         if (uris.isEmpty()) return@registerForActivityResult
+        uris.forEach { uri ->
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+        }
         if (directory == null || identity == null || partition == null || attach == Long.MIN_VALUE) {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return@registerForActivityResult
@@ -8006,7 +8055,7 @@ class MainActivity : ComponentActivity() {
         val device = live.device
         val livePartition = live.partitions.firstOrNull { it.id == partition }
         if (device == null || device.identity != identity || device.attachGeneration != attach ||
-            live.selectedPartitionId != partition || live.currentPath != directory ||
+            live.selectedPartitionId != partition ||
             livePartition == null || livePartition.startLba != start || livePartition.sectorCount != count
         ) {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))

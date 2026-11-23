@@ -393,8 +393,16 @@ internal fun AutounattendSection(
         var candidatesSourceKey by remember(state.device?.identity, state.device?.attachGeneration) {
             mutableStateOf<String?>(null)
         }
-        LaunchedEffect(state.device?.identity, state.device?.attachGeneration, configSourceKey, state.actionsEnabled) {
-            if (state.actionsEnabled && candidatesSourceKey != configSourceKey) {
+        LaunchedEffect(
+            state.device?.identity,
+            state.device?.attachGeneration,
+            configSourceKey,
+            state.autounattendCandidates,
+            state.actionsEnabled,
+        ) {
+            if (state.actionsEnabled &&
+                (candidatesSourceKey != configSourceKey || state.autounattendCandidates == null)
+            ) {
                 candidatesSourceKey = configSourceKey
                 onIntent(UiIntent.LoadAutounattendCandidatesOnly)
             }

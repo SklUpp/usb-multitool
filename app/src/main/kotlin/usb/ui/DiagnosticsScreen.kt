@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -221,10 +222,27 @@ fun DiagnosticsScreen(
                     )
                     Spacer(Modifier.weight(1f))
                 }
-                state.smartResult?.let { outcome ->
-                    InspectionText(smartInspectionLines(outcome))
+                val checkOp = state.operation
+                val checkLines = when {
+                    checkOp?.title == OperationTitle.SelfTest ->
+                        checkOp.errorMessage?.lines()?.filter { it.isNotBlank() }
+                            ?: checkOp.resultMessage?.lines()?.filter { it.isNotBlank() }
+                            .orEmpty()
+                    checkOp?.title == OperationTitle.ReadScan ->
+                        checkOp.readScanResult?.let { listOf(readScanSummary(it)) }.orEmpty()
+                    checkOp?.title == OperationTitle.SmartRead ->
+                        state.smartResult?.let { smartInspectionLines(it) }.orEmpty()
+                    state.smartResult != null ->
+                        smartInspectionLines(state.smartResult)
+                    else -> emptyList()
                 }
-                CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Diagnostics)
+                InspectionText(checkLines)
+                if (checkOp?.title == OperationTitle.SelfTest ||
+                    checkOp?.title == OperationTitle.ReadScan ||
+                    checkOp?.title == OperationTitle.SmartRead
+                ) {
+                    CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Diagnostics)
+                }
             }
         }
 
@@ -344,6 +362,7 @@ fun DiagnosticsScreen(
                     ) {
                         IconButton(
                             onClick = onPickRescueFile,
+                            enabled = state.actionsEnabled,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics {
@@ -388,23 +407,40 @@ fun DiagnosticsScreen(
                 rescueMap != null &&
                 rescueMap.error == null &&
                 rescueMap.summary?.sectorSize != null
-            Row(
+            val restoreOperation = state.operation?.takeIf { op ->
+                op.cancelable &&
+                    (op.state == OperationState.Running || op.state == OperationState.Queued) &&
+                    (
+                        op.title == OperationTitle.RescueBackup ||
+                            op.title == OperationTitle.Destructive(DestructiveAction.RESCUE_RESTORE)
+                        )
+            }
+            if (restoreOperation != null) {
+                Button(
+                    onClick = { onIntent(UiIntent.CancelOperation(restoreOperation.token)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text(stringResource(R.string.action_cancel)) }
+            } else Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 FilledTonalButton(
                     onClick = { requestCreate(onStartRescueBackup) },
                     enabled = state.actionsEnabled && backupFolderReady,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.diagnostics_create_image),
                         style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Button(
@@ -412,60 +448,48 @@ fun DiagnosticsScreen(
                         onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
                     },
                     enabled = state.actionsEnabled && rescueReady,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
                     ),
                 ) {
                     GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.diagnostics_restore_image),
                         style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
             if (state.rescueImageUri != null || state.rescueMapUri != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (state.rescueImageUri != null) {
-                            InspectionText(
-                                rescueImageInspectionLines(
-                                    state.rescueImageInspection?.takeIf {
-                                        it.uri == state.rescueImageUri
-                                    },
-                                ),
-                            )
-                        }
-                        if (state.rescueImageUri != null && state.rescueMapUri == null) {
-                            Text(
-                                text = stringResource(R.string.diagnostics_restore_map_missing),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        if (state.rescueMapUri != null) {
-                            InspectionText(
-                                rescueMapInspectionLines(
-                                    state.rescueMapInspection?.takeIf {
-                                        it.uri == state.rescueMapUri
-                                    },
-                                ),
-                            )
-                        }
+                val restoreLines = buildList {
+                    if (state.rescueImageUri != null) {
+                        addAll(
+                            rescueImageInspectionLines(
+                                state.rescueImageInspection?.takeIf {
+                                    it.uri == state.rescueImageUri
+                                },
+                            ),
+                        )
+                    }
+                    if (state.rescueImageUri != null && state.rescueMapUri == null) {
+                        add(stringResource(R.string.diagnostics_restore_map_missing))
+                    }
+                    if (state.rescueMapUri != null) {
+                        addAll(
+                            rescueMapInspectionLines(
+                                state.rescueMapInspection?.takeIf {
+                                    it.uri == state.rescueMapUri
+                                },
+                            ),
+                        )
                     }
                 }
+                InspectionText(restoreLines)
             }
 
             SubsectionHeader(
@@ -478,6 +502,7 @@ fun DiagnosticsScreen(
                     ) {
                         IconButton(
                             onClick = onPickGptFile,
+                            enabled = state.actionsEnabled,
                             modifier = Modifier
                                 .size(48.dp)
                                 .semantics {
@@ -509,23 +534,25 @@ fun DiagnosticsScreen(
                 state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
                     it.error == null && it.summary != null
                 } == true
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 FilledTonalButton(
                     onClick = { requestCreate(onCreateGptCopy) },
-                    enabled = state.actionsEnabled && backupFolderReady,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    enabled = state.actionsEnabled &&
+                        state.partitionScheme == usb.partition.TableScheme.GPT &&
+                        backupFolderReady,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.diagnostics_create_gpt_copy),
                         style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Button(
@@ -533,45 +560,36 @@ fun DiagnosticsScreen(
                         onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
                     },
                     enabled = state.actionsEnabled && gptRestoreReady,
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
                     ),
                 ) {
                     GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.diagnostics_restore_gpt),
                         style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
             if (state.backupUri != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        InspectionText(
-                            gptBackupInspectionLines(
-                                state.backupInspection?.takeIf { it.uri == state.backupUri },
-                            ),
-                        )
-                    }
-                }
+                InspectionText(
+                    gptBackupInspectionLines(
+                        state.backupInspection?.takeIf { it.uri == state.backupUri },
+                    ),
+                )
             }
             // Live backup-GPT repair: RequestDestructive(GPT_REPAIR), never GPT_RESTORE.
             // Same UI guards as the former Partitions repair card: actionsEnabled and a
             // readable primary (not partitionTableDamaged). No backup-folder grant needed.
-            val repairEnabled = state.actionsEnabled && !state.partitionTableDamaged
+            val repairEnabled = state.actionsEnabled &&
+                state.partitionScheme == usb.partition.TableScheme.GPT &&
+                !state.partitionTableDamaged
             val repairLabel = stringResource(R.string.diagnostics_gpt_repair)
             val repairA11y = stringResource(R.string.diagnostics_gpt_repair_a11y)
             FilledTonalButton(
@@ -807,13 +825,32 @@ private fun DiagTile(
 /** Compact bounded-inspection lines; never invents a value when the provider omitted one. */
 @Composable
 private fun InspectionText(lines: List<String>) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        lines.forEach { line ->
-            Text(
-                text = line,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth().height(200.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (lines.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.diagnostics_info_empty),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            lines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

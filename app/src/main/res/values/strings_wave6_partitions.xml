@@ -16,13 +16,7 @@
     </plurals>
     <!-- Layout subtitle count: "N partitions (M special)". -->
     <string name="partitions_layout_count_with_special">%1$s (%2$s)</string>
-    <!-- Ready raw plan fact pills. -->
-    <string name="partitions_raw_pill_start_lba">Start LBA %1$s</string>
-    <string name="partitions_raw_pill_end_lba">End LBA %1$s</string>
-    <string name="partitions_raw_pill_sector_count">%1$s sectors</string>
-    <string name="partitions_raw_pill_start_mib">Start %1$s MiB</string>
-    <string name="partitions_raw_pill_end_mib">End %1$s MiB</string>
-    <!-- Synchronized monospace range lines under the pills. -->
+    <!-- Synchronized monospace range lines. -->
     <string name="partitions_raw_binding_lba">LBA: %1$s–%2$s · %3$s sectors</string>
     <string name="partitions_raw_binding_mib">MiB: %1$s–%2$s</string>
     <!-- Operation status phase while Write/Sync/Verify runs. -->

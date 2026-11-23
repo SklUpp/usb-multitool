@@ -148,6 +148,7 @@
 
     <string name="diagnostics_checks_title">Checks</string>
     <string name="diagnostics_checks_subtitle">Read-only. It does not change data.</string>
+    <string name="diagnostics_info_empty">No data for this operation yet.</string>
     <string name="diagnostics_perf_title">Performance</string>
     <string name="diagnostics_perf_subtitle">Settings take effect on the next operation.</string>
     <string name="diagnostics_perf_scsi_title">SCSI chunk</string>
@@ -356,6 +357,7 @@
     <string name="raw_map_snap_hint">Span is locked to image size. Dragging adjusts start LBA with magnetic snapping to 1 MiB partition boundaries. Exact sector can be typed in the LBA field.</string>
     <string name="raw_map_snap_state">Start LBA %1$d, end LBA %2$d. %3$d snap edges are drawn.</string>
     <string name="partitions_raw_write_subtitle">Writes to the medium itself, not into a filesystem.</string>
+    <string name="raw_write_not_partition_note">Sector write does not create a partition or filesystem. The written bytes are not visible as files; read them only via raw range verification or restore.</string>
     <string name="partitions_delete_staged">Delete staged file</string>
     <string name="partitions_gpt_repair">Fix backup GPT…</string>
     <string name="partitions_repair_title">Repair</string>

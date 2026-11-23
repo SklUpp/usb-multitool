@@ -102,6 +102,12 @@ object VentoySetup {
     fun readLinks(disk: BlockDevice): List<AutoInstallLink> =
         withVolume(disk) { volume -> WindowsSetup.parseLinks(readText(volume, CONFIG_PATH)) }
 
+    /** Existing raw auto_install entries in an imported settings file on the data partition. */
+    fun readLinksAt(disk: BlockDevice, path: String): List<AutoInstallLink> =
+        withVolume(disk) { volume ->
+            WindowsSetup.parseLinks(readText(volume, normalizeVentoyFilePath(path)))
+        }
+
     /** Raw global control entries, preserving unknown keys, sections, and exact raw values. */
     fun readGlobalSettings(disk: BlockDevice): VentoyGlobalSettings =
         readSettingsFile(disk, CONFIG_PATH, defaultPath = true)

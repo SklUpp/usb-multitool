@@ -356,6 +356,7 @@
     <string name="raw_map_snap_hint">Размер диапазона зафиксирован объемом образа. Перемещается базовый LBA с магнитной привязкой к границам разделов (сетка 1 МиБ). Сектор можно ввести вручную в поле LBA.</string>
     <string name="raw_map_snap_state">Начало LBA %1$d, конец LBA %2$d. Нарисовано границ привязки: %3$d.</string>
     <string name="partitions_raw_write_subtitle">Пишет на сам носитель, не в файловую систему.</string>
+    <string name="raw_write_not_partition_note">Посекторная запись не создаёт раздел и файловую систему. Записанные байты не видны как файлы; читать их можно только проверкой диапазона или восстановлением.</string>
     <string name="partitions_delete_staged">Удалить подготовленный файл</string>
     <string name="partitions_gpt_repair">Исправить резервную GPT…</string>
     <string name="partitions_repair_title">Восстановление</string>

@@ -200,6 +200,7 @@ object RawWriter {
             closeQuietly()
             throw ImageTooLargeException("image $known exceeds selected range $capacity bytes")
         }
+        val writeStarted = System.nanoTime()
         val result =
             try {
                 streamToRange(
@@ -234,6 +235,7 @@ object RawWriter {
             }
         if (closeFailure == null) {
             return finishWithDigest(result, writeDigest, expectedSha256, operation)
+                .withAverageSpeed(writeStarted)
         }
 
         val primaryFailure = result.failure
@@ -248,7 +250,7 @@ object RawWriter {
             writeDigest,
             expectedSha256,
             operation,
-        )
+        ).withAverageSpeed(writeStarted)
     }
 
     /**
@@ -279,6 +281,18 @@ object RawWriter {
                 handle.abandon()
             }
         }
+    }
+
+    private fun RawWriteResult.withAverageSpeed(startedNanos: Long): RawWriteResult {
+        val elapsed = (System.nanoTime() - startedNanos).coerceAtLeast(0L)
+        val average = if (elapsed > 0L && writtenBytes > 0L) {
+            (writtenBytes.toDouble() * 1_000_000_000.0 / elapsed.toDouble())
+                .takeIf { it.isFinite() && it > 0.0 }
+                ?.toLong()
+        } else {
+            null
+        }
+        return copy(elapsedNanos = elapsed, averageBytesPerSecond = average)
     }
 
     /**

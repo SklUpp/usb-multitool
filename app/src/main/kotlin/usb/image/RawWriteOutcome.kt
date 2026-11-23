@@ -56,6 +56,10 @@ data class RawWriteResult(
     val readback: ReadbackVerdict,
     val state: RawWriteStatus,
     val failure: Throwable? = null,
+    /** Wall-clock time from write start through readback; 0 when not measured. */
+    val elapsedNanos: Long = 0L,
+    /** Average over [writtenBytes] and [elapsedNanos], null when undefined. */
+    val averageBytesPerSecond: Long? = null,
 ) {
     val completed: Boolean get() = state == RawWriteStatus.Completed
 }
