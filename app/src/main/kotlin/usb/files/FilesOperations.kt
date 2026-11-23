@@ -911,6 +911,8 @@ object FilesOperations {
             resolver.openFileDescriptor(destination, "wt")
         } catch (_: FileNotFoundException) {
             null
+        } catch (_: IllegalArgumentException) {
+            null
         }
         return truncating
             ?: resolver.openFileDescriptor(destination, "w")
