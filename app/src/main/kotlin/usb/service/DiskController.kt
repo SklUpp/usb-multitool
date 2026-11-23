@@ -10,6 +10,10 @@ import kotlinx.coroutines.launch
 import usb.device.UsbExclusiveClaim
 import usb.operation.DiskOperation
 
+private val defaultProcessIoFailureReporter: (Throwable) -> Unit = { error ->
+    error.printStackTrace()
+}
+
 /**
  * Process-safe disk work accessor. Owns the single-thread scope and [OperationExecutor].
  * Idle [ServiceControl.stopWhenIdle] must not cancel this controller — later [submit] still runs.
@@ -18,6 +22,7 @@ class DiskController(
     wakeLock: OperationWakeLock = NoOpWakeLock,
     serviceControl: ServiceControl = NoOpServiceControl,
     dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
+    private val failureReporter: (Throwable) -> Unit = defaultProcessIoFailureReporter,
 ) {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + dispatcher)
@@ -51,9 +56,12 @@ class DiskController(
      * Process-lifetime IO that survives ViewModel [CoroutineScope] cancellation.
      * Used for non-blocking files-volume teardown from onCleared.
      */
-    fun runProcessIo(block: () -> Unit) {
+    fun runProcessIo(
+        onFailure: (Throwable) -> Unit = failureReporter,
+        block: () -> Unit,
+    ) {
         scope.launch {
-            runCatching(block)
+            runCatching(block).onFailure(onFailure)
         }
     }
 

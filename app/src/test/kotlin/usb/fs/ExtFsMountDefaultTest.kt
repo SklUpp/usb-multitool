@@ -1,8 +1,7 @@
 package usb.fs
 
 import java.nio.ByteBuffer
-import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import usb.device.BlockDevice
 
@@ -19,24 +18,27 @@ class ExtFsMountDefaultTest {
         override fun read(lba: ULong, destination: ByteBuffer) {
             destination.put(data, (lba * sectorSize.toULong()).toInt(), destination.remaining())
         }
+        var writeCount = 0
+            private set
         override fun write(lba: ULong, source: ByteBuffer) {
-            fail("default mount must not write")
+            writeCount++
+        }
+        override fun write(lba: Long, source: ByteBuffer) {
+            writeCount++
         }
         override fun sync() = Unit
     }
 
     @Test
     fun defaultMountDoesNotWriteEvenWhenNativeAbsent() {
+        val dev = MemDev()
         try {
-            ExtFs.mount(MemDev()) // omit readOnly → default true
+            ExtFs.mount(dev) // omit readOnly → default true
         } catch (_: ExtException) {
             // native present but image invalid / dirty — OK
         } catch (_: UnsatisfiedLinkError) {
             // host JVM — OK
-        } catch (_: Throwable) {
-            // link/load failure variants
         }
-        // MemDev.write was never called (would fail()).
-        assertTrue(true)
+        assertEquals(0, dev.writeCount)
     }
 }

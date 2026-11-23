@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,7 +97,14 @@ static uint64_t hash_image(int fd, uint64_t size)
     return h;
 }
 
-/* Decompress fixture xz archive to temporary disk image */
+/* Build a temp-image template rooted at TMPDIR (Termux has no /tmp). */
+static void temp_template(char *out, size_t size, const char *name)
+{
+    const char *dir = getenv("TMPDIR");
+    if (!dir || !*dir) dir = "/tmp";
+    snprintf(out, size, "%s/%s", dir, name);
+}
+
 static int unpack_fixture(const char *fixture_xz, const char *out_img)
 {
     char cmd[1024];
@@ -116,7 +124,8 @@ typedef struct NtfsVolumeContext {
 int main(int argc, char **argv)
 {
     const char *fixture_xz = (argc > 1) ? argv[1] : "third_party/ntfs-3g/testdata/ntfs.img.xz";
-    char tmp_img[] = "/tmp/ntfs_host_test_XXXXXX.img";
+    char tmp_img[PATH_MAX];
+    temp_template(tmp_img, sizeof(tmp_img), "ntfs_host_test_XXXXXX.img");
     int tmp_fd = mkstemps(tmp_img, 4);
     if (tmp_fd < 0) {
         snprintf(tmp_img, sizeof(tmp_img), "./ntfs_host_test_tmp.img");
@@ -648,7 +657,8 @@ int main(int argc, char **argv)
 
     /* --- upstream mkntfs over usb_block: format → mount → read/write → remount --- */
     {
-        char fmt_img[] = "/tmp/ntfs_mkfs_XXXXXX.img";
+        char fmt_img[PATH_MAX];
+        temp_template(fmt_img, sizeof(fmt_img), "ntfs_mkfs_XXXXXX.img");
         int fmt_fd = mkstemps(fmt_img, 4);
         assert(fmt_fd >= 0);
 
@@ -673,7 +683,8 @@ int main(int argc, char **argv)
         assert(fmt_block != 0);
 
         /* Geometry smaller than mkntfs' 1 MiB minimum is refused up front. */
-        char tiny_img[] = "/tmp/ntfs_tiny_XXXXXX.img";
+        char tiny_img[PATH_MAX];
+        temp_template(tiny_img, sizeof(tiny_img), "ntfs_tiny_XXXXXX.img");
         int tiny_fd = mkstemps(tiny_img, 4);
         assert(tiny_fd >= 0);
         assert(ftruncate(tiny_fd, 8 * 1024) == 0);
@@ -700,7 +711,8 @@ int main(int argc, char **argv)
         /* Upstream mkntfs only marks the volume dirty when the backup boot
          * sector write fails and still returns success. Engine must fail
          * closed instead of reporting a formatted volume. */
-        char bad_img[] = "/tmp/ntfs_backupfail_XXXXXX.img";
+        char bad_img[PATH_MAX];
+        temp_template(bad_img, sizeof(bad_img), "ntfs_backupfail_XXXXXX.img");
         int bad_fd = mkstemps(bad_img, 4);
         assert(bad_fd >= 0);
         assert(ftruncate(bad_fd, (off_t)fsc * fss) == 0);
@@ -780,7 +792,8 @@ int main(int argc, char **argv)
         static const uint32_t geom_ss[] = {512, 1024, 2048, 4096};
         static const uint64_t geom_mib[] = {2, 4, 8, 16};
         for (size_t g = 0; g < sizeof(geom_ss) / sizeof(geom_ss[0]); g++) {
-            char gimg[] = "/tmp/ntfs_geom_XXXXXX.img";
+            char gimg[PATH_MAX];
+            temp_template(gimg, sizeof(gimg), "ntfs_geom_XXXXXX.img");
             int gfd = mkstemps(gimg, 4);
             assert(gfd >= 0);
             uint32_t gss = geom_ss[g];
@@ -837,7 +850,8 @@ int main(int argc, char **argv)
 
     /* Volume label setter: round-trip, and writeback (sync) failures must be reported. */
     {
-        char limg[] = "/tmp/ntfs_label_XXXXXX.img";
+        char limg[PATH_MAX];
+        temp_template(limg, sizeof(limg), "ntfs_label_XXXXXX.img");
         int lfd = mkstemps(limg, 4);
         assert(lfd >= 0);
         uint64_t lsc = (8ULL << 20) / 512u;

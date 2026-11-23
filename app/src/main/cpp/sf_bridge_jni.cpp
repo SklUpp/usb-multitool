@@ -205,7 +205,10 @@ Java_usb_diagnostics_SectorForgeNative_nativeStart(
     ctx->reader = env->NewGlobalRef(reader);
     ctx->writer = env->NewGlobalRef(writer);
     ctx->progress = env->NewGlobalRef(progress_target);
-
+    if (ctx->reader == nullptr || ctx->writer == nullptr || ctx->progress == nullptr) {
+        release(ctx);
+        return 0;
+    }
     jclass reader_class = env->GetObjectClass(reader);
     jclass writer_class = env->GetObjectClass(writer);
     jclass progress_class = env->GetObjectClass(progress_target);
@@ -247,20 +250,24 @@ Java_usb_diagnostics_SectorForgeNative_nativeStart(
         static_cast<uint32_t>(max_retries), reverse == JNI_TRUE ? 1u : 0u,
         static_cast<uint64_t>(checkpoint_bytes));
     if (seed_values != nullptr) env->ReleaseLongArrayElements(seeds, seed_values, JNI_ABORT);
-    if (handle == 0) {
+    if (handle == 0 || handle > kMaxRuns) {
+        if (handle > kMaxRuns) {
+            sf_run_free(handle);
+        }
         release(ctx);
         return 0;
     }
 
     {
         std::lock_guard<std::mutex> lock(g_runs_mutex);
-        if (handle <= kMaxRuns) g_runs[handle - 1] = ctx;
+        g_runs[handle - 1] = ctx;
     }
     return static_cast<jlong>(handle);
 }
 
 extern "C" JNIEXPORT jint JNICALL
 Java_usb_diagnostics_SectorForgeNative_nativeExecute(JNIEnv *env, jclass, jlong handle) {
+    if (handle <= 0 || static_cast<uint64_t>(handle) > kMaxRuns) return 3; /* bad handle */
     jint status = static_cast<jint>(sf_run_execute(static_cast<uint64_t>(handle)));
     std::lock_guard<std::mutex> lock(g_runs_mutex);
     if (handle > 0 && static_cast<uint64_t>(handle) <= kMaxRuns) {
@@ -273,6 +280,7 @@ Java_usb_diagnostics_SectorForgeNative_nativeExecute(JNIEnv *env, jclass, jlong 
 extern "C" JNIEXPORT jlong JNICALL
 Java_usb_diagnostics_SectorForgeNative_nativeBlocks(JNIEnv *env, jclass, jlong handle,
                                                     jlongArray out) {
+    if (handle <= 0 || static_cast<uint64_t>(handle) > kMaxRuns) return -1;
     if (out == nullptr) {
         throw_java_exception(env, "java/lang/IllegalArgumentException", "block output array is null");
         return -1;
@@ -312,6 +320,7 @@ Java_usb_diagnostics_SectorForgeNative_nativeBlocks(JNIEnv *env, jclass, jlong h
 
 extern "C" JNIEXPORT void JNICALL
 Java_usb_diagnostics_SectorForgeNative_nativeFree(JNIEnv *, jclass, jlong handle) {
+    if (handle <= 0 || static_cast<uint64_t>(handle) > kMaxRuns) return;
     sf_run_free(static_cast<uint64_t>(handle));
     release(take_ctx(static_cast<uint64_t>(handle)));
 }

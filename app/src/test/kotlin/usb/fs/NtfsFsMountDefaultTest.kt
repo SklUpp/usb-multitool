@@ -1,9 +1,11 @@
 package usb.fs
 
 import java.nio.ByteBuffer
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import usb.EngineMissingException
 import usb.device.BlockDevice
 
 /** NtfsFs.mount defaults readOnly=true and must not write during default mount. */
@@ -15,21 +17,30 @@ class NtfsFsMountDefaultTest {
         override fun read(lba: ULong, destination: ByteBuffer) {
             destination.put(data, (lba * sectorSize.toULong()).toInt(), destination.remaining())
         }
+        var writeCount = 0
+            private set
         override fun write(lba: ULong, source: ByteBuffer) {
-            fail("default NTFS mount must not write")
+            writeCount++
+        }
+        override fun write(lba: Long, source: ByteBuffer) {
+            writeCount++
         }
         override fun sync() = Unit
     }
 
     @Test
     fun defaultMountDoesNotWriteEvenWhenNativeAbsent() {
+        val dev = MemDev()
         try {
-            NtfsFs.mount(MemDev()) // omit readOnly → default true
+            NtfsFs.mount(dev) // omit readOnly → default true
         } catch (_: NtfsException) {
+            // native present but image invalid / dirty — OK
+        } catch (_: EngineMissingException) {
+            // native ntfs-3g engine not linked / host JVM — OK
         } catch (_: UnsatisfiedLinkError) {
-        } catch (_: Throwable) {
+            // host JVM — OK
         }
-        assertTrue(true)
+        assertEquals(0, dev.writeCount)
     }
 
     @Test

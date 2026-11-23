@@ -1,5 +1,9 @@
 package usb.service
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.withTimeout
+
 /**
  * Pure service-lifecycle policy (no Android types).
  * [startForeground] only requests service start once — never promotes the
@@ -11,7 +15,7 @@ package usb.service
  * [onServiceDestroyed] / service teardown.
  */
 class DiskServiceLifecycle(
-    private val requestStart: () -> Unit,
+    private val requestStart: () -> Deferred<Unit>,
     private val stopService: () -> Unit,
     private val hasOutstandingWork: () -> Boolean,
     private val isServiceForeground: () -> Boolean = { false },
@@ -19,20 +23,40 @@ class DiskServiceLifecycle(
     private val lock = Any()
     @Volatile
     private var startRequested = false
+    private var pendingStart: CompletableDeferred<Unit>? = null
 
-    override fun startForeground() {
-        synchronized(lock) {
+    override suspend fun startForeground() {
+        var owner = false
+        val ready = synchronized(lock) {
             if (isServiceForeground()) {
                 startRequested = true
                 return
             }
-            if (startRequested) return
             startRequested = true
+            pendingStart ?: CompletableDeferred<Unit>().also {
+                pendingStart = it
+                owner = true
+            }
         }
         try {
-            requestStart()
+            withTimeout(5_000L) {
+                if (owner) {
+                    requestStart().await()
+                    ready.complete(Unit)
+                } else {
+                    ready.await()
+                }
+            }
         } catch (t: Throwable) {
-            startRequested = false
+            if (owner) {
+                ready.completeExceptionally(t)
+                synchronized(lock) {
+                    if (pendingStart === ready) {
+                        pendingStart = null
+                        startRequested = false
+                    }
+                }
+            }
             throw t
         }
     }
@@ -48,6 +72,7 @@ class DiskServiceLifecycle(
                     runCatching { requestStart() }.onFailure { startRequested = false }
                 }
             } else {
+                pendingStart = null
                 followUp = { stopService() }
             }
         }
@@ -57,10 +82,13 @@ class DiskServiceLifecycle(
     /**
      * Service instance is gone: clear the one-shot start latch so a later
      * [startForeground] can request start again instead of no-oping.
-     * Volatile write only — must not take [lock] (callers may hold Companion).
+     * Clear pending readiness so a subsequent start does not reuse a stale signal.
      */
     fun onServiceDestroyed() {
-        startRequested = false
+        synchronized(lock) {
+            startRequested = false
+            pendingStart = null
+        }
     }
 
     /** Test hook: whether a start has already been requested. */

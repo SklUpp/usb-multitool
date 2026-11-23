@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * Foreground connectedDevice owner for serialized USB disk work.
@@ -56,6 +57,20 @@ class DiskService : Service() {
             isForeground = true
             serviceReady.complete(Unit)
         }
+        if (!controller.executor.hasOutstandingWork()) {
+            synchronized(Companion) {
+                if (!controller.executor.hasOutstandingWork()) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    if (controller.executor.hasOutstandingWork()) {
+                        startForegroundInternal()
+                        isForeground = true
+                        return START_NOT_STICKY
+                    }
+                    isForeground = false
+                    stopSelfResult(startId)
+                }
+            }
+        }
         return START_NOT_STICKY
     }
 
@@ -71,9 +86,7 @@ class DiskService : Service() {
                 activeWakeLock = null
             }
             isForeground = false
-            if (serviceReady.isCompleted) {
-                serviceReady = kotlinx.coroutines.CompletableDeferred()
-            }
+            if (serviceReady.isCompleted) serviceReady = CompletableDeferred()
             controlToDrop = boundServiceControl
             boundServiceControl = null
         }
@@ -122,7 +135,7 @@ class DiskService : Service() {
         const val ACTION_STOP = "usb.service.DiskService.STOP"
 
         @Volatile
-        private var serviceReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+        private var serviceReady = CompletableDeferred<Unit>()
         @Volatile
         private var activeWakeLock: PowerManager.WakeLock? = null
         @Volatile
@@ -172,12 +185,12 @@ class DiskService : Service() {
             controller.bind(wakeLock = lock, serviceControl = policy)
         }
 
-        fun requestStart(context: Context) {
+        fun requestStart(context: Context): CompletableDeferred<Unit> {
             val ready = synchronized(Companion) {
                 if (!serviceReady.isCompleted) {
                     serviceReady
                 } else {
-                    serviceReady = kotlinx.coroutines.CompletableDeferred()
+                    serviceReady = CompletableDeferred()
                     serviceReady
                 }
             }
@@ -188,11 +201,7 @@ class DiskService : Service() {
                 @Suppress("DEPRECATION")
                 context.startService(intent)
             }
-            kotlinx.coroutines.runBlocking {
-                kotlinx.coroutines.withTimeout(5_000L) {
-                    ready.await()
-                }
-            }
+            return ready
         }
 
         private fun ensureChannelStatic(context: Context) {

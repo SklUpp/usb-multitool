@@ -416,9 +416,9 @@ int main(void)
 
 	/* mkfs must report a failed flush instead of claiming success. */
 	block = open_image(img, ss, sc, &ctx);
-	g_ops.sync = file_sync_fail;
+	usb_block_ops(block)->sync = file_sync_fail;
 	assert(ext_engine_mkfs(block, "HOSTEXT") == -EIO);
-	g_ops.sync = file_sync;
+	usb_block_ops(block)->sync = file_sync;
 	usb_block_unregister(block);
 	close(ctx.fd);
 	unlink(img);

@@ -167,10 +167,15 @@ std::string from_jstring(JNIEnv *env, jstring s)
 	return out;
 }
 
+constexpr jint kMaxFatReadLength = 8 * 1024 * 1024; // 8 MiB (matches MAX_FAT_EXT_IO_BYTES)
+
 void throw_fat(JNIEnv *env, const char *cls, const char *msg)
 {
 	jclass c = env->FindClass(cls);
-	if (c) env->ThrowNew(c, msg);
+	if (c) {
+		env->ThrowNew(c, msg);
+		env->DeleteLocalRef(c);
+	}
 }
 
 } // namespace
@@ -181,16 +186,21 @@ Java_usb_fs_FatFsNative_nativeOpenBlock(JNIEnv *env, jclass, jobject callback,
 {
 	if (!callback || sectorSize < 512 || sectorSize > 4096 || sectorCount <= 0) return 0;
 	JavaVM *jvm = nullptr;
-	env->GetJavaVM(&jvm);
+	if (env->GetJavaVM(&jvm) != 0 || !jvm) return 0;
 	jclass cls = env->GetObjectClass(callback);
+	if (!cls) return 0;
 	jmethodID readMid = env->GetMethodID(cls, "readSectors", "(J[BI)I");
 	jmethodID writeMid = env->GetMethodID(cls, "writeSectors", "(J[BI)I");
 	jmethodID syncMid = env->GetMethodID(cls, "sync", "()I");
+	env->DeleteLocalRef(cls);
 	if (!readMid || !writeMid || !syncMid) return 0;
+
+	jobject cbGlobal = env->NewGlobalRef(callback);
+	if (!cbGlobal) return 0;
 
 	auto *ctx = new JniBlockCtx();
 	ctx->jvm = jvm;
-	ctx->callback = env->NewGlobalRef(callback);
+	ctx->callback = cbGlobal;
 	ctx->readMid = readMid;
 	ctx->writeMid = writeMid;
 	ctx->syncMid = syncMid;
@@ -202,18 +212,35 @@ Java_usb_fs_FatFsNative_nativeOpenBlock(JNIEnv *env, jclass, jobject callback,
 	ctx->ops.ctx = ctx;
 	ctx->ops.sector_size = ctx->sector_size;
 	ctx->ops.sector_count = ctx->sector_count;
-	return static_cast<jlong>(usb_block_register(&ctx->ops));
+
+	uint64_t handle = usb_block_register(&ctx->ops);
+	if (handle == 0) {
+		env->DeleteGlobalRef(ctx->callback);
+		if (ctx->scratch) env->DeleteGlobalRef(ctx->scratch);
+		delete ctx;
+		return 0;
+	}
+	return static_cast<jlong>(handle);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_usb_fs_FatFsNative_nativeCloseBlock(JNIEnv *env, jclass, jlong handle)
 {
-	UsbBlockOps *ops = usb_block_ops(static_cast<uint64_t>(handle));
+	if (handle <= 0) return;
+	uint64_t bhandle = static_cast<uint64_t>(handle);
+	UsbBlockOps *ops = usb_block_ops(bhandle);
 	if (!ops) return;
 	auto *ctx = static_cast<JniBlockCtx *>(ops->ctx);
+	usb_block_unregister(bhandle);
 	if (ctx) {
-		if (ctx->scratch) env->DeleteGlobalRef(ctx->scratch);
-		if (ctx->callback) env->DeleteGlobalRef(ctx->callback);
+		if (ctx->scratch) {
+			env->DeleteGlobalRef(ctx->scratch);
+			ctx->scratch = nullptr;
+		}
+		if (ctx->callback) {
+			env->DeleteGlobalRef(ctx->callback);
+			ctx->callback = nullptr;
+		}
 		delete ctx;
 	}
 }
@@ -343,8 +370,9 @@ Java_usb_fs_FatFsNative_nativeRead(JNIEnv *env, jclass, jlong volume, jstring pa
 				   jint length)
 {
 	std::string p = from_jstring(env, path);
-	if (length < 0) {
-		throw_fat(env, "usb/fs/FatFsException", "negative length");
+	if (length < 0 || length > kMaxFatReadLength) {
+		throw_fat(env, "usb/fs/FatFsException",
+			  length < 0 ? "negative length" : "length exceeds maximum read size");
 		return nullptr;
 	}
 	std::vector<uint8_t> buf(static_cast<size_t>(length));

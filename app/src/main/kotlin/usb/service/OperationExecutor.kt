@@ -44,12 +44,12 @@ object NoOpWakeLock : OperationWakeLock {
 }
 
 interface ServiceControl {
-    fun startForeground()
+    suspend fun startForeground()
     fun stopWhenIdle()
 }
 
 object NoOpServiceControl : ServiceControl {
-    override fun startForeground() = Unit
+    override suspend fun startForeground() = Unit
     override fun stopWhenIdle() = Unit
 }
 
@@ -130,6 +130,19 @@ class OperationExecutor(
         outstanding.incrementAndGet()
 
         scope.launch {
+            val startFailure = if (handle.operation.foregroundService &&
+                !disconnected.get() && connectionGeneration.get() == submitGen &&
+                !handle.cancelled.get() && handle.operation.isActive()
+            ) {
+                try {
+                    serviceControl.startForeground()
+                    null
+                } catch (t: Throwable) {
+                    t
+                }
+            } else {
+                null
+            }
             val startWorker = mutex.withLock {
                 if (disconnected.get() || connectionGeneration.get() != submitGen) {
                     handle.complete(OperationState.Failed(DiskException.Disconnected()))
@@ -141,23 +154,17 @@ class OperationExecutor(
                     stopIfIdleLocked(force = true)
                     return@withLock false
                 }
-                // Only long I/O raises the foreground service. A queued foreground job
-                // starts it even when a metadata read is already running.
-                if (handle.operation.foregroundService) {
-                    try {
-                        serviceControl.startForeground()
-                    } catch (t: Throwable) {
-                        handle.complete(
-                            OperationState.Failed(
-                                DiskException.IoFailure(
-                                    "Failed to start foreground service: ${t.message ?: t.javaClass.simpleName}",
-                                    t,
-                                ),
+                if (startFailure != null) {
+                    handle.complete(
+                        OperationState.Failed(
+                            DiskException.IoFailure(
+                                "Failed to start foreground service: ${startFailure.message ?: startFailure.javaClass.simpleName}",
+                                startFailure,
                             ),
-                        )
-                        stopIfIdleLocked(force = true)
-                        return@withLock false
-                    }
+                        ),
+                    )
+                    stopIfIdleLocked(force = true)
+                    return@withLock false
                 }
                 // Serialized with stopIfIdleLocked: work queued after a concurrent
                 // idle attempt must be able to stop the (re)started service later.

@@ -3,6 +3,12 @@ package usb.service
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.TimeoutCancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -10,10 +16,10 @@ import org.junit.Test
 
 class DiskServiceLifecycleDestroyTest {
     @Test
-    fun destroyClearsStartLatchSoLaterStartForegroundRequestsAgain() {
+    fun destroyClearsStartLatchSoLaterStartForegroundRequestsAgain() = runBlocking {
         var starts = 0
         val lifecycle = DiskServiceLifecycle(
-            requestStart = { starts++ },
+            requestStart = { starts++; CompletableDeferred(Unit) },
             stopService = {},
             hasOutstandingWork = { false },
             isServiceForeground = { false },
@@ -33,11 +39,11 @@ class DiskServiceLifecycleDestroyTest {
     }
 
     @Test
-    fun startWhileMarkedForegroundDoesNotDoubleRequest() {
+    fun startWhileMarkedForegroundDoesNotDoubleRequest() = runBlocking {
         var starts = 0
         var foreground = true
         val lifecycle = DiskServiceLifecycle(
-            requestStart = { starts++ },
+            requestStart = { starts++; CompletableDeferred(Unit) },
             stopService = {},
             hasOutstandingWork = { false },
             isServiceForeground = { foreground },
@@ -64,6 +70,7 @@ class DiskServiceLifecycleDestroyTest {
                 starts.incrementAndGet()
                 enteredStart.countDown()
                 assertTrue(releaseStart.await(2, TimeUnit.SECONDS))
+                CompletableDeferred(Unit)
             },
             stopService = {},
             hasOutstandingWork = { false },
@@ -71,7 +78,7 @@ class DiskServiceLifecycleDestroyTest {
         )
 
         val starter = Thread {
-            lifecycle.startForeground()
+            runBlocking { lifecycle.startForeground() }
         }
         starter.start()
         assertTrue(enteredStart.await(2, TimeUnit.SECONDS))
@@ -82,5 +89,43 @@ class DiskServiceLifecycleDestroyTest {
         starter.join(2_000)
         assertFalse(starter.isAlive)
         assertEquals(1, starts.get())
+    }
+    @Test
+    fun concurrentStartsWaitForSameReadiness() = runTest {
+        val ready = CompletableDeferred<Unit>()
+        var starts = 0
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = { starts++; ready },
+            stopService = {},
+            hasOutstandingWork = { true },
+        )
+        val first = async { lifecycle.startForeground() }
+        val second = async { lifecycle.startForeground() }
+        runCurrent()
+        assertEquals(1, starts)
+        assertFalse(first.isCompleted)
+        assertFalse(second.isCompleted)
+        ready.complete(Unit)
+        first.await()
+        second.await()
+    }
+
+    @Test
+    fun timeoutClearsStartLatchForRetry() = runTest {
+        var starts = 0
+        val lifecycle = DiskServiceLifecycle(
+            requestStart = { starts++; if (starts == 1) CompletableDeferred() else CompletableDeferred(Unit) },
+            stopService = {},
+            hasOutstandingWork = { true },
+        )
+        try {
+            lifecycle.startForeground()
+            org.junit.Assert.fail("expected timeout")
+        } catch (_: TimeoutCancellationException) {
+        }
+        assertFalse(lifecycle.hasRequestedStart())
+        assertEquals(1, starts)
+        lifecycle.startForeground()
+        assertEquals(2, starts)
     }
 }

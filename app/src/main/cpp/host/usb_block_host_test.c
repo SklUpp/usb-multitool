@@ -127,11 +127,62 @@ static void check_pointer_mode(void)
 	ops.sector_count = SECTOR_COUNT;
 	handle = usb_block_register(&ops);
 	assert(handle != 0);
-	assert(usb_block_ops(handle) == &ops);
+	/* Ops are copied into slot, not pointer identity. */
+	UsbBlockOps *registered = usb_block_ops(handle);
+	assert(registered != NULL);
+	assert(registered != &ops);
+	assert(registered->read == slot_read);
+	assert(registered->write == slot_write);
+	assert(registered->sync == slot_sync);
+	assert(registered->ctx == g_slot_store);
+	assert(registered->sector_size == SECTOR_SIZE);
+	assert(registered->sector_count == SECTOR_COUNT);
+
+	/* Reject forged pointer handles. */
+	assert(usb_block_ops((uint64_t)(uintptr_t)&ops) == NULL);
+	assert(usb_block_read((uint64_t)(uintptr_t)&ops, 0, buf, 1) == -EINVAL);
+	assert(usb_block_write((uint64_t)(uintptr_t)&ops, 0, buf, 1) == -EINVAL);
+	assert(usb_block_sync((uint64_t)(uintptr_t)&ops) == -EINVAL);
+
 	memset(buf, 0x23, sizeof(buf));
 	assert(usb_block_write(handle, 5, buf, 1) == 0);
 	assert(usb_block_read(handle, 5, buf, 1) == 0);
 	assert(buf[0] == 0x23);
+
+	/* Stale handle after unregister must return NULL / -EINVAL. */
+	usb_block_unregister(handle);
+	assert(usb_block_ops(handle) == NULL);
+	assert(usb_block_read(handle, 0, buf, 1) == -EINVAL);
+	assert(usb_block_write(handle, 0, buf, 1) == -EINVAL);
+	assert(usb_block_sync(handle) == -EINVAL);
+
+	/* Double unregister must be idempotent. */
+	usb_block_unregister(handle);
+	assert(usb_block_ops(handle) == NULL);
+	assert(usb_block_read(handle, 0, buf, 1) == -EINVAL);
+
+	/* Bounded slot exhaustion: fill all 64 dynamic slots. */
+	uint64_t handles[64];
+	for (int i = 0; i < 64; i++) {
+		handles[i] = usb_block_register(&ops);
+		assert(handles[i] != 0);
+	}
+	/* 65th dynamic registration must fail (no slot). */
+	assert(usb_block_register(&ops) == 0);
+	/* Freeing one slot allows a new registration with a fresh generation. */
+	usb_block_unregister(handles[0]);
+	uint64_t recycled = usb_block_register(&ops);
+	assert(recycled != 0);
+	assert(recycled != handles[0]);
+	assert(usb_block_ops(handles[0]) == NULL);
+	assert(usb_block_read(handles[0], 0, buf, 1) == -EINVAL);
+	assert(usb_block_ops(recycled) != NULL);
+	usb_block_unregister(handles[0]); /* stale close must not free recycled slot */
+	assert(usb_block_ops(recycled) != NULL);
+	usb_block_unregister(recycled);
+	for (int i = 1; i < 64; i++) {
+		usb_block_unregister(handles[i]);
+	}
 }
 
 static void *reader_main(void *arg)

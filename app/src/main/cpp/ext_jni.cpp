@@ -84,16 +84,21 @@ JniBlockDevice *create_block_device(JNIEnv *env, jobject device, jint sectorSize
 {
     if (!device || sectorSize < 512 || sectorSize > 4096 || sectorCount <= 0) return nullptr;
     JavaVM *jvm = nullptr;
-    if (env->GetJavaVM(&jvm) != 0) return nullptr;
+    if (env->GetJavaVM(&jvm) != 0 || !jvm) return nullptr;
     jclass cls = env->GetObjectClass(device);
+    if (!cls) return nullptr;
     jmethodID readMid = env->GetMethodID(cls, "read", "(JLjava/nio/ByteBuffer;)V");
     jmethodID writeMid = env->GetMethodID(cls, "write", "(JLjava/nio/ByteBuffer;)V");
     jmethodID syncMid = env->GetMethodID(cls, "sync", "()V");
+    env->DeleteLocalRef(cls);
     if (!readMid || !writeMid || !syncMid) return nullptr;
+
+    jobject devGlobal = env->NewGlobalRef(device);
+    if (!devGlobal) return nullptr;
 
     auto *bdev = new JniBlockDevice();
     bdev->jvm = jvm;
-    bdev->device = env->NewGlobalRef(device);
+    bdev->device = devGlobal;
     bdev->readMid = readMid;
     bdev->writeMid = writeMid;
     bdev->syncMid = syncMid;
@@ -163,10 +168,15 @@ bool utf8_name_to_utf16(const char *name, std::u16string &out)
     return true;
 }
 
+constexpr jint kMaxExtReadLength = 8 * 1024 * 1024; // 8 MiB (matches MAX_FAT_EXT_IO_BYTES)
+
 void throw_ext(JNIEnv *env, const char *msg)
 {
     jclass exCls = env->FindClass("usb/fs/ExtException");
-    if (exCls) env->ThrowNew(exCls, msg);
+    if (exCls) {
+        env->ThrowNew(exCls, msg);
+        env->DeleteLocalRef(exCls);
+    }
 }
 } // namespace
 
@@ -185,6 +195,14 @@ Java_usb_fs_ExtFs_nativeMount(JNIEnv *env, jclass, jobject device, jint sectorSi
         return 0;
     }
     uint64_t bhandle = usb_block_register(&bdev->ops);
+    if (bhandle == 0) {
+        destroy_block_device(env, bdev);
+        if (outErrno) {
+            jint e = ENOMEM;
+            env->SetIntArrayRegion(outErrno, 0, 1, &e);
+        }
+        return 0;
+    }
     int err = 0;
     uint64_t vol = ext_engine_mount(bhandle, readOnly != JNI_FALSE, &err);
     if (vol == 0) {
@@ -213,7 +231,10 @@ Java_usb_fs_ExtFs_nativeClose(JNIEnv *env, jclass, jlong handle)
         usb_block_unregister(wrapper->block_handle);
         wrapper->block_handle = 0;
     }
-    destroy_block_device(env, wrapper->block_dev);
+    if (wrapper->block_dev) {
+        destroy_block_device(env, wrapper->block_dev);
+        wrapper->block_dev = nullptr;
+    }
     delete wrapper;
     return rc;
 }
@@ -260,17 +281,21 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
     }
     jmethodID ctor = env->GetMethodID(entryCls, "<init>", "(Ljava/lang/String;ZJ)V");
     if (!ctor) {
+        env->DeleteLocalRef(entryCls);
         free(entries);
         return nullptr;
     }
     jobjectArray arr = env->NewObjectArray(static_cast<jsize>(count), entryCls, nullptr);
     if (!arr) {
+        env->DeleteLocalRef(entryCls);
         free(entries);
         return nullptr;
     }
     for (size_t i = 0; i < count; i++) {
         std::u16string u16;
         if (!utf8_name_to_utf16(entries[i].name, u16)) {
+            env->DeleteLocalRef(arr);
+            env->DeleteLocalRef(entryCls);
             free(entries);
             throw_ext(env, "directory listing failed: invalid filename encoding");
             return nullptr;
@@ -278,6 +303,9 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
         jstring name = env->NewString(reinterpret_cast<const jchar *>(u16.data()),
                                       static_cast<jsize>(u16.size()));
         if (!name || env->ExceptionCheck()) {
+            if (name) env->DeleteLocalRef(name);
+            env->DeleteLocalRef(arr);
+            env->DeleteLocalRef(entryCls);
             free(entries);
             return nullptr;
         }
@@ -286,12 +314,16 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
                                      static_cast<jlong>(entries[i].size));
         env->DeleteLocalRef(name);
         if (!obj || env->ExceptionCheck()) {
+            if (obj) env->DeleteLocalRef(obj);
+            env->DeleteLocalRef(arr);
+            env->DeleteLocalRef(entryCls);
             free(entries);
             return nullptr;
         }
         env->SetObjectArrayElement(arr, static_cast<jsize>(i), obj);
         env->DeleteLocalRef(obj);
     }
+    env->DeleteLocalRef(entryCls);
     free(entries);
     return arr;
 }
@@ -332,9 +364,18 @@ Java_usb_fs_ExtFs_nativeStat(JNIEnv *env, jclass, jlong handle, jstring path,
     jclass cls = env->FindClass("usb/fs/ExtStat");
     if (!cls) return nullptr;
     jmethodID ctor = env->GetMethodID(cls, "<init>", "(JZ)V");
-    if (!ctor) return nullptr;
-    return env->NewObject(cls, ctor, static_cast<jlong>(st.size),
+    if (!ctor) {
+        env->DeleteLocalRef(cls);
+        return nullptr;
+    }
+    jobject obj = env->NewObject(cls, ctor, static_cast<jlong>(st.size),
                           static_cast<jboolean>(st.is_directory));
+    env->DeleteLocalRef(cls);
+    if (!obj || env->ExceptionCheck()) {
+        if (obj) env->DeleteLocalRef(obj);
+        return nullptr;
+    }
+    return obj;
 }
 
 JNIEXPORT jbyteArray JNICALL
@@ -342,7 +383,12 @@ Java_usb_fs_ExtFs_nativeRead(JNIEnv *env, jclass, jlong handle, jstring path,
                              jlong offset, jint length)
 {
     auto *w = reinterpret_cast<MountedVolumeWrapper *>(handle);
-    if (!w || length < 0) return nullptr;
+    if (!w || length < 0 || length > kMaxExtReadLength) {
+        if (length > kMaxExtReadLength) {
+            throw_ext(env, "length exceeds maximum read size");
+        }
+        return nullptr;
+    }
     std::string p;
     if (!path_from_jstring(env, path, p)) return nullptr;
     std::vector<uint8_t> buf(static_cast<size_t>(length));
@@ -436,17 +482,13 @@ Java_usb_fs_ExtFs_nativeMkfs(JNIEnv *env, jclass, jobject device, jint sectorSiz
     JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
     if (!bdev) return -EINVAL;
     uint64_t bhandle = usb_block_register(&bdev->ops);
-    /*
-     * lwext4 copies the label bytes into ext4_superblock.volume_name verbatim, and the
-     * Kotlin validation counts standard UTF-8. GetStringUTFChars would hand over Java's
-     * modified UTF-8 (CESU-8), where a supplementary code point becomes two 3-byte
-     * surrogate sequences, so the two sides would disagree about the 15-byte ceiling and
-     * the stored label would not be valid UTF-8.
-     */
+    if (bhandle == 0) {
+        destroy_block_device(env, bdev);
+        return -ENOMEM;
+    }
     char label_utf8[64];
     const jsize label_len = label ? env->GetStringLength(label) : 0;
-    const jchar *label_chars =
-        label_len > 0 ? env->GetStringChars(label, nullptr) : nullptr;
+    const jchar *label_chars = label_len > 0 ? env->GetStringChars(label, nullptr) : nullptr;
     int converted = 0;
     if (label_chars) {
         converted = ext_utf16_to_utf8(reinterpret_cast<const uint16_t *>(label_chars),
@@ -473,10 +515,8 @@ Java_usb_fs_ExtFs_nativeUsage(JNIEnv *env, jclass, jlong handle, jlongArray out)
         throw_ext(env, "space query: output array too small");
         return JNI_FALSE;
     }
-    uint64_t total = 0;
-    uint64_t free_bytes = 0;
-    int rc = ext_engine_usage(w->vol_handle, &total, &free_bytes);
-    if (rc != 0) {
+    uint64_t total = 0, free_bytes = 0;
+    if (ext_engine_usage(w->vol_handle, &total, &free_bytes) != 0) {
         throw_ext(env, "space query failed");
         return JNI_FALSE;
     }
@@ -492,6 +532,10 @@ Java_usb_fs_ExtFs_nativeProbe(JNIEnv *env, jclass, jobject device, jint sectorSi
     JniBlockDevice *bdev = create_block_device(env, device, sectorSize, sectorCount);
     if (!bdev) return JNI_FALSE;
     uint64_t bhandle = usb_block_register(&bdev->ops);
+    if (bhandle == 0) {
+        destroy_block_device(env, bdev);
+        return JNI_FALSE;
+    }
     int rc = ext_engine_probe(bhandle);
     usb_block_unregister(bhandle);
     destroy_block_device(env, bdev);

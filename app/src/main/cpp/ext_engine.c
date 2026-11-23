@@ -37,11 +37,20 @@
 #define EXT_NAME_MAX 32
 #define EXT_PATH_MAX 768
 
+#if defined(PTHREAD_MUTEX_RECURSIVE)
+#define EXT_RECURSIVE_MUTEX PTHREAD_MUTEX_RECURSIVE
+#elif defined(PTHREAD_MUTEX_RECURSIVE_NP)
+#define EXT_RECURSIVE_MUTEX PTHREAD_MUTEX_RECURSIVE_NP
+#else
+#define EXT_RECURSIVE_MUTEX 1
+#endif
+
 typedef struct ExtVolumeContext {
 	uint64_t block_handle;
 	UsbBlockOps *ops;
 	struct ext4_blockdev bdev;
 	struct ext4_blockdev_iface iface;
+	pthread_mutex_t io_mu;
 	uint8_t *ph_bbuf;
 	char dev_name[EXT_NAME_MAX];
 	char mount_point[EXT_NAME_MAX];
@@ -151,16 +160,17 @@ static int bdev_close(struct ext4_blockdev *bdev)
 	return EOK;
 }
 
+/* ponytail: per-volume recursive mutex; ceiling is single-volume serialization; upgrade to fine-grained bdev locks when multi-thread per-volume I/O needed */
 static int bdev_lock(struct ext4_blockdev *bdev)
 {
-	(void)bdev;
-	return EOK;
+	ExtVolumeContext *v = bdev && bdev->bdif ? (ExtVolumeContext *)bdev->bdif->p_user : NULL;
+	return v ? pthread_mutex_lock(&v->io_mu) : EIO;
 }
 
 static int bdev_unlock(struct ext4_blockdev *bdev)
 {
-	(void)bdev;
-	return EOK;
+	ExtVolumeContext *v = bdev && bdev->bdif ? (ExtVolumeContext *)bdev->bdif->p_user : NULL;
+	return v ? pthread_mutex_unlock(&v->io_mu) : EIO;
 }
 
 static int bdev_bread(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id,
@@ -191,6 +201,7 @@ static int bdev_bwrite(struct ext4_blockdev *bdev, const void *buf,
 static void free_volume(ExtVolumeContext *v)
 {
 	if (!v) return;
+	pthread_mutex_destroy(&v->io_mu);
 	free(v->ph_bbuf);
 	free(v);
 }
@@ -203,8 +214,18 @@ static ExtVolumeContext *alloc_volume(uint64_t block_handle, bool read_only)
 
 	ExtVolumeContext *v = calloc(1, sizeof(*v));
 	if (!v) return NULL;
+	pthread_mutexattr_t attr;
+	pthread_mutexattr_init(&attr);
+	if (pthread_mutexattr_settype(&attr, EXT_RECURSIVE_MUTEX) != 0 ||
+	    pthread_mutex_init(&v->io_mu, &attr) != 0) {
+		pthread_mutexattr_destroy(&attr);
+		free(v);
+		return NULL;
+	}
+	pthread_mutexattr_destroy(&attr);
 	v->ph_bbuf = calloc(1, ops->sector_size);
 	if (!v->ph_bbuf) {
+		pthread_mutex_destroy(&v->io_mu);
 		free(v);
 		return NULL;
 	}

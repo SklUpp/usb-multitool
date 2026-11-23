@@ -31,9 +31,13 @@
 #define USB_BLOCK_RECURSIVE_MUTEX 1
 #endif
 
-#define USB_BLOCK_SLOTS 64
-static UsbBlockOps g_slots[USB_BLOCK_SLOTS];
-static int g_slot_used[USB_BLOCK_SLOTS];
+#define USB_BLOCK_RAW_SLOTS 64
+#define USB_BLOCK_DYNAMIC_SLOTS 64
+#define USB_BLOCK_TOTAL_SLOTS (USB_BLOCK_RAW_SLOTS + USB_BLOCK_DYNAMIC_SLOTS)
+
+static UsbBlockOps g_slots[USB_BLOCK_TOTAL_SLOTS];
+static int g_slot_used[USB_BLOCK_TOTAL_SLOTS];
+static uint64_t g_slot_generation[USB_BLOCK_TOTAL_SLOTS];
 
 static pthread_once_t g_lock_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_lock;
@@ -59,20 +63,56 @@ static void unlock_tables(void)
 	pthread_mutex_unlock(&g_lock);
 }
 
+/*
+ * Dynamic handles are (generation << 8) | (slot_index + 1), so a stale handle
+ * cannot reach a device that reuses the slot. Raw handles stay 1..64 with
+ * generation 0 for callers that supply their own handle.
+ */
+static int decode_handle(uint64_t handle, size_t *index, uint64_t *generation)
+{
+	if (handle == 0) return 0;
+	if (handle <= USB_BLOCK_TOTAL_SLOTS) {
+		if (handle > USB_BLOCK_RAW_SLOTS) return 0;
+		*index = (size_t)handle - 1;
+		*generation = 0;
+		return 1;
+	}
+	size_t slot = (size_t)(handle & 0xffu);
+	if (slot <= USB_BLOCK_RAW_SLOTS || slot > USB_BLOCK_TOTAL_SLOTS) return 0;
+	*index = slot - 1;
+	*generation = handle >> 8;
+	return *generation != 0;
+}
+
 /* Caller must hold g_lock. */
 static UsbBlockOps *lookup_locked(uint64_t handle)
 {
-	if (handle == 0) return NULL;
-	if (handle <= USB_BLOCK_SLOTS) {
-		if (!g_slot_used[handle - 1]) return NULL;
-		return &g_slots[handle - 1];
-	}
-	return (UsbBlockOps *)(uintptr_t)handle;
+	size_t index;
+	uint64_t generation;
+
+	if (!decode_handle(handle, &index, &generation)) return NULL;
+	if (!g_slot_used[index] || g_slot_generation[index] != generation) return NULL;
+	return &g_slots[index];
 }
 
+/* ponytail: fixed 64 dynamic slots; ceiling is 64 concurrent mounts; upgrade to growable array when multi-device multi-mount exceeds 64 */
 uint64_t usb_block_register(UsbBlockOps *ops)
 {
-	return (uint64_t)(uintptr_t)ops;
+	if (!ops) return 0;
+	lock_tables();
+	for (size_t i = USB_BLOCK_RAW_SLOTS; i < USB_BLOCK_TOTAL_SLOTS; i++) {
+		if (!g_slot_used[i]) {
+			uint64_t generation = g_slot_generation[i] + 1;
+			if (generation == 0) generation = 1;
+			g_slot_generation[i] = generation;
+			g_slots[i] = *ops;
+			g_slot_used[i] = 1;
+			unlock_tables();
+			return (generation << 8) | (uint64_t)(i + 1);
+		}
+	}
+	unlock_tables();
+	return 0;
 }
 
 UsbBlockOps *usb_block_ops(uint64_t handle)
@@ -94,7 +134,7 @@ int usb_block_register_raw(
         int (*sync_fn)(void *ctx),
         void *ctx)
 {
-	if (handle == 0 || handle > USB_BLOCK_SLOTS)
+	if (handle == 0 || handle > USB_BLOCK_RAW_SLOTS)
 		return -EINVAL;
 	if (!read_fn || !write_fn || !sync_fn)
 		return -EINVAL;
@@ -120,11 +160,15 @@ int usb_block_register_raw(
 
 void usb_block_unregister(uint64_t handle)
 {
-	if (handle == 0 || handle > USB_BLOCK_SLOTS)
-		return;
+	size_t index;
+	uint64_t generation;
+
 	lock_tables();
-	memset(&g_slots[handle - 1], 0, sizeof(UsbBlockOps));
-	g_slot_used[handle - 1] = 0;
+	if (decode_handle(handle, &index, &generation) &&
+	    g_slot_used[index] && g_slot_generation[index] == generation) {
+		memset(&g_slots[index], 0, sizeof(UsbBlockOps));
+		g_slot_used[index] = 0;
+	}
 	unlock_tables();
 }
 

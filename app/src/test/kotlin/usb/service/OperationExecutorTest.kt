@@ -44,7 +44,7 @@ class OperationExecutorTest {
         var starts = 0
         var wakeAcquires = 0
         val control = object : ServiceControl {
-            override fun startForeground() { starts++ }
+            override suspend fun startForeground() { starts++ }
             override fun stopWhenIdle() = Unit
         }
         val wake = object : OperationWakeLock {
@@ -393,6 +393,7 @@ class OperationExecutorTest {
                 requestStarts++
                 // Mimic DiskService.onStartCommand: promote only, never re-enter startForegroundService.
                 promoteCalls++
+                CompletableDeferred(Unit)
             },
             stopService = { stopCalls++ },
             hasOutstandingWork = { executor.hasOutstandingWork() },
@@ -417,7 +418,7 @@ class OperationExecutorTest {
         var stopCalls = 0
         val executor = OperationExecutor(this)
         val lifecycle = DiskServiceLifecycle(
-            requestStart = {},
+            requestStart = { CompletableDeferred(Unit) },
             stopService = {
                 assertFalse(
                     "stopWhenIdle while work outstanding",
@@ -581,9 +582,53 @@ class OperationExecutorTest {
     }
 
 
+    @Test fun processIoReportsFailureOnce() = runTest {
+        val failure = IllegalStateException("close failed")
+        val reported = mutableListOf<Throwable>()
+        val controller = DiskController(
+            dispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+            failureReporter = { reported.add(it) },
+        )
+        try {
+            controller.runProcessIo { throw failure }
+            advanceUntilIdle()
+            assertEquals(listOf(failure), reported)
+        } finally {
+            controller.shutdown()
+        }
+    }
+
+    @Test fun foregroundWorkWaitsForReadinessWithoutBlockingOtherWork() = runTest {
+        val ready = CompletableDeferred<Unit>()
+        var wakeAcquires = 0
+        val executor = OperationExecutor(
+            this,
+            wakeLock = object : OperationWakeLock {
+                override fun acquire() { wakeAcquires++ }
+                override fun release() = Unit
+            },
+            serviceControl = object : ServiceControl {
+                override suspend fun startForeground() { ready.await() }
+                override fun stopWhenIdle() = Unit
+            },
+        )
+        val foreground = executor.submit(object : DiskOperation() {
+            override suspend fun run() = Unit
+        })
+        val metadata = executor.submit(object : DiskOperation() {
+            override val foregroundService = false
+            override suspend fun run() = Unit
+        })
+        assertEquals(OperationState.Completed, metadata.await())
+        assertEquals(0, wakeAcquires)
+        ready.complete(Unit)
+        assertEquals(OperationState.Completed, foreground.await())
+        assertEquals(1, wakeAcquires)
+    }
+
     @Test fun foregroundServiceStartFailureFailsOperation() = runTest {
         val failingControl = object : ServiceControl {
-            override fun startForeground() {
+            override suspend fun startForeground() {
                 throw IllegalStateException("FGS not allowed")
             }
             override fun stopWhenIdle() = Unit
@@ -670,12 +715,12 @@ class OperationExecutorTest {
         assertEquals(listOf("start", "stop", "start", "stop"), service.events)
     }
 
-    @Test fun serviceLifecycleInterleavingDoesNotDropForeground() {
+    @Test fun serviceLifecycleInterleavingDoesNotDropForeground() = runTest {
         var starts = 0
         var stops = 0
         var outstandingWork = false
         val lifecycle = DiskServiceLifecycle(
-            requestStart = { starts++ },
+            requestStart = { starts++; CompletableDeferred(Unit) },
             stopService = { stops++ },
             hasOutstandingWork = { outstandingWork },
         )
@@ -693,11 +738,11 @@ class OperationExecutorTest {
         assertTrue(lifecycle.hasRequestedStart())
     }
 
-    @Test fun serviceAlreadyForegroundDoesNotCallRequestStart() {
+    @Test fun serviceAlreadyForegroundDoesNotCallRequestStart() = runTest {
         var starts = 0
         var isForeground = true
         val lifecycle = DiskServiceLifecycle(
-            requestStart = { starts++ },
+            requestStart = { starts++; CompletableDeferred(Unit) },
             stopService = {},
             hasOutstandingWork = { false },
             isServiceForeground = { isForeground },
@@ -1185,7 +1230,7 @@ class RecordingServiceControl : ServiceControl {
     /** Start/stop order across the executor's lifetime. */
     val events = mutableListOf<String>()
 
-    override fun startForeground() {
+    override suspend fun startForeground() {
         startCount++
         events.add("start")
     }
