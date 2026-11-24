@@ -29,6 +29,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -5693,20 +5694,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Keep system bar icons light and bars black; edge-to-edge content supplies backgrounds on API 35+. */
-    private fun configureDarkSystemBars() {
+    /** Keep system bars edge-to-edge and contrast icons with the active theme. */
+    private fun configureSystemBars(darkTheme: Boolean) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = AndroidColor.BLACK
         window.navigationBarColor = AndroidColor.BLACK
+        applySystemBarIconAppearance(darkTheme)
+    }
+
+    private fun applySystemBarIconAppearance(darkTheme: Boolean) {
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = false
-            isAppearanceLightNavigationBars = false
+            isAppearanceLightStatusBars = !darkTheme
+            isAppearanceLightNavigationBars = !darkTheme
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        configureDarkSystemBars()
+        configureSystemBars(viewModel.state.darkTheme)
         // Transfer knobs are read once per operation, so persisted values must be live
         // before the first disk action, not only after visiting Diagnostics.
         usb.diagnostics.PerformancePreferences.load(applicationContext)
@@ -5751,6 +5756,8 @@ class MainActivity : ComponentActivity() {
         }
         requestPermissionsIfNeeded()
         setContent {
+            val darkTheme = viewModel.state.darkTheme
+            SideEffect { applySystemBarIconAppearance(darkTheme) }
             AppShell(
                 state = viewModel.state,
                 onIntent = { intent ->

@@ -3,6 +3,7 @@ package usb.image
 import android.net.Uri
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -550,8 +551,14 @@ class ImageSource private constructor(
                     conn.readTimeout = 60_000
                     conn.inputStream
                 }
-                "file" -> FileInputStream(uri.path!!)
-                else -> FileInputStream(uri.path ?: uri.toString())
+                "file" -> FileInputStream(
+                    uri.path ?: throw IOException("File URI has no path: $uri"),
+                )
+                else -> {
+                    val path = uri.path
+                        ?: throw IOException("Unsupported URI without path: $uri")
+                    FileInputStream(path)
+                }
             }
         }
         private fun queryFileSize(uri: Uri): Long? {

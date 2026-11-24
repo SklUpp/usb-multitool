@@ -1,5 +1,7 @@
 package usb.multitool
 
+import kotlinx.coroutines.CancellationException
+
 internal data class ProbePublicationResult(
     val failure: Throwable? = null,
     val closeFailure: Throwable? = null,
@@ -14,8 +16,13 @@ internal object ProbePublication {
     ): ProbePublicationResult {
         var failure: Throwable? = null
         var bodyThrew = false
+        var cancellation: CancellationException? = null
         try {
             failure = body()
+        } catch (cancelled: CancellationException) {
+            cancellation = cancelled
+            bodyThrew = true
+            failure = cancelled
         } catch (thrown: Throwable) {
             bodyThrew = true
             failure = thrown
@@ -24,6 +31,8 @@ internal object ProbePublication {
         var closeFailure: Throwable? = null
         try {
             close()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (thrown: Throwable) {
             closeFailure = thrown
             if (failure == null) {
@@ -32,9 +41,12 @@ internal object ProbePublication {
                 failure?.addSuppressed(thrown)
             }
         }
+        cancellation?.let { throw it }
         if (closeFailure == null && !bodyThrew) {
             try {
                 publish()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (thrown: Throwable) {
                 if (failure == null) failure = thrown else if (failure !== thrown) failure?.addSuppressed(thrown)
             }

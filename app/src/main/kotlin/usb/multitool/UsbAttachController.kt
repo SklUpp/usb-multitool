@@ -138,13 +138,14 @@ class UsbAttachController(
 
     fun probeAttachedDevice(intent: Intent?): Boolean {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return false
-        val deviceFromIntent =
+        val deviceFromIntent = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
             } else {
                 @Suppress("DEPRECATION")
                 intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
             }
+        }.getOrNull()
         intent?.removeExtra(UsbManager.EXTRA_DEVICE)
 
         val currentDevices = usbManager.deviceList
@@ -211,9 +212,9 @@ class UsbAttachController(
         pendingUsbPermissionToken = token
         val flags =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_MUTABLE
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             } else {
-                0
+                PendingIntent.FLAG_UPDATE_CURRENT
             }
         val permissionIntent =
             PendingIntent.getBroadcast(

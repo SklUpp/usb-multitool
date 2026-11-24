@@ -23,6 +23,7 @@ Windows-носителя, rescue/backup и диагностика.
 | [filesystems.md](filesystems.md) | FAT/exFAT, NTFS, ext4: возможности, лимиты, ошибки |
 | [ui.md](ui.md) | Экраны, MD3, полоса разделов, RangeSlider и MiB-поля |
 | [build-test-release.md](build-test-release.md) | Сборка, native-движки, тесты, CI, APK |
+| [modernization.md](modernization.md) | Технический долг, устаревшие API, миграции и решения по native |
 
 ## Быстрый старт
 

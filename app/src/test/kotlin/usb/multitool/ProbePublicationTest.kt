@@ -1,11 +1,12 @@
 package usb.multitool
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.Assert.assertFalse
 import usb.device.UsbExclusiveClaim
 
 class ProbePublicationTest {
@@ -36,6 +37,23 @@ class ProbePublicationTest {
         assertSame(bodyFailure, result.failure)
         assertSame(closeFailure, result.closeFailure)
         assertSame(closeFailure, bodyFailure.suppressed.single())
+    }
+
+    @Test
+    fun bodyCancellationReleasesClaimAndDoesNotPublish() = runBlocking {
+        val cancellation = CancellationException("stop")
+        var closed = false
+        var published = false
+        val thrown = runCatching {
+            ProbePublication.run(
+                body = { throw cancellation },
+                close = { closed = true },
+                publish = { published = true },
+            )
+        }.exceptionOrNull()
+        assertSame(cancellation, thrown)
+        assertTrue(closed)
+        assertFalse(published)
     }
 
     @Test
