@@ -18,7 +18,10 @@ import usb.service.OperationSubmitter
 class ArchPortsTest {
     @Test
     fun volumePortImplementedBySession() {
-        val session: Any = FilesVolumeSession({ null }) { _, _, _, _ -> error("unused") }
+        val session: Any = FilesVolumeSession(
+            currentAttachment = { null },
+            openMounted = { _, _, _, _ -> error("unused") },
+        )
         assertTrue(session is UsbVolume)
         assertTrue(UsbVolume::class.java.isAssignableFrom(FilesVolumeSession::class.java))
     }

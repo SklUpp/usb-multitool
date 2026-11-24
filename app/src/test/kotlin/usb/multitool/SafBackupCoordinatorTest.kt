@@ -245,7 +245,7 @@ class SafBackupCoordinatorTest {
         FakeOpenableProvider.rows[uri] = name to bytes.size.toLong()
         shadow.registerInputStreamSupplier(uri) { ByteArrayInputStream(bytes) }
     }
-    private fun awaitIntent(predicate: (UiIntent) -> Boolean, timeoutMs: Long = 5_000L) {
+    private fun awaitIntent(timeoutMs: Long = 5_000L, predicate: (UiIntent) -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
