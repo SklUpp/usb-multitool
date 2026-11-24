@@ -37,12 +37,10 @@ android {
         applicationId = "usb.multitool"
         minSdk = 28
         targetSdk = 36
-        // Single source of the app version; the header shows the installed values.
-        // Bump versionCode by 1 when a new installable version is released (not on every
-        // CI build). versionName follows MAJOR.MINOR.PATCH and never decreases.
+        // Fallback app version. Release workflow overrides both values through Gradle
+        // properties: versionCode = 1000 + run number, versionName = tag without v.
+        // Local and debug builds keep these checked-in defaults.
         // See README → App versions.
-        // Release workflows override these through Gradle properties; local builds keep
-        // the checked-in defaults.
         val releaseVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.toIntOrNull()
         val releaseVersionName = providers.gradleProperty("releaseVersionName").orNull
         require(releaseVersionCode == null || releaseVersionCode > 0) {
