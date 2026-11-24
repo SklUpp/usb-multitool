@@ -8,8 +8,9 @@ import java.util.concurrent.ConcurrentHashMap
  * App-private staging for "Send to raw writer".
  *
  * Ownership is **session-scoped**: only paths returned by a successful [createUnique]
- * in this process (recorded in an in-memory registry) are [isManaged] / deletable.
- * Name patterns prove nothing — leftovers after process death are left in place.
+ * in this process (recorded in an in-memory registry) are [isManaged] / deletable by
+ * callers. Name patterns prove nothing on their own; [cleanStaleFiles] is the only
+ * path that removes old unowned `raw-*` leftovers after process death.
  */
 object ImageStaging {
     const val DIR_NAME = "staging"
@@ -49,9 +50,34 @@ object ImageStaging {
         )
     }
 
+    /**
+     * Delete old `raw-*` leftovers that this process does not own. Session-owned
+     * files are always preserved; files not matching the staging name are kept.
+     * Returns the number of deleted files.
+     */
+    fun cleanStaleFiles(filesDir: File, maxAgeHours: Long = 12): Int {
+        val dir = File(filesDir, DIR_NAME)
+        if (!dir.isDirectory) return 0
+        val threshold = System.currentTimeMillis() - maxAgeHours.coerceAtLeast(0) * 3_600_000L
+        var deleted = 0
+        dir.listFiles()?.forEach { file ->
+            if (!file.isFile ||
+                !file.name.startsWith("raw-") ||
+                file.lastModified() >= threshold
+            ) {
+                return@forEach
+            }
+            val path = runCatching { file.canonicalPath }.getOrNull() ?: return@forEach
+            if (sessionOwned.contains(path)) return@forEach
+            if (file.delete()) deleted++
+        }
+        return deleted
+    }
+
     /** Estimate-only gate. Real ENOSPC still surfaces during the stream. */
     fun requireUsableSpaceEstimate(filesDir: File, needBytes: Long) {
         if (needBytes <= 0L) return
+        cleanStaleFiles(filesDir)
         val usable = stagingDir(filesDir).usableSpace
         if (usable in 1L until needBytes) {
             throw IOException(

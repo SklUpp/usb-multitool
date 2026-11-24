@@ -404,9 +404,10 @@ class MainViewModel(
                 )
             }
         }
-        // Fail closed: never auto-delete staging after restart (name ≠ proof of ownership).
-        // Leftovers stay on disk; user must re-stage in this process. Notify only.
+        // Name is not ownership proof: only old raw-* leftovers are collected here;
+        // anything still present needs a user decision and is reported below.
         runCatching {
+            ImageStaging.cleanStaleFiles(application.filesDir)
             val leftovers = ImageStaging.listStagingFiles(application.filesDir)
             if (leftovers.isNotEmpty()) {
                 onIntent(

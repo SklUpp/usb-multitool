@@ -422,7 +422,14 @@ object TableInitializer {
     private fun protectiveMbr(diskSectors: ULong, sectorSize: Int): ByteArray {
         val sector = ByteArray(sectorSize)
         val count = minOf(diskSectors - 1UL, MBR_MAX_LBA)
+        // UEFI spec 2.10 table 5.1: StartingCHS = 00 02 00, EndingCHS = FF FF FF.
+        sector[446 + 1] = 0x00
+        sector[446 + 2] = 0x02
+        sector[446 + 3] = 0x00
         sector[446 + 4] = MBR_TYPE_PROTECTIVE.toByte()
+        sector[446 + 5] = 0xFF.toByte()
+        sector[446 + 6] = 0xFF.toByte()
+        sector[446 + 7] = 0xFF.toByte()
         putLe32(sector, 446 + 8, 1UL)
         putLe32(sector, 446 + 12, count)
         sector[510] = (MBR_SIGNATURE and 0xFF).toByte()

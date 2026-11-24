@@ -20,6 +20,8 @@ class BotSessionImplTest {
         // Queued responses for bulkIn
         private val inResponses = ArrayDeque<ByteArray>()
         private var zeroNextIn = false
+        private var failNextIn = false
+        var clearHaltInCount = 0
 
         fun queueIn(bytes: ByteArray) {
             inResponses.addLast(bytes)
@@ -27,6 +29,10 @@ class BotSessionImplTest {
 
         fun queueZlp() {
             zeroNextIn = true
+        }
+
+        fun failNextBulkIn() {
+            failNextIn = true
         }
 
         fun queueCsw(tag: Int, residue: Int = 0, status: CswStatus = CswStatus.PASSED) {
@@ -45,6 +51,10 @@ class BotSessionImplTest {
             if (zeroNextIn) {
                 zeroNextIn = false
                 return 0
+            }
+            if (failNextIn) {
+                failNextIn = false
+                return -1
             }
             val resp = if (inResponses.isNotEmpty()) inResponses.removeFirst() else ByteArray(0)
             val toTake = minOf(length, resp.size)
@@ -71,7 +81,7 @@ class BotSessionImplTest {
             length: Int,
         ): Int = 0
 
-        override fun clearHaltIn() {}
+        override fun clearHaltIn() { clearHaltInCount++ }
         override fun clearHaltOut() {}
         override fun isConnected(): Boolean = connected
         override fun close() {
@@ -108,6 +118,20 @@ class BotSessionImplTest {
         // Verify channel bulkIn calls: first asked for 96 bytes (returned 36),
         // then next call MUST BE for 13 bytes (CSW), NOT retrying remaining data!
         assertEquals(listOf(96, BotConstants.CSW_SIZE), channel.inCalls)
+    }
+
+    @Test
+    fun bulkInFailureClearsHaltThenReadsCswWithoutReset() {
+        val channel = ScriptedBulkChannel()
+        val session = BotSessionImpl(channel)
+        channel.failNextBulkIn()
+        channel.queueCsw(tag = 1, residue = 0, status = CswStatus.FAILED)
+
+        val csw = session.transfer(ScsiCommand.read(0UL, 1, 512), ByteBuffer.allocate(512))
+
+        assertEquals(CswStatus.FAILED, csw.status)
+        assertEquals(1, channel.clearHaltInCount)
+        assertEquals(listOf(512, BotConstants.CSW_SIZE), channel.inCalls)
     }
 
     @Test

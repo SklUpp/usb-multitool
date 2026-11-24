@@ -105,6 +105,25 @@ class ImageStagingTest {
     }
 
     @Test
+    fun cleanStaleFilesDeletesOnlyOldUnownedRawFiles() {
+        val root = root()
+        val dir = ImageStaging.stagingDir(root)
+        val stale = File(dir, "raw-old-image.iso").apply { writeText("old") }
+        val fresh = File(dir, "raw-fresh-image.iso").apply { writeText("fresh") }
+        val foreign = File(dir, "keep.bin").apply { writeText("keep") }
+        stale.setLastModified(System.currentTimeMillis() - 13 * 3_600_000L)
+        val owned = ImageStaging.createUnique(root, "owned.iso")
+        owned.setLastModified(System.currentTimeMillis() - 13 * 3_600_000L)
+
+        assertEquals(1, ImageStaging.cleanStaleFiles(root))
+
+        assertFalse(stale.exists())
+        assertTrue(fresh.exists())
+        assertTrue(foreign.exists())
+        assertTrue(owned.exists())
+    }
+
+    @Test
     fun spaceEstimateAllowsZeroNeed() {
         ImageStaging.requireUsableSpaceEstimate(root(), 0L)
     }

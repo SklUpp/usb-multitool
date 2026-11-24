@@ -105,7 +105,11 @@ internal object FormatNative {
 internal fun fatMkfsType(id: FilesystemId, partition: VirtualPartition? = null): FatMkfsType = when (id) {
     FilesystemId.FAT -> {
         val bytes = (partition?.sectorCount ?: 0UL) * (partition?.sectorSize?.toULong() ?: 512UL)
-        if (bytes > 2147483648UL) FatMkfsType.FAT32 else FatMkfsType.FAT
+        // FAT32 needs > 65525 clusters; reserve headroom for FAT and alignment.
+        // 64 MiB is enough at 512-byte sectors; larger sectors need a larger volume.
+        val sectorBytes = partition?.sectorSize?.toULong() ?: 512UL
+        val fat32MinBytes = maxOf(67_108_864UL, 66_000UL * sectorBytes)
+        if (bytes >= fat32MinBytes) FatMkfsType.FAT32 else FatMkfsType.FAT
     }
     FilesystemId.EXFAT -> FatMkfsType.EXFAT
     else -> throw IllegalArgumentException("$id is not a FAT-family filesystem")

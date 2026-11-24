@@ -4,6 +4,7 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import usb.device.DiskException
+import usb.device.TransferPlan
 import usb.device.UsbDisk
 import usb.image.CountedInputStream
 import usb.image.ImageCancelledException
@@ -155,7 +156,9 @@ object Diagnostics {
         operation: DiskOperation = DiskOperation("wipe"),
     ) {
         confirmation.requireMatch(identity, disk)
-        val zeros = ByteBuffer.allocate(disk.geometry.sectorSize)
+        val sectorSize = disk.geometry.sectorSize
+        val chunkSectors = (TransferPlan.MAX_CHUNK / sectorSize).coerceAtLeast(1)
+        val zeros = ByteBuffer.allocate(chunkSectors * sectorSize)
         var lba = 0UL
         try {
             while (lba < disk.geometry.sectorCount) {
@@ -163,11 +166,13 @@ object Diagnostics {
                     if (operation.mutationAttempted) operation.state = OperationState.Partial
                     break
                 }
+                val count = minOf(chunkSectors.toULong(), disk.geometry.sectorCount - lba).toInt()
                 zeros.clear()
+                zeros.limit(count * sectorSize)
                 operation.mutationAttempted = true
                 disk.write(lba, zeros)
-                lba++
-                operation.report((lba * disk.geometry.sectorSize.toULong()).toLong())
+                lba += count.toULong()
+                operation.report((lba * sectorSize.toULong()).toLong())
             }
             // Coordinator performs single disk.sync after mutation.
         } catch (failure: Throwable) {

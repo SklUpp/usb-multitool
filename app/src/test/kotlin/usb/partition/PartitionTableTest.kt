@@ -374,6 +374,14 @@ class PartitionTableTest {
         )
         assertTrue(image.writes.isNotEmpty())
         assertEquals(TableScheme.GPT, PartitionTable.read(image).scheme)
+        val protectiveMbr = sector(image, 0UL)
+        assertEquals(0x00, protectiveMbr[446 + 1].toInt() and 0xFF)
+        assertEquals(0x02, protectiveMbr[446 + 2].toInt() and 0xFF)
+        assertEquals(0x00, protectiveMbr[446 + 3].toInt() and 0xFF)
+        assertEquals(0xEE, protectiveMbr[446 + 4].toInt() and 0xFF)
+        assertEquals(0xFF, protectiveMbr[446 + 5].toInt() and 0xFF)
+        assertEquals(0xFF, protectiveMbr[446 + 6].toInt() and 0xFF)
+        assertEquals(0xFF, protectiveMbr[446 + 7].toInt() and 0xFF)
     }
 
 

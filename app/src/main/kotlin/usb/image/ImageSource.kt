@@ -625,7 +625,7 @@ class ImageSource private constructor(
         ): CountedInputStream {
             val decoded: InputStream = when (format) {
                 ImageFormat.GZIP -> GZIPInputStream(raw)
-                ImageFormat.XZ -> XZCompressorInputStream(raw, true)
+                ImageFormat.XZ -> XZCompressorInputStream(raw, true, 65_536)
                 ImageFormat.ISO, ImageFormat.IMG -> raw
             }
             return CountedInputStream(decoded, decodedSize)

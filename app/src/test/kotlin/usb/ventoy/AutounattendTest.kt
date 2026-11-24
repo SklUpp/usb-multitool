@@ -67,6 +67,7 @@ class AutounattendTest {
             Charsets.UTF_8,
         )
         assertTrue(xml.contains("WillWipeDisk>true<"))
+        assertTrue(xml.contains("<WillShowUI>Always</WillShowUI>"))
         assertTrue(xml.contains("<DiskID>0</DiskID>"))
         assertTrue(xml.contains("CreatePartition"))
         assertTrue(xml.contains("InstallTo"))

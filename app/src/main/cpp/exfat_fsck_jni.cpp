@@ -4,6 +4,7 @@
  * usb_block_* contract. Partition offset is applied exactly once by the
  * BlockDevice behind the handle; this layer never adds a second offset.
  */
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -25,9 +26,13 @@ struct HandleRec {
     uint64_t sector_count;
     bool closed_volumes;
     jobject device; /* GlobalRef to usb.device.BlockDevice */
+    jobject scratch_bb; /* GlobalRef to one reusable direct ByteBuffer */
+    void *scratch_ptr;
+    size_t scratch_bytes;
 };
 
 constexpr int kMaxHandles = 8;
+constexpr size_t kScratchBytes = 64 * 1024;
 HandleRec g_handles[kMaxHandles];
 bool g_handle_used[kMaxHandles];
 
@@ -38,6 +43,7 @@ jmethodID g_sync_mid = nullptr;
 jclass g_bytebuffer_cls = nullptr;
 jmethodID g_bb_allocate_direct = nullptr;
 jmethodID g_bb_clear = nullptr;
+jmethodID g_bb_limit = nullptr;
 
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_method_cache_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -81,9 +87,10 @@ int ensure_method_cache(JNIEnv *env) {
     jmethodID bb_allocate_direct = env->GetStaticMethodID(
         bytebuffer_cls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
     jmethodID bb_clear = env->GetMethodID(bytebuffer_cls, "clear", "()Ljava/nio/Buffer;");
+    jmethodID bb_limit = env->GetMethodID(bytebuffer_cls, "limit", "(I)Ljava/nio/Buffer;");
     if (env->ExceptionCheck())
         env->ExceptionClear();
-    if (!bb_allocate_direct || !bb_clear) {
+    if (!bb_allocate_direct || !bb_clear || !bb_limit) {
         env->DeleteGlobalRef(bytebuffer_cls);
         pthread_mutex_unlock(&g_method_cache_mu);
         return -ENOENT;
@@ -91,6 +98,7 @@ int ensure_method_cache(JNIEnv *env) {
     g_bytebuffer_cls = bytebuffer_cls;
     g_bb_allocate_direct = bb_allocate_direct;
     g_bb_clear = bb_clear;
+    g_bb_limit = bb_limit;
     g_write_mid = write_mid;
     g_sync_mid = sync_mid;
     g_read_mid = read_mid;
@@ -106,44 +114,57 @@ int java_transfer(HandleRec *h, int writing, uint64_t lba, void *buf,
     if (ensure_method_cache(env) != 0)
         return -EIO;
 
-    const size_t bytes =
+    const size_t total_bytes =
         static_cast<size_t>(sectors) * static_cast<size_t>(h->sector_size);
-    if (bytes > static_cast<size_t>(INT32_MAX))
+    if (total_bytes > static_cast<size_t>(INT32_MAX))
         return -EINVAL;
-
-    jobject bb = env->CallStaticObjectMethod(
-        g_bytebuffer_cls, g_bb_allocate_direct, static_cast<jint>(bytes));
-    if (!bb || env->ExceptionCheck()) {
-        env->ExceptionClear();
-        return -ENOMEM;
-    }
-
-    void *direct = env->GetDirectBufferAddress(bb);
-    if (!direct) {
-        env->DeleteLocalRef(bb);
-        return -ENOMEM;
-    }
-
-    if (writing)
-        std::memcpy(direct, cbuf, bytes);
-
-    jobject cleared = env->CallObjectMethod(bb, g_bb_clear);
-    if (cleared) env->DeleteLocalRef(cleared);
-    if (writing) {
-        env->CallVoidMethod(h->device, g_write_mid, static_cast<jlong>(lba), bb);
-    } else {
-        env->CallVoidMethod(h->device, g_read_mid, static_cast<jlong>(lba), bb);
-    }
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
-        env->DeleteLocalRef(bb);
+    if (total_bytes == 0)
+        return 0;
+    if (!h->scratch_bb || !h->scratch_ptr || h->scratch_bytes == 0)
         return -EIO;
+
+    auto *read_dst = static_cast<uint8_t *>(buf);
+    const auto *write_src = static_cast<const uint8_t *>(cbuf);
+    size_t done = 0;
+    while (done < total_bytes) {
+        const size_t bytes =
+            std::min(total_bytes - done, h->scratch_bytes);
+
+        jobject cleared = env->CallObjectMethod(h->scratch_bb, g_bb_clear);
+        if (cleared) env->DeleteLocalRef(cleared);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return -EIO;
+        }
+        jobject limited = env->CallObjectMethod(
+            h->scratch_bb, g_bb_limit, static_cast<jint>(bytes));
+        if (limited) env->DeleteLocalRef(limited);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return -EIO;
+        }
+
+        if (writing)
+            std::memcpy(h->scratch_ptr, write_src + done, bytes);
+
+        const jlong transfer_lba =
+            static_cast<jlong>(lba + done / h->sector_size);
+        if (writing) {
+            env->CallVoidMethod(h->device, g_write_mid, transfer_lba,
+                                h->scratch_bb);
+        } else {
+            env->CallVoidMethod(h->device, g_read_mid, transfer_lba,
+                                h->scratch_bb);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return -EIO;
+        }
+
+        if (!writing)
+            std::memcpy(read_dst + done, h->scratch_ptr, bytes);
+        done += bytes;
     }
-
-    if (!writing)
-        std::memcpy(buf, direct, bytes);
-
-    env->DeleteLocalRef(bb);
     return 0;
 }
 
@@ -194,6 +215,12 @@ Java_usb_fs_ExfatFsck_nativeOpen(
         jlong sectorCount) {
     if (!device || sectorSize <= 0 || sectorCount <= 0)
         return 0;
+    if (ensure_method_cache(env) != 0)
+        return 0;
+    const size_t scratch_bytes =
+        kScratchBytes - (kScratchBytes % static_cast<size_t>(sectorSize));
+    if (scratch_bytes == 0)
+        return 0;
 
     pthread_mutex_lock(&g_mu);
     int slot = -1;
@@ -214,12 +241,34 @@ Java_usb_fs_ExfatFsck_nativeOpen(
         return 0;
     }
 
+    jobject scratch = env->CallStaticObjectMethod(
+        g_bytebuffer_cls, g_bb_allocate_direct,
+        static_cast<jint>(kScratchBytes));
+    if (!scratch || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        env->DeleteGlobalRef(global);
+        pthread_mutex_unlock(&g_mu);
+        return 0;
+    }
+    jobject scratch_global = env->NewGlobalRef(scratch);
+    void *scratch_ptr = env->GetDirectBufferAddress(scratch);
+    env->DeleteLocalRef(scratch);
+    if (!scratch_global || !scratch_ptr) {
+        if (scratch_global) env->DeleteGlobalRef(scratch_global);
+        env->DeleteGlobalRef(global);
+        pthread_mutex_unlock(&g_mu);
+        return 0;
+    }
+
     HandleRec &h = g_handles[slot];
     h = HandleRec{
         static_cast<uint64_t>(sectorSize),
         static_cast<uint64_t>(sectorCount),
         false,
         global,
+        scratch_global,
+        scratch_ptr,
+        scratch_bytes,
     };
     g_handle_used[slot] = true;
     const uint64_t handle = static_cast<uint64_t>(slot + 1);
@@ -227,6 +276,7 @@ Java_usb_fs_ExfatFsck_nativeOpen(
     int rc = usb_block_register_raw(handle, h.sector_size, h.sector_count,
                                     java_read, java_write, java_sync, &h);
     if (rc != 0) {
+        env->DeleteGlobalRef(scratch_global);
         env->DeleteGlobalRef(global);
         g_handle_used[slot] = false;
         std::memset(&h, 0, sizeof(h));
@@ -249,6 +299,9 @@ Java_usb_fs_ExfatFsck_nativeClose(JNIEnv *env, jclass, jlong handle) {
     usb_block_unregister(static_cast<uint64_t>(handle));
     if (g_handles[handle - 1].device) {
         env->DeleteGlobalRef(g_handles[handle - 1].device);
+    }
+    if (g_handles[handle - 1].scratch_bb) {
+        env->DeleteGlobalRef(g_handles[handle - 1].scratch_bb);
     }
     g_handle_used[handle - 1] = false;
     std::memset(&g_handles[handle - 1], 0, sizeof(HandleRec));

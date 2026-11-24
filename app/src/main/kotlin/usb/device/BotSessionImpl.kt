@@ -46,6 +46,15 @@ class BotSessionImpl(
                 try {
                     dest.limit(mark + cdb.transferLength)
                     transferDataIn(dest, cdb.transferLength, timeoutMs)
+                } catch (e: DiskException.IoFailure) {
+                    // BOT 1.0 §5.3: a stalled bulk-IN pipe must be unstalled before
+                    // reading the CSW; do not escalate to Bulk-Only Reset first.
+                    try {
+                        channel.clearHaltIn()
+                    } catch (clearFailure: Throwable) {
+                        e.addSuppressed(clearFailure)
+                        throw e
+                    }
                 } finally {
                     dest.limit(oldLimit)
                 }

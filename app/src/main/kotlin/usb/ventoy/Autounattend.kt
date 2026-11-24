@@ -404,7 +404,8 @@ object Autounattend {
         // Explicit opt-in: replace only the partition layout; InstallFrom/MetaData stay.
         removeChild(setup, "DiskConfiguration")
         val diskConfiguration = child(document, setup, "DiskConfiguration")
-        willShowUi?.let { setText(document, diskConfiguration, "WillShowUI", it) }
+        val effectiveWillShowUi = if (layout.wipe) "Always" else willShowUi
+        effectiveWillShowUi?.let { setText(document, diskConfiguration, "WillShowUI", it) }
         val disk = child(document, diskConfiguration, "Disk")
         setActionAdd(document, root, disk)
         setText(document, disk, "DiskID", (layout.diskId ?: 0).toString())
