@@ -6,12 +6,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import usb.image.CloseCapacityException
 import usb.image.ImageSource
 import usb.image.MeasurementHandle
 import usb.ui.AppUiState
 import usb.ui.RawMeasureError
+import usb.ui.rawSourceKey
 import usb.ui.UiEffect
 import usb.ui.UiIntent
 
