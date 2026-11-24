@@ -171,9 +171,9 @@ class PickerContractTest {
                     binding = base.copy(attachment = base.attachment.copy(attachGeneration = 99L)),
                 ),
                 VerdictCase(
-                    "selectedPartitionId changed",
+                    "current selection changed, pinned partition intact",
                     ready(selectedId = "2", partitionsOverride = listOf(partition, partition.copy(id = "2"))),
-                    PickerVerdict.TargetInvalid,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="windows_file_none">Selected file: not selected</string>
+    <string name="windows_file_none">No file selected</string>
     <string name="windows_file_status">Selected file: %1$s</string>
     <string name="partitions_strip_item_a11y_name">Partition %1$s</string>
 </resources>

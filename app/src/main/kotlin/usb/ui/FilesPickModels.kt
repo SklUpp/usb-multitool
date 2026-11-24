@@ -43,7 +43,8 @@ data class UiAttachmentPin(
     fun matches(state: AppUiState, directory: String? = null): Boolean {
         val device = state.device ?: return false
         if (device.identity != identity || device.attachGeneration != attachGeneration) return false
-        if (state.selectedPartitionId != partitionId) return false
+        // The pin owns the target partition; the user's current selection is UI state and may
+        // legitimately change while a SAF picker is in front. Geometry below is the fence.
         if (directory != null && state.currentPath != directory) return false
         val partition = state.partitions.firstOrNull { it.id == partitionId } ?: return false
         return partition.startLba == startLba && partition.sectorCount == sectorCount

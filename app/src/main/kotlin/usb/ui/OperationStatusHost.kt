@@ -132,7 +132,7 @@ private fun rememberOperationStatusFacts(
     }
 }
 
-private fun computeOperationStatusFacts(
+internal fun computeOperationStatusFacts(
     op: OperationProgress,
     diskSectorSize: Int,
     resources: Resources,
@@ -261,6 +261,7 @@ internal fun OperationStatusHost(
             }
         }
         ?: statusMessage?.localized()
+        ?: stringResource(R.string.shell_status_ready)
     val progressDescription = stringResource(R.string.shell_status_progress)
     val openDetailsLabel = stringResource(R.string.shell_status_open_details)
 
@@ -269,14 +270,14 @@ internal fun OperationStatusHost(
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(top = 4.dp, bottom = 4.dp)
-            .heightIn(min = 48.dp, max = 76.dp)
+            .heightIn(min = 48.dp)
             .then(
                 if (onOpenDetails != null) {
-                    Modifier
-                        .clickable(role = Role.Button, onClick = onOpenDetails)
-                        .semantics {
-                            contentDescription = openDetailsLabel
-                        }
+                    Modifier.clickable(
+                        role = Role.Button,
+                        onClickLabel = openDetailsLabel,
+                        onClick = onOpenDetails,
+                    )
                 } else {
                     Modifier
                 },
@@ -303,7 +304,7 @@ internal fun OperationStatusHost(
             Text(
                 text = lineText.orEmpty(),
                 style = MaterialTheme.typography.bodySmall,
-                color = if (facts?.tone == StatusTone.Error) {
+                color = if (newerStandaloneText == null && facts?.tone == StatusTone.Error) {
                     MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.onSurface

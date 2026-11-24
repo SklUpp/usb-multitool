@@ -368,7 +368,7 @@
     <string name="ventoy_version_subtitle">Version</string>
     <string name="ventoy_help_title">Ventoy install and update</string>
     <string name="ventoy_help_text">Ventoy versions (bundled, installed on USB, and upstream) are shown separately Clean installation wipes the drive and formats partitions Upgrading rewrites EFI/MBR boot files while preserving the data partition</string>
-    <string name="ventoy_help_details">Downloading and verifying Ventoy does not modify the USB drive: verified releases are cached in app storage Official releases are checked against hardcoded SHA-256 checksums</string>
+    <string name="ventoy_help_details">Downloading and verifying Ventoy does not modify the USB drive: verified releases are cached in app storage Official releases are checked against hardcoded SHA-256 checksums\n\n**Example:** check the version, download the release, then install or update Ventoy Updating keeps files on the data partition</string>
     <string name="ventoy_version_bundled">Bundled in app</string>
     <string name="ventoy_version_installed">On USB</string>
     <string name="ventoy_version_upstream">Server</string>
@@ -965,4 +965,7 @@
     <string name="settings_about_title">About</string>
     <string name="more_actions">More actions</string>
     <string name="raw_write_help_examples">Examples: Linux ISO → a partition or free range; Windows ISO → whole disk; firmware → exact range from its documentation</string>
+    <string name="settings_toggle_values">Show value options</string>
+    <string name="msg_rescue_map_required">Choose a .map sector map file</string>
+    <string name="partitions_raw_range_whole_disk">Disk start: the partition table and boot sectors inside the image will be overwritten</string>
 </resources>

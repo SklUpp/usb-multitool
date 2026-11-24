@@ -190,6 +190,7 @@ enum class UiMessageKey {
     RescueImageCleared,
     RescueImageReady,
     RescueMapCleared,
+    RescueMapRequired,
     RescueMapReady,
     ChooseGptBackup,
     ChooseRescueFiles,

@@ -183,6 +183,7 @@ fun AppShell(
     onRequestBatchUpload: () -> Unit = {},
     onPickBackupFolder: () -> Unit = {},
     onPickRescueFile: () -> Unit = {},
+    onPickRescueMap: () -> Unit = {},
     onPickGptFile: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
@@ -531,6 +532,7 @@ fun AppShell(
                         onRequestBatchUpload = onRequestBatchUpload,
                         onPickBackupFolder = onPickBackupFolder,
                         onPickRescueFile = onPickRescueFile,
+                        onPickRescueMap = onPickRescueMap,
                         onPickGptFile = onPickGptFile,
                         onStartRescueBackup = onStartRescueBackup,
                         onCreateGptCopy = onCreateGptCopy,
@@ -921,7 +923,15 @@ private fun StatusDialog(
         ).joinToString(" — ")
     }
     val statusLine = state.statusMessage?.localized()
+    val readback = op?.let {
+        computeOperationStatusFacts(
+            LocalContext.current.resources,
+            it,
+            state.diskSectorSize,
+        ).readback
+    }
     val detailLine = failureText
+        ?: readback
         ?: op?.resultMessage
         ?: statusLine
     AlertDialog(
@@ -961,24 +971,15 @@ private fun StatusDialog(
                         },
                     )
                 }
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    shape = MaterialTheme.shapes.small,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 0.dp,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.operationLogLines.isEmpty()) {
-                        Text(
-                            text = stringResource(R.string.log_empty),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        )
-                    } else {
+                if (state.operationLogLines.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        shape = MaterialTheme.shapes.small,
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()

@@ -503,10 +503,17 @@ internal fun AutounattendSection(
                             Text(image, style = MaterialTheme.typography.bodySmall)
                             Text(xml ?: stringResource(R.string.unattend_xml_not_selected), style = MaterialTheme.typography.labelSmall)
                         }
-                        IconButton(onClick = {
-                            onIntent(UiIntent.SetWindowsLinkTarget(image))
-                            onIntent(UiIntent.BeginFilesPick(FilesPickPurpose.WindowsTemplate, ShellTab.Ventoy, FilesPickTarget.File, initialPath = "/ventoy", expectedIdentity = state.device?.identity, expectedAttachGeneration = state.device?.attachGeneration))
-                        }, enabled = state.actionsEnabled) { GlyphIcon(Glyph.File, size = 20.dp) }
+                        val chooseXmlDescription = stringResource(R.string.unattend_choose_template)
+                        IconButton(
+                            onClick = {
+                                onIntent(UiIntent.SetWindowsLinkTarget(image))
+                                onIntent(UiIntent.BeginFilesPick(FilesPickPurpose.WindowsTemplate, ShellTab.Ventoy, FilesPickTarget.File, initialPath = "/ventoy", expectedIdentity = state.device?.identity, expectedAttachGeneration = state.device?.attachGeneration))
+                            },
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = chooseXmlDescription
+                            },
+                        ) { GlyphIcon(Glyph.File, size = 20.dp) }
                         IconButton(
                             onClick = {
                                 if (xml != null) {
@@ -535,7 +542,12 @@ internal fun AutounattendSection(
                 candidates?.scopeLimitedBy?.let { Text(stringResource(R.string.unattend_scope_limited, it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp)) }
                 if (candidates?.truncated == true) Text(stringResource(R.string.unattend_truncated), modifier = Modifier.padding(horizontal = 24.dp))
                 candidates?.error?.let { Text(stringResource(R.string.raw_stick_incomplete), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp)) }
-                candidates?.images.orEmpty().forEach { image ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                ) {
+                items(candidates?.images.orEmpty(), key = { it.imagePath }) { image ->
                     val selectable = image.problem == null && !image.bound
                     val checked = image.imagePath in selected
                     PopupChoiceBlock(
@@ -569,6 +581,7 @@ internal fun AutounattendSection(
                             }
                         }
                     }
+                }
                 }
                 Button(onClick = {
                     val old = state.windowsSelectedImages.toSet()
@@ -1452,7 +1465,8 @@ private fun AutounattendRawEditorDialog(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(inner)
-                        .padding(16.dp),
+                        .padding(16.dp)
+                        .imePadding(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
@@ -1578,17 +1592,20 @@ private fun EditablePairRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                val keyFieldLabel = stringResource(R.string.settings_key_label)
                 OutlinedTextField(
                     value = draft.key,
                     onValueChange = { onChange(draft.copy(key = it)) },
-                    placeholder = { Text(stringResource(R.string.settings_key_label)) },
+                    placeholder = { Text(keyFieldLabel) },
                     singleLine = true,
                     enabled = actionsEnabled,
                     readOnly = keyReadOnly,
                     textStyle = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = keyFieldLabel },
                 )
                 Text(
                     text = "=",
@@ -1597,16 +1614,19 @@ private fun EditablePairRow(
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                val valueFieldLabel = stringResource(R.string.settings_value_label)
                 OutlinedTextField(
                     value = draft.value,
                     onValueChange = { onChange(draft.copy(value = it)) },
-                    placeholder = { Text(stringResource(R.string.settings_value_label)) },
+                    placeholder = { Text(valueFieldLabel) },
                     singleLine = true,
                     enabled = actionsEnabled,
                     textStyle = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics { contentDescription = valueFieldLabel },
                 )
                 // Explicit delete affordance — swipe alone is not enough for a11y.
                 IconButton(
@@ -1797,9 +1817,12 @@ private fun KnownControlRow(
                         }
                     }
                 }
+                val toggleValuesLabel = stringResource(R.string.settings_toggle_values)
                 IconButton(
                     onClick = { optionsExpanded = !optionsExpanded },
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = toggleValuesLabel },
                 ) {
                     GlyphIcon(
                         glyph = if (optionsExpanded) Glyph.ChevronUp else Glyph.ChevronDown,
@@ -2752,18 +2775,15 @@ private fun GenerateDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                val targetDirectory = template.substringBeforeLast('/', "/").trimEnd('/')
+                val targetPath = if (targetDirectory.isEmpty()) "/$xmlName" else "$targetDirectory/$xmlName"
                 Text(
-                    text = VentoySetup.resolveXmlPath(template),
-                    style = MaterialTheme.typography.labelSmall,
+                    text = targetPath,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (template == null) {
-                    Text(
-                        text = stringResource(R.string.wave4_suggested_xml_path),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
                 OutlinedTextField(
                     value = xmlName,
                     onValueChange = { xmlName = it },
@@ -2962,17 +2982,6 @@ private fun GenerateDialog(
                                 style = MaterialTheme.typography.labelSmall,
                             )
                     }
-                    diskLayoutInstallTargetPartitionId(draftLayout.partitions)?.let { target ->
-                        Text(
-                            text = stringResource(R.string.params_layout_install_target, target),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    } ?: Text(
-                        text = stringResource(R.string.params_layout_install_target_missing),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
                     SwitchRow(
                         label = stringResource(R.string.params_layout_wipe),
                         checked = wipe,

@@ -87,6 +87,7 @@ internal fun PerformanceSettingsSection(enabled: Boolean = true) {
             range = TransferTuning.MIN_SCSI_CHUNK_KIB..TransferTuning.MAX_SCSI_CHUNK_KIB,
             step = TransferTuning.SCSI_CHUNK_STEP_KIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_kib, scsiChunkKib),
+            defaultValue = TransferTuning.DEFAULT_SCSI_CHUNK_KIB,
             resetDescription = resetDescription,
             enabled = enabled,
             onValueChange = { scsiChunkKib = it },
@@ -106,6 +107,7 @@ internal fun PerformanceSettingsSection(enabled: Boolean = true) {
             range = TransferTuning.MIN_JNI_CAP_KIB..TransferTuning.MAX_JNI_CAP_KIB,
             step = TransferTuning.JNI_CAP_STEP_KIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_kib, jniCapKib),
+            defaultValue = TransferTuning.DEFAULT_JNI_CAP_KIB,
             resetDescription = resetDescription,
             enabled = enabled,
             onValueChange = { jniCapKib = it },
@@ -126,6 +128,7 @@ internal fun PerformanceSettingsSection(enabled: Boolean = true) {
                 TransferTuning.MIN_RESCUE_CHECKPOINT_MIB..TransferTuning.MAX_RESCUE_CHECKPOINT_MIB,
             step = TransferTuning.RESCUE_CHECKPOINT_STEP_MIB,
             valueLabel = stringResource(R.string.diagnostics_perf_value_mib, rescueCheckpointMib),
+            defaultValue = TransferTuning.DEFAULT_RESCUE_CHECKPOINT_MIB,
             resetDescription = resetDescription,
             enabled = enabled,
             onValueChange = { rescueCheckpointMib = it },
@@ -149,6 +152,7 @@ private fun PerfSlider(
     range: IntRange,
     step: Int,
     valueLabel: String,
+    defaultValue: Int,
     resetDescription: String,
     enabled: Boolean,
     onValueChange: (Int) -> Unit,
@@ -193,10 +197,10 @@ private fun PerfSlider(
             )
             IconButton(
                 onClick = onReset,
-                enabled = enabled,
+                enabled = enabled && value != defaultValue,
                 modifier = Modifier
                     .size(48.dp)
-                    .semantics { contentDescription = resetDescription },
+                    .semantics { contentDescription = "$resetDescription: $title" },
             ) {
                 GlyphIcon(Glyph.Refresh, size = 20.dp)
             }

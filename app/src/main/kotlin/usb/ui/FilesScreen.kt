@@ -207,7 +207,9 @@ fun FilesScreen(
     ) {
         mutableStateOf<PartitionBinding?>(null)
     }
-    var renameName by remember(renameTarget, renameBinding) { mutableStateOf("") }
+    var renameName by remember(renameTarget, renameBinding) {
+        mutableStateOf(renameTarget?.name.orEmpty())
+    }
     var actionEntry by remember(
         state.selectedPartitionId,
         state.currentPath,
@@ -357,18 +359,15 @@ fun FilesScreen(
                 text = { Text(stringResource(R.string.action_cancel)) },
             )
         } else if (canWrite) {
-            FloatingActionButton(
+            ExtendedFloatingActionButton(
                 onClick = onRequestBatchUpload,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp)
                     .semantics { contentDescription = uploadDescription },
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = null,
-                )
-            }
+                icon = { GlyphIcon(Glyph.Upload, size = 20.dp) },
+                text = { Text(stringResource(R.string.files_copy_from_phone)) },
+            )
         }
     }
     actionEntry?.let { entry ->
@@ -409,7 +408,6 @@ fun FilesScreen(
             onRename = {
                 actionEntry = null
                 renameTarget = entry
-                renameName = entry.name
                 val device = state.device
                 val partition = state.selectedPartition()
                 renameBinding = if (device != null && partition != null) {
@@ -962,17 +960,18 @@ private fun FilesPickScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (selectsFile) {
-                        selectedPickEntry?.let { selected ->
-                            Text(
-                                text = folderPathLabel(state.currentPath) + selected.name,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                        val selected = selectedPickEntry
+                        Text(
+                            text = selected?.let {
+                                folderPathLabel(state.currentPath) + it.name
+                            } ?: stringResource(R.string.wave4_file_not_selected),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
                 if (showDeviceImage) {
@@ -1347,8 +1346,13 @@ private fun FolderBreadcrumbs(
 ) {
     val rootLabel = stringResource(R.string.files_breadcrumb_root)
     val parts = path.trim('/').split('/').filter { it.isNotBlank() }
+    val breadcrumbScroll = rememberScrollState()
+    // A deep path must open on the current folder, not on the root end.
+    LaunchedEffect(path, breadcrumbScroll.maxValue) {
+        breadcrumbScroll.scrollTo(breadcrumbScroll.maxValue)
+    }
     Row(
-        modifier = modifier.horizontalScroll(rememberScrollState()),
+        modifier = modifier.horizontalScroll(breadcrumbScroll),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(

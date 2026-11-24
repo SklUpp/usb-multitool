@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="windows_file_none">Выбранный файл: не выбран</string>
+    <string name="windows_file_none">Файл не выбран</string>
     <string name="windows_file_status">Выбранный файл: %1$s</string>
     <string name="partitions_strip_item_a11y_name">Раздел %1$s</string>
 </resources>

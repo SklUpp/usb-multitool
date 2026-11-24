@@ -368,7 +368,7 @@
     <string name="ventoy_version_subtitle">Версия</string>
     <string name="ventoy_help_title">Установка и обновление Ventoy</string>
     <string name="ventoy_help_text">Версии Ventoy (в приложении, на флешке и на сервере) отображаются отдельно Установка начисто стирает все разделы и форматирует накопитель Обновление перезаписывает загрузочные файлы EFI/MBR, сохраняя файлы на разделе данных</string>
-    <string name="ventoy_help_details">Загрузка и проверка образов Ventoy не изменяют накопитель: проверенный релиз кэшируется во внутренней памяти телефона Официальные релизы проверяются по независимым контрольным суммам SHA-256</string>
+    <string name="ventoy_help_details">Загрузка и проверка образов Ventoy не изменяют накопитель: проверенный релиз кэшируется во внутренней памяти телефона Официальные релизы проверяются по независимым контрольным суммам SHA-256\n\n**Пример:** проверьте версию, скачайте релиз, затем установите или обновите Ventoy При обновлении файлы на разделе данных сохраняются</string>
 
     <string name="ventoy_version_bundled">В пакете</string>
     <string name="ventoy_version_installed">На накопителе</string>
@@ -966,4 +966,7 @@
     <string name="settings_about_title">О приложении</string>
     <string name="more_actions">Другие действия</string>
     <string name="raw_write_help_examples">Примеры: Linux ISO → раздел или свободный диапазон; Windows ISO → весь диск; прошивка → точный диапазон из документации</string>
+    <string name="settings_toggle_values">Показать варианты значения</string>
+    <string name="msg_rescue_map_required">Выберите файл карты .map</string>
+    <string name="partitions_raw_range_whole_disk">Начало диска: таблица разделов и загрузочные секторы в пределах образа будут перезаписаны</string>
 </resources>

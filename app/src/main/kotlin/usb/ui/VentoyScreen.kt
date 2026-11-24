@@ -894,7 +894,12 @@ internal fun ImportFolderDialog(
             folders == null && !blocked -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_not_loaded), style = MaterialTheme.typography.bodySmall) })
             folders == null -> Unit
             listed.isEmpty() -> ListItem(headlineContent = { Text(text = stringResource(R.string.import_folder_empty), style = MaterialTheme.typography.bodySmall) })
-            else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 items(items = listed, key = { it }) { folder ->
                     val name = usb.ventoy.folderName(folder)
                     val openLabel = stringResource(R.string.import_folder_open, name)
@@ -962,6 +967,7 @@ internal fun ImportOverwriteDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
@@ -971,11 +977,7 @@ internal fun ImportOverwriteDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        // Cap body so fontScale 2.0 still scrolls instead of clipping checkboxes.
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(

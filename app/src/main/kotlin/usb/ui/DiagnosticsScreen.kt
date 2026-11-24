@@ -116,9 +116,9 @@ private fun RestorePathLine(label: String, path: String?) {
 }
 
 /** One line: canonical path and filename, with no provider/volume prefix. */
-private fun restorePathText(uri: String?, fallback: String?): String {
+private fun restorePathText(uri: String?, fallback: String?): String? {
     val path = uri?.let(::normalizedRestorePath)
-    return if (path != null && path != "/") path else fallback.orEmpty()
+    return if (path != null && path != "/") path else fallback?.takeIf { it.isNotBlank() }
 }
 
 @Composable
@@ -128,6 +128,7 @@ fun DiagnosticsScreen(
     modifier: Modifier = Modifier,
     onPickBackupFolder: () -> Unit = {},
     onPickRescueFile: () -> Unit = {},
+    onPickRescueMap: () -> Unit = {},
     onPickGptFile: () -> Unit = {},
     onOpenBackupSettings: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
@@ -135,7 +136,9 @@ fun DiagnosticsScreen(
     /** Live persisted-grant check from the shell; required so a stale snapshot cannot ship. */
     backupFolderGrantValid: () -> Boolean,
 ) {
-    var dangerExpanded by remember { mutableStateOf(false) }
+    var dangerExpanded by remember(state.device?.identity, state.device?.attachGeneration) {
+        mutableStateOf(false)
+    }
     // The persisted SAF grant can vanish after startup while [AppUiState.backupFolderUsable]
     // still holds the old snapshot. Create clicks re-check the live grant: a lost grant
     // publishes that fact and opens Settings, so no SAF chooser ever starts from here.
@@ -372,7 +375,7 @@ fun DiagnosticsScreen(
                         }
                         IconButton(
                             onClick = { onIntent(UiIntent.ResetRescueSelection) },
-                            enabled = state.rescueImageUri != null || state.rescueMapUri != null,
+                            enabled = state.actionsEnabled && (state.rescueImageUri != null || state.rescueMapUri != null),
                             modifier = Modifier.semantics {
                                 contentDescription = resetSelectionLabel
                             },
@@ -396,6 +399,25 @@ fun DiagnosticsScreen(
                     state.rescueMapInspection?.displayName,
                 ),
             )
+            if (state.rescueImageUri != null && state.rescueMapUri == null) {
+                // One-file pick cannot discover a sibling map without a tree grant. Make the
+                // second half explicit instead of silently leaving Restore disabled.
+                FilledTonalButton(
+                    onClick = onPickRescueMap,
+                    enabled = state.actionsEnabled,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    GlyphIcon(glyph = Glyph.File, size = 18.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.diagnostics_pick_map),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
             val rescueImage = state.rescueImageInspection
                 ?.takeIf { it.uri == state.rescueImageUri }
             val rescueMap = state.rescueMapInspection
@@ -499,7 +521,7 @@ fun DiagnosticsScreen(
                         }
                         IconButton(
                             onClick = { onIntent(UiIntent.ResetGptSelection) },
-                            enabled = state.backupUri != null,
+                            enabled = state.actionsEnabled && state.backupUri != null,
                             modifier = Modifier.semantics {
                                 contentDescription = resetSelectionLabel
                             },
@@ -815,25 +837,23 @@ private fun DiagTile(
 /** Compact bounded-inspection lines; never invents a value when the provider omitted one. */
 @Composable
 private fun InspectionText(lines: List<String>) {
+    // No inspection, no panel: an empty framed block reads as missing data and steals
+    // vertical space. The panel grows with its content up to 200 dp and scrolls inside
+    // that bound, independently of the screen's global scroll.
+    if (lines.isEmpty()) return
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = MaterialTheme.shapes.small,
-        modifier = Modifier.fillMaxWidth().height(200.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 200.dp)
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (lines.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.diagnostics_info_empty),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             lines.forEach { line ->
                 Text(
                     text = line,

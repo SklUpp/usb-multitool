@@ -1741,6 +1741,19 @@ private fun RawWriteSection(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                geometry?.let { liveGeometry ->
+                    RawPlanMap(
+                        geometry = liveGeometry,
+                        startLba = alignedCustomStart ?: 0UL,
+                        sectorCount = sourceSectors,
+                        onStartChange = { started ->
+                            customStart = started.toString()
+                            rawSectorSize?.let { size ->
+                                customStartMib = formatMibInput(started, size)
+                            }
+                        },
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1750,10 +1763,12 @@ private fun RawWriteSection(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                     )
+                    val verifyLabel = stringResource(R.string.raw_verify_readback_label)
                     Switch(
                         checked = state.rawVerifyReadback,
                         onCheckedChange = { onIntent(UiIntent.SetRawVerifyReadback(it)) },
                         enabled = state.actionsEnabled,
+                        modifier = Modifier.semantics { contentDescription = verifyLabel },
                     )
                 }
                 if (geometry == null) {
@@ -2106,6 +2121,7 @@ private fun assessRawRange(
     }
 
     val message = when {
+        wholeDisk -> stringResource(R.string.partitions_raw_range_whole_disk)
         !refinedOk -> stringResource(R.string.partitions_raw_range_touches_protected)
         roEfiBlocked -> stringResource(R.string.partitions_raw_range_ro_efi)
         else -> stringResource(R.string.partitions_raw_range_ok)

@@ -218,6 +218,8 @@ class MainViewModel(
     internal val pendingDownloadRequestId: Long
         get() = safPicker.pendingDownloadRequestId
     @Volatile private var pendingRawStagingPath: String? = null
+    /** SAF upload picked while a probe transiently owns the stick; retried on Ready. */
+    private var pendingBatchUpload: UiIntent.UploadBatchDocs? = null
     private val rawMeasurement by lazy {
         RawSourceMeasurementCoordinator(
             scope = scope,
@@ -604,6 +606,15 @@ class MainViewModel(
         expected: PendingBackupFolderAction,
     ) = backupActions.requestPinned(action, expected)
 
+    /**
+     * Keep a picked SAF upload until the stick is Ready. Returning from SAF can race a
+     * lifecycle re-probe; dropping the result would silently lose the user's selection.
+     */
+    fun queueBatchUpload(intent: UiIntent.UploadBatchDocs) {
+        pendingBatchUpload = intent
+        onIntent(intent)
+    }
+
     fun onIntent(intent: UiIntent) {
         // A reset must beat every inspection already in flight, not just the UI fields.
         when (intent) {
@@ -797,6 +808,12 @@ class MainViewModel(
         if (acceptedOperationIntent || completionGenerationAccepted) filesystemUsage.refresh(intent)
         if (state.tab != previousTab) {
             ShellTabPersistence.write(savedStateHandle, state.tab)
+        }
+        if (intent is UiIntent.DeviceChanged && state.actionsEnabled) {
+            pendingBatchUpload?.let { pending ->
+                pendingBatchUpload = null
+                onIntent(pending)
+            }
         }
 
     }
@@ -1395,8 +1412,8 @@ class MainViewModel(
      * other document is inspected as a rescue image. The shared folder choice is cleared so
      * the visible path is the exact document the user picked.
      */
-    fun onRescueFilePicked(uri: Uri) {
-        safBackup.onRescueFilePicked(uri, state)
+    fun onRescueFilePicked(uri: Uri, mapOnly: Boolean = false) {
+        safBackup.onRescueFilePicked(uri, state, mapOnly)
     }
 
 
@@ -1895,6 +1912,7 @@ class MainViewModel(
                 ),
             )
         }
+        pendingBatchUpload = null
         filesystemUsage.resetPlan()
         filesystemUsage.cancel(markWaiting = false)
         inspectionOwner.cancel(cancelUsb = true)
@@ -5065,14 +5083,17 @@ class MainActivity : ComponentActivity() {
         viewModel.onSafImagePicked(uri)
     }
 
+    private var rescuePickMapOnly = false
     private val rescueFilePicker = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
+        val mapOnly = rescuePickMapOnly
+        rescuePickMapOnly = false
         if (uri == null) return@registerForActivityResult
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        viewModel.onRescueFilePicked(uri)
+        viewModel.onRescueFilePicked(uri, mapOnly)
     }
 
     private val gptFilePicker = registerForActivityResult(
@@ -5532,7 +5553,7 @@ class MainActivity : ComponentActivity() {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
             return@registerForActivityResult
         }
-        viewModel.onIntent(
+        viewModel.queueBatchUpload(
             UiIntent.UploadBatchDocs(
                 directory = target.directory,
                 uris = uris.map { it.toString() },
@@ -5760,7 +5781,14 @@ class MainActivity : ComponentActivity() {
                 onPickBackupFolder = {
                     openBackupFolderPicker(BackupFolderAction.ChangeFolder)
                 },
-                onPickRescueFile = { rescueFilePicker.launch(arrayOf("*/*")) },
+                onPickRescueFile = {
+                    rescuePickMapOnly = false
+                    rescueFilePicker.launch(arrayOf("*/*"))
+                },
+                onPickRescueMap = {
+                    rescuePickMapOnly = true
+                    rescueFilePicker.launch(arrayOf("*/*"))
+                },
                 onPickGptFile = { gptFilePicker.launch(arrayOf("*/*")) },
                 onStartRescueBackup = {
                     viewModel.startCreateWithBackupFolder(BackupFolderAction.RescueBackup)

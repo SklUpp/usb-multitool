@@ -155,7 +155,7 @@ class SafBackupCoordinator(
      * other document is inspected as a rescue image. The shared folder choice is cleared so
      * the visible path is the exact document the user picked.
      */
-    fun onRescueFilePicked(uri: Uri, state: AppUiState) {
+    fun onRescueFilePicked(uri: Uri, state: AppUiState, mapOnly: Boolean = false) {
         val target = uri.toString()
         log("picker.rescue_file uri=$target")
         val generation = rescueArchivePickGeneration.incrementAndGet()
@@ -165,6 +165,12 @@ class SafBackupCoordinator(
             val (name, size) = contentInfo(resolver, uri)
             val lower = name?.lowercase(java.util.Locale.ROOT)
             val isMap = lower?.endsWith(".map") == true
+            if (mapOnly && !isMap) {
+                withContext(Dispatchers.Main.immediate) {
+                    intents(UiIntent.Status(UiMessage.Key(UiMessageKey.RescueMapRequired)))
+                }
+                return@launch
+            }
             var imageInspection: usb.ui.RescueImageInspection? = null
             var mapInspection: usb.ui.RescueMapInspection? = null
             var failure: String? = null
