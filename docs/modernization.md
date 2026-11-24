@@ -38,14 +38,6 @@ Compose BOM 2025.12.01, `compileSdk`/`targetSdk` 36, `minSdk` 28.
 | 12 | P3 | Icons | `gradle/libs.versions.toml:27`; `FilesScreen.kt`, `PartitionsScreen.kt`, `VentoyScreen.kt` | `material-icons-extended` больше не рекомендуется и заметно увеличивает APK | Перейти на нужные vector drawables/Material Symbols |
 | 13 | P3 | CI actions | `.github/workflows/android-debug.yml` | `actions/setup-java@v4` больше не обновляется; `checkout/cache/setup-java/upload-artifact` работают на принудительном Node 24 из-за Node 20 deprecation | Обновить majors actions и проверить, что pinned SHAs обновлены осознанно |
 
-### Снято с плана как нерелевантное
-
-- **Toolchain matrix (KGP 2.2.10 + AGP 8.13.2).** Текущая сборка зелёная; ограничение официальной матрицы имеет значение только при обновлении Kotlin/AGP, а не сейчас. Рассматривать в той же миграции, что и `kotlinOptions`.
-- **Cancel semantics для `OpenMultipleDocuments`.** Пустой список — штатный результат и для отмены, и для пустого выбора; текущее сообщение нейтрально и не теряет данные. Отдельная миграция на `StartActivityForResult` не оправдана.
-- **`SimpleDateFormat` в `AppTraceLogger`.** Форматтер приватный и вызывается только внутри `synchronized`-блока; текущей гонки нет. Менять только при выносе `buildLine` из-под lock.
-- **Лишние `@OptIn(ExperimentalLayoutApi::class)`.** Это предупреждения компилятора, не дефект поведения; удаление требует проверки конкретной перегрузки `FlowRow` и не входит в план улучшений.
-- **Обновление Compose BOM.** Сейчас заблокировано `compileSdk 37.1`/AGP 9/Gradle 9.1 и меняет API (`FlowRow`→`FlexBox`, `VisualTransformation`). Это отдельная крупная миграция, а не пункт текущего плана.
-
 ## Перенос в native: решение
 
 | Кандидат | Решение | Причина |
