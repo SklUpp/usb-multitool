@@ -113,13 +113,13 @@ class OperationProgressMapperTest {
 
     @Test fun cancelableOnlyWhileRunningOrQueued() {
         val cases = listOf(
-            Triple<OperationProgress?, Boolean>(null, false),
-            Triple(OperationProgress(OperationState.Running, OperationTitle.Upload, token, cancelable = false), false),
-            Triple(OperationProgress(OperationState.Completed, OperationTitle.Upload, token, cancelable = true), false),
-            Triple(OperationProgress(OperationState.Failed, OperationTitle.Upload, token, cancelable = true), false),
-            Triple(OperationProgress(OperationState.Cancelled, OperationTitle.Upload, token, cancelable = true), false),
-            Triple(OperationProgress(OperationState.Queued, OperationTitle.Upload, token, cancelable = true), true),
-            Triple(OperationProgress(OperationState.Running, OperationTitle.Upload, token, cancelable = true), true),
+            Pair<OperationProgress?, Boolean>(null, false),
+            Pair(OperationProgress(OperationState.Running, OperationTitle.Upload, token, cancelable = false), false),
+            Pair(OperationProgress(OperationState.Completed, OperationTitle.Upload, token, cancelable = true), false),
+            Pair(OperationProgress(OperationState.Failed, OperationTitle.Upload, token, cancelable = true), false),
+            Pair(OperationProgress(OperationState.Cancelled, OperationTitle.Upload, token, cancelable = true), false),
+            Pair(OperationProgress(OperationState.Queued, OperationTitle.Upload, token, cancelable = true), true),
+            Pair(OperationProgress(OperationState.Running, OperationTitle.Upload, token, cancelable = true), true),
         )
         for ((progress, expected) in cases) {
             assertEquals("state=${progress?.state}, cancelable=${progress?.cancelable}", expected, OperationPresentation.isCancelable(progress))
