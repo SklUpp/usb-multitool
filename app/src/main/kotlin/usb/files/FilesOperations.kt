@@ -14,6 +14,7 @@ import usb.image.MeasurementHandle
 import usb.operation.DiskOperation
 import usb.operation.OperationState
 import usb.saf.SafBackupFolder
+import usb.saf.SafCleanupPolicy
 import usb.saf.SafDocument
 import usb.ui.FilesConflict
 import usb.ui.FilesConflictDecision
@@ -308,11 +309,9 @@ object FilesOperations {
             )
             throw original
         } catch (failure: Throwable) {
-            val cleanupNote = if (offset == 0L && SafWriter.deleteDocument(resolver, destination, failure)) {
-                "empty destination deleted"
-            } else {
-                "destination retained"
-            }
+            val cleanupNote = SafCleanupPolicy.emptyDestinationNote(
+                offset == 0L && SafWriter.deleteDocument(resolver, destination, failure),
+            )
             operation.state = OperationState.Partial
             operation.failureCause = usb.device.DiskException.IoFailure(
                 "Download failed after $offset of $size bytes; $cleanupNote",
@@ -886,13 +885,13 @@ object FilesOperations {
             }
         } catch (failure: Throwable) {
             val cleanupNote =
-                if (target.created) {
+                if (SafCleanupPolicy.shouldDeleteCreated(target.created)) {
                     runCatching { destTree.deleteDocument(target.uri) }
                         .onFailure(failure::addSuppressed)
                         .getOrDefault(false)
-                        .let { deleted -> if (deleted) "partial destination deleted" else "destination retained" }
+                        .let(SafCleanupPolicy::createdDestinationNote)
                 } else {
-                    "destination retained"
+                    SafCleanupPolicy.createdDestinationNote(deleted = false)
                 }
             operation.state = OperationState.Partial
             operation.failureCause = usb.device.DiskException.IoFailure(

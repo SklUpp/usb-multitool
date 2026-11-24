@@ -4,8 +4,10 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
-import java.io.FileNotFoundException
 import java.io.OutputStream
+import usb.saf.SafCleanupPolicy
+import usb.saf.SafOpenPolicy
+import usb.saf.SafOpenResult
 
 class SafWriteException(
     val bytesWritten: Long,
@@ -14,9 +16,10 @@ class SafWriteException(
 ) : Exception(cause)
 
 /**
- * Consolidates SAF destination writes for download operations:
- * opening descriptor (wt/w) with stream fallback, synced writes,
- * size validation, and empty-destination cleanup.
+ * One-shot SAF destination writes for download operations:
+ * [SafOpenPolicy.openDownload] (`wt`/`w`/stream), synced writes,
+ * size validation, and empty-destination cleanup via [SafCleanupPolicy].
+ * Held-handle writers stay on [usb.saf.SafSyncedOutput].
  */
 class SafWriter(
     private val resolver: ContentResolver,
@@ -40,72 +43,73 @@ class SafWriter(
             }
             return offset
         } catch (failure: Throwable) {
-            val emptyDestination = offset == 0L || isEmptyDestination(
+            val emptyDestination = offset == 0L || SafCleanupPolicy.isEmptyDestination(
                 offset = offset,
                 reportedSize = reportedSize,
                 hasData = destinationHasData(resolver, destination),
             )
             val deleted = emptyDestination && deleteDocument(resolver, destination, failure)
-            val cleanupNote = if (deleted) "empty destination deleted" else "destination retained"
-            throw SafWriteException(offset, cleanupNote, failure)
+            throw SafWriteException(offset, SafCleanupPolicy.emptyDestinationNote(deleted), failure)
         }
     }
 
     /**
-     * Opens [destination] using descriptor if supported (with fd.sync),
-     * or falls back to resolver.openOutputStream.
+     * Opens [destination] via [SafOpenPolicy.openDownload].
+     * Descriptor path flushes then `fd.sync`; stream fallback flushes only.
      * Returns the byte count reported by [write].
      */
     fun writeSynced(
         destination: Uri,
         write: (OutputStream) -> Long,
     ): Long {
-        val descriptor = openDownloadDescriptor(resolver, destination)
-        if (descriptor == null) {
-            val stream = resolver.openOutputStream(destination, "w")
-                ?: error("cannot open $destination for writing")
-            try {
-                val written = write(stream)
-                stream.flush()
-                return written
-            } finally {
+        when (val opened = SafOpenPolicy.openDownload(resolver, destination)) {
+            is SafOpenResult.Stream -> {
+                try {
+                    val written = write(opened.stream)
+                    opened.stream.flush()
+                    return written
+                } finally {
+                    opened.stream.close()
+                }
+            }
+            is SafOpenResult.Descriptor -> {
+                val descriptor = opened.descriptor
+                val stream = try {
+                    ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
+                } catch (failure: Throwable) {
+                    try {
+                        descriptor.close()
+                    } catch (closeFailure: Throwable) {
+                        failure.addSuppressed(closeFailure)
+                    }
+                    throw failure
+                }
+                val written: Long
+                try {
+                    written = write(stream)
+                    stream.flush()
+                    descriptor.fileDescriptor.sync()
+                } catch (failure: Throwable) {
+                    try {
+                        stream.close()
+                    } catch (closeFailure: Throwable) {
+                        failure.addSuppressed(closeFailure)
+                    }
+                    throw failure
+                }
                 stream.close()
+                return written
             }
         }
-        val stream = try {
-            ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
-        } catch (failure: Throwable) {
-            runCatching { descriptor.close() }.onFailure(failure::addSuppressed)
-            throw failure
-        }
-        val written: Long
-        try {
-            written = write(stream)
-            stream.flush()
-            descriptor.fileDescriptor.sync()
-        } catch (failure: Throwable) {
-            runCatching { stream.close() }.onFailure(failure::addSuppressed)
-            throw failure
-        }
-        stream.close()
-        return written
     }
-
     companion object {
-        /** Pure decision helper for whether a download destination has no data. */
-        fun isEmptyDestination(
-            offset: Long,
-            reportedSize: Long?,
-            hasData: Boolean?,
-        ): Boolean = offset == 0L || (reportedSize == 0L && hasData == false)
-
         /** Probe if provider destination can be opened and contains data. */
         fun destinationHasData(resolver: ContentResolver, destination: Uri): Boolean? =
             runCatching {
                 resolver.openInputStream(destination)?.use { it.read() != -1 }
             }.getOrNull()
 
-        /** Remove a destination document. */
+        /** Remove a destination document. Trust-boundary: provider may reject. */
         fun deleteDocument(
             resolver: ContentResolver,
             destination: Uri,
@@ -122,36 +126,6 @@ class SafWriter(
                     failure?.let { f -> res.exceptionOrNull()?.let(f::addSuppressed) }
                 }
                 .getOrDefault(0) > 0
-        }
-
-        /** Open descriptor with wt then w fallback. */
-        fun openDownloadDescriptor(
-            resolver: ContentResolver,
-            destination: Uri,
-        ): ParcelFileDescriptor? {
-            val truncating = try {
-                resolver.openFileDescriptor(destination, "wt")
-            } catch (_: FileNotFoundException) {
-                null
-            } catch (_: IllegalArgumentException) {
-                null
-            } catch (_: SecurityException) {
-                null
-            } catch (_: UnsupportedOperationException) {
-                null
-            }
-            if (truncating != null) return truncating
-            return try {
-                resolver.openFileDescriptor(destination, "w")
-            } catch (_: FileNotFoundException) {
-                null
-            } catch (_: IllegalArgumentException) {
-                null
-            } catch (_: SecurityException) {
-                null
-            } catch (_: UnsupportedOperationException) {
-                null
-            }
         }
     }
 }

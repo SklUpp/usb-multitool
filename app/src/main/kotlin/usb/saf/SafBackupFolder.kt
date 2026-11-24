@@ -339,8 +339,7 @@ class SafSyncedOutput(
     resolver: ContentResolver,
     document: Uri,
 ) : Closeable {
-    private val descriptor = resolver.openFileDescriptor(document, "w")
-        ?: throw IOException("cannot open $document for writing")
+    private val descriptor = SafOpenPolicy.openHeldWrite(resolver, document)
     private val stream = ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
     private var closed = false
 
