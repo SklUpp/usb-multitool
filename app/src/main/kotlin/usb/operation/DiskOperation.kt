@@ -119,6 +119,11 @@ open class DiskOperation(
         inactive.await()
     }
 
+    /** Human-readable name of the file a batch is currently processing. */
+    @Volatile
+    var currentFile: String? = null
+        private set
+
     /**
      * Start progress for the next file in a batch (or a single transfer).
      * Resets [bytesDone] before publishing [bytesTotal] so the UI never shows a
@@ -128,11 +133,6 @@ open class DiskOperation(
      * (indeterminate / bytes-only).
      */
     @Synchronized
-    /** Human-readable name of the file a batch is currently processing. */
-    @Volatile
-    var currentFile: String? = null
-        private set
-
     fun beginCurrentFile(total: Long, name: String? = null) {
         currentFile = name
         bytesDone = 0L
