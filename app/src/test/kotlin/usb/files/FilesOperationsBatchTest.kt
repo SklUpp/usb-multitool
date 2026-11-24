@@ -318,6 +318,18 @@ class FilesOperationsBatchTest {
     }
 
     @Test
+    fun writeSyncedReturnsWriterBytes() {
+        val resolver = RecordingResolver()
+        val uri = Uri.parse("content://${RecordingResolver.DOC_AUTHORITY}/write-synced-bytes")
+        resolver.trackOutput(uri)
+        val written = SafWriter(resolver.resolver).writeSynced(uri) { out ->
+            out.write(byteArrayOf(1, 2, 3, 4, 5)); 5L
+        }
+        assertEquals(5L, written)
+        assertEquals(listOf<Byte>(1, 2, 3, 4, 5), resolver.written.getValue(uri).toList())
+    }
+
+    @Test
     fun downloadUsbReadFailureDeletesCreatedSafDestination() {
         val volume = object : MemoryVolume() {
             override fun read(path: String, offset: Long, length: Int): ByteArray =

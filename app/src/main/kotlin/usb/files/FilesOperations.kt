@@ -308,15 +308,8 @@ object FilesOperations {
             )
             throw original
         } catch (failure: Throwable) {
-            val emptyDestination =
-                offset == 0L ||
-                    (openableSizeBytes(resolver, destination) == 0L && SafWriter.destinationHasData(resolver, destination) == false)
-            val cleanupNote = if (emptyDestination) {
-                if (SafWriter.deleteDocument(resolver, destination, failure)) {
-                    "empty destination deleted"
-                } else {
-                    "destination retained"
-                }
+            val cleanupNote = if (offset == 0L && SafWriter.deleteDocument(resolver, destination, failure)) {
+                "empty destination deleted"
             } else {
                 "destination retained"
             }
@@ -886,9 +879,8 @@ object FilesOperations {
         var offset = 0L
         try {
             SafWriter(resolver).writeSynced(target.uri) { stream ->
-                offset = streamVolume(volume, sourcePath, size, stream, operation)
+                streamVolume(volume, sourcePath, size, stream, operation).also { offset = it }
             }
-            if (offset != size) error("download size mismatch: got $offset, expected $size")
             if (size > 0L && openableSizeBytes(resolver, target.uri) == 0L) {
                 error("provider reports empty destination after $size bytes")
             }

@@ -30,9 +30,7 @@ class SafWriter(
         var offset = 0L
         var reportedSize: Long? = null
         try {
-            writeSynced(destination) { stream ->
-                offset = writer(stream)
-            }
+            offset = writeSynced(destination) { stream -> writer(stream).also { offset = it } }
             if (offset != expectedSize) {
                 error("download size mismatch: got $offset, expected $expectedSize")
             }
@@ -56,22 +54,23 @@ class SafWriter(
     /**
      * Opens [destination] using descriptor if supported (with fd.sync),
      * or falls back to resolver.openOutputStream.
+     * Returns the byte count reported by [write].
      */
     fun writeSynced(
         destination: Uri,
-        write: (OutputStream) -> Unit,
-    ) {
+        write: (OutputStream) -> Long,
+    ): Long {
         val descriptor = openDownloadDescriptor(resolver, destination)
         if (descriptor == null) {
             val stream = resolver.openOutputStream(destination, "w")
                 ?: error("cannot open $destination for writing")
             try {
-                write(stream)
+                val written = write(stream)
                 stream.flush()
+                return written
             } finally {
                 stream.close()
             }
-            return
         }
         val stream = try {
             ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
@@ -79,8 +78,9 @@ class SafWriter(
             runCatching { descriptor.close() }.onFailure(failure::addSuppressed)
             throw failure
         }
+        val written: Long
         try {
-            write(stream)
+            written = write(stream)
             stream.flush()
             descriptor.fileDescriptor.sync()
         } catch (failure: Throwable) {
@@ -88,6 +88,7 @@ class SafWriter(
             throw failure
         }
         stream.close()
+        return written
     }
 
     companion object {
