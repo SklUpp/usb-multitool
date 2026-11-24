@@ -341,11 +341,7 @@ class UiStateMachineTest {
             directory = "/docs",
             name = "manual.pdf",
             sizeBytes = 42uL,
-            identity = device.identity,
-            attachGeneration = device.attachGeneration,
-            partitionId = "1",
-            startLba = 0uL,
-            sectorCount = 2048uL,
+            attachment = UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL),
         )
         val upload = UiReducer.reduce(state, UiIntent.UploadFile("content://docs/42"))
         val uploadEffect = upload.effects.single() as UiEffect.UploadFile
@@ -361,7 +357,12 @@ class UiStateMachineTest {
     @Test
     fun pickedDownloadSurvivesEmptyListingButNotAttachmentSwap() {
         val binding =
-            FilesDownloadBinding("/docs", "manual.pdf", 42uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+            FilesDownloadBinding(
+                "/docs",
+                "manual.pdf",
+                42uL,
+                UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL),
+            )
         val restarted =
             ready().copy(
                 currentPath = "/",
@@ -486,7 +487,12 @@ class UiStateMachineTest {
     @Test
     fun staleDownloadBindingFailsClosedAfterDirectoryOrAttachmentChange() {
         val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
-        val binding = FilesDownloadBinding("/docs", "manual.pdf", 42uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+        val binding = FilesDownloadBinding(
+            "/docs",
+            "manual.pdf",
+            42uL,
+            UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL),
+        )
         val moved = UiReducer.reduce(state.copy(currentPath = "/other"), UiIntent.DownloadFile(binding, "content://out/7"))
         assertTrue(moved.effects.isEmpty())
         assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), moved.state.statusMessage)
@@ -497,7 +503,12 @@ class UiStateMachineTest {
     @Test
     fun changedFileSizeFailsClosedEvenWhenNameStaysSame() {
         val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))
-        val binding = FilesDownloadBinding("/docs", "manual.pdf", 41uL, device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+        val binding = FilesDownloadBinding(
+            "/docs",
+            "manual.pdf",
+            41uL,
+            UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL),
+        )
         val result = UiReducer.reduce(state, UiIntent.DownloadFile(binding, "content://out/7"))
         assertTrue(result.effects.isEmpty())
         assertEquals(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid), result.state.statusMessage)
@@ -532,11 +543,7 @@ class UiStateMachineTest {
                 directory = "/",
                 name = "manual.pdf",
                 sizeBytes = 42uL,
-                identity = device.identity,
-                attachGeneration = device.attachGeneration,
-                partitionId = "1",
-                startLba = 0uL,
-                sectorCount = 2048uL,
+                attachment = UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL),
             )
         val download = UiReducer.reduce(late.state, UiIntent.DownloadFile(binding, "content://out/old"))
         assertTrue(download.effects.isEmpty())
@@ -632,7 +639,12 @@ class UiStateMachineTest {
     @Test
     fun readOnlyPartitionStillAllowsBoundReads() {
         val efi = ready().copy(selectedPartitionId = "2", currentPath = "/docs", files = listOf(FileEntry("ubuntu.iso", false, 9uL)))
-        val binding = FilesDownloadBinding("/docs", "ubuntu.iso", 9uL, device.identity, device.attachGeneration, "2", 2048uL, 4096uL)
+        val binding = FilesDownloadBinding(
+            "/docs",
+            "ubuntu.iso",
+            9uL,
+            UiAttachmentPin(device.identity, device.attachGeneration, "2", 2048uL, 4096uL),
+        )
         val download = UiReducer.reduce(efi, UiIntent.DownloadFile(binding, "content://out/1"))
         assertTrue(download.effects.single() is UiEffect.DownloadFile)
         val listed = UiReducer.reduce(efi, UiIntent.OpenDirectory("/docs"))
@@ -1303,11 +1315,13 @@ class UiStateMachineTest {
         val intent = UiIntent.UploadBatchDocs(
             directory = state.currentPath,
             uris = listOf("content://doc/a"),
-            identity = state.device!!.identity,
-            attachGeneration = state.device!!.attachGeneration,
-            partitionId = state.selectedPartitionId!!,
-            startLba = 0uL,
-            sectorCount = 999uL, // stale vs ready() geometry
+            attachment = UiAttachmentPin(
+                state.device!!.identity,
+                state.device!!.attachGeneration,
+                state.selectedPartitionId!!,
+                0uL,
+                999uL, // stale vs ready() geometry
+            ),
         )
         val result = UiReducer.reduce(state, intent)
         assertTrue(result.effects.isEmpty())
@@ -1321,14 +1335,16 @@ class UiStateMachineTest {
         val intent = UiIntent.UploadBatchDocs(
             directory = state.currentPath,
             uris = listOf("content://doc/a"),
-            identity = state.device!!.identity,
-            attachGeneration = state.device!!.attachGeneration,
-            partitionId = state.selectedPartitionId!!,
-            startLba = part.startLba,
-            sectorCount = part.sectorCount,
+            attachment = UiAttachmentPin(
+                state.device!!.identity,
+                state.device!!.attachGeneration,
+                state.selectedPartitionId!!,
+                part.startLba,
+                part.sectorCount,
+            ),
         )
         val result = UiReducer.reduce(state, intent)
-        assertTrue(result.effects.single() is UiEffect.UploadBatchDocs)
+        assertEquals(intent.attachment, (result.effects.single() as UiEffect.UploadBatchDocs).attachment)
     }
 
     @Test

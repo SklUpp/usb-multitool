@@ -263,11 +263,7 @@ class MainViewModel(
         data class UploadDocs(
             val directory: String,
             val remainingUris: List<String>,
-            val identity: String,
-            val attachGeneration: Long,
-            val partitionId: String,
-            val startLba: ULong?,
-            val sectorCount: ULong?,
+            val attachment: UiAttachmentPin,
             val conflict: FilesConflict,
         ) : ParkedFilesBatch() {
             override val selection: FilesBatchSelection? get() = null
@@ -275,7 +271,7 @@ class MainViewModel(
     }
 
     private fun ParkedFilesBatch.UploadDocs.matchesAttachment(state: AppUiState): Boolean =
-        UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount).matches(state)
+        attachment.matches(state)
 
     private class FilesBatchConflictPark(
         val conflict: FilesConflict,
@@ -6542,7 +6538,7 @@ class MainViewModel(
             val destination = Uri.parse(uri)
             try {
                 require(binding.matchesAttachment(state)) { "download attachment changed" }
-                val volume = filesSession.volumeForLocked(pin, binding.partitionId)
+                val volume = filesSession.volumeForLocked(pin, binding.attachment.partitionId)
                 FilesOperations.download(
                     resolver = resolver,
                     target = binding.targetPath,
@@ -6641,7 +6637,7 @@ class MainViewModel(
         val remaining = effect.uris.toMutableList()
         val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
         withWritablePartitionId { partitionId ->
-            if (partitionId != effect.partitionId) {
+            if (partitionId != effect.attachment.partitionId) {
                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
                 return@withWritablePartitionId
             }
@@ -6698,11 +6694,7 @@ class MainViewModel(
                             ParkedFilesBatch.UploadDocs(
                                 directory = effect.directory,
                                 remainingUris = park.remainingUris.ifEmpty { remaining.toList() },
-                                identity = effect.identity,
-                                attachGeneration = effect.attachGeneration,
-                                partitionId = effect.partitionId,
-                                startLba = effect.startLba,
-                                sectorCount = effect.sectorCount,
+                                attachment = effect.attachment,
                                 conflict = park.conflict,
                             )
                         onIntent(UiIntent.FilesBatchConflict(park.conflict))
@@ -6837,7 +6829,7 @@ class MainViewModel(
         val conflictLabel = parked.conflict.pathLabel
         val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
         withWritablePartitionId { partitionId ->
-            if (partitionId != parked.partitionId) {
+            if (partitionId != parked.attachment.partitionId) {
                 onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
                 return@withWritablePartitionId
             }
@@ -6901,11 +6893,7 @@ class MainViewModel(
                             ParkedFilesBatch.UploadDocs(
                                 directory = parked.directory,
                                 remainingUris = park.remainingUris.ifEmpty { remaining.toList() },
-                                identity = parked.identity,
-                                attachGeneration = parked.attachGeneration,
-                                partitionId = parked.partitionId,
-                                startLba = parked.startLba,
-                                sectorCount = parked.sectorCount,
+                                attachment = parked.attachment,
                                 conflict = park.conflict,
                             )
                         onIntent(UiIntent.FilesBatchConflict(park.conflict))
@@ -7931,11 +7919,7 @@ class MainActivity : ComponentActivity() {
     private var pendingBatchDownload: FilesBatchSelection? = null
     /** Upload pin before OpenMultipleDocuments; cleared on detach/result. */
     private var pendingBatchUploadDirectory: String? = null
-    private var pendingBatchUploadIdentity: String? = null
-    private var pendingBatchUploadAttach: Long = Long.MIN_VALUE
-    private var pendingBatchUploadPartition: String? = null
-    private var pendingBatchUploadStart: String? = null
-    private var pendingBatchUploadCount: String? = null
+    private var pendingBatchUploadPin: UiAttachmentPin? = null
     private val batchDownloadTreeLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
@@ -7963,17 +7947,9 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris: List<Uri> ->
         val directory = pendingBatchUploadDirectory
-        val identity = pendingBatchUploadIdentity
-        val attach = pendingBatchUploadAttach
-        val partition = pendingBatchUploadPartition
-        val start = pendingBatchUploadStart?.toULongOrNull()
-        val count = pendingBatchUploadCount?.toULongOrNull()
+        val pin = pendingBatchUploadPin
         pendingBatchUploadDirectory = null
-        pendingBatchUploadIdentity = null
-        pendingBatchUploadAttach = Long.MIN_VALUE
-        pendingBatchUploadPartition = null
-        pendingBatchUploadStart = null
-        pendingBatchUploadCount = null
+        pendingBatchUploadPin = null
         if (uris.isEmpty()) return@registerForActivityResult
         uris.forEach { uri ->
             runCatching {
@@ -7983,29 +7959,26 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        if (directory == null || identity == null || partition == null || attach == Long.MIN_VALUE) {
-            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-            return@registerForActivityResult
-        }
         val live = viewModel.state
-        val device = live.device
-        val livePartition = live.partitions.firstOrNull { it.id == partition }
-        if (device == null || device.identity != identity || device.attachGeneration != attach ||
-            live.selectedPartitionId != partition ||
-            livePartition == null || livePartition.startLba != start || livePartition.sectorCount != count
-        ) {
-            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
+        if (directory == null || pin == null || !pin.matches(live)) {
+            viewModel.onIntent(
+                UiIntent.Status(
+                    UiMessage.Key(
+                        if (directory == null || pin == null) {
+                            UiMessageKey.FilesPickTargetInvalid
+                        } else {
+                            UiMessageKey.TargetChanged
+                        },
+                    ),
+                ),
+            )
             return@registerForActivityResult
         }
         viewModel.onIntent(
             UiIntent.UploadBatchDocs(
                 directory = directory,
                 uris = uris.map { it.toString() },
-                identity = identity,
-                attachGeneration = attach,
-                partitionId = partition,
-                startLba = start,
-                sectorCount = count,
+                attachment = pin,
             ),
         )
     }
@@ -8019,19 +7992,11 @@ class MainActivity : ComponentActivity() {
             return
         }
         pendingBatchUploadDirectory = live.currentPath
-        pendingBatchUploadIdentity = device.identity
-        pendingBatchUploadAttach = device.attachGeneration
-        pendingBatchUploadPartition = partition.id
-        pendingBatchUploadStart = partition.startLba?.toString()
-        pendingBatchUploadCount = partition.sectorCount?.toString()
+        pendingBatchUploadPin = UiAttachmentPin(device, partition)
         runCatching { batchUploadDocsLauncher.launch(arrayOf("*/*")) }
             .onFailure {
                 pendingBatchUploadDirectory = null
-                pendingBatchUploadIdentity = null
-                pendingBatchUploadAttach = Long.MIN_VALUE
-                pendingBatchUploadPartition = null
-                pendingBatchUploadStart = null
-                pendingBatchUploadCount = null
+                pendingBatchUploadPin = null
                 viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
             }
     }
@@ -8087,11 +8052,7 @@ class MainActivity : ComponentActivity() {
                         deniedUsbPermissionRetriedKey = null
                         pendingBatchDownload = null
                         pendingBatchUploadDirectory = null
-                        pendingBatchUploadIdentity = null
-                        pendingBatchUploadAttach = Long.MIN_VALUE
-                        pendingBatchUploadPartition = null
-                        pendingBatchUploadStart = null
-                        pendingBatchUploadCount = null
+                        pendingBatchUploadPin = null
                     }
                     viewModel.onUsbDeviceDetached(device)
                 }
@@ -8202,7 +8163,12 @@ class MainActivity : ComponentActivity() {
                 if (directory != null && name != null && size != null && identity != null &&
                     partition != null && generation != Long.MIN_VALUE
                 ) {
-                    FilesDownloadBinding(directory, name, size, identity, generation, partition, start, count)
+                    FilesDownloadBinding(
+                        directory,
+                        name,
+                        size,
+                        UiAttachmentPin(identity, generation, partition, start, count),
+                    )
                 } else {
                     null
                 }
@@ -8237,22 +8203,18 @@ class MainActivity : ComponentActivity() {
             )
         }
         savedInstanceState?.let { saved ->
-            pendingBatchUploadDirectory = saved.getString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY)
-            pendingBatchUploadIdentity = saved.getString(STATE_PENDING_BATCH_UPLOAD_IDENTITY)
-            pendingBatchUploadPartition = saved.getString(STATE_PENDING_BATCH_UPLOAD_PARTITION)
-            pendingBatchUploadStart = saved.getString(STATE_PENDING_BATCH_UPLOAD_START)
-            pendingBatchUploadCount = saved.getString(STATE_PENDING_BATCH_UPLOAD_COUNT)
+            val directory = saved.getString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY)
+            val identity = saved.getString(STATE_PENDING_BATCH_UPLOAD_IDENTITY)
+            val partition = saved.getString(STATE_PENDING_BATCH_UPLOAD_PARTITION)
+            val start = saved.getString(STATE_PENDING_BATCH_UPLOAD_START)?.toULongOrNull()
+            val count = saved.getString(STATE_PENDING_BATCH_UPLOAD_COUNT)?.toULongOrNull()
             val attach = saved.getLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, Long.MIN_VALUE)
-            pendingBatchUploadAttach = if (
-                pendingBatchUploadDirectory != null && pendingBatchUploadIdentity != null &&
-                pendingBatchUploadPartition != null && attach != Long.MIN_VALUE
-            ) attach else {
+            if (directory != null && identity != null && partition != null && attach != Long.MIN_VALUE) {
+                pendingBatchUploadDirectory = directory
+                pendingBatchUploadPin = UiAttachmentPin(identity, attach, partition, start, count)
+            } else {
                 pendingBatchUploadDirectory = null
-                pendingBatchUploadIdentity = null
-                pendingBatchUploadPartition = null
-                pendingBatchUploadStart = null
-                pendingBatchUploadCount = null
-                Long.MIN_VALUE
+                pendingBatchUploadPin = null
             }
         }
          val savedState = savedInstanceState
@@ -8401,11 +8363,11 @@ class MainActivity : ComponentActivity() {
             outState.putString(STATE_PENDING_DOWNLOAD_DIRECTORY, binding.directory)
             outState.putString(STATE_PENDING_DOWNLOAD_NAME, binding.name)
             outState.putString(STATE_PENDING_DOWNLOAD_SIZE, binding.sizeBytes.toString())
-            outState.putString(STATE_PENDING_DOWNLOAD_IDENTITY, binding.identity)
-            outState.putLong(STATE_PENDING_DOWNLOAD_ATTACH, binding.attachGeneration)
-            outState.putString(STATE_PENDING_DOWNLOAD_PARTITION, binding.partitionId)
-            binding.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
-            binding.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
+            outState.putString(STATE_PENDING_DOWNLOAD_IDENTITY, binding.attachment.identity)
+            outState.putLong(STATE_PENDING_DOWNLOAD_ATTACH, binding.attachment.attachGeneration)
+            outState.putString(STATE_PENDING_DOWNLOAD_PARTITION, binding.attachment.partitionId)
+            binding.attachment.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
+            binding.attachment.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
         }
         pendingBatchDownload?.let { selection ->
             outState.putString(STATE_PENDING_BATCH_DIRECTORY, selection.directory)
@@ -8418,15 +8380,15 @@ class MainActivity : ComponentActivity() {
             selection.startLba?.let { outState.putString(STATE_PENDING_BATCH_START, it.toString()) }
             selection.sectorCount?.let { outState.putString(STATE_PENDING_BATCH_COUNT, it.toString()) }
         }
-        if (pendingBatchUploadDirectory != null && pendingBatchUploadIdentity != null &&
-            pendingBatchUploadPartition != null && pendingBatchUploadAttach != Long.MIN_VALUE
-        ) {
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY, pendingBatchUploadDirectory)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_IDENTITY, pendingBatchUploadIdentity)
-            outState.putLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, pendingBatchUploadAttach)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_PARTITION, pendingBatchUploadPartition)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_START, pendingBatchUploadStart)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, pendingBatchUploadCount)
+        val uploadDirectory = pendingBatchUploadDirectory
+        val uploadPin = pendingBatchUploadPin
+        if (uploadDirectory != null && uploadPin != null) {
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY, uploadDirectory)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_IDENTITY, uploadPin.identity)
+            outState.putLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, uploadPin.attachGeneration)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_PARTITION, uploadPin.partitionId)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_START, uploadPin.startLba?.toString())
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, uploadPin.sectorCount?.toString())
         }
         backupFolderLaunches.saveState(outState)
     }

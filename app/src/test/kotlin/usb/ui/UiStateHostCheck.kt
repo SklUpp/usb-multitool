@@ -427,7 +427,12 @@ object UiStateHostCheck {
                 .effects.single() is UiEffect.UploadFile,
         ) { "enabled VTOYEFI writes must be allowed" }
         val downloadBinding =
-            FilesDownloadBinding("/", "win11.iso", 0uL, efi.device!!.identity, efi.device!!.attachGeneration, "2", 2048uL, 4096uL)
+            FilesDownloadBinding(
+                "/",
+                "win11.iso",
+                0uL,
+                UiAttachmentPin(efi.device!!, efi.partitions.first { it.id == "2" }),
+            )
         require(
             UiReducer.reduce(
                 efi.copy(currentPath = "/", files = listOf(FileEntry("win11.iso", false, 0uL))),

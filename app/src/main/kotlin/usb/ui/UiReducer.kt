@@ -770,11 +770,7 @@ sealed class UiIntent {
     data class UploadBatchDocs(
         val directory: String,
         val uris: List<String>,
-        val identity: String,
-        val attachGeneration: Long,
-        val partitionId: String,
-        val startLba: ULong?,
-        val sectorCount: ULong?,
+        val attachment: UiAttachmentPin,
     ) : UiIntent()
 
     /** Host parked a batch name collision; UI shows Skip/Replace(file)/Cancel. */
@@ -975,11 +971,7 @@ sealed interface UiEffect {
     data class UploadBatchDocs(
         val directory: String,
         val uris: List<String>,
-        val identity: String,
-        val attachGeneration: Long,
-        val partitionId: String,
-        val startLba: ULong?,
-        val sectorCount: ULong?,
+        val attachment: UiAttachmentPin,
     ) : UiEffect
 
     /**
@@ -4744,11 +4736,7 @@ object UiReducer {
                                     UiEffect.UploadBatchDocs(
                                         directory = intent.directory,
                                         uris = intent.uris,
-                                        identity = intent.identity,
-                                        attachGeneration = intent.attachGeneration,
-                                        partitionId = intent.partitionId,
-                                        startLba = intent.startLba,
-                                        sectorCount = intent.sectorCount,
+                                        attachment = intent.attachment,
                                     ),
                                 ),
                         )

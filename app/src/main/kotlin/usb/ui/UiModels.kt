@@ -694,11 +694,7 @@ data class FilesDownloadBinding(
     val directory: String,
     val name: String,
     val sizeBytes: ULong,
-    val identity: String,
-    val attachGeneration: Long,
-    val partitionId: String,
-    val startLba: ULong?,
-    val sectorCount: ULong?,
+    val attachment: UiAttachmentPin,
 ) {
     val targetPath: String get() = fatChildPath(directory, name)
 }
@@ -711,6 +707,14 @@ data class UiAttachmentPin(
     val startLba: ULong?,
     val sectorCount: ULong?,
 ) {
+    constructor(device: DeviceIdentity, partition: PartitionTab) : this(
+        identity = device.identity,
+        attachGeneration = device.attachGeneration,
+        partitionId = partition.id,
+        startLba = partition.startLba,
+        sectorCount = partition.sectorCount,
+    )
+
     fun matches(state: AppUiState, directory: String? = null): Boolean {
         val device = state.device ?: return false
         if (device.identity != identity || device.attachGeneration != attachGeneration) return false
@@ -721,20 +725,11 @@ data class UiAttachmentPin(
     }
 }
 
-fun FilesDownloadBinding.attachmentPin(): UiAttachmentPin =
-    UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount)
-
-fun UiIntent.UploadBatchDocs.attachmentPin(): UiAttachmentPin =
-    UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount)
-
 fun UiIntent.UploadBatchDocs.matchesAttachment(state: AppUiState): Boolean =
-    attachmentPin().matches(state)
-
-fun UiEffect.UploadBatchDocs.attachmentPin(): UiAttachmentPin =
-    UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount)
+    attachment.matches(state)
 
 fun UiEffect.UploadBatchDocs.matchesAttachment(state: AppUiState): Boolean =
-    attachmentPin().matches(state)
+    attachment.matches(state)
 
 /**
  * Attachment pin only: enough to service a destination already chosen in the picker.
@@ -742,7 +737,7 @@ fun UiEffect.UploadBatchDocs.matchesAttachment(state: AppUiState): Boolean =
  * exact path before reading, so a stale listing must not discard the picked file.
  */
 fun FilesDownloadBinding.matchesAttachment(state: AppUiState): Boolean {
-    if (!attachmentPin().matches(state)) return false
+    if (!attachment.matches(state)) return false
     return name.isNotBlank() && name != "." && name != ".." &&
         '/' !in name && '\\' !in name && '\u0000' !in name
 }

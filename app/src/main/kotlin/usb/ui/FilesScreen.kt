@@ -403,11 +403,7 @@ fun FilesScreen(
                                 directory = state.currentPath,
                                 name = entry.name,
                                 sizeBytes = entry.sizeBytes,
-                                identity = device.identity,
-                                attachGeneration = device.attachGeneration,
-                                partitionId = partition.id,
-                                startLba = partition.startLba,
-                                sectorCount = partition.sectorCount,
+                                attachment = UiAttachmentPin(device, partition),
                             ),
                         )
                     }
