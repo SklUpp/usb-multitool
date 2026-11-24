@@ -155,7 +155,9 @@ APK подписан debug-ключом и предназначен для те�
 make -C native-tests/fatfs test
 ```
 
-Локально допустимы статические проверки: `sh -n gradlew`, `git grep` по закреплённым значениям, `sh scripts/run-ui-host-check.sh` (скрипт рассчитан на пути Termux и требует `kotlinc`). Скрипты `fetch-third-party.sh` и host-тесты скачивают и собирают upstream-исходники в `third_party/` — запускать только осознанно.
+Локальные Gradle/NDK-команды в проекте не документируются: сборка и проверки
+выполняются в CI. Скрипты `fetch-third-party.sh` и host-тесты скачивают и
+собирают upstream-исходники в `third_party/`.
 
 | Что CI доказывает | Чего CI не доказывает |
 | --- | --- |

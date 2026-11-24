@@ -153,7 +153,9 @@ The separate `fatfs-host` job has no Android SDK. It builds and runs the FatFs h
 make -C native-tests/fatfs test
 ```
 
-You can run these static checks locally: `sh -n gradlew`, `git grep` for pinned values, and `sh scripts/run-ui-host-check.sh`. The last script expects Termux paths and needs `kotlinc`. If you need upstream sources, run `scripts/fetch-third-party.sh` and the host tests deliberately. They download and build sources in `third_party/`.
+Local Gradle/NDK commands are not documented: builds and checks run in CI. The
+`fetch-third-party.sh` and host-test scripts download and build upstream sources
+in `third_party/`.
 
 | What CI proves | What CI does not prove |
 | --- | --- |

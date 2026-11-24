@@ -27,18 +27,8 @@ Windows-носителя, rescue/backup и диагностика.
 
 ## Быстрый старт
 
-```bash
-./gradlew :app:compileDebugKotlin
-./gradlew :app:testDebugUnitTest
-```
-
-На Termux сначала нужен `local.properties` с `sdk.dir=$PREFIX/opt/android-sdk`
-и нативный `aapt2` через `-Pandroid.aapt2FromMavenOverride=$PREFIX/bin/aapt2`;
-подробности — в [build-test-release.md](build-test-release.md).
-
-Полная сборка с движками и CI-эквивалент — в
-[build-test-release.md](build-test-release.md). Тяжёлую сборку APK запускать в
-GitHub Actions, не на телефоне.
+Сборка, тесты и APK выполняются в GitHub Actions. Полная сборка с движками и
+CI-эквивалент — в [build-test-release.md](build-test-release.md).
 
 ## Границы
 

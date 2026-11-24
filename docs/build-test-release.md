@@ -1,8 +1,8 @@
 # Сборка, тесты, CI и APK
 
-Тяжёлая сборка и полный тестовый прогон выполняются в GitHub Actions. На
-телефоне допустимы лёгкий Kotlin-анализ, `processDebugResources` и короткие
-host-проверки; полный APK/NDK локально не проверялся.
+Тяжёлая сборка и полный тестовый прогон выполняются в GitHub Actions.
+Локальные Gradle/NDK-сборки не документируются; CI — единственный проверенный
+путь сборки APK.
 
 ## Toolchain
 
@@ -27,7 +27,7 @@ Native: `libusb_native.so`; статические upstream-архивы `fatfs_
 
 ## Подготовка движков
 
-`scripts/fetch-third-party.sh` — только для CI/Linux, не для телефона. Скрипт
+`scripts/fetch-third-party.sh` — только для CI/Linux. Скрипт
 скачивает pinned-версии, проверяет commit/digest и идемпотентно применяет патчи:
 FatFs `ff16p1..p4`, ntfs-3g mkntfs-library, lwext4 teardown/O_EXCL, SectorForge
 progress map. exfatprogs vendored 1.4.3. F3 и ddrescue скачиваются, но в
@@ -38,42 +38,7 @@ SectorForge bridge собирается Gradle-задачей `buildSfBridge`:
 Результат — `app/build/rust/aarch64-linux-android/release/libsf_bridge.a`.
 `scripts/build-sf-bridge.sh` делает то же вручную; CI полагается на Gradle.
 
-## Локальные команды
-
-Из корня репозитория:
-
-```bash
-./gradlew :app:compileDebugKotlin
-./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug
-./scripts/check-16kb-alignment.sh app/build/outputs/apk/debug/*.apk
-./gradlew :app:lintDebug
-```
-
-На телефоне использовать `nice ./gradlew ...` и один процесс Gradle
-(`--max-workers=1`; `-j` этот wrapper не принимает). `fetch-third-party.sh` и
-полный APK/NDK не запускать локально.
-
-Termux: Gradle требует gitignored `local.properties` с
-`sdk.dir=$PREFIX/opt/android-sdk`. Кэшированный x86_64 `aapt2` не работает на
-ARM64; нативный `$PREFIX/bin/aapt2` подключается так:
-
-```bash
-printf 'sdk.dir=%s/opt/android-sdk\n' "$PREFIX" > local.properties
-./gradlew --max-workers=1 \
-  -Pandroid.aapt2FromMavenOverride=$PREFIX/bin/aapt2 \
-  :app:processDebugResources :app:compileDebugKotlin
-```
-
-Проверено на Termux: `processDebugResources` и `compileDebugKotlin` проходят;
-полная сборка APK остаётся в CI.
-
-Robolectric работает offline: jar-ы `android-all-instrumented` для SDK 28/31/33
-резолвятся через конфигурацию `robolectricSdks` и копируются в
-`app/build/robolectric-sdks` задачей `syncRobolectricSdks`
-(см. `app/build.gradle.kts`). Первый resolve зависимостей
-Gradle всё ещё требует сеть; после прогрева кэша можно
-`./gradlew :app:testDebugUnitTest --offline`.
+## Зависимости
 
 Dependency locking объявлен (`subprojects { dependencyLocking { lockAllConfigurations() } }`),
 но `gradle.lockfile`, `app/gradle.lockfile` и `gradle/verification-metadata.xml` в
