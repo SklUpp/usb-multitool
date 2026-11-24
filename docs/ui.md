@@ -24,7 +24,7 @@
 
 ## Отмена длинных операций
 
-`CancelOperationButton` — общий компонент (`AppShell.kt`). Он виден только при
+`OperationAction` — общий компонент (`AppShell.kt`). Он виден только при
 Queued/Running и `cancelable`, отменяет точный `OperationToken`.
 
 Размещён:

@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import usb.operation.DiskOperation
 import usb.operation.OperationState
+import usb.ui.toOperationResult
 
 class OperationThroughputSchedulingTest {
     @Test fun scheduledReportsProduceMonotonicSpeed() = runTest {
@@ -57,25 +58,19 @@ class OperationThroughputSchedulingTest {
         val stalledAt = 1_000_000_000L + DiskOperation.THROUGHPUT_STALE_NANOS + 1L
         assertEquals(0L, operation.currentBytesPerSecond(stalledAt))
         val token = OperationTokenGenerator.next()
-        val fresh = usb.ui.readOnlyOperationProgress(
+        val fresh = usb.operation.OperationState.Running.toOperationResult().toProgress(
             token = token,
-            outcome = OperationState.Running,
             title = usb.ui.OperationTitle.Upload,
             bytesDone = operation.bytesDone,
             bytesTotal = 4_000L,
-            resultMessage = null,
-            failureCause = null,
             cancelable = true,
             bytesPerSecond = operation.currentBytesPerSecond(freshAt),
         )
-        val stalled = usb.ui.readOnlyOperationProgress(
+        val stalled = usb.operation.OperationState.Running.toOperationResult().toProgress(
             token = token,
-            outcome = OperationState.Running,
             title = usb.ui.OperationTitle.Upload,
             bytesDone = operation.bytesDone,
             bytesTotal = 4_000L,
-            resultMessage = null,
-            failureCause = null,
             cancelable = true,
             bytesPerSecond = operation.currentBytesPerSecond(stalledAt),
         )

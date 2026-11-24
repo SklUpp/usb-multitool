@@ -16,9 +16,32 @@ class OperationProgressMapperTest {
         averageBytesPerSecond = 512L,
     )
 
+    private fun mapProgress(
+        outcome: ServiceOperationState,
+        title: OperationTitle,
+        bytesDone: Long,
+        bytesTotal: Long,
+        resultMessage: String?,
+        failureCause: Throwable?,
+        cancelable: Boolean,
+        bytesPerSecond: Long = 0L,
+        readScanResult: ReadScanOutcome? = null,
+        smartResult: SmartOutcome? = null,
+    ) = outcome.toOperationResult(failureCause).toProgress(
+        token = token,
+        title = title,
+        bytesDone = bytesDone,
+        bytesTotal = bytesTotal,
+        bytesPerSecond = bytesPerSecond,
+        cancelable = cancelable,
+        resultMessage = resultMessage,
+        readScanResult = readScanResult,
+        smartResult = smartResult,
+    )
+
     @Test fun partialPreservesProgressAndMessages() {
-        val progress = readOnlyOperationProgress(
-            token, ServiceOperationState.Partial, OperationTitle.ReadScan, 4L, 10L, "saved", IllegalStateException("incomplete"), false,
+        val progress = mapProgress(
+            ServiceOperationState.Partial, OperationTitle.ReadScan, 4L, 10L, "saved", IllegalStateException("incomplete"), false,
         )
         assertEquals(OperationState.Partial, progress.state)
         assertEquals(4L, progress.bytesDone)
@@ -29,17 +52,34 @@ class OperationProgressMapperTest {
     }
 
     @Test fun failedUsesOutcomeCauseMessage() {
-        val progress = readOnlyOperationProgress(
-            token, ServiceOperationState.Failed(IllegalArgumentException("bad disk")), OperationTitle.ReadScan, 4L, 10L, null, null, true,
+        val progress = mapProgress(
+            ServiceOperationState.Failed(IllegalArgumentException("bad disk")), OperationTitle.ReadScan, 4L, 10L, null, null, true,
         )
         assertEquals(OperationState.Failed, progress.state)
         assertEquals("bad disk", progress.errorMessage)
         assertNull(progress.readScanResult)
     }
 
+    @Test fun failedFallsBackToOperationFailureWhenCauseMessageBlank() {
+        val progress = mapProgress(
+            ServiceOperationState.Failed(IllegalStateException()),
+            OperationTitle.ReadScan,
+            0L,
+            0L,
+            null,
+            IllegalArgumentException("host failure"),
+            true,
+        )
+        assertEquals(OperationState.Failed, progress.state)
+        assertEquals("host failure", progress.errorMessage)
+        assertEquals(0L, progress.bytesDone)
+        assertNull(progress.resultMessage)
+        assertNull(progress.readScanResult)
+    }
+
     @Test fun queuedAndRunningKeepTheirState() {
-        val queued = readOnlyOperationProgress(
-            token, ServiceOperationState.Queued, OperationTitle.ReadScan, 0L, 10L, "stale", null, true, readScanResult = scan,
+        val queued = mapProgress(
+            ServiceOperationState.Queued, OperationTitle.ReadScan, 0L, 10L, "stale", null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Queued, queued.state)
         assertEquals(0L, queued.bytesDone)
@@ -48,8 +88,8 @@ class OperationProgressMapperTest {
         // Non-terminal must not carry a finished scan summary.
         assertNull(queued.readScanResult)
 
-        val running = readOnlyOperationProgress(
-            token, ServiceOperationState.Running, OperationTitle.ReadScan, 4L, 10L, "stale", null, true, readScanResult = scan,
+        val running = mapProgress(
+            ServiceOperationState.Running, OperationTitle.ReadScan, 4L, 10L, "stale", null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Running, running.state)
         assertEquals(4L, running.bytesDone)
@@ -58,8 +98,8 @@ class OperationProgressMapperTest {
     }
 
     @Test fun cancelledKeepsProgressAndStructuredScan() {
-        val progress = readOnlyOperationProgress(
-            token, ServiceOperationState.Cancelled, OperationTitle.ReadScan, 4L, 10L, null, null, false, readScanResult = scan,
+        val progress = mapProgress(
+            ServiceOperationState.Cancelled, OperationTitle.ReadScan, 4L, 10L, null, null, false, readScanResult = scan,
         )
         assertEquals(OperationState.Cancelled, progress.state)
         assertEquals(false, progress.cancelable)
@@ -69,8 +109,8 @@ class OperationProgressMapperTest {
     }
 
     @Test fun completedPreservesResultProgressAndScan() {
-        val progress = readOnlyOperationProgress(
-            token, ServiceOperationState.Completed, OperationTitle.ReadScan, 10L, 10L, null, null, true, readScanResult = scan,
+        val progress = mapProgress(
+            ServiceOperationState.Completed, OperationTitle.ReadScan, 10L, 10L, null, null, true, readScanResult = scan,
         )
         assertEquals(OperationState.Completed, progress.state)
         assertEquals(10L, progress.bytesDone)
@@ -78,10 +118,47 @@ class OperationProgressMapperTest {
         assertEquals(scan, progress.readScanResult)
     }
 
+    @Test fun rawWriteResultSurvivesPartialAndCompleted() {
+        val raw = usb.image.RawWriteResult(
+            range = usb.partition.RawWriteRange(startLba = 10UL, sectorCount = 2UL),
+            writtenBytes = 1_024L,
+            readback = usb.image.ReadbackVerdict.Verified,
+            state = usb.image.RawWriteStatus.Partial,
+        )
+        val title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE)
+        val partial = ServiceOperationState.Partial.toOperationResult(
+            IllegalStateException("incomplete"),
+        ).toProgress(
+            token = token,
+            title = title,
+            bytesDone = 512L,
+            bytesTotal = 1_024L,
+            cancelable = false,
+            resultMessage = "partial write",
+            rawWriteResult = raw,
+        )
+        assertEquals(OperationState.Partial, partial.state)
+        assertEquals(raw, partial.rawWriteResult)
+        assertEquals("incomplete", partial.errorMessage)
+
+        val completed = ServiceOperationState.Completed.toOperationResult().toProgress(
+            token = token,
+            title = title,
+            bytesDone = 1_024L,
+            bytesTotal = 1_024L,
+            cancelable = false,
+            resultMessage = "ok",
+            rawWriteResult = raw.copy(state = usb.image.RawWriteStatus.Completed),
+        )
+        assertEquals(OperationState.Completed, completed.state)
+        assertEquals(usb.image.RawWriteStatus.Completed, completed.rawWriteResult?.state)
+        assertEquals(raw.range, completed.rawWriteResult?.range)
+    }
+
     @Test fun preservesTypedTitleAndLogLabel() {
         val title = OperationTitle.ListPath("/ISO")
-        val progress = readOnlyOperationProgress(
-            token, ServiceOperationState.Completed, title, 10L, 10L, "ok", null, true,
+        val progress = mapProgress(
+            ServiceOperationState.Completed, title, 10L, 10L, "ok", null, true,
         )
         assertEquals(title, progress.title)
         assertEquals("List /ISO", progress.label)
@@ -91,8 +168,8 @@ class OperationProgressMapperTest {
     @Test fun destructiveTitleKeepsDisplayNameAsLogLabel() {
         val title = OperationTitle.Destructive(DestructiveAction.GPT_RESTORE)
         assertEquals("restore GPT backup", title.logLabel)
-        val progress = readOnlyOperationProgress(
-            token, ServiceOperationState.Running, title, 0L, 0L, null, null, true,
+        val progress = mapProgress(
+            ServiceOperationState.Running, title, 0L, 0L, null, null, true,
         )
         assertEquals(title, progress.title)
         assertEquals("restore GPT backup", progress.label)
@@ -124,6 +201,25 @@ class OperationProgressMapperTest {
         for ((progress, expected) in cases) {
             assertEquals("state=${progress?.state}, cancelable=${progress?.cancelable}", expected, OperationPresentation.isCancelable(progress))
         }
+    }
+
+    @Test fun cancelTokenFencesOwnerTabAndTitle() {
+        val running = OperationProgress(OperationState.Running, OperationTitle.UploadBatch(2), token, cancelable = true)
+        val queued = OperationProgress(OperationState.Queued, OperationTitle.RescueBackup, token, cancelable = true)
+        val completed = OperationProgress(OperationState.Completed, OperationTitle.UploadBatch(2), token, cancelable = true)
+        val notCancelable = OperationProgress(OperationState.Running, OperationTitle.UploadBatch(2), token, cancelable = false)
+        assertNull(OperationPresentation.cancelToken(null))
+        assertNull(OperationPresentation.cancelToken(notCancelable))
+        assertNull(OperationPresentation.cancelToken(completed))
+        assertNull(OperationPresentation.cancelToken(running, ownerTab = ShellTab.Ventoy))
+        assertNull(OperationPresentation.cancelToken(running, matchesTitle = { false }))
+        assertEquals(token, OperationPresentation.cancelToken(running))
+        assertEquals(token, OperationPresentation.cancelToken(running, ownerTab = ShellTab.Files))
+        assertEquals(token, OperationPresentation.cancelToken(queued, ownerTab = ShellTab.Diagnostics))
+        assertEquals(
+            token,
+            OperationPresentation.cancelToken(queued, matchesTitle = { it == OperationTitle.RescueBackup }),
+        )
     }
 
     @Test fun originTabMatchesOwningScreen() {

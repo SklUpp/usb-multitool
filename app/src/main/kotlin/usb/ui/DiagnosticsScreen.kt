@@ -240,7 +240,7 @@ fun DiagnosticsScreen(
                     checkOp?.title == OperationTitle.ReadScan ||
                     checkOp?.title == OperationTitle.SmartRead
                 ) {
-                    CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Diagnostics)
+                    OperationAction(state = state, onIntent = onIntent, ownerTab = ShellTab.Diagnostics)
                 }
             }
         }
@@ -426,24 +426,26 @@ fun DiagnosticsScreen(
                         }
                     },
                     {
-                        ApplyCancelButton(
+                        OperationAction(
                             state = state,
                             onIntent = onIntent,
                             ownerTab = ShellTab.Diagnostics,
-                            label = stringResource(R.string.diagnostics_restore_image),
-                            enabled = state.actionsEnabled && rescueReady,
-                            onClick = {
-                                onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
-                            },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
                             matchesTitle = { title ->
                                 title == OperationTitle.RescueBackup ||
                                     title == OperationTitle.Destructive(DestructiveAction.RESCUE_RESTORE)
                             },
+                            applyButton = OperationApply(
+                                label = stringResource(R.string.diagnostics_restore_image),
+                                enabled = state.actionsEnabled && rescueReady,
+                                onClick = {
+                                    onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                ),
+                            ),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         )
                     },
                 ),

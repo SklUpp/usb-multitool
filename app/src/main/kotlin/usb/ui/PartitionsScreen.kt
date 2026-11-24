@@ -1998,24 +1998,26 @@ private fun RawWriteSection(
                         )
                     }
 
-                    ApplyCancelButton(
+                    OperationAction(
                         state = state,
                         onIntent = onIntent,
                         ownerTab = ShellTab.Partitions,
-                        label = stringResource(R.string.partitions_raw_write_sectors),
-                        enabled = state.actionsEnabled && planRange != null &&
-                            planProblems.isEmpty() &&
-                            rangeAssessment?.ok == true,
-                        onClick = {
-                            draftStart?.let { start ->
-                                onIntent(UiIntent.RequestRawWrite(start))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        applyButton = OperationApply(
+                            label = stringResource(R.string.partitions_raw_write_sectors),
+                            enabled = state.actionsEnabled && planRange != null &&
+                                planProblems.isEmpty() &&
+                                rangeAssessment?.ok == true,
+                            onClick = {
+                                draftStart?.let { start ->
+                                    onIntent(UiIntent.RequestRawWrite(start))
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
                         ),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     )
                 }
             }

@@ -520,7 +520,7 @@ private fun VentoyVersionRow(
                     )
                 }
             }
-            CancelOperationButton(
+            OperationAction(
                 state = state,
                 onIntent = onIntent,
                 ownerTab = ShellTab.Ventoy,

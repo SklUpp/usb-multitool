@@ -21,114 +21,178 @@ import usb.formatEtaDuration
 import usb.operation.DiskOperationPhase
 import usb.remainingSeconds
 
-/** Maps read-only operation outcome to UI progress without touching operation ownership. */
-fun readOnlyOperationProgress(
-    token: OperationToken,
-    outcome: ServiceOperationState,
-    title: OperationTitle,
-    bytesDone: Long,
-    bytesTotal: Long,
-    resultMessage: String?,
-    failureCause: Throwable?,
-    cancelable: Boolean,
-    bytesPerSecond: Long = 0L,
-    readScanResult: ReadScanOutcome? = null,
-    smartResult: SmartOutcome? = null,
-): OperationProgress = when (outcome) {
-    is ServiceOperationState.Failed -> OperationProgress(
-        state = OperationState.Failed,
-        title = title,
-        token = token,
-        errorMessage = outcome.cause.message ?: outcome.cause.javaClass.simpleName,
-        cancelable = cancelable,
-    )
-    is ServiceOperationState.Cancelled -> OperationProgress(
-        state = OperationState.Cancelled,
-        title = title,
-        token = token,
-        bytesDone = bytesDone,
-        bytesTotal = bytesTotal,
-        resultMessage = resultMessage,
-        readScanResult = readScanResult,
-        smartResult = smartResult,
-        cancelable = cancelable,
-    )
-    is ServiceOperationState.Partial -> OperationProgress(
-        state = OperationState.Partial,
-        title = title,
-        token = token,
-        bytesDone = bytesDone,
-        bytesTotal = bytesTotal,
-        resultMessage = resultMessage,
-        errorMessage = failureCause?.message ?: failureCause?.javaClass?.simpleName,
-        readScanResult = readScanResult,
-        smartResult = smartResult,
-        cancelable = cancelable,
-    )
-    is ServiceOperationState.Queued -> OperationProgress(
-        state = OperationState.Queued,
-        title = title,
-        token = token,
-        bytesDone = bytesDone,
-        bytesTotal = bytesTotal,
-        cancelable = cancelable,
-    )
-    is ServiceOperationState.Running -> OperationProgress(
-        state = OperationState.Running,
-        title = title,
-        token = token,
-        bytesDone = bytesDone,
-        bytesTotal = bytesTotal,
-        bytesPerSecond = bytesPerSecond,
-        cancelable = cancelable,
-    )
-    is ServiceOperationState.Completed -> OperationProgress(
-        state = OperationState.Completed,
-        title = title,
-        token = token,
-        bytesDone = bytesDone,
-        bytesTotal = bytesTotal,
-        resultMessage = resultMessage,
-        readScanResult = readScanResult,
-        smartResult = smartResult,
-        cancelable = cancelable,
-    )
+/** One service outcome, normalized once: UI state + authored failure text. */
+data class OperationResult(
+    val state: OperationState,
+    val errorMessage: String?,
+) {
+    /** Same string the old `serviceOperationErrorMessage` produced; null for clean terminals. */
+    fun toMessage(): String? = errorMessage
+
+    fun toProgress(
+        token: OperationToken,
+        title: OperationTitle,
+        bytesDone: Long = 0L,
+        bytesTotal: Long = 0L,
+        bytesPerSecond: Long = 0L,
+        cancelable: Boolean = true,
+        resultMessage: String? = null,
+        readScanResult: ReadScanOutcome? = null,
+        smartResult: SmartOutcome? = null,
+        rawWriteResult: usb.image.RawWriteResult? = null,
+    ): OperationProgress =
+        when (state) {
+            OperationState.Failed -> OperationProgress(
+                state = OperationState.Failed,
+                title = title,
+                token = token,
+                errorMessage = errorMessage,
+                cancelable = cancelable,
+            )
+            OperationState.Cancelled -> OperationProgress(
+                state = OperationState.Cancelled,
+                title = title,
+                token = token,
+                bytesDone = bytesDone,
+                bytesTotal = bytesTotal,
+                resultMessage = resultMessage,
+                readScanResult = readScanResult,
+                smartResult = smartResult,
+                cancelable = cancelable,
+            )
+            OperationState.Partial -> OperationProgress(
+                state = OperationState.Partial,
+                title = title,
+                token = token,
+                bytesDone = bytesDone,
+                bytesTotal = bytesTotal,
+                resultMessage = resultMessage,
+                errorMessage = errorMessage,
+                readScanResult = readScanResult,
+                smartResult = smartResult,
+                rawWriteResult = rawWriteResult,
+                cancelable = cancelable,
+            )
+            OperationState.Queued -> OperationProgress(
+                state = OperationState.Queued,
+                title = title,
+                token = token,
+                bytesDone = bytesDone,
+                bytesTotal = bytesTotal,
+                cancelable = cancelable,
+            )
+            OperationState.Running -> OperationProgress(
+                state = OperationState.Running,
+                title = title,
+                token = token,
+                bytesDone = bytesDone,
+                bytesTotal = bytesTotal,
+                bytesPerSecond = bytesPerSecond,
+                cancelable = cancelable,
+            )
+            OperationState.Completed -> OperationProgress(
+                state = OperationState.Completed,
+                title = title,
+                token = token,
+                bytesDone = bytesDone,
+                bytesTotal = bytesTotal,
+                resultMessage = resultMessage,
+                errorMessage = errorMessage,
+                readScanResult = readScanResult,
+                smartResult = smartResult,
+                rawWriteResult = rawWriteResult,
+                cancelable = cancelable,
+            )
+        }
 }
 
-/** Maps every service state to its UI state without coordinator-specific branching. */
-fun serviceOperationUiState(state: ServiceOperationState): OperationState = when (state) {
-    is ServiceOperationState.Queued -> OperationState.Queued
-    is ServiceOperationState.Running -> OperationState.Running
-    is ServiceOperationState.Completed -> OperationState.Completed
-    is ServiceOperationState.Cancelled -> OperationState.Cancelled
-    is ServiceOperationState.Partial -> OperationState.Partial
-    is ServiceOperationState.Failed -> OperationState.Failed
+fun ServiceOperationState.toOperationResult(operationFailure: Throwable? = null): OperationResult {
+    val state = when (this) {
+        is ServiceOperationState.Queued -> OperationState.Queued
+        is ServiceOperationState.Running -> OperationState.Running
+        is ServiceOperationState.Completed -> OperationState.Completed
+        is ServiceOperationState.Cancelled -> OperationState.Cancelled
+        is ServiceOperationState.Partial -> OperationState.Partial
+        is ServiceOperationState.Failed -> OperationState.Failed
+    }
+    val errorMessage =
+        (this as? ServiceOperationState.Failed)?.cause?.message
+            ?: operationFailure?.message
+            ?: (this as? ServiceOperationState.Failed)?.cause?.javaClass?.simpleName
+            ?: operationFailure?.javaClass?.simpleName
+    return OperationResult(state = state, errorMessage = errorMessage)
 }
 
-/** Prefer terminal failure message, then operation.failureCause, then simple class name. */
-fun serviceOperationErrorMessage(
-    state: ServiceOperationState,
-    operationFailure: Throwable? = null,
-): String? =
-    (state as? ServiceOperationState.Failed)?.cause?.message
-        ?: operationFailure?.message
-        ?: (state as? ServiceOperationState.Failed)?.cause?.javaClass?.simpleName
-        ?: operationFailure?.javaClass?.simpleName
 
 
 /** Single source of presentation logic for operations across UI surfaces. */
 object OperationPresentation {
     @Composable
-    fun label(progress: OperationProgress): String = progress.title.localized()
+    fun label(title: OperationTitle): String =
+        when (title) {
+            is OperationTitle.Destructive -> title.action.statusTitle()
+            OperationTitle.ProbeDevice -> stringResource(R.string.op_probe)
+            OperationTitle.ReadScan -> stringResource(R.string.op_read_scan)
+            OperationTitle.SmartRead -> stringResource(R.string.op_smart_read)
 
-    @Composable
-    fun label(title: OperationTitle): String = title.localized()
+            OperationTitle.RescueBackup -> stringResource(R.string.op_rescue_backup)
+            OperationTitle.GptCriticalBackup -> stringResource(R.string.op_gpt_backup)
+            OperationTitle.RefreshPartitions -> stringResource(R.string.op_refresh)
+            OperationTitle.EjectDevice -> stringResource(R.string.op_eject)
+            OperationTitle.SelfTest -> stringResource(R.string.op_self_test)
+            OperationTitle.SelfTestRunning -> stringResource(R.string.op_self_test_running)
+            OperationTitle.Upload -> stringResource(R.string.op_upload)
+            OperationTitle.AutounattendXmlLink -> stringResource(R.string.op_link_xml)
+            OperationTitle.CheckRawRange -> stringResource(R.string.op_check_raw_range)
+            OperationTitle.ListRawSources -> stringResource(R.string.op_list_raw_sources)
+            OperationTitle.ListDataPartitionFiles ->
+                stringResource(R.string.op_list_data_partition_files)
+            OperationTitle.ReadXmlBindings -> stringResource(R.string.op_read_xml_bindings)
+            OperationTitle.RemoveXmlBindings -> stringResource(R.string.op_remove_xml_bindings)
+            OperationTitle.SaveGlobalWindowsControls ->
+                stringResource(R.string.op_save_global_windows_controls)
+            OperationTitle.ReadUnattendXml -> stringResource(R.string.op_read_unattend_xml)
+            OperationTitle.ListVentoyImages -> stringResource(R.string.op_list_ventoy_images)
+            OperationTitle.GenerateUnattendXml -> stringResource(R.string.op_generate_unattend_xml)
+            OperationTitle.WriteUnattendXml -> stringResource(R.string.op_write_unattend_xml)
+            OperationTitle.ReadVentoyGlobalSettings ->
+                stringResource(R.string.op_read_ventoy_global_settings)
+            OperationTitle.ListVentoyFolders -> stringResource(R.string.op_list_ventoy_folders)
+            OperationTitle.SetVentoyGlobalSetting ->
+                stringResource(R.string.op_set_ventoy_global_setting)
+            OperationTitle.BindImagesToUnattendXml ->
+                stringResource(R.string.op_bind_images_unattend)
+            OperationTitle.UnbindImageFromUnattendXml ->
+                stringResource(R.string.op_unbind_image_unattend)
+            is OperationTitle.ListPath -> stringResource(R.string.op_list, normalizeFatPath(title.path))
+            is OperationTitle.NewFolder -> stringResource(R.string.op_new_folder, title.name)
+            is OperationTitle.DeleteEntry -> stringResource(R.string.op_delete, title.name)
+            is OperationTitle.RenameEntry -> stringResource(R.string.op_rename, title.from)
+            is OperationTitle.DownloadEntry -> stringResource(R.string.op_download, title.name)
+            is OperationTitle.DownloadBatch -> stringResource(R.string.op_download_batch, title.count)
+            is OperationTitle.UploadBatch -> stringResource(R.string.op_upload_batch, title.count)
+            is OperationTitle.DeleteBatch -> stringResource(R.string.op_delete_batch, title.count)
+            is OperationTitle.StageForRawWrite -> stringResource(R.string.op_stage, title.name)
+            is OperationTitle.FormatTarget -> stringResource(R.string.op_format, title.target)
+            is OperationTitle.ImportTarget -> stringResource(R.string.op_import, title.targetName)
+        }
 
     fun tab(title: OperationTitle): ShellTab? = title.originTab()
 
     fun isCancelable(progress: OperationProgress?): Boolean =
         progress != null && progress.cancelable &&
             (progress.state == OperationState.Running || progress.state == OperationState.Queued)
+
+    fun cancelToken(
+        progress: OperationProgress?,
+        ownerTab: ShellTab? = null,
+        matchesTitle: (OperationTitle) -> Boolean = { true },
+    ): OperationToken? =
+        progress?.takeIf {
+            isCancelable(it) &&
+                (ownerTab == null || tab(it.title) == ownerTab) &&
+                matchesTitle(it.title)
+        }?.token
 
     @Composable
     fun stateLabel(state: OperationState, phase: DiskOperationPhase? = null): String =
@@ -177,7 +241,7 @@ fun OperationInfo(
     operation: OperationProgress,
     showDetails: Boolean = false,
     modifier: Modifier = Modifier,
-    onCancel: (() -> Unit)? = null,
+    onCancel: ((OperationToken) -> Unit)? = null,
 ) {
     val failed = operation.state == OperationState.Failed || operation.state == OperationState.Partial
     Column(
@@ -185,7 +249,7 @@ fun OperationInfo(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            text = "${OperationPresentation.label(operation)}: ${OperationPresentation.stateLabel(operation.state, operation.phase)}",
+            text = "${OperationPresentation.label(operation.title)}: ${OperationPresentation.stateLabel(operation.state, operation.phase)}",
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
             color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
@@ -230,15 +294,17 @@ fun OperationInfo(
                 )
             }
         }
-        if (onCancel != null && OperationPresentation.isCancelable(operation)) {
-            TextButton(
-                onClick = onCancel,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.action_cancel),
-                    color = MaterialTheme.colorScheme.error,
-                )
+        OperationPresentation.cancelToken(operation)?.let { token ->
+            if (onCancel != null) {
+                TextButton(
+                    onClick = { onCancel(token) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.action_cancel),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }

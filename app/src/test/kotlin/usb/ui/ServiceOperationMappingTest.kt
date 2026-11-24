@@ -8,39 +8,38 @@ import usb.operation.OperationState as ServiceOperationState
 
 class ServiceOperationMappingTest {
     @Test fun mapsTerminalStates() {
-        assertEquals(OperationState.Completed, serviceOperationUiState(ServiceOperationState.Completed))
-        assertEquals(OperationState.Cancelled, serviceOperationUiState(ServiceOperationState.Cancelled))
-        assertEquals(OperationState.Partial, serviceOperationUiState(ServiceOperationState.Partial))
+        assertEquals(OperationState.Completed, ServiceOperationState.Completed.toOperationResult().state)
+        assertEquals(OperationState.Cancelled, ServiceOperationState.Cancelled.toOperationResult().state)
+        assertEquals(OperationState.Partial, ServiceOperationState.Partial.toOperationResult().state)
         assertEquals(
             OperationState.Failed,
-            serviceOperationUiState(ServiceOperationState.Failed(IllegalStateException("x"))),
+            ServiceOperationState.Failed(IllegalStateException("x")).toOperationResult().state,
         )
     }
 
     @Test fun mapsNonTerminalStatesWithoutClaimingCompletion() {
-        assertEquals(OperationState.Queued, serviceOperationUiState(ServiceOperationState.Queued))
-        assertEquals(OperationState.Running, serviceOperationUiState(ServiceOperationState.Running))
-        assertNull(serviceOperationErrorMessage(ServiceOperationState.Queued))
-        assertNull(serviceOperationErrorMessage(ServiceOperationState.Running))
+        assertEquals(OperationState.Queued, ServiceOperationState.Queued.toOperationResult().state)
+        assertEquals(OperationState.Running, ServiceOperationState.Running.toOperationResult().state)
+        assertNull(ServiceOperationState.Queued.toOperationResult().toMessage())
+        assertNull(ServiceOperationState.Running.toOperationResult().toMessage())
     }
 
     @Test fun prefersFailureMessageThenOperationFailure() {
         val failure = IllegalArgumentException("operation")
         assertEquals(
             "terminal",
-            serviceOperationErrorMessage(
-                ServiceOperationState.Failed(IllegalStateException("terminal")),
-                failure,
-            ),
+            ServiceOperationState.Failed(IllegalStateException("terminal"))
+                .toOperationResult(failure)
+                .toMessage(),
         )
         assertEquals(
             "operation",
-            serviceOperationErrorMessage(ServiceOperationState.Completed, failure),
+            ServiceOperationState.Completed.toOperationResult(failure).toMessage(),
         )
-        assertNull(serviceOperationErrorMessage(ServiceOperationState.Completed))
+        assertNull(ServiceOperationState.Completed.toOperationResult().toMessage())
         assertTrue(
-            serviceOperationErrorMessage(ServiceOperationState.Failed(IllegalStateException()), null)
-                != null,
+            ServiceOperationState.Failed(IllegalStateException()).toOperationResult(null)
+                .toMessage() != null,
         )
     }
 }

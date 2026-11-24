@@ -90,7 +90,7 @@ import usb.ui.ReadScanOutcome
 import usb.ui.SmartOutcome
 
 import usb.ui.RestoreSourceInspector
-import usb.ui.readOnlyOperationProgress
+import usb.ui.toOperationResult
 import usb.ui.OperationState
 import usb.ui.UiEffect
 import usb.ui.UiIntent
@@ -1674,22 +1674,19 @@ class MainViewModel(
                     try {
                         val outcome = handle.await()
                         ticker.cancel()
-                        val mappedState = usb.ui.serviceOperationUiState(outcome)
-                        val errorMsg = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                        val result = outcome.toOperationResult(op.failureCause)
                         onIntent(
                             UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = mappedState,
-                                    title = opTitle,
+                                result.toProgress(
                                     token = token,
-                                    errorMessage = errorMsg,
+                                    title = opTitle,
+                                    cancelable = isCooperative,
                                     resultMessage = op.result,
                                     rawWriteResult = rawWriteOutcome,
-                                    cancelable = isCooperative,
                                 ),
                             ),
                         )
-                        if (mappedState == OperationState.Completed) {
+                        if (result.state == OperationState.Completed) {
                             val consumed = stagedConsumedPath
                             stagedConsumedPath = null
                             if (consumed != null && state.stagedRawImagePath == consumed) {
@@ -2098,18 +2095,15 @@ class MainViewModel(
                 scope.launch {
                     try {
                         val outcome = handle.await()
-                        val mappedState = usb.ui.serviceOperationUiState(outcome)
+                        val result = outcome.toOperationResult()
                         val failure = (outcome as? usb.operation.OperationState.Failed)?.cause
-                        val errorMsg = usb.ui.serviceOperationErrorMessage(outcome)
                         onIntent(
                             UiIntent.OperationUpdated(
-                                OperationProgress(
-                                    state = mappedState,
-                                    title = OperationTitle.AutounattendXmlLink,
+                                result.toProgress(
                                     token = token,
-                                    errorMessage = errorMsg,
-                                    resultMessage = op.result,
+                                    title = OperationTitle.AutounattendXmlLink,
                                     cancelable = false,
+                                    resultMessage = op.result,
                                 ),
                             ),
                         )
@@ -2130,7 +2124,7 @@ class MainViewModel(
                                 ),
                             )
                         }
-                        if (mappedState == OperationState.Completed && state.operation?.token == token) {
+                        if (result.state == OperationState.Completed && state.operation?.token == token) {
                             onIntent(UiIntent.LoadWindowsImageLinks)
                         }
                     } finally {
@@ -4869,23 +4863,21 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 ticker.cancel()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = opTitle,
+                        result.toProgress(
                             token = token,
+                            title = opTitle,
                             bytesDone = op.bytesDone,
                             bytesTotal = op.bytesTotal,
-                            errorMessage = message,
-                            resultMessage = op.result,
                             cancelable = false,
+                            resultMessage = op.result,
                         ),
                     ),
                 )
-                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && result.state == OperationState.Completed) {
                     val importStart = proposal.partitionStartLba
                     val importCount = proposal.partitionSectorCount
                     val importIdentity = proposal.identity
@@ -4995,21 +4987,19 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = opTitle,
+                        result.toProgress(
                             token = token,
-                            errorMessage = message,
-                            resultMessage = op.result,
+                            title = opTitle,
                             cancelable = false,
+                            resultMessage = op.result,
                         ),
                     ),
                 )
-                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && result.state == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
                 } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
@@ -5075,17 +5065,15 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = opTitle,
+                        result.toProgress(
                             token = token,
-                            errorMessage = message,
-                            resultMessage = op.result,
+                            title = opTitle,
                             cancelable = false,
+                            resultMessage = op.result,
                         ),
                     ),
                 )
@@ -5324,13 +5312,13 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
-                onIntent(UiIntent.OperationUpdated(OperationProgress(
-                    state = mappedState, title = opTitle, token = token,
-                    errorMessage = message, resultMessage = op.result, cancelable = false,
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
+                onIntent(UiIntent.OperationUpdated(result.toProgress(
+                    token = token, title = opTitle,
+                    cancelable = false, resultMessage = op.result,
                 )))
-                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && result.state == OperationState.Completed) {
                     onIntent(UiIntent.LoadAutounattend(xmlName))
                 } else if (state.operation?.token == token && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
@@ -5452,21 +5440,19 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = opTitle,
+                        result.toProgress(
                             token = token,
-                            errorMessage = message,
-                            resultMessage = op.result,
+                            title = opTitle,
                             cancelable = false,
+                            resultMessage = op.result,
                         ),
                     ),
                 )
-                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && result.state == OperationState.Completed) {
                     val live = state.partitions.firstOrNull { it.id == "1" }
                     val start = expectedPart1Start
                     val count = expectedPart1Count
@@ -6208,21 +6194,19 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = title,
+                        result.toProgress(
                             token = token,
-                            errorMessage = message,
-                            resultMessage = op.result,
+                            title = title,
                             cancelable = false,
+                            resultMessage = op.result,
                         ),
                     )
                 )
-                if (state.operation?.token == token && mappedState != OperationState.Completed && message != null) {
+                if (state.operation?.token == token && result.state != OperationState.Completed && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -6316,21 +6300,19 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = title,
+                        result.toProgress(
                             token = token,
-                            errorMessage = message,
-                            resultMessage = op.result,
+                            title = title,
                             cancelable = false,
+                            resultMessage = op.result,
                         ),
                     )
                 )
-                if (state.operation?.token == token && mappedState != OperationState.Completed && message != null) {
+                if (state.operation?.token == token && result.state != OperationState.Completed && message != null) {
                     onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
@@ -6431,20 +6413,18 @@ class MainViewModel(
         scope.launch {
             try {
                 val outcome = handle.await()
-                val mappedState = usb.ui.serviceOperationUiState(outcome)
-                val message = usb.ui.serviceOperationErrorMessage(outcome, op.failureCause)
+                val result = outcome.toOperationResult(op.failureCause)
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
-                        OperationProgress(
-                            state = mappedState,
-                            title = title,
+                        result.toProgress(
                             token = token,
-                            errorMessage = message,
+                            title = title,
                             cancelable = false,
                         ),
                     ),
                 )
-                if (state.operation?.token == token && mappedState == OperationState.Completed) {
+                if (state.operation?.token == token && result.state == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
                 } else if (state.operation?.token == token && message != null) {
@@ -7300,51 +7280,33 @@ class MainViewModel(
                 val outcome = handle.await()
                 ticker.cancel()
                 logTicker.cancel()
+                val result = outcome.toOperationResult(operation.failureCause)
+                val progress = result.toProgress(
+                    token = token,
+                    title = title,
+                    bytesDone = operation.bytesDone,
+                    bytesTotal = operation.bytesTotal,
+                    bytesPerSecond = operation.currentBytesPerSecond(),
+                    cancelable = cancelable,
+                    resultMessage = operation.result?.takeIf { it.isNotEmpty() },
+                    readScanResult = sink.readScanResult,
+                    smartResult = sink.smartResult,
+                )
                 when (outcome) {
                     is usb.operation.OperationState.Failed -> {
-                        val message = outcome.cause.message ?: outcome.cause.javaClass.simpleName
+                        val message = result.toMessage()
+                            ?: outcome.cause.message
+                            ?: outcome.cause.javaClass.simpleName
                         if (state.operation?.token == token) {
                             onIntent(UiIntent.Status(UiMessage.Raw(message)))
                         }
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                readOnlyOperationProgress(
-                                    token = token,
-                                    outcome = outcome,
-                                    title = title,
-                                    bytesDone = operation.bytesDone,
-                                    bytesTotal = operation.bytesTotal,
-                                    resultMessage = operation.result?.takeIf { it.isNotEmpty() },
-                                    failureCause = operation.failureCause,
-                                    cancelable = cancelable,
-                                    bytesPerSecond = operation.currentBytesPerSecond(),
-                                    readScanResult = sink.readScanResult,
-                                    smartResult = sink.smartResult,
-                                ),
-                            ),
-                        )
+                        onIntent(UiIntent.OperationUpdated(progress))
                         if (state.operation?.token == token) {
                             scope.launch(Dispatchers.IO) { runCatching { closeFilesVolume(reportStatus = true) } }
                         }
                     }
                     else -> {
-                        onIntent(
-                            UiIntent.OperationUpdated(
-                                readOnlyOperationProgress(
-                                    token = token,
-                                    outcome = outcome,
-                                    title = title,
-                                    bytesDone = operation.bytesDone,
-                                    bytesTotal = operation.bytesTotal,
-                                    resultMessage = operation.result?.takeIf { it.isNotEmpty() },
-                                    failureCause = operation.failureCause,
-                                    cancelable = cancelable,
-                                    bytesPerSecond = operation.currentBytesPerSecond(),
-                                    readScanResult = sink.readScanResult,
-                                    smartResult = sink.smartResult,
-                                ),
-                            ),
-                        )
+                        onIntent(UiIntent.OperationUpdated(progress))
                     }
                 }
             } finally {

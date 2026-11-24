@@ -295,7 +295,7 @@ fun FilesScreen(
                     onSelect = { id -> onIntent(UiIntent.SelectPartition(id)) },
                 )
                 if (uploading == null) {
-                    CancelOperationButton(state = state, onIntent = onIntent, ownerTab = ShellTab.Files)
+                    OperationAction(state = state, onIntent = onIntent, ownerTab = ShellTab.Files)
                 }
                 // Matches the empty-partitions branch below: the same known blocked
                 // release state renders the localized card here too, since partitions
@@ -346,13 +346,10 @@ fun FilesScreen(
                     .padding(bottom = 12.dp),
             )
         }
-        val uploadOp = uploading?.takeIf {
-            it.cancelable &&
-                (it.state == OperationState.Running || it.state == OperationState.Queued)
-        }
-        if (uploadOp != null) {
+        val uploadCancelToken = OperationPresentation.cancelToken(uploading, ownerTab = ShellTab.Files)
+        if (uploadCancelToken != null) {
             ExtendedFloatingActionButton(
-                onClick = { onIntent(UiIntent.CancelOperation(uploadOp.token)) },
+                onClick = { onIntent(UiIntent.CancelOperation(uploadCancelToken)) },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp),
@@ -820,9 +817,7 @@ private fun FilesPickScreen(
                         OperationInfo(
                             operation = copying,
                             showDetails = true,
-                            onCancel = if (copying.state == OperationState.Running && copying.cancelable) {
-                                { onIntent(UiIntent.CancelOperation(copying.token)) }
-                            } else null,
+                            onCancel = { onIntent(UiIntent.CancelOperation(it)) },
                         )
                     }
                 }

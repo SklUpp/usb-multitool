@@ -1,5 +1,6 @@
 package usb.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -309,121 +310,107 @@ fun smartSummary(outcome: SmartOutcome): String {
 
 
 
-@Composable
-fun DestructiveAction.label(): String =
+internal data class DestructivePresentation(
+    @StringRes val action: Int,
+    @StringRes val statusTitle: Int,
+    @StringRes val confirmTitle: Int = R.string.confirm_title,
+    val dataLosing: Boolean = false,
+)
+
+internal fun DestructiveAction.presentation(): DestructivePresentation =
     when (this) {
-        DestructiveAction.WIPE -> stringResource(R.string.action_wipe)
-        DestructiveAction.VENTOY_INSTALL -> stringResource(R.string.action_ventoy_install)
-        DestructiveAction.VENTOY_UPDATE -> stringResource(R.string.action_ventoy_update)
-        DestructiveAction.RAW_WRITE -> stringResource(R.string.action_raw_write)
-        DestructiveAction.FORMAT_PARTITION -> stringResource(R.string.action_format_partition)
-        DestructiveAction.DELETE_PARTITION -> stringResource(R.string.action_delete_partition)
-        DestructiveAction.CREATE_PARTITION -> stringResource(R.string.action_create_partition)
-        DestructiveAction.GPT_REPAIR -> stringResource(R.string.action_gpt_repair)
-        DestructiveAction.GPT_RESTORE -> stringResource(R.string.action_gpt_restore)
-        DestructiveAction.RESCUE_RESTORE -> stringResource(R.string.action_rescue_restore)
-        DestructiveAction.VENTOY_LINK_XML -> stringResource(R.string.action_ventoy_link_xml)
-        DestructiveAction.SET_PARTITION_ROLE -> stringResource(R.string.action_set_partition_role)
-        DestructiveAction.SET_PARTITION_BOOTABLE ->
-            stringResource(R.string.action_set_partition_bootable)
-        DestructiveAction.RENAME_PARTITION -> stringResource(R.string.action_rename_partition)
-        DestructiveAction.RENAME_VOLUME_LABEL ->
-            stringResource(R.string.action_rename_volume_label)
-        DestructiveAction.INITIALIZE_PARTITION_TABLE ->
-            stringResource(R.string.action_initialize_table)
-        DestructiveAction.VENTOY_UNATTEND_XML_WRITE ->
-            stringResource(R.string.action_ventoy_unattend_write)
-        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT ->
-            stringResource(R.string.action_ventoy_unattend_layout)
+        DestructiveAction.WIPE -> DestructivePresentation(
+            action = R.string.action_wipe,
+            statusTitle = R.string.status_title_wipe,
+            confirmTitle = R.string.confirm_title_wipe,
+            dataLosing = true,
+        )
+        DestructiveAction.VENTOY_INSTALL -> DestructivePresentation(
+            action = R.string.action_ventoy_install,
+            statusTitle = R.string.status_title_ventoy_install,
+            dataLosing = true,
+        )
+        DestructiveAction.VENTOY_UPDATE -> DestructivePresentation(
+            action = R.string.action_ventoy_update,
+            statusTitle = R.string.status_title_ventoy_update,
+        )
+        DestructiveAction.RAW_WRITE -> DestructivePresentation(
+            action = R.string.action_raw_write,
+            statusTitle = R.string.status_title_raw_write,
+        )
+        DestructiveAction.FORMAT_PARTITION -> DestructivePresentation(
+            action = R.string.action_format_partition,
+            statusTitle = R.string.status_title_format_partition,
+            confirmTitle = R.string.confirm_title_format,
+            dataLosing = true,
+        )
+        DestructiveAction.DELETE_PARTITION -> DestructivePresentation(
+            action = R.string.action_delete_partition,
+            statusTitle = R.string.status_title_delete_partition,
+        )
+        DestructiveAction.CREATE_PARTITION -> DestructivePresentation(
+            action = R.string.action_create_partition,
+            statusTitle = R.string.status_title_create_partition,
+        )
+        DestructiveAction.GPT_REPAIR -> DestructivePresentation(
+            action = R.string.action_gpt_repair,
+            statusTitle = R.string.status_title_gpt_repair,
+            confirmTitle = R.string.confirm_title_gpt_repair,
+        )
+        DestructiveAction.GPT_RESTORE -> DestructivePresentation(
+            action = R.string.action_gpt_restore,
+            statusTitle = R.string.status_title_gpt_restore,
+            confirmTitle = R.string.confirm_title_gpt_restore,
+        )
+        DestructiveAction.RESCUE_RESTORE -> DestructivePresentation(
+            action = R.string.action_rescue_restore,
+            statusTitle = R.string.status_title_rescue_restore,
+        )
+        DestructiveAction.VENTOY_LINK_XML -> DestructivePresentation(
+            action = R.string.action_ventoy_link_xml,
+            statusTitle = R.string.status_title_ventoy_link_xml,
+        )
+        DestructiveAction.SET_PARTITION_ROLE -> DestructivePresentation(
+            action = R.string.action_set_partition_role,
+            statusTitle = R.string.status_title_set_partition_role,
+            confirmTitle = R.string.confirm_title_partition_role,
+        )
+        DestructiveAction.SET_PARTITION_BOOTABLE -> DestructivePresentation(
+            action = R.string.action_set_partition_bootable,
+            statusTitle = R.string.status_title_set_partition_bootable,
+        )
+        DestructiveAction.RENAME_PARTITION -> DestructivePresentation(
+            action = R.string.action_rename_partition,
+            statusTitle = R.string.status_title_rename_partition,
+        )
+        DestructiveAction.RENAME_VOLUME_LABEL -> DestructivePresentation(
+            action = R.string.action_rename_volume_label,
+            statusTitle = R.string.status_title_rename_volume_label,
+        )
+        DestructiveAction.INITIALIZE_PARTITION_TABLE -> DestructivePresentation(
+            action = R.string.action_initialize_table,
+            statusTitle = R.string.status_title_initialize_table,
+            dataLosing = true,
+        )
+        DestructiveAction.VENTOY_UNATTEND_XML_WRITE -> DestructivePresentation(
+            action = R.string.action_ventoy_unattend_write,
+            statusTitle = R.string.status_title_ventoy_unattend_write,
+        )
+        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT -> DestructivePresentation(
+            action = R.string.action_ventoy_unattend_layout,
+            statusTitle = R.string.status_title_ventoy_unattend_layout,
+        )
     }
+
+@Composable
+fun DestructiveAction.label(): String = stringResource(presentation().action)
 
 /**
  * Nominative noun phrase for the permanent status line and details dialog.
  * Confirmation dialogs keep [label] (accusative / gerund wording).
  */
 @Composable
-fun DestructiveAction.statusTitle(): String =
-    when (this) {
-        DestructiveAction.WIPE -> stringResource(R.string.status_title_wipe)
-        DestructiveAction.VENTOY_INSTALL -> stringResource(R.string.status_title_ventoy_install)
-        DestructiveAction.VENTOY_UPDATE -> stringResource(R.string.status_title_ventoy_update)
-        DestructiveAction.RAW_WRITE -> stringResource(R.string.status_title_raw_write)
-        DestructiveAction.FORMAT_PARTITION -> stringResource(R.string.status_title_format_partition)
-        DestructiveAction.DELETE_PARTITION -> stringResource(R.string.status_title_delete_partition)
-        DestructiveAction.CREATE_PARTITION -> stringResource(R.string.status_title_create_partition)
-        DestructiveAction.GPT_REPAIR -> stringResource(R.string.status_title_gpt_repair)
-        DestructiveAction.GPT_RESTORE -> stringResource(R.string.status_title_gpt_restore)
-        DestructiveAction.RESCUE_RESTORE -> stringResource(R.string.status_title_rescue_restore)
-        DestructiveAction.VENTOY_LINK_XML -> stringResource(R.string.status_title_ventoy_link_xml)
-        DestructiveAction.SET_PARTITION_ROLE ->
-            stringResource(R.string.status_title_set_partition_role)
-        DestructiveAction.SET_PARTITION_BOOTABLE ->
-            stringResource(R.string.status_title_set_partition_bootable)
-        DestructiveAction.RENAME_PARTITION -> stringResource(R.string.status_title_rename_partition)
-        DestructiveAction.RENAME_VOLUME_LABEL ->
-            stringResource(R.string.status_title_rename_volume_label)
-        DestructiveAction.INITIALIZE_PARTITION_TABLE ->
-            stringResource(R.string.status_title_initialize_table)
-        DestructiveAction.VENTOY_UNATTEND_XML_WRITE ->
-            stringResource(R.string.status_title_ventoy_unattend_write)
-        DestructiveAction.VENTOY_UNATTEND_DISK_LAYOUT ->
-            stringResource(R.string.status_title_ventoy_unattend_layout)
-    }
-
-
-/**
- * Localized title for a user-facing operation. Technical log lines keep
- * [OperationProgress.label] / [OperationTitle.logLabel] unchanged.
- */
-@Composable
-fun OperationTitle.localized(): String =
-    when (this) {
-        is OperationTitle.Destructive -> action.statusTitle()
-        OperationTitle.ProbeDevice -> stringResource(R.string.op_probe)
-        OperationTitle.ReadScan -> stringResource(R.string.op_read_scan)
-        OperationTitle.SmartRead -> stringResource(R.string.op_smart_read)
-
-        OperationTitle.RescueBackup -> stringResource(R.string.op_rescue_backup)
-        OperationTitle.GptCriticalBackup -> stringResource(R.string.op_gpt_backup)
-        OperationTitle.RefreshPartitions -> stringResource(R.string.op_refresh)
-        OperationTitle.EjectDevice -> stringResource(R.string.op_eject)
-        OperationTitle.SelfTest -> stringResource(R.string.op_self_test)
-        OperationTitle.SelfTestRunning -> stringResource(R.string.op_self_test_running)
-        OperationTitle.Upload -> stringResource(R.string.op_upload)
-        OperationTitle.AutounattendXmlLink -> stringResource(R.string.op_link_xml)
-        OperationTitle.CheckRawRange -> stringResource(R.string.op_check_raw_range)
-        OperationTitle.ListRawSources -> stringResource(R.string.op_list_raw_sources)
-        OperationTitle.ListDataPartitionFiles ->
-            stringResource(R.string.op_list_data_partition_files)
-        OperationTitle.ReadXmlBindings -> stringResource(R.string.op_read_xml_bindings)
-        OperationTitle.RemoveXmlBindings -> stringResource(R.string.op_remove_xml_bindings)
-        OperationTitle.SaveGlobalWindowsControls ->
-            stringResource(R.string.op_save_global_windows_controls)
-        OperationTitle.ReadUnattendXml -> stringResource(R.string.op_read_unattend_xml)
-        OperationTitle.ListVentoyImages -> stringResource(R.string.op_list_ventoy_images)
-        OperationTitle.GenerateUnattendXml -> stringResource(R.string.op_generate_unattend_xml)
-        OperationTitle.WriteUnattendXml -> stringResource(R.string.op_write_unattend_xml)
-        OperationTitle.ReadVentoyGlobalSettings ->
-            stringResource(R.string.op_read_ventoy_global_settings)
-        OperationTitle.ListVentoyFolders -> stringResource(R.string.op_list_ventoy_folders)
-        OperationTitle.SetVentoyGlobalSetting ->
-            stringResource(R.string.op_set_ventoy_global_setting)
-        OperationTitle.BindImagesToUnattendXml ->
-            stringResource(R.string.op_bind_images_unattend)
-        OperationTitle.UnbindImageFromUnattendXml ->
-            stringResource(R.string.op_unbind_image_unattend)
-        is OperationTitle.ListPath -> stringResource(R.string.op_list, normalizeFatPath(path))
-        is OperationTitle.NewFolder -> stringResource(R.string.op_new_folder, name)
-        is OperationTitle.DeleteEntry -> stringResource(R.string.op_delete, name)
-        is OperationTitle.RenameEntry -> stringResource(R.string.op_rename, from)
-        is OperationTitle.DownloadEntry -> stringResource(R.string.op_download, name)
-        is OperationTitle.DownloadBatch -> stringResource(R.string.op_download_batch, count)
-        is OperationTitle.UploadBatch -> stringResource(R.string.op_upload_batch, count)
-        is OperationTitle.DeleteBatch -> stringResource(R.string.op_delete_batch, count)
-        is OperationTitle.StageForRawWrite -> stringResource(R.string.op_stage, name)
-        is OperationTitle.FormatTarget -> stringResource(R.string.op_format, target)
-        is OperationTitle.ImportTarget -> stringResource(R.string.op_import, targetName)
-    }
+fun DestructiveAction.statusTitle(): String = stringResource(presentation().statusTitle)
 
 @Composable
 fun operationStateLabel(state: OperationState): String =
@@ -448,22 +435,11 @@ data class ConfirmationLine(val text: String, val monospace: Boolean = false)
  */
 @Composable
 fun confirmationTitle(confirmation: DestructiveConfirmation): String =
-    when (confirmation.action) {
-        DestructiveAction.GPT_REPAIR -> stringResource(R.string.confirm_title_gpt_repair)
-        DestructiveAction.FORMAT_PARTITION -> stringResource(R.string.confirm_title_format)
-        DestructiveAction.WIPE -> stringResource(R.string.confirm_title_wipe)
-        DestructiveAction.SET_PARTITION_ROLE ->
-            stringResource(R.string.confirm_title_partition_role)
-        DestructiveAction.GPT_RESTORE -> stringResource(R.string.confirm_title_gpt_restore)
-        else -> stringResource(R.string.confirm_title)
-    }
+    stringResource(confirmation.action.presentation().confirmTitle)
 
 /** Data-losing confirmations: the enabled confirm button reads as an error, not primary. */
 internal fun isDataLosingConfirmation(confirmation: DestructiveConfirmation): Boolean =
-    confirmation.action == DestructiveAction.FORMAT_PARTITION ||
-        confirmation.action == DestructiveAction.WIPE ||
-        confirmation.action == DestructiveAction.VENTOY_INSTALL ||
-        confirmation.action == DestructiveAction.INITIALIZE_PARTITION_TABLE ||
+    confirmation.action.presentation().dataLosing ||
         (confirmation.action == DestructiveAction.SET_PARTITION_ROLE &&
             confirmation.partitionRole == PartitionRole.Efi)
 

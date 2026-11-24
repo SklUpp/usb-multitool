@@ -1353,7 +1353,7 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
         else -> StatusTone.Neutral
     }
     return OperationStatusFacts(
-        name = OperationPresentation.label(op),
+        name = OperationPresentation.label(op.title),
         state = OperationPresentation.stateLabel(op.state, op.phase),
         progress = progress,
         readback = readback?.first,
@@ -1369,72 +1369,68 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
 }
 
 /**
- * One button for both halves of a serialized operation: Apply when idle/disabled,
- * Cancel while the owning tab has a cancelable queued/running operation.
+ * Apply half of [OperationAction]. Null colors resolve to [ButtonDefaults.buttonColors]
+ * inside the composable because that factory is itself `@Composable`.
  */
-@Composable
-internal fun ApplyCancelButton(
-    state: AppUiState,
-    onIntent: (UiIntent) -> Unit,
-    ownerTab: ShellTab,
-    label: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    colors: ButtonColors = ButtonDefaults.buttonColors(),
-    matchesTitle: (OperationTitle) -> Boolean = { true },
-) {
-    val operation = state.operation
-    val cancelable = OperationPresentation.isCancelable(operation) &&
-        operation != null &&
-        OperationPresentation.tab(operation.title) == ownerTab &&
-        matchesTitle(operation.title)
-    if (cancelable) {
-        Button(
-            onClick = { onIntent(UiIntent.CancelOperation(operation.token)) },
-            modifier = modifier,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = MaterialTheme.colorScheme.onError,
-            ),
-        ) {
-            Text(stringResource(R.string.action_cancel))
-        }
-    } else {
-        Button(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = modifier,
-            colors = colors,
-        ) {
-            Text(label)
-        }
-    }
-}
+internal data class OperationApply(
+    val label: String,
+    val enabled: Boolean,
+    val onClick: () -> Unit,
+    val colors: ButtonColors? = null,
+)
 
 /**
- * Cancel action shared by every long-operation surface. It is visible only while the
- * serialized operation is queued/running and cancelable, and always targets that exact
- * token. Direct cancel matches the existing Ventoy/ISO progress action.
+ * One button for Apply, Cancel, or Apply+Cancel. Cancel fences via
+ * [OperationPresentation.cancelToken]; absent token + null apply emits nothing.
  */
 @Composable
-internal fun CancelOperationButton(
+internal fun OperationAction(
     state: AppUiState,
     onIntent: (UiIntent) -> Unit,
     ownerTab: ShellTab? = null,
     modifier: Modifier = Modifier,
+    matchesTitle: (OperationTitle) -> Boolean = { true },
+    applyButton: OperationApply? = null,
 ) {
-    val operation = state.operation ?: return
-    if (ownerTab != null && OperationPresentation.tab(operation.title) != ownerTab) return
-    if (!OperationPresentation.isCancelable(operation)) return
-    TextButton(
-        onClick = { onIntent(UiIntent.CancelOperation(operation.token)) },
-        modifier = modifier.heightIn(min = 48.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.action_cancel),
-            color = MaterialTheme.colorScheme.error,
-        )
+    val token = OperationPresentation.cancelToken(
+        progress = state.operation,
+        ownerTab = ownerTab,
+        matchesTitle = matchesTitle,
+    )
+    when {
+        token != null && applyButton != null -> {
+            Button(
+                onClick = { onIntent(UiIntent.CancelOperation(token)) },
+                modifier = modifier,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        }
+        token != null && applyButton == null -> {
+            TextButton(
+                onClick = { onIntent(UiIntent.CancelOperation(token)) },
+                modifier = modifier.heightIn(min = 48.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.action_cancel),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        token == null && applyButton != null -> {
+            Button(
+                onClick = applyButton.onClick,
+                enabled = applyButton.enabled,
+                modifier = modifier,
+                colors = applyButton.colors ?: ButtonDefaults.buttonColors(),
+            ) {
+                Text(applyButton.label)
+            }
+        }
     }
 }
 
