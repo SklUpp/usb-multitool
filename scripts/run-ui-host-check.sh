@@ -50,6 +50,11 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ui/RawTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RescueBackupTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/VentoyTransitions.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/OperationReducer.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/FilesReducer.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/PartitionsReducer.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/VentoyReducer.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/DiagnosticsReducer.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiReducer.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/TestIntents.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/UiStateHostCheck.kt"

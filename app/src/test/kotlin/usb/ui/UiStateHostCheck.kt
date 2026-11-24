@@ -6,7 +6,7 @@ import usb.partition.TableScheme
 
 /**
  * Host-runnable assert self-check (no Android/Compose).
- * Compile with kotlinc against UiModels.kt + UiReducer.kt.
+ * Compile with kotlinc against UiModels + feature reducers + UiReducer.
  */
 object UiStateHostCheck {
     @JvmStatic

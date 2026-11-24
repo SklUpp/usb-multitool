@@ -6,7 +6,21 @@ import usb.ventoy.AutounattendState
  * Pure operation lifecycle transitions. [UiReducer.reduce] remains the entry point; this object
  * owns token fencing, operation status mapping, cancellation, and terminal cache refreshes.
  */
-internal object OperationTransitions {
+internal object OperationReducer {
+    fun reduce(state: AppUiState, intent: UiIntent): ReduceResult? = when (intent) {
+        is UiIntent.OperationBegan -> progress(state, intent.progress, begin = true)
+        is UiIntent.OperationUpdated -> progress(state, intent.progress, begin = false)
+        is UiIntent.OperationCleared ->
+            if (state.operation?.token == intent.token) {
+                ReduceResult(state.copy(operation = null, operationLogLines = emptyList()))
+            } else {
+                ReduceResult(state)
+            }
+        is UiIntent.OperationCompletionEffects -> completion(state, intent)
+        is UiIntent.CancelOperation -> cancel(state, intent.token)
+        else -> null
+    }
+
     fun progress(
         state: AppUiState,
         progress: OperationProgress,
