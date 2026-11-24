@@ -231,7 +231,9 @@ internal object FilesReducer {
         is UiIntent.DownloadFile -> {
             val bindingValid =
                 if (intent.fromPicker) {
-                    intent.binding.matchesAttachment(state) && !intent.binding.listedSizeChanged(state)
+                    // The picker result may race a listing refresh. The download service
+                    // re-stats this exact path and reports a real mismatch itself.
+                    intent.binding.matchesAttachment(state)
                 } else {
                     intent.binding.matches(state)
                 }
