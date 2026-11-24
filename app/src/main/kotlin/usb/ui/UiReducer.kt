@@ -247,7 +247,8 @@ sealed class UiIntent {
     data class RawSourceCandidatesFailed(
         val generation: Long,
         val identity: String?,
-        val message: String,
+        val failure: OperationFailure? = null,
+        val diagnostic: String? = null,
     ) : UiIntent()
 
     /** Stage [path] from the selected partition; selection alone never writes. */
@@ -791,7 +792,8 @@ sealed class UiIntent {
      */
     data class FilesListFailed(
         val path: String,
-        val message: String,
+        val failure: OperationFailure? = null,
+        val diagnostic: String? = null,
         val generation: Long,
         val identity: String?,
         val partitionId: String,
@@ -1347,7 +1349,7 @@ object UiReducer {
                         selectedPartitionId = intent.partitionId,
                         currentPath = "/",
                         files = emptyList(),
-                        filesError = null,
+                        filesFailure = null,
                         filesListGeneration = state.filesListGeneration + 1L,
                         filesListingState = FilesListingState.Loading,
                         filesystemUsage = null,
@@ -1358,7 +1360,7 @@ object UiReducer {
                         rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
                         rawSourceCandidatesIdentity = null,
                         rawSourceCandidatesTruncated = false,
-                        rawSourceCandidatesError = null,
+                        rawSourceCandidatesFailure = null,
                         pendingIsoImport = null,
                         deferredIsoImport = null,
                         isoImportError = null,
@@ -1675,7 +1677,7 @@ object UiReducer {
                         probingRetain -> state.files
                         else -> emptyList()
                     },
-                    filesError = if (probingRetain && !ejectStillPinned) state.filesError else null,
+                    filesFailure = if (probingRetain && !ejectStillPinned) state.filesFailure else null,
                     pendingFilesBatchConflict =
                         if (keepVentoy && !pickLost && !ejectStillPinned) state.pendingFilesBatchConflict else null,
                     filesListGeneration = filesGeneration,
@@ -1733,8 +1735,8 @@ object UiReducer {
                         if (probingRetain) state.rawSourceCandidatesIdentity else null,
                     rawSourceCandidatesTruncated =
                         if (probingRetain) state.rawSourceCandidatesTruncated else false,
-                    rawSourceCandidatesError =
-                        if (probingRetain) state.rawSourceCandidatesError else null,
+                    rawSourceCandidatesFailure =
+                        if (probingRetain) state.rawSourceCandidatesFailure else null,
                     windowsIsoCandidates =
                         if (keepVentoy) state.windowsIsoCandidates else null,
                     windowsIsoCandidatesGeneration =
@@ -2694,7 +2696,7 @@ object UiReducer {
                     ejectInFlight = false,
                     ejected = true,
                     files = emptyList(),
-                    filesError = null,
+                    filesFailure = null,
                     filesListingState = FilesListingState.Stale,
                     filesystemUsage = null,
                     partitionUsage = emptyMap(),
@@ -3018,7 +3020,7 @@ object UiReducer {
      * FatFs absence is the exact nativeList shape `list failed: FR_NO_FILE|FR_NO_PATH`
      * from fat_jni — never a bare trailing ": 5" from an unrelated I/O exception.
      * EXT/NTFS absence is the exact jni message `Path not found` (ENOENT only).
-     * Generic `directory listing failed` / EIO stay as [AppUiState.filesError].
+     * Generic `directory listing failed` / EIO stay as [AppUiState.filesFailure].
      */
     /**
      * Explicit reason writes to the selected partition are refused, or null when allowed.

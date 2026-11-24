@@ -536,7 +536,7 @@ class FilesVolumeSessionTest {
         assertTrue(publish is CloseDiagnosticPublish.LogOnly)
         assertEquals(
             "list failed: 5",
-            FilesOperationPolicy.primaryErrorMessage(primary),
+            FilesOperationPolicy.technicalDetail(primary),
         )
         assertSame(closeErr, session.close())
     }

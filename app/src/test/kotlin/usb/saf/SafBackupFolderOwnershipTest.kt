@@ -15,6 +15,8 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import usb.operation.ProviderRejectedException
+
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -137,6 +139,8 @@ class SafBackupFolderOwnershipTest {
         try {
             block()
         } catch (failure: IllegalArgumentException) {
+            return failure
+        } catch (failure: ProviderRejectedException) {
             return failure
         } catch (failure: IllegalStateException) {
             return failure

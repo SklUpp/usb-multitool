@@ -66,11 +66,17 @@ object RestoreSourceInspector {
                 sha256 = sha256(text.toByteArray(Charsets.UTF_8)),
             )
         } catch (failure: Exception) {
+            val typed = failure.toOperationFailure()
             RescueMapInspection(
                 uri = uri,
                 name = name,
                 sizeBytes = sizeBytes,
-                error = failure.message ?: failure.javaClass.simpleName,
+                failure = typed,
+                error = if (typed == null) {
+                    failure.message ?: failure.javaClass.simpleName
+                } else {
+                    null
+                },
             )
         }
 
@@ -123,11 +129,17 @@ object RestoreSourceInspector {
                 lastFailure = failure
             }
         }
+        val typed = lastFailure.toOperationFailure()
         return GptBackupInspection(
             uri = uri,
             name = name,
             sizeBytes = sizeBytes,
-            error = lastFailure?.message ?: "not a GPT critical backup",
+            failure = typed,
+            error = if (typed == null) {
+                lastFailure?.message ?: "not a GPT critical backup"
+            } else {
+                null
+            },
         )
     }
 

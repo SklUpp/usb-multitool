@@ -13,6 +13,8 @@ import usb.image.MeasurementHandle
 import usb.operation.DiskOperation
 import usb.saf.SafBackupFolder
 import usb.saf.SafDocument
+import usb.operation.SizeMismatchException
+
 
 /** Single-file and tree upload into a USB volume. */
 object UploadService {
@@ -81,7 +83,7 @@ object UploadService {
                 if (!operation.isActive()) throw CancellationException("Upload cancelled")
                 if (read <= 0) break
                 if (plannedTotal >= 0L && offset + read > plannedTotal) {
-                    throw IOException(
+                    throw SizeMismatchException(
                         "upload size mismatch: expected $plannedTotal bytes, stream exceeded it",
                     )
                 }
@@ -98,7 +100,7 @@ object UploadService {
                 operation.report(offset)
             }
             if (plannedTotal >= 0L && offset != plannedTotal) {
-                throw IOException(
+                throw SizeMismatchException(
                     "upload size mismatch: expected $plannedTotal bytes, got $offset",
                 )
             }

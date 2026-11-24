@@ -17,6 +17,9 @@ import usb.operation.OperationState
 import usb.saf.SafBackupFolder
 import usb.saf.SafCleanupPolicy
 import usb.saf.SafDocument
+import usb.operation.ProviderRejectedException
+import usb.operation.SizeMismatchException
+
 
 /** Single-file and tree download from USB into SAF. */
 object DownloadService {
@@ -43,7 +46,7 @@ object DownloadService {
             size = if (statSize == 0L && expectedSize != null && expectedSize > 0L) expectedSize else statSize
             operation.beginCurrentFile(size)
             if (expectedSize != null && expectedSize > 0L && statSize > 0L && statSize != expectedSize) {
-                error("source size changed: listed $expectedSize, now $statSize")
+                throw SizeMismatchException("source size changed: listed $expectedSize, now $statSize")
             }
             if (!operation.isActive()) throw CancellationException("Download cancelled")
             operation.mutationAttempted = true
@@ -382,7 +385,7 @@ object DownloadService {
                 TransferDecision.Skip -> return null
                 TransferDecision.Cancel -> throw CancellationException("Download cancelled")
                 TransferDecision.ReplaceFile ->
-                    throw IOException(
+                    throw ProviderRejectedException(
                         "Cannot safely replace existing SAF file \"$pathLabel\" with a directory: " +
                             "provider atomic rename is unavailable; choose another name or Skip",
                     )
@@ -461,7 +464,7 @@ object DownloadService {
             TransferDecision.Skip -> return null
             TransferDecision.Cancel -> throw CancellationException("Download cancelled")
             TransferDecision.ReplaceFile ->
-                throw IOException(
+                throw ProviderRejectedException(
                     "Cannot safely replace existing SAF file \"$pathLabel\": " +
                         "provider atomic rename is unavailable; choose another name or Skip",
                 )

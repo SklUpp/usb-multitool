@@ -21,14 +21,11 @@ import usb.formatEtaDuration
 import usb.operation.DiskOperationPhase
 import usb.remainingSeconds
 
-/** One service outcome, normalized once: UI state + authored failure text. */
+/** One service outcome, normalized once: UI state + typed failure. */
 data class OperationResult(
     val state: OperationState,
-    val errorMessage: String?,
+    val failure: OperationFailure?,
 ) {
-    /** Same string the old `serviceOperationErrorMessage` produced; null for clean terminals. */
-    fun toMessage(): String? = errorMessage
-
     fun toProgress(
         token: OperationToken,
         title: OperationTitle,
@@ -46,7 +43,7 @@ data class OperationResult(
                 state = OperationState.Failed,
                 title = title,
                 token = token,
-                errorMessage = errorMessage,
+                failure = failure,
                 cancelable = cancelable,
             )
             OperationState.Cancelled -> OperationProgress(
@@ -58,6 +55,7 @@ data class OperationResult(
                 resultMessage = resultMessage,
                 readScanResult = readScanResult,
                 smartResult = smartResult,
+                failure = failure,
                 cancelable = cancelable,
             )
             OperationState.Partial -> OperationProgress(
@@ -67,7 +65,7 @@ data class OperationResult(
                 bytesDone = bytesDone,
                 bytesTotal = bytesTotal,
                 resultMessage = resultMessage,
-                errorMessage = errorMessage,
+                failure = failure,
                 readScanResult = readScanResult,
                 smartResult = smartResult,
                 rawWriteResult = rawWriteResult,
@@ -97,7 +95,7 @@ data class OperationResult(
                 bytesDone = bytesDone,
                 bytesTotal = bytesTotal,
                 resultMessage = resultMessage,
-                errorMessage = errorMessage,
+                failure = failure,
                 readScanResult = readScanResult,
                 smartResult = smartResult,
                 rawWriteResult = rawWriteResult,
@@ -115,12 +113,10 @@ fun ServiceOperationState.toOperationResult(operationFailure: Throwable? = null)
         is ServiceOperationState.Partial -> OperationState.Partial
         is ServiceOperationState.Failed -> OperationState.Failed
     }
-    val errorMessage =
-        (this as? ServiceOperationState.Failed)?.cause?.message
-            ?: operationFailure?.message
-            ?: (this as? ServiceOperationState.Failed)?.cause?.javaClass?.simpleName
-            ?: operationFailure?.javaClass?.simpleName
-    return OperationResult(state = state, errorMessage = errorMessage)
+    val failure =
+        (this as? ServiceOperationState.Failed)?.cause?.toOperationFailure()
+            ?: operationFailure.toOperationFailure()
+    return OperationResult(state = state, failure = failure)
 }
 
 
@@ -206,6 +202,20 @@ object OperationPresentation {
             )
         } ?: operationStateLabel(state)
 
+    @androidx.annotation.StringRes
+    fun failureTextRes(failure: OperationFailure): Int =
+        when (failure) {
+            OperationFailure.Cancelled -> R.string.msg_failure_cancelled
+            OperationFailure.AttachmentChanged -> R.string.msg_failure_attachment_changed
+            OperationFailure.SizeMismatch -> R.string.msg_failure_size_mismatch
+            OperationFailure.SafIo -> R.string.msg_failure_io
+            OperationFailure.ProviderRejected -> R.string.msg_failure_provider_rejected
+        }
+
+    @Composable
+    fun failureText(failure: OperationFailure): String =
+        stringResource(failureTextRes(failure))
+
     @Composable
     fun lines(progress: OperationProgress): List<String> = operationProgressLines(progress)
 }
@@ -215,8 +225,7 @@ object OperationPresentation {
 fun operationProgressLines(progress: OperationProgress): List<String> = buildList {
     when {
         progress.title == OperationTitle.SelfTest -> {
-            progress.errorMessage?.lines()?.filter { it.isNotBlank() }?.let(::addAll)
-                ?: progress.resultMessage?.lines()?.filter { it.isNotBlank() }?.let(::addAll)
+            progress.resultMessage?.lines()?.filter { it.isNotBlank() }?.let(::addAll)
         }
         progress.title == OperationTitle.ReadScan -> {
             progress.readScanResult?.let { add(readScanSummary(it)) }
@@ -225,9 +234,11 @@ fun operationProgressLines(progress: OperationProgress): List<String> = buildLis
             progress.smartResult?.let { addAll(smartInspectionLines(it)) }
         }
         else -> {
-            (progress.errorMessage ?: progress.resultMessage)?.let {
-                add(normalizeProviderText(it))
-            }
+            // Structured outcome first; Cancelled failure never hides resultMessage.
+            progress.resultMessage?.let { add(normalizeProviderText(it)) }
+                ?: progress.failure
+                    ?.takeIf { it != OperationFailure.Cancelled }
+                    ?.let { add(OperationPresentation.failureText(it)) }
         }
     }
 }

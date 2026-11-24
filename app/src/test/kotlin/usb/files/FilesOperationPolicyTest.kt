@@ -123,10 +123,10 @@ class FilesOperationPolicyTest {
     }
 
     @Test
-    fun primaryErrorMessageKeepsPrimaryNotClose() {
+    fun technicalDetailKeepsPrimaryNotClose() {
         val primary = IOException("list failed: 5")
         mergeCloseFailure(primary, IOException("volume sync unconfirmed"))
-        assertEquals("list failed: 5", FilesOperationPolicy.primaryErrorMessage(primary))
+        assertEquals("list failed: 5", FilesOperationPolicy.technicalDetail(primary))
         assertEquals(1, primary.suppressed.size)
     }
 
@@ -175,7 +175,7 @@ class FilesOperationPolicyTest {
                 opStillCurrent = true,
             )
         assertTrue(d is CloseDiagnosticPublish.LogOnly)
-        assertEquals("cancelled", FilesOperationPolicy.primaryErrorMessage(cancel))
+        assertEquals("cancelled", FilesOperationPolicy.technicalDetail(cancel))
     }
 
     @Test

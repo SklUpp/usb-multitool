@@ -32,6 +32,8 @@ import usb.fs.UsbFsDirEntry
 import usb.fs.UsbFsVolume
 import usb.operation.DiskOperation
 import usb.operation.OperationState
+import usb.operation.ProviderRejectedException
+
 import usb.saf.SafDocument
 import usb.image.ImageStaging
 import usb.ui.FilesConflict
@@ -249,7 +251,7 @@ class FilesOperationsBatchTest {
         val old = saf.createExclusiveFile(saf.root, "a.bin", "application/octet-stream")
         resolver.seedOutput(old, byteArrayOf(1, 2, 3))
         val op = DiskOperation("dl-replace-closed")
-        val thrown = assertThrows(IOException::class.java) {
+        val thrown = assertThrows(ProviderRejectedException::class.java) {
             FilesOperations.downloadTree(
                 resolver = resolver.resolver,
                 volume = volume,
@@ -589,7 +591,7 @@ class FilesOperationsBatchTest {
         )
         val op = DiskOperation("dl-resume-nested")
         var decisions = 0
-        val thrown = assertThrows(IOException::class.java) {
+        val thrown = assertThrows(ProviderRejectedException::class.java) {
             FilesOperations.downloadChildren(
                 resolver = resolver.resolver,
                 volume = volume,

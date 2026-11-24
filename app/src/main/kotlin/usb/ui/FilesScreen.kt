@@ -131,7 +131,7 @@ internal fun directoryContentKey(
         attachGeneration = state.device?.attachGeneration?.toString().orEmpty(),
         listGeneration = state.filesListGeneration.toString(),
         listingState = state.filesListingState.name,
-        error = state.filesError.orEmpty(),
+        error = state.filesFailure?.toString().orEmpty(),
         files = state.files,
         visibleFiles = visibleFiles,
     )
@@ -1068,7 +1068,7 @@ private fun FolderCard(
         rows.filter { it.name.contains(fileFilter.trim(), ignoreCase = true) }
     }
     val rowsState = state.filesListingState.name
-    val rowsError = state.filesError
+    val rowsFailure = state.filesFailure
     val locked = state.deviceBusy
     Column(modifier = modifier.fillMaxSize()) {
         Surface(
@@ -1138,7 +1138,7 @@ private fun FolderCard(
                     }
                     rowsState == FilesListingState.Failed.name -> item(key = "error") {
                         EmptyHint(
-                            rowsError?.let(::normalizeProviderText)
+                            rowsFailure?.let { OperationPresentation.failureText(it) }
                                 ?: stringResource(R.string.import_folder_read_failed),
                             modifier = Modifier.padding(16.dp),
                         )

@@ -1,7 +1,6 @@
 package usb.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,11 +35,12 @@ class RawSourceCandidatesFreshnessTest {
                 UiIntent.RawSourceCandidatesFailed(
                     generation = 5L,
                     identity = device.identity,
-                    message = "chooser I/O",
+                    failure = OperationFailure.SafIo,
+                    diagnostic = "chooser I/O",
                 ),
             )
-        assertEquals("chooser I/O", failed.state.rawSourceCandidatesError)
-        assertEquals(UiMessage.Raw("chooser I/O"), failed.state.statusMessage)
+        assertEquals(OperationFailure.SafIo, failed.state.rawSourceCandidatesFailure)
+        assertEquals(UiMessage.Failure(OperationFailure.SafIo), failed.state.statusMessage)
         assertEquals(emptyList<RawSourceCandidate>(), failed.state.rawSourceCandidates)
     }
 
@@ -63,11 +63,12 @@ class RawSourceCandidatesFreshnessTest {
                 UiIntent.RawSourceCandidatesFailed(
                     generation = 5L,
                     identity = device.identity,
-                    message = "late chooser A",
+                    failure = OperationFailure.SafIo,
+                    diagnostic = "late chooser A",
                 ),
             )
         // Bound chooser still gets the error.
-        assertEquals("late chooser A", failed.state.rawSourceCandidatesError)
+        assertEquals(OperationFailure.SafIo, failed.state.rawSourceCandidatesFailure)
         assertEquals(emptyList<RawSourceCandidate>(), failed.state.rawSourceCandidates)
         // Global status stays with mutation B.
         assertEquals(UiMessage.Raw("op-B-running"), failed.state.statusMessage)
@@ -89,10 +90,11 @@ class RawSourceCandidatesFreshnessTest {
                 UiIntent.RawSourceCandidatesFailed(
                     generation = 5L,
                     identity = device.identity,
-                    message = "chooser cancel",
+                    failure = OperationFailure.Cancelled,
+                    diagnostic = "chooser cancel",
                 ),
             )
-        assertEquals("chooser cancel", failed.state.rawSourceCandidatesError)
+        assertEquals(OperationFailure.Cancelled, failed.state.rawSourceCandidatesFailure)
         assertEquals(UiMessage.Raw("queued-B"), failed.state.statusMessage)
         assertTrue(failed.state.logLines.any { "chooser cancel" in it })
     }
@@ -106,10 +108,11 @@ class RawSourceCandidatesFreshnessTest {
                 UiIntent.RawSourceCandidatesFailed(
                     generation = 5L,
                     identity = device.identity,
-                    message = "late chooser A",
+                    failure = OperationFailure.SafIo,
+                    diagnostic = "late chooser A",
                 ),
             )
-        assertNull(stale.state.rawSourceCandidatesError)
+        assertNull(stale.state.rawSourceCandidatesFailure)
         assertEquals(UiMessage.Raw("op-B-running"), stale.state.statusMessage)
         assertTrue(stale.state.logLines.any { it.contains("stale") && it.contains("late chooser A") })
     }
@@ -123,19 +126,20 @@ class RawSourceCandidatesFreshnessTest {
                 UiIntent.RawSourceCandidatesFailed(
                     generation = 5L,
                     identity = "other#serial",
-                    message = "wrong stick",
+                    failure = OperationFailure.SafIo,
+                    diagnostic = "wrong stick",
                 ),
             )
-        assertNull(stale.state.rawSourceCandidatesError)
+        assertNull(stale.state.rawSourceCandidatesFailure)
         assertEquals(UiMessage.Raw("op-B-running"), stale.state.statusMessage)
         assertTrue(stale.state.logLines.any { it.contains("wrong stick") })
     }
 
     @Test
     fun loadClearsPriorError() {
-        val dirty = ready().copy(rawSourceCandidatesError = "old")
+        val dirty = ready().copy(rawSourceCandidatesFailure = OperationFailure.SafIo)
         val loaded = UiReducer.reduce(dirty, UiIntent.LoadRawSourceCandidates)
-        assertNull(loaded.state.rawSourceCandidatesError)
+        assertNull(loaded.state.rawSourceCandidatesFailure)
         assertTrue(loaded.effects.any { it is UiEffect.LoadRawSources })
     }
 }

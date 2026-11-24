@@ -159,8 +159,8 @@ object FilesOperationPolicy {
         return CloseDiagnosticPublish.LogOnly(log)
     }
 
-    /** Primary UI message: never replace with close-only text. */
-    fun primaryErrorMessage(cause: Throwable): String =
+    /** Journal/log detail only — never render in user-facing status/rows. */
+    fun technicalDetail(cause: Throwable): String =
         cause.message ?: cause.javaClass.simpleName
 }
 

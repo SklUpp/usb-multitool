@@ -260,7 +260,7 @@ Java_usb_fs_ExtFs_nativeList(JNIEnv *env, jclass, jlong handle, jstring path)
     if (rc != 0) {
         // Match ntfs_jni / delete path: only ENOENT is path-absent (UI may fall back to
         // root). EIO and other faults keep a generic listing-failed message so they
-        // surface as filesError, never as a silent empty folder.
+        // surface as filesFailure, never as a silent empty folder.
         const char *msg = "directory listing failed";
         if (rc == -EOVERFLOW) {
             msg = "directory listing exceeds the supported entry count";

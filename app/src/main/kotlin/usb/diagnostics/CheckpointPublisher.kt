@@ -1,6 +1,8 @@
 package usb.diagnostics
 
 import java.io.IOException
+import usb.operation.ProviderRejectedException
+
 
 /**
  * Document operations used by [CheckpointPublisher]. Implementations must create a new
@@ -30,8 +32,10 @@ fun CheckpointStore.probeWriteSupport(name: String) {
     try {
         writeAndSync(document, PROBE_TEXT)
         val readBack = readText(document, PROBE_TEXT.length)
-        require(readBack == PROBE_TEXT) {
-            "provider did not return the bytes written; fsync/read capability unsupported"
+        if (readBack != PROBE_TEXT) {
+            throw ProviderRejectedException(
+                "provider did not return the bytes written; fsync/read capability unsupported",
+            )
         }
     } finally {
         runCatching { delete(document) }

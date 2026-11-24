@@ -354,7 +354,7 @@ class VentoyUiStateTest {
                 state = OperationState.Partial,
                 token = OperationTokenGenerator.next(),
                 title = OperationTitle.Destructive(DestructiveAction.RAW_WRITE),
-                errorMessage = "transport cut",
+                failure = OperationFailure.SafIo,
             ),
         ).state
         assertNull(next.ventoyFolders)
@@ -507,7 +507,7 @@ class VentoyUiStateTest {
                     state = terminal,
                     token = OperationTokenGenerator.next(),
                     title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                    errorMessage = "x",
+                    failure = OperationFailure.SafIo,
                 ),
             ).state
             assertNull(next.ventoyGlobalSettings)
@@ -1072,7 +1072,7 @@ class VentoyUiStateTest {
                     state = OperationState.Partial,
                     token = operationToken,
                     title = OperationTitle.DeleteEntry("gone.bin"),
-                    errorMessage = "partial",
+                    failure = OperationFailure.SafIo,
                 ),
             ),
         )
@@ -1678,7 +1678,7 @@ class VentoyUiStateTest {
                     state = OperationState.Failed,
                     token = importToken,
                     title = OperationTitle.ImportTarget("win.iso"),
-                    errorMessage = "import folder is gone",
+                    failure = OperationFailure.SafIo,
                 ),
             ),
         )

@@ -369,7 +369,7 @@ internal object FilesReducer {
                 ReduceResult(
                     state.copy(
                         files = intent.files,
-                        filesError = null,
+                        filesFailure = null,
                         filesListingState = FilesListingState.Loaded,
                     ),
                 )
@@ -389,7 +389,7 @@ internal object FilesReducer {
             } else if (
                 intent.path != "/" &&
                 intent.path.isNotEmpty() &&
-                isMissingDirectoryListError(intent.message)
+                isMissingDirectoryListError(intent.diagnostic.orEmpty())
             ) {
                 // Only a proven absent directory falls back to root. Unknown I/O
                 // stays visible so a disk error is never painted as "empty folder".
@@ -398,19 +398,25 @@ internal object FilesReducer {
                     state.copy(
                         currentPath = "/",
                         files = emptyList(),
-                        filesError = null,
+                        filesFailure = null,
                         filesListGeneration = generation,
                         filesListingState = FilesListingState.Loading,
-                    ).withStatus(UiMessage.Raw(intent.message)),
+                    ).withStatus(
+                        intent.failure?.let(UiMessage::Failure)
+                            ?: UiMessage.Key(UiMessageKey.FailedStatus),
+                    ),
                     effects = listOf(UiEffect.LoadFiles(path = "/")),
                 )
             } else {
                 ReduceResult(
                     state.copy(
                         files = emptyList(),
-                        filesError = intent.message,
+                        filesFailure = intent.failure,
                         filesListingState = FilesListingState.Failed,
-                    ).withStatus(UiMessage.Raw(intent.message)),
+                    ).withStatus(
+                        intent.failure?.let(UiMessage::Failure)
+                            ?: UiMessage.Key(UiMessageKey.FailedStatus),
+                    ),
                 )
             }
 
@@ -621,7 +627,7 @@ internal object FilesReducer {
      * FatFs absence is the exact nativeList shape `list failed: FR_NO_FILE|FR_NO_PATH`
      * from fat_jni — never a bare trailing ": 5" from an unrelated I/O exception.
      * EXT/NTFS absence is the exact jni message `Path not found` (ENOENT only).
-     * Generic `directory listing failed` / EIO stay as [AppUiState.filesError].
+     * Generic `directory listing failed` / EIO stay as [AppUiState.filesFailure].
      */
     internal fun isMissingDirectoryListError(message: String): Boolean {
         val m = message

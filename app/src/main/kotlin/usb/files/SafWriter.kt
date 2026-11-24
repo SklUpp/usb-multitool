@@ -8,6 +8,8 @@ import java.io.OutputStream
 import usb.saf.SafCleanupPolicy
 import usb.saf.SafOpenPolicy
 import usb.saf.SafOpenResult
+import usb.operation.SizeMismatchException
+
 
 class SafWriteException(
     val bytesWritten: Long,
@@ -35,11 +37,11 @@ class SafWriter(
         try {
             offset = writeSynced(destination) { stream -> writer(stream).also { offset = it } }
             if (offset != expectedSize) {
-                error("download size mismatch: got $offset, expected $expectedSize")
+                throw SizeMismatchException("download size mismatch: got $offset, expected $expectedSize")
             }
             reportedSize = OpenableSafHelpers.openableSizeBytes(resolver, destination)
             if (expectedSize > 0L && reportedSize == 0L) {
-                error("provider reports empty destination after $expectedSize bytes")
+                throw SizeMismatchException("provider reports empty destination after $expectedSize bytes")
             }
             return offset
         } catch (failure: Throwable) {

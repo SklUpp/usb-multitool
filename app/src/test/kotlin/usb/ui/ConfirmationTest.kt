@@ -143,10 +143,10 @@ class UiStateMachineTest {
                 OperationState.Failed,
                 OperationTitle.Destructive(DestructiveAction.WIPE),
                 token = OperationTokenGenerator.next(),
-                errorMessage = "I/O error",
+                failure = OperationFailure.SafIo,
             ),
         )
-        assertEquals(UiMessage.Raw("I/O error"), failed.state.statusMessage)
+        assertEquals(UiMessage.Failure(OperationFailure.SafIo), failed.state.statusMessage)
 
         val partial = reduceTerminalOperation(
             base,
@@ -154,7 +154,7 @@ class UiStateMachineTest {
                 OperationState.Partial,
                 OperationTitle.RescueBackup,
                 token = OperationTokenGenerator.next(),
-                errorMessage = "Partial rescue map retained",
+                resultMessage = "Partial rescue map retained",
             ),
         )
         assertEquals(UiMessage.Raw("Partial rescue map retained"), partial.state.statusMessage)

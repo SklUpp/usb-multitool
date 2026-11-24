@@ -116,6 +116,9 @@ sealed interface UiMessage {
 
     data class Raw(val text: String) : UiMessage
 
+    /** Typed operation failure; Compose maps once via OperationPresentation.failureText. */
+    data class Failure(val failure: OperationFailure) : UiMessage
+
     /** Structured read-scan outcome; Compose formats via string resources (language-switch safe). */
     data class ReadScan(val outcome: ReadScanOutcome) : UiMessage
 
@@ -686,8 +689,8 @@ data class AppUiState(
     val filesListGeneration: Long = 0L,
     /** Current directory listing lifecycle; Stale is deferred demand, Loading emitted LoadFiles. */
     val filesListingState: FilesListingState = FilesListingState.Stale,
-    /** Real directory-list failure detail; non-null only after [FilesListingState.Failed]. */
-    val filesError: String? = null,
+    /** Real directory-list failure; non-null only after [FilesListingState.Failed]. */
+    val filesFailure: OperationFailure? = null,
     /**
      * Active batch name conflict awaiting Skip/ReplaceFile/Cancel. Cleared by
      * ResolveFilesBatchConflict; continuation parks outside AppUiState.
@@ -777,7 +780,7 @@ data class AppUiState(
      * Bound scan failure for the current [rawSourceCandidatesGeneration].
      * Stale chooser errors must not land here or in [statusMessage].
      */
-    val rawSourceCandidatesError: String? = null,
+    val rawSourceCandidatesFailure: OperationFailure? = null,
     val windowsIsoCandidates: List<RawSourceCandidate>? = null,
     val windowsIsoCandidatesGeneration: Long = 0L,
     val windowsIsoCandidatesIdentity: String? = null,

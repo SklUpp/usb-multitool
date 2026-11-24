@@ -84,14 +84,15 @@ object UiStateHostCheck {
                 ready,
                 UiIntent.FilesListFailed(
                     path = "/",
-                    message = "Read failed",
+                    failure = OperationFailure.SafIo,
+                    diagnostic = "Read failed",
                     generation = ready.filesListGeneration,
                     identity = device.identity,
                     partitionId = "1",
                     attachGeneration = device.attachGeneration,
                 ),
             )
-        require(listFailed.state.filesError == "Read failed")
+        require(listFailed.state.filesFailure == OperationFailure.SafIo)
         val retry = UiReducer.reduce(listFailed.state, UiIntent.RefreshFiles)
         val listRecovered =
             UiReducer.reduce(
@@ -105,13 +106,13 @@ object UiStateHostCheck {
                     attachGeneration = device.attachGeneration,
                 ),
             )
-        require(listRecovered.state.filesError == null) { "successful listing must clear filesError" }
+        require(listRecovered.state.filesFailure == null) { "successful listing must clear filesFailure" }
         require(
             UiReducer.reduce(
                 listFailed.state,
                 UiIntent.DeviceChanged(DevicePresence.Ready, device, partitions = ready.partitions),
-            ).state.filesError == null,
-        ) { "device change must clear filesError" }
+            ).state.filesFailure == null,
+        ) { "device change must clear filesFailure" }
 
         val maxMib = PartitionRangeMath.availableMib(16_777_219UL * 2048UL, 2048UL)
         require(maxMib == 16_777_219UL)

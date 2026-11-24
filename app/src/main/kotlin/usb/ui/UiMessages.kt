@@ -24,6 +24,7 @@ fun normalizeProviderText(text: String): String =
 fun UiMessage.localized(): String =
     when (this) {
         is UiMessage.Raw -> normalizeProviderText(text)
+        is UiMessage.Failure -> OperationPresentation.failureText(failure)
         is UiMessage.ReadScan -> readScanSummary(outcome)
         is UiMessage.Smart -> smartSummary(outcome)
 
@@ -128,7 +129,7 @@ fun UiMessage.localized(): String =
             UiMessageKey.ArchiveUnexpectedFiles ->
                 stringResource(R.string.msg_archive_unexpected_files, *safeArgs.toTypedArray())
             UiMessageKey.ArchiveUnreadable ->
-                stringResource(R.string.msg_archive_unreadable, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_archive_unreadable)
             UiMessageKey.SourceInspectionRejected ->
                 stringResource(R.string.msg_source_inspection_rejected, *safeArgs.toTypedArray())
             UiMessageKey.RescueMapSectorSizeMismatch ->
@@ -165,21 +166,21 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_staging_leftovers, *safeArgs.toTypedArray())
             UiMessageKey.StaleStagedImage -> stringResource(R.string.msg_stale_staged_image)
             UiMessageKey.CannotDeleteStaging ->
-                stringResource(R.string.msg_cannot_delete_staging, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_cannot_delete_staging)
             UiMessageKey.CannotStage -> stringResource(R.string.msg_cannot_stage)
             UiMessageKey.CannotReadUsb ->
-                stringResource(R.string.msg_cannot_read_usb, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_cannot_read_usb)
             UiMessageKey.CannotReadPartitionTable ->
-                stringResource(R.string.msg_cannot_read_partition_table, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_cannot_read_partition_table)
             UiMessageKey.FolderListChanged -> stringResource(R.string.msg_folder_list_changed)
             UiMessageKey.CreatedFolder ->
                 stringResource(R.string.msg_created_folder, *safeArgs.toTypedArray())
             UiMessageKey.DeletedPath -> stringResource(R.string.msg_deleted_path, *safeArgs.toTypedArray())
             UiMessageKey.UploadedFile -> stringResource(R.string.msg_uploaded_file, *safeArgs.toTypedArray())
             UiMessageKey.CannotOpenUsb ->
-                stringResource(R.string.msg_cannot_open_usb, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_cannot_open_usb)
             UiMessageKey.VolumeSyncUnconfirmed ->
-                stringResource(R.string.msg_volume_sync_unconfirmed, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_volume_sync_unconfirmed)
             UiMessageKey.EjectSucceeded ->
                 stringResource(R.string.msg_eject_succeeded, *safeArgs.toTypedArray())
             UiMessageKey.EjectStarted -> stringResource(R.string.msg_eject_started)
@@ -188,7 +189,7 @@ fun UiMessage.localized(): String =
             UiMessageKey.EjectRescanRequired ->
                 stringResource(R.string.msg_eject_rescan_required)
             UiMessageKey.DeleteStagingFailed ->
-                stringResource(R.string.msg_delete_staging_failed, *safeArgs.toTypedArray())
+                stringResource(R.string.msg_delete_staging_failed)
             UiMessageKey.InvalidEntryName -> stringResource(R.string.msg_invalid_entry_name)
             UiMessageKey.RenameSameName -> stringResource(R.string.msg_rename_same_name)
             UiMessageKey.RenamedPath ->
@@ -754,6 +755,9 @@ fun smartInspectionLines(outcome: SmartOutcome): List<String> {
 fun rescueMapInspectionLines(inspection: RescueMapInspection?): List<String> {
     val unavailable = stringResource(R.string.diagnostics_inspection_unavailable)
     if (inspection == null) return listOf(unavailable)
+    inspection.failure?.let {
+        return listOf(OperationPresentation.failureText(it))
+    }
     inspection.error?.let {
         return listOf(
             stringResource(R.string.diagnostics_inspection_failed, normalizeProviderText(it)),
@@ -788,6 +792,9 @@ fun rescueMapInspectionLines(inspection: RescueMapInspection?): List<String> {
 fun gptBackupInspectionLines(inspection: GptBackupInspection?): List<String> {
     val unavailable = stringResource(R.string.diagnostics_inspection_unavailable)
     if (inspection == null) return listOf(unavailable)
+    inspection.failure?.let {
+        return listOf(OperationPresentation.failureText(it))
+    }
     inspection.error?.let {
         return listOf(
             stringResource(R.string.diagnostics_inspection_failed, normalizeProviderText(it)),

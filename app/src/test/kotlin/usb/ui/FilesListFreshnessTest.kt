@@ -62,7 +62,8 @@ class FilesListFreshnessTest {
 
     private fun AppUiState.listFailed(
         path: String = currentPath,
-        message: String,
+        failure: OperationFailure? = null,
+        diagnostic: String? = null,
         generation: Long = filesListGeneration,
         identity: String? = device?.identity,
         partitionId: String = selectedPartitionId ?: "",
@@ -70,7 +71,8 @@ class FilesListFreshnessTest {
     ): UiIntent.FilesListFailed =
         UiIntent.FilesListFailed(
             path = path,
-            message = message,
+            failure = failure,
+            diagnostic = diagnostic,
             generation = generation,
             identity = identity,
             partitionId = partitionId,
@@ -94,7 +96,7 @@ class FilesListFreshnessTest {
         assertEquals("/ISO", refreshed.state.currentPath)
         assertTrue(refreshed.state.files.isEmpty())
         assertEquals(FilesListingState.Loading, refreshed.state.filesListingState)
-        assertNull(refreshed.state.filesError)
+        assertNull(refreshed.state.filesFailure)
         assertEquals(base.filesListGeneration + 1L, refreshed.state.filesListGeneration)
         val refreshedFiles = refreshed.effects.single() as UiEffect.LoadFiles
         assertEquals("/ISO", refreshedFiles.path)
@@ -183,7 +185,7 @@ class FilesListFreshnessTest {
         val applied = UiReducer.reduce(pending, pending.listed(files = entries))
         assertEquals(entries, applied.state.files)
         assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
-        assertNull(applied.state.filesError)
+        assertNull(applied.state.filesFailure)
     }
 
     @Test
@@ -192,7 +194,7 @@ class FilesListFreshnessTest {
         val applied = UiReducer.reduce(pending, pending.listed(files = emptyList()))
         assertTrue(applied.state.files.isEmpty())
         assertEquals(FilesListingState.Loaded, applied.state.filesListingState)
-        assertNull(applied.state.filesError)
+        assertNull(applied.state.filesFailure)
     }
 
     @Test
@@ -212,7 +214,7 @@ class FilesListFreshnessTest {
             )
         assertTrue(stale.state.files.isEmpty())
         assertEquals(FilesListingState.Loading, stale.state.filesListingState)
-        assertNull(stale.state.filesError)
+        assertNull(stale.state.filesFailure)
 
         val live =
             listOf(FileEntry("from-other.bin", isDirectory = false, sizeBytes = 4uL))
@@ -286,8 +288,8 @@ class FilesListFreshnessTest {
     @Test
     fun matchingFailureClearsPendingAndSetsError() {
         val pending = ready(files = emptyList(), pending = true, generation = 8L)
-        val failed = UiReducer.reduce(pending, pending.listFailed(message = "I/O error"))
-        assertEquals("I/O error", failed.state.filesError)
+        val failed = UiReducer.reduce(pending, pending.listFailed(failure = OperationFailure.SafIo))
+        assertEquals(OperationFailure.SafIo, failed.state.filesFailure)
         assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.state.files.isEmpty())
     }
@@ -299,9 +301,9 @@ class FilesListFreshnessTest {
         val stale =
             UiReducer.reduce(
                 switched,
-                onData.listFailed(message = "late fail", generation = 2L, partitionId = data.id),
+                onData.listFailed(failure = OperationFailure.SafIo, diagnostic = "late fail", generation = 2L, partitionId = data.id),
             )
-        assertNull(stale.state.filesError)
+        assertNull(stale.state.filesFailure)
         assertEquals(FilesListingState.Loading, stale.state.filesListingState)
     }
 
@@ -393,10 +395,10 @@ class FilesListFreshnessTest {
     fun deepPathMissingFallsBackToRoot() {
         val pending =
             ready(path = "/gone/after/format", files = emptyList(), pending = true, generation = 6L)
-        val failed = UiReducer.reduce(pending, pending.listFailed(message = "Path not found: /gone/after/format"))
+        val failed = UiReducer.reduce(pending, pending.listFailed(diagnostic = "Path not found: /gone/after/format"))
         assertEquals("/", failed.state.currentPath)
         assertEquals(FilesListingState.Loading, failed.state.filesListingState)
-        assertNull(failed.state.filesError)
+        assertNull(failed.state.filesFailure)
         assertEquals(7L, failed.state.filesListGeneration)
         val failedFiles = failed.effects.single() as UiEffect.LoadFiles
         assertEquals("/", failedFiles.path)
@@ -405,9 +407,9 @@ class FilesListFreshnessTest {
         val rootFail =
             UiReducer.reduce(
                 failed.state,
-                failed.state.listFailed(message = "I/O error"),
+                failed.state.listFailed(failure = OperationFailure.SafIo),
             )
-        assertEquals("I/O error", rootFail.state.filesError)
+        assertEquals(OperationFailure.SafIo, rootFail.state.filesFailure)
         assertEquals(FilesListingState.Failed, rootFail.state.filesListingState)
         assertTrue(rootFail.effects.isEmpty())
     }
@@ -416,9 +418,9 @@ class FilesListFreshnessTest {
     fun deepPathUnknownIoErrorStaysVisible() {
         val pending =
             ready(path = "/ISO", files = emptyList(), pending = true, generation = 6L)
-        val failed = UiReducer.reduce(pending, pending.listFailed(message = "disk read failed"))
+        val failed = UiReducer.reduce(pending, pending.listFailed(failure = OperationFailure.SafIo, diagnostic = "disk read failed"))
         assertEquals("/ISO", failed.state.currentPath)
-        assertEquals("disk read failed", failed.state.filesError)
+        assertEquals(OperationFailure.SafIo, failed.state.filesFailure)
         assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.effects.isEmpty())
     }
@@ -432,10 +434,10 @@ class FilesListFreshnessTest {
         val stale =
             UiReducer.reduce(
                 atRoot,
-                deep.listFailed(path = "/ISO", message = "Path not found: /ISO", generation = 2L),
+                deep.listFailed(path = "/ISO", diagnostic = "Path not found: /ISO", generation = 2L),
             )
         assertEquals("/", stale.state.currentPath)
-        assertNull(stale.state.filesError)
+        assertNull(stale.state.filesFailure)
         assertEquals(FilesListingState.Loading, stale.state.filesListingState)
     }
 
@@ -649,10 +651,10 @@ class FilesListFreshnessTest {
             ready(path = "/gone/on/ext", files = emptyList(), pending = true, generation = 6L)
         // Message from fixed ext_jni ENOENT branch (same as NTFS list).
         val failed =
-            UiReducer.reduce(pending, pending.listFailed(message = "Path not found"))
+            UiReducer.reduce(pending, pending.listFailed(diagnostic = "Path not found"))
         assertEquals("/", failed.state.currentPath)
         assertEquals(FilesListingState.Loading, failed.state.filesListingState)
-        assertNull(failed.state.filesError)
+        assertNull(failed.state.filesFailure)
         assertTrue(failed.effects.single() is UiEffect.LoadFiles)
     }
 
@@ -663,10 +665,10 @@ class FilesListFreshnessTest {
         val failed =
             UiReducer.reduce(
                 pending,
-                pending.listFailed(message = "directory listing failed"),
+                pending.listFailed(failure = null, diagnostic = "directory listing failed"),
             )
         assertEquals("/ISO", failed.state.currentPath)
-        assertEquals("directory listing failed", failed.state.filesError)
+        assertNull(failed.state.filesFailure)
         assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.effects.isEmpty())
     }
@@ -942,7 +944,7 @@ class FilesListFreshnessTest {
                     state = OperationState.Failed,
                     token = token,
                     title = OperationTitle.DeleteEntry("old.bin"),
-                    errorMessage = "delete failed",
+                    failure = OperationFailure.SafIo,
                 ),
             ),
         )
@@ -984,7 +986,7 @@ class FilesListFreshnessTest {
                         state = OperationState.Partial,
                         token = token,
                         title = OperationTitle.DeleteEntry("old.bin"),
-                        errorMessage = "partial",
+                        failure = OperationFailure.SafIo,
                     ),
                 ),
             )
@@ -1063,7 +1065,7 @@ class FilesListFreshnessTest {
                         state = OperationState.Partial,
                         token = token,
                         title = OperationTitle.UploadBatch(3),
-                        errorMessage = "partial",
+                        failure = OperationFailure.SafIo,
                     ),
                 ),
             )

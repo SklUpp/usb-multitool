@@ -18,6 +18,8 @@ import usb.diagnostics.CheckpointStore
 import usb.diagnostics.RescueArchiveTarget
 import usb.diagnostics.RescueMap
 import usb.diagnostics.RescueSink
+import usb.operation.ProviderRejectedException
+
 
 /** One document from a SAF tree; no platform type escapes into the UI/reducer. */
 data class SafDocument(
@@ -159,7 +161,7 @@ class SafBackupFolder(
         val createdId = try {
             DocumentsContract.getDocumentId(created)
         } catch (failure: Throwable) {
-            throw IllegalStateException(
+            throw ProviderRejectedException(
                 "SAF provider returned invalid document URI for folder $name: $created; retained returned document $created",
                 failure,
             )
@@ -168,7 +170,7 @@ class SafBackupFolder(
         val document = try {
             queryDocument(scoped)
         } catch (failure: Throwable) {
-            throw IllegalStateException(
+            throw ProviderRejectedException(
                 "SAF provider query failed for folder $name; retained returned document $created",
                 failure,
             )
@@ -192,7 +194,7 @@ class SafBackupFolder(
         val createdId = try {
             DocumentsContract.getDocumentId(created)
         } catch (failure: Throwable) {
-            throw IllegalStateException(
+            throw ProviderRejectedException(
                 "SAF provider returned invalid document URI for file $name: $created; retained returned document $created",
                 failure,
             )
@@ -201,7 +203,7 @@ class SafBackupFolder(
         val document = try {
             queryDocument(scoped)
         } catch (failure: Throwable) {
-            throw IllegalStateException(
+            throw ProviderRejectedException(
                 "SAF provider query failed for file $name; retained returned document $created",
                 failure,
             )

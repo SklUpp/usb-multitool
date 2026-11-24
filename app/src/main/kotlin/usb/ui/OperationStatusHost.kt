@@ -108,11 +108,16 @@ private fun rememberOperationStatusFacts(
     val stateLabel = OperationPresentation.stateLabel(operation.state, operation.phase)
     val resources = LocalResources.current
     // smartSummary / readScanSummary are @Composable; resolve here before remember.
-    val result = (operation.errorMessage
-        ?: operation.smartResult?.let { smartSummary(it) }
+    val failureText = operation.failure
+        ?.takeIf { it != OperationFailure.Cancelled }
+        ?.let { OperationPresentation.failureText(it) }
+    val result = (operation.smartResult?.let { smartSummary(it) }
         ?: operation.readScanResult?.let { readScanSummary(it) }
-        ?: operation.resultMessage)
-        ?.let(::normalizeProviderText)
+        ?: if (operation.state == OperationState.Partial) {
+            operation.resultMessage ?: failureText
+        } else {
+            failureText ?: operation.resultMessage
+        })
     return remember(operation, diskSectorSize, resources, name, stateLabel, result) {
         computeOperationStatusFacts(
             op = operation,
@@ -190,7 +195,9 @@ private fun computeOperationStatusFacts(
         listOfNotNull(text, average).joinToString(" ") to tone
     }
     val tone = when {
-        op.state == OperationState.Failed || op.errorMessage != null -> StatusTone.Error
+        op.state == OperationState.Failed -> StatusTone.Error
+        op.state == OperationState.Cancelled -> StatusTone.Neutral
+        op.failure != null && op.failure != OperationFailure.Cancelled -> StatusTone.Error
         op.state == OperationState.Partial -> StatusTone.Warning
         op.state == OperationState.Completed -> StatusTone.Success
         else -> StatusTone.Neutral
@@ -203,7 +210,8 @@ private fun computeOperationStatusFacts(
         readbackTone = readback?.second ?: StatusTone.Neutral,
         result = result,
         resultTone = when {
-            op.errorMessage != null || op.state == OperationState.Failed -> StatusTone.Error
+            (op.failure != null && op.failure != OperationFailure.Cancelled) ||
+                op.state == OperationState.Failed -> StatusTone.Error
             op.state == OperationState.Partial -> StatusTone.Warning
             else -> StatusTone.Neutral
         },

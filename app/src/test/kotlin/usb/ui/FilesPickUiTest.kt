@@ -81,7 +81,7 @@ class FilesPickUiTest {
         return opened.copy(
             files = ready().files,
             filesListingState = FilesListingState.Loaded,
-            filesError = null,
+            filesFailure = null,
         )
     }
 
@@ -416,7 +416,7 @@ class FilesPickUiTest {
 
         val failed =
             UiReducer.reduce(
-                begun().copy(filesListingState = FilesListingState.Failed, filesError = "read failed"),
+                begun().copy(filesListingState = FilesListingState.Failed, filesFailure = OperationFailure.SafIo),
                 UiIntent.ConfirmFilesPickFile("win11.iso"),
             )
         assertNotNull(failed.state.filesPickMode)

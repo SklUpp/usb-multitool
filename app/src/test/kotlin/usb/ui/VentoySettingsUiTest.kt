@@ -130,7 +130,7 @@ class VentoySettingsUiTest {
                 state = OperationState.Partial,
                 token = partialToken,
                 title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                errorMessage = "settings write failed",
+                failure = OperationFailure.SafIo,
             ),
         ).state
         assertEquals(controls, partial.pendingVentoyControls)
@@ -294,7 +294,7 @@ class VentoySettingsUiTest {
                 state = OperationState.Partial,
                 token = partialToken,
                 title = OperationTitle.Destructive(DestructiveAction.VENTOY_INSTALL),
-                errorMessage = "settings write failed",
+                failure = OperationFailure.SafIo,
             ),
         ).state
         val retry = UiReducer.reduce(partial, UiIntent.RequestApplyVentoyControls)

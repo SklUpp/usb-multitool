@@ -114,13 +114,14 @@ internal object OperationReducer {
                         progress.smartResult?.let(UiMessage::Smart)
                             ?: progress.readScanResult?.let(UiMessage::ReadScan)
                             ?: UiMessage.Key(UiMessageKey.CancelledStatus)
-                    OperationState.Failed -> progress.errorMessage?.let(UiMessage::Raw)
-                        ?: UiMessage.Key(UiMessageKey.FailedStatus)
+                    OperationState.Failed ->
+                        progress.failure?.let(UiMessage::Failure)
+                            ?: UiMessage.Key(UiMessageKey.FailedStatus)
                     OperationState.Partial ->
                         progress.smartResult?.let(UiMessage::Smart)
                             ?: progress.readScanResult?.let(UiMessage::ReadScan)
-                            ?: (progress.resultMessage ?: progress.errorMessage)
-                                ?.let(UiMessage::Raw)
+                            ?: progress.resultMessage?.let(UiMessage::Raw)
+                            ?: progress.failure?.let(UiMessage::Failure)
                             ?: UiMessage.Key(UiMessageKey.PartialStatus)
                     OperationState.Running -> UiMessage.Key(UiMessageKey.RunningStatus)
                     OperationState.Queued -> UiMessage.Key(UiMessageKey.QueuedStatus)
@@ -229,7 +230,7 @@ internal object OperationReducer {
     internal fun filesInvalidate(state: AppUiState): AppUiState =
         state.copy(
             files = emptyList(),
-            filesError = null,
+            filesFailure = null,
             filesListGeneration = state.filesListGeneration + 1L,
             filesListingState = FilesListingState.Stale,
         )

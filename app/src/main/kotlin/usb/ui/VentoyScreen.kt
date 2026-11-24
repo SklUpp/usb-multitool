@@ -261,14 +261,14 @@ fun VentoyScreen(
                 }
                 state.ventoyDownloadError?.let { error ->
                     Text(
-                        text = stringResource(R.string.ventoy_download_failed, error),
+                        text = stringResource(R.string.ventoy_download_failed),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
                 state.upstreamVentoyError?.let { error ->
                     Text(
-                        text = stringResource(R.string.ventoy_upstream_check_failed, error),
+                        text = stringResource(R.string.ventoy_upstream_check_failed),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )

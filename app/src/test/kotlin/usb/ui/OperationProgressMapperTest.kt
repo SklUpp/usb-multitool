@@ -46,32 +46,32 @@ class OperationProgressMapperTest {
         assertEquals(OperationState.Partial, progress.state)
         assertEquals(4L, progress.bytesDone)
         assertEquals("saved", progress.resultMessage)
-        assertEquals("incomplete", progress.errorMessage)
+        assertNull(progress.failure)
         assertEquals(false, progress.cancelable)
         assertNull(progress.readScanResult)
     }
 
-    @Test fun failedUsesOutcomeCauseMessage() {
+    @Test fun failedLeavesUnclassifiedCauseAsNullFailure() {
         val progress = mapProgress(
             ServiceOperationState.Failed(IllegalArgumentException("bad disk")), OperationTitle.ReadScan, 4L, 10L, null, null, true,
         )
         assertEquals(OperationState.Failed, progress.state)
-        assertEquals("bad disk", progress.errorMessage)
+        assertNull(progress.failure)
         assertNull(progress.readScanResult)
     }
 
-    @Test fun failedFallsBackToOperationFailureWhenCauseMessageBlank() {
+    @Test fun failedFallsBackToOperationFailureWhenCauseUnclassified() {
         val progress = mapProgress(
             ServiceOperationState.Failed(IllegalStateException()),
             OperationTitle.ReadScan,
             0L,
             0L,
             null,
-            IllegalArgumentException("host failure"),
+            java.io.IOException("host failure"),
             true,
         )
         assertEquals(OperationState.Failed, progress.state)
-        assertEquals("host failure", progress.errorMessage)
+        assertEquals(OperationFailure.SafIo, progress.failure)
         assertEquals(0L, progress.bytesDone)
         assertNull(progress.resultMessage)
         assertNull(progress.readScanResult)
@@ -139,7 +139,7 @@ class OperationProgressMapperTest {
         )
         assertEquals(OperationState.Partial, partial.state)
         assertEquals(raw, partial.rawWriteResult)
-        assertEquals("incomplete", partial.errorMessage)
+        assertNull(partial.failure)
 
         val completed = ServiceOperationState.Completed.toOperationResult().toProgress(
             token = token,
@@ -232,5 +232,16 @@ class OperationProgressMapperTest {
         assertEquals(ShellTab.Partitions, OperationTitle.Destructive(DestructiveAction.RAW_WRITE).originTab())
         assertEquals(ShellTab.Partitions, OperationTitle.ProbeDevice.originTab())
         assertNull(OperationTitle.EjectDevice.originTab())
+    }
+
+    @Test fun failureTextResAreDistinct() {
+        val ids = listOf(
+            OperationFailure.Cancelled,
+            OperationFailure.AttachmentChanged,
+            OperationFailure.SizeMismatch,
+            OperationFailure.SafIo,
+            OperationFailure.ProviderRejected,
+        ).map { OperationPresentation.failureTextRes(it) }
+        assertEquals(5, ids.toSet().size)
     }
 }

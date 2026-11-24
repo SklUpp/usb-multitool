@@ -260,7 +260,7 @@ data class OperationProgress(
     val bytesDone: Long = 0L,
     val bytesTotal: Long = 0L,
     val bytesPerSecond: Long = 0L,
-    val errorMessage: String? = null,
+    val failure: OperationFailure? = null,
     /** Concrete outcome (paths, counts) shown instead of the bare "Success" label. */
     val resultMessage: String? = null,
     /**

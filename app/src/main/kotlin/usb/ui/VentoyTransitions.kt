@@ -471,7 +471,7 @@ internal object VentoyTransitions {
                 ).let { nextState ->
                     val loaded = intent.settings
                     if (loaded is VentoyGlobalSettings.ReadError && !loaded.damagedLayout) {
-                        nextState.withStatus(UiMessage.Raw(loaded.message))
+                        nextState.withStatus(UiMessage.Key(UiMessageKey.FailedStatus))
                     } else {
                         // Carried forward, not a new emission: no sequence bump.
                         nextState.copy(statusMessage = state.statusMessage)

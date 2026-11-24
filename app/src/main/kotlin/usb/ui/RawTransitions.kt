@@ -344,7 +344,7 @@ internal object RawTransitions {
                         rawSourceCandidatesGeneration = generation,
                         rawSourceCandidatesIdentity = device.identity,
                         rawSourceCandidatesTruncated = false,
-                        rawSourceCandidatesError = null,
+                        rawSourceCandidatesFailure = null,
                     ),
                     effects = listOf(
                         UiEffect.LoadRawSources(
@@ -399,7 +399,7 @@ internal object RawTransitions {
                 state.copy(
                     rawSourceCandidates = accepted,
                     rawSourceCandidatesTruncated = intent.truncated,
-                    rawSourceCandidatesError = null,
+                    rawSourceCandidatesFailure = null,
                 )
             ReduceResult(
                 if (notice != null) {
@@ -417,32 +417,36 @@ internal object RawTransitions {
         intent: UiIntent.RawSourceCandidatesFailed,
     ): ReduceResult {
         val device = state.device
+        val logDetail = intent.diagnostic ?: intent.failure?.toString() ?: "failed"
         return if (device == null ||
             intent.generation != state.rawSourceCandidatesGeneration ||
             intent.identity != device.identity
         ) {
             // Stale chooser A — keep B status/candidates; log so close/I/O is not silent.
-            ReduceResult(appendLogLine(state, "Raw sources (stale): ${intent.message}"))
+            ReduceResult(appendLogLine(state, "Raw sources (stale): $logDetail"))
         } else {
             // Bound chooser error always; global status only when no other op owns the slot.
             val opOwnsStatus =
                 state.operation?.state == OperationState.Running ||
                     state.operation?.state == OperationState.Queued
+            val status =
+                intent.failure?.let(UiMessage::Failure)
+                    ?: UiMessage.Key(UiMessageKey.FailedStatus)
             val next =
                 state.copy(
                     rawSourceCandidates = emptyList(),
-                    rawSourceCandidatesError = intent.message,
+                    rawSourceCandidatesFailure = intent.failure,
                     rawSourceCandidatesTruncated = false,
                 ).let { nextState ->
                     if (opOwnsStatus) {
                         // Carried forward, not a new emission: no sequence bump.
                         nextState.copy(statusMessage = state.statusMessage)
                     } else {
-                        nextState.withStatus(UiMessage.Raw(intent.message))
+                        nextState.withStatus(status)
                     }
                 }
             if (opOwnsStatus) {
-                ReduceResult(appendLogLine(next, "Raw sources: ${intent.message}"))
+                ReduceResult(appendLogLine(next, "Raw sources: $logDetail"))
             } else {
                 ReduceResult(next)
             }
@@ -510,7 +514,7 @@ internal object RawTransitions {
                 rawSourceCandidatesGeneration = state.rawSourceCandidatesGeneration + 1,
                 rawSourceCandidatesIdentity = null,
                 rawSourceCandidatesTruncated = false,
-                rawSourceCandidatesError = null,
+                rawSourceCandidatesFailure = null,
             ),
             effects = listOf(UiEffect.CancelRawSources),
         )

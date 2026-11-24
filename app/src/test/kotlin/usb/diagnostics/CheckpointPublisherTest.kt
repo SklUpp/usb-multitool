@@ -1,6 +1,8 @@
 package usb.diagnostics
 
 import java.io.IOException
+import usb.operation.ProviderRejectedException
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -218,7 +220,11 @@ class CheckpointPublisherTest {
         } catch (t: Throwable) {
             failure = t
         }
-        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure is ProviderRejectedException)
+        assertEquals(
+            "provider did not return the bytes written; fsync/read capability unsupported",
+            failure!!.message,
+        )
     }
 
     @Test

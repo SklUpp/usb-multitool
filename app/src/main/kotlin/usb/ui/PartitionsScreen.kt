@@ -1794,10 +1794,8 @@ private fun RawWriteSection(
                             RawMeasureError.Busy -> stringResource(R.string.raw_write_error_busy)
                             RawMeasureError.CloseCapacity ->
                                 stringResource(R.string.raw_write_error_close_capacity)
-                            RawMeasureError.Failed, null -> stringResource(
-                                R.string.raw_write_size_measure_failed,
-                                state.rawDecodedSizeError ?: "",
-                            )
+                            RawMeasureError.Failed, null ->
+                                stringResource(R.string.raw_write_size_measure_failed)
                         }
                         Text(
                             text = text,

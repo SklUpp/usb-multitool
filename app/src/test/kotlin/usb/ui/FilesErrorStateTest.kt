@@ -1,7 +1,6 @@
 package usb.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,37 +29,64 @@ class FilesErrorStateTest {
 
     private fun AppUiState.listFailed(
         path: String = currentPath,
-        message: String,
+        failure: OperationFailure? = null,
+        diagnostic: String? = null,
         generation: Long = filesListGeneration,
         identity: String? = device?.identity,
         partitionId: String = selectedPartitionId ?: "",
         attachGeneration: Long = device?.attachGeneration ?: 0L,
     ): UiIntent.FilesListFailed =
-        UiIntent.FilesListFailed(path, message, generation, identity, partitionId, attachGeneration)
+        UiIntent.FilesListFailed(
+            path = path,
+            failure = failure,
+            diagnostic = diagnostic,
+            generation = generation,
+            identity = identity,
+            partitionId = partitionId,
+            attachGeneration = attachGeneration,
+        )
 
     @Test
-    fun failureSetsStructuredErrorIndependentOfLanguage() {
+    fun failureSetsTypedFailureIndependentOfLanguage() {
         val failed = UiReducer.reduce(
             ready,
-            ready.listFailed(message = "Не удалось прочитать папку"),
+            ready.listFailed(failure = OperationFailure.SafIo),
         ).state
-        assertEquals("Не удалось прочитать папку", failed.filesError)
+        assertEquals(OperationFailure.SafIo, failed.filesFailure)
+        assertEquals(UiMessage.Failure(OperationFailure.SafIo), failed.statusMessage)
 
-        val failedEnglish = UiReducer.reduce(
+        val failedAgain = UiReducer.reduce(
             ready,
-            ready.listFailed(message = "Read failed"),
+            ready.listFailed(failure = OperationFailure.SafIo, diagnostic = "Read failed"),
         ).state
-        assertEquals("Read failed", failedEnglish.filesError)
+        assertEquals(OperationFailure.SafIo, failedAgain.filesFailure)
+    }
+
+    @Test
+    fun unclassifiedNullFailureStillMarksFailed() {
+        val failed = UiReducer.reduce(
+            ready,
+            ready.listFailed(failure = null, diagnostic = "engine boom"),
+        ).state
+        assertNull(failed.filesFailure)
+        assertEquals(FilesListingState.Failed, failed.filesListingState)
+        assertEquals(UiMessage.Key(UiMessageKey.FailedStatus), failed.statusMessage)
     }
 
     @Test
     fun deepPathFailureFallsBackToRootReload() {
         val deep = ready.copy(currentPath = "/docs", filesListingState = FilesListingState.Loading)
         val fallback =
-            UiReducer.reduce(deep, deep.listFailed(message = "Path not found: /docs"))
+            UiReducer.reduce(
+                deep,
+                deep.listFailed(
+                    failure = OperationFailure.SafIo,
+                    diagnostic = "Path not found: /docs",
+                ),
+            )
         assertEquals("/", fallback.state.currentPath)
         assertEquals(FilesListingState.Loading, fallback.state.filesListingState)
-        assertNull(fallback.state.filesError)
+        assertNull(fallback.state.filesFailure)
         val load = fallback.effects.single() as UiEffect.LoadFiles
         assertEquals("/", load.path)
     }
@@ -68,42 +94,51 @@ class FilesErrorStateTest {
     @Test
     fun deepPathIoErrorDoesNotFallback() {
         val deep = ready.copy(currentPath = "/docs", filesListingState = FilesListingState.Loading)
-        val failed = UiReducer.reduce(deep, deep.listFailed(message = "Read failed"))
+        val failed = UiReducer.reduce(
+            deep,
+            deep.listFailed(failure = OperationFailure.SafIo, diagnostic = "Read failed"),
+        )
         assertEquals("/docs", failed.state.currentPath)
-        assertEquals("Read failed", failed.state.filesError)
+        assertEquals(OperationFailure.SafIo, failed.state.filesFailure)
         assertEquals(FilesListingState.Failed, failed.state.filesListingState)
         assertTrue(failed.effects.isEmpty())
     }
 
     @Test
     fun successAndNavigationClearTheError() {
-        val failed = ready.copy(filesListingState = FilesListingState.Failed, filesError = "boom")
+        val failed = ready.copy(
+            filesListingState = FilesListingState.Failed,
+            filesFailure = OperationFailure.SafIo,
+        )
         val listedState = UiReducer.reduce(failed, UiIntent.RefreshFiles).state
         assertNull(
-            UiReducer.reduce(listedState, listedState.listed(files = emptyList())).state.filesError,
+            UiReducer.reduce(listedState, listedState.listed(files = emptyList())).state.filesFailure,
         )
         assertNull(
-            UiReducer.reduce(failed, UiIntent.OpenDirectory("/other")).state.filesError,
+            UiReducer.reduce(failed, UiIntent.OpenDirectory("/other")).state.filesFailure,
         )
         assertNull(
-            UiReducer.reduce(failed, UiIntent.DeviceChanged(DevicePresence.Disconnected)).state.filesError,
+            UiReducer.reduce(failed, UiIntent.DeviceChanged(DevicePresence.Disconnected)).state.filesFailure,
         )
     }
 
     @Test
     fun staleResultForAnotherPathIsIgnored() {
-        val failed = ready.copy(filesError = "boom")
+        val failed = ready.copy(filesFailure = OperationFailure.SafIo)
         assertEquals(
-            "boom",
+            OperationFailure.SafIo,
             UiReducer.reduce(failed, failed.listed(path = "/elsewhere", files = emptyList()))
                 .state
-                .filesError,
+                .filesFailure,
         )
         assertEquals(
-            "boom",
-            UiReducer.reduce(failed, failed.listFailed(path = "/elsewhere", message = "late"))
+            OperationFailure.SafIo,
+            UiReducer.reduce(
+                failed,
+                failed.listFailed(path = "/elsewhere", failure = OperationFailure.ProviderRejected),
+            )
                 .state
-                .filesError,
+                .filesFailure,
         )
     }
 }

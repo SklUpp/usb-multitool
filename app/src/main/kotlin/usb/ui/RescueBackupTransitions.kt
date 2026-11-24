@@ -29,7 +29,6 @@ internal object RescueBackupTransitions {
             val clearConfirm =
                 state.pendingConfirmation?.action == DestructiveAction.GPT_RESTORE
             val inspection = intent.inspection?.takeIf { it.uri == intent.uri }
-            val inspectionError = inspection?.error
             ReduceResult(
                 state.copy(
                     backupUri = intent.uri,
@@ -39,10 +38,11 @@ internal object RescueBackupTransitions {
                         if (clearConfirm) null else state.pendingConfirmation,
                 ).withStatus(when {
                             intent.uri == null -> UiMessage.Key(UiMessageKey.BackupCleared)
-                            inspection != null && inspectionError != null -> UiReducer.message(
+                            inspection?.failure != null -> UiMessage.Failure(inspection.failure!!)
+                            inspection != null && inspection.error != null -> UiReducer.message(
                                 UiMessageKey.SourceInspectionRejected,
                                 inspection.displayName,
-                                inspectionError,
+                                inspection.error!!,
                             )
                             else -> UiReducer.message(
                                 UiMessageKey.BackupReady,
@@ -107,7 +107,6 @@ internal object RescueBackupTransitions {
             val clearConfirm =
                 state.pendingConfirmation?.action == DestructiveAction.RESCUE_RESTORE
             val inspection = intent.inspection?.takeIf { it.uri == intent.uri }
-            val inspectionError = inspection?.error
             ReduceResult(
                 state.copy(
                     rescueMapUri = intent.uri,
@@ -117,10 +116,11 @@ internal object RescueBackupTransitions {
                         if (clearConfirm) null else state.pendingConfirmation,
                 ).withStatus(when {
                             intent.uri == null -> UiMessage.Key(UiMessageKey.RescueMapCleared)
-                            inspection != null && inspectionError != null -> UiReducer.message(
+                            inspection?.failure != null -> UiMessage.Failure(inspection.failure!!)
+                            inspection != null && inspection.error != null -> UiReducer.message(
                                 UiMessageKey.SourceInspectionRejected,
                                 inspection.displayName,
-                                inspectionError,
+                                inspection.error!!,
                             )
                             else -> UiReducer.message(
                                 UiMessageKey.RescueMapReady,

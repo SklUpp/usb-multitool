@@ -75,14 +75,14 @@ class OperationTransitionsTest {
                     OperationState.Failed,
                     OperationTitle.Upload,
                     currentToken,
-                    errorMessage = "disk read failed",
+                    failure = OperationFailure.SafIo,
                 ),
             ),
         )
-        assertEquals(UiMessage.Raw("disk read failed"), failed.state.statusMessage)
+        assertEquals(UiMessage.Failure(OperationFailure.SafIo), failed.state.statusMessage)
         val stale = UiReducer.reduce(
             running.state,
-            UiIntent.OperationUpdated(OperationProgress(OperationState.Failed, OperationTitle.Upload, staleToken, errorMessage = "old")),
+            UiIntent.OperationUpdated(OperationProgress(OperationState.Failed, OperationTitle.Upload, staleToken, failure = OperationFailure.SafIo)),
         )
         val staleCompletion = UiReducer.reduce(
             running.state,

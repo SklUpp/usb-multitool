@@ -64,7 +64,9 @@ data class RescueMapInspection(
     val summary: RescueMapSummary? = null,
     /** SHA-256 of the inspected map text; restore refuses a changed source. */
     val sha256: String? = null,
-    /** Decode/bounded-read failure; a non-null error blocks the destructive confirmation. */
+    /** Typed I/O failure; preferred over [error] for status/dialog copy. */
+    val failure: OperationFailure? = null,
+    /** Authored validation/decode detail; kept when not an OperationFailure. */
     val error: String? = null,
 ) {
     val displayName: String
@@ -93,7 +95,9 @@ data class GptBackupInspection(
     val summary: GptBackupSummary? = null,
     /** SHA-256 of the inspected blob; restore refuses a changed source. */
     val sha256: String? = null,
-    /** Size/header/CRC failure; a non-null error blocks the destructive confirmation. */
+    /** Typed I/O failure; preferred over [error] for status/dialog copy. */
+    val failure: OperationFailure? = null,
+    /** Authored validation/CRC detail; kept when not an OperationFailure. */
     val error: String? = null,
 ) {
     val displayName: String
