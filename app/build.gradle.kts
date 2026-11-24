@@ -139,6 +139,27 @@ android {
     }
 }
 
+// Pre-resolve android-all jars so Robolectric never hits Maven at test time.
+val robolectricSdks by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+val syncRobolectricSdks =
+    tasks.register<Sync>("syncRobolectricSdks") {
+        from(robolectricSdks)
+        into(layout.buildDirectory.dir("robolectric-sdks"))
+    }
+
+tasks.withType<Test>().configureEach {
+    dependsOn(syncRobolectricSdks)
+    systemProperty("robolectric.offline", "true")
+    systemProperty(
+        "robolectric.dependency.dir",
+        layout.buildDirectory.dir("robolectric-sdks").get().asFile.absolutePath,
+    )
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -157,4 +178,9 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // SDKs used by robolectric.properties (33) and @Config overrides (28, 31).
+    add("robolectricSdks", "org.robolectric:android-all-instrumented:13-robolectric-9030017-i7")
+    add("robolectricSdks", "org.robolectric:android-all-instrumented:12-robolectric-7732740-i7")
+    add("robolectricSdks", "org.robolectric:android-all-instrumented:9-robolectric-4913185-2-i7")
 }

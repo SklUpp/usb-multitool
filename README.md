@@ -118,7 +118,7 @@ Android-приложение для работы с USB-накопителями
 
 1. Открыть [workflow `android-debug`](actions/workflows/android-debug.yml).
 2. Запустить его вручную (`workflow_dispatch`) или дождаться запуска по push в ветку `feature/android-usb-multitool`.
-3. В артефактах запуска скачать `app-debug-apk` (там же `unit-test-reports`).
+3. В артефактах запуска скачать `app-debug-apk`; при падении `unit-tests` — ещё `unit-test-reports`.
 
 APK подписан debug-ключом и предназначен для тестирования, а не для распространения. Локальная сборка Gradle/NDK в проекте не предусмотрена. Этот README не подтверждает успешный финальный CI-прогон или проверку на устройствах.
 
@@ -133,7 +133,7 @@ APK подписан debug-ключом и предназначен для те�
 
 ## Сборка и проверки
 
-Все Gradle/NDK-команды выполняются только в GitHub Actions (`.github/workflows/android-debug.yml`), рабочий каталог — корень репозитория. Порядок шагов джобы `verify`:
+Все Gradle/NDK-команды выполняются только в GitHub Actions (`.github/workflows/android-debug.yml`), рабочий каталог — корень репозитория. Джоба `unit-tests` гоняет `:app:testDebugUnitTest` без NDK/Rust/third_party. Порядок шагов джобы `verify`:
 
 ```bash
 ./scripts/fetch-third-party.sh
@@ -142,14 +142,13 @@ APK подписан debug-ключом и предназначен для те�
 ./scripts/run-ntfs-host-test.sh
 ./scripts/run-ext-host-test.sh
 ./scripts/run-usb-block-host-test.sh
-./gradlew :app:testDebugUnitTest --no-daemon
 ./gradlew :app:assembleDebug --no-daemon
 ./scripts/check-16kb-alignment.sh app/build/outputs/apk/debug/*.apk
 ./gradlew :app:lintDebug --no-daemon
 ./gradlew :app:compileDebugKotlin --no-daemon
 ```
 
-`:app:testDebugUnitTest` включает и Robolectric-тесты: реальный `MainActivity` (запрос POST_NOTIFICATIONS) и SAF-границу `ImageSource.fromContentUri`. Robolectric скачивает `android-all` jar при первом запуске, поэтому нужен доступ в сеть; устройство и эмулятор не нужны.
+`:app:testDebugUnitTest` включает и Robolectric-тесты: реальный `MainActivity` (запрос POST_NOTIFICATIONS) и SAF-границу `ImageSource.fromContentUri`. Jar-ы `android-all-instrumented` резолвятся через `robolectricSdks`/`syncRobolectricSdks` (offline на прогоне); сеть нужна только для первого Gradle resolve. Устройство и эмулятор не нужны.
 
 Отдельная джоба `fatfs-host` (без Android SDK) собирает и запускает host-тесты FatFs:
 

@@ -116,7 +116,7 @@ The project has no releases and no Google Play publication. GitHub Actions build
 
 1. Open the [`android-debug` workflow](actions/workflows/android-debug.yml).
 2. Run the workflow manually with `workflow_dispatch`, or push to the `feature/android-usb-multitool` branch.
-3. Download the `app-debug-apk` artifact. The `unit-test-reports` artifact holds the test reports.
+3. Download the `app-debug-apk` artifact. On a failed `unit-tests` job, also download `unit-test-reports`.
 
 The build signs the APK with a debug key for testing only. Do not distribute it. The project does not support local Gradle or NDK builds. This README does not assert a successful final CI run or device checks.
 
@@ -131,7 +131,7 @@ The build signs the APK with a debug key for testing only. Do not distribute it.
 
 ## Build and checks
 
-Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-debug.yml`). The working directory is the repository root. The `verify` job runs these steps:
+Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-debug.yml`). The working directory is the repository root. The `unit-tests` job runs `:app:testDebugUnitTest` without NDK, Rust, or third_party. The `verify` job runs these steps:
 
 ```bash
 ./scripts/fetch-third-party.sh
@@ -140,14 +140,13 @@ Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-d
 ./scripts/run-ntfs-host-test.sh
 ./scripts/run-ext-host-test.sh
 ./scripts/run-usb-block-host-test.sh
-./gradlew :app:testDebugUnitTest --no-daemon
 ./gradlew :app:assembleDebug --no-daemon
 ./scripts/check-16kb-alignment.sh app/build/outputs/apk/debug/*.apk
 ./gradlew :app:lintDebug --no-daemon
 ./gradlew :app:compileDebugKotlin --no-daemon
 ```
 
-`:app:testDebugUnitTest` also runs Robolectric tests: the real `MainActivity` (POST_NOTIFICATIONS request) and the SAF boundary `ImageSource.fromContentUri`. Robolectric downloads the `android-all` jar on first run, so it needs network access; no device or emulator is required.
+`:app:testDebugUnitTest` also runs Robolectric tests: the real `MainActivity` (POST_NOTIFICATIONS request) and the SAF boundary `ImageSource.fromContentUri`. `android-all-instrumented` jars resolve via `robolectricSdks`/`syncRobolectricSdks` (offline at test time); network is needed only for the first Gradle resolve. No device or emulator is required.
 
 The separate `fatfs-host` job has no Android SDK. It builds and runs the FatFs host tests:
 

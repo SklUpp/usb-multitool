@@ -51,8 +51,23 @@ SectorForge bridge собирается Gradle-задачей `buildSfBridge`:
 ```
 
 На телефоне использовать `nice ./gradlew ...` и один процесс Gradle; не
-запускать fetch-third-party и не собирать APK. Robolectric при первом запуске
-может скачать `android-all`; нужен интернет.
+запускать fetch-third-party и не собирать APK. Robolectric работает offline:
+jar-ы `android-all-instrumented` для SDK 28/31/33 резолвятся через конфигурацию
+`robolectricSdks` и копируются в `app/build/robolectric-sdks` задачей
+`syncRobolectricSdks` (см. `app/build.gradle.kts`). Первый resolve зависимостей
+Gradle всё ещё требует сеть; после прогрева кэша можно
+`./gradlew :app:testDebugUnitTest --offline`.
+
+Dependency locking включён (`subprojects { dependencyLocking { lockAllConfigurations() } }`).
+Сгенерировать и закоммитить lockfile/verification-metadata (нужна сеть):
+
+```bash
+./gradlew :app:dependencies --write-locks
+./gradlew --write-verification-metadata sha256 help
+```
+
+После коммита `gradle.lockfile` / `app/gradle.lockfile` /
+`gradle/verification-metadata.xml` mismatch падает на CI.
 
 Host-тесты:
 
@@ -75,19 +90,24 @@ Workflow `.github/workflows/android-debug.yml`, ветка
 
 - `fatfs-host`: checkout → `fetch-third-party.sh` → `make test` в
   `native-tests/fatfs`.
+- `unit-tests` (без NDK/Rust/third_party): JDK 21, `setup-gradle`, кэш
+  `platforms;android-36` + `build-tools;36.0.0`, затем
+  `:app:testDebugUnitTest`. Отчёты загружаются только при failure.
 - `verify`:
-  1. fetch + Rust 1.99.1 + `cargo test` для sf-bridge;
-  2. JDK 21, Android SDK 36, build-tools 36.0.0, NDK, CMake;
-  3. exFAT fsck host, NTFS host, EXT host, usb_block host;
-  4. `:app:testDebugUnitTest`;
+  1. fetch + Rust cache (`Cargo.lock`) + Rust 1.99.1 + `cargo test` для sf-bridge;
+  2. JDK 21, `setup-gradle`, кэш NDK/CMake/SDK по `libs.versions.toml`;
+  3. SDK install (platform-tools, android-36, build-tools, NDK, CMake);
+  4. exFAT fsck host, NTFS host, EXT host, FAT streaming, usb_block host;
   5. `:app:assembleDebug`;
   6. `check-16kb-alignment.sh`;
   7. `:app:lintDebug`;
   8. `:app:compileDebugKotlin`.
 
+Кэши без `restore-keys` и без секретов. Action SHA pinned.
+
 Artifacts:
-- `app-debug-apk` — debug APK;
-- `unit-test-reports` — JVM test reports/results.
+- `app-debug-apk` — debug APK (`verify`, always);
+- `unit-test-reports` — JVM test reports/results (`unit-tests`, on failure).
 
 APK не подписывается release-ключом и предназначен для тестирования, не для
 распространения. Release workflow отсутствует; версия задаётся в
