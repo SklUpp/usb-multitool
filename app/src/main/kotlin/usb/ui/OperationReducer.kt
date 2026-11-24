@@ -116,6 +116,7 @@ internal object OperationReducer {
                             ?: UiMessage.Key(UiMessageKey.CancelledStatus)
                     OperationState.Failed ->
                         progress.failure?.let(UiMessage::Failure)
+                            ?: progress.resultMessage?.let(UiMessage::Raw)
                             ?: UiMessage.Key(UiMessageKey.FailedStatus)
                     OperationState.Partial ->
                         progress.smartResult?.let(UiMessage::Smart)

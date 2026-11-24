@@ -1035,8 +1035,4 @@ class FilesCoordinator(
             isDirectory = isDirectory,
             sizeBytes = size.coerceAtLeast(0L).toULong(),
         )
-
     }
-
-    class MainActivity : ComponentActivity() {
-}

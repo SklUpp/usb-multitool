@@ -35,8 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.SavedStateHandle
-import usb.ui.OperationFailure
-import usb.ui.toOperationFailure
 import usb.ui.ShellTab
 import usb.ui.ShellTabPersistence
 import usb.ventoy.AutounattendBinding
@@ -80,12 +78,14 @@ import usb.ui.DeviceIdentity
 import usb.ui.PendingBackupFolderAction
 import usb.ui.DevicePresence
 import usb.ui.FileEntry
+import usb.ui.OperationFailure
 import usb.ui.OperationProgress
 import usb.ui.OperationTitle
 import usb.ui.ReadScanOutcome
 import usb.ui.SmartOutcome
 
 import usb.ui.RestoreSourceInspector
+import usb.ui.toOperationFailure
 import usb.ui.toOperationResult
 import usb.ui.OperationState
 import usb.ui.UiEffect
@@ -757,6 +757,7 @@ class MainViewModel(
                     state = state.withStatus(
                         UiMessage.Key(
                             UiMessageKey.CannotDeleteStaging,
+                            listOf(err.message ?: err.javaClass.simpleName),
                         ),
                     )
                 }
@@ -1146,8 +1147,9 @@ class MainViewModel(
                                             // The entry is already committed: never report "failed"
                                             // as if nothing was created.
                                             result = "Partition created at LBA $start ($size sectors); " +
-                                                "formatting as ${FormatCatalog.label(supported)} failed. " +
-                                                "The partition exists but is unformatted."
+                                                "formatting as ${FormatCatalog.label(supported)} failed: " +
+                                                (formatFailure.message ?: formatFailure.javaClass.simpleName) +
+                                                ". The partition exists but is unformatted."
                                             state = usb.operation.OperationState.Partial
                                             failureCause = formatFailure
                                             throw formatFailure
@@ -2169,12 +2171,10 @@ class MainViewModel(
         val dev = attachedDevice
         val mgr = usbManager
         if (dev != null && mgr != null && state.presence == DevicePresence.Ready) {
-            submitReadOnlyDiskOperation(OperationTitle.SelfTest, cancelable = false) { disk, _, sink ->
+            submitReadOnlyDiskOperation(OperationTitle.SelfTest, cancelable = false) { disk, _, _ ->
                 val report = usb.diagnostics.SelfTestRunner.runAll(disk)
-                val summary = report.summary()
-                sink.resultMessage = summary
-                check(report.allPassed) { summary }
-                summary
+                check(report.allPassed) { report.summary() }
+                report.summary()
             }
         } else {
             val token = nextOperationToken()
@@ -2261,326 +2261,12 @@ class MainViewModel(
      * the visible path is the exact document the user picked.
      */
     fun onRescueFilePicked(uri: Uri) {
-        val target = uri.toString()
-        trace.log("picker.rescue_file", "uri" to target)
-        val generation = rescueArchivePickGeneration.incrementAndGet()
-        val expectedAttachGeneration = state.device?.attachGeneration
-        val resolver = getApplication<Application>().contentResolver
-        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
-        scope.launch(Dispatchers.IO) {
-            val (name, size) = contentInfo(resolver, uri)
-            val lower = name?.lowercase(java.util.Locale.ROOT)
-            val isMap = lower?.endsWith(".map") == true
-            var imageInspection: usb.ui.RescueImageInspection? = null
-            var mapInspection: usb.ui.RescueMapInspection? = null
-            var failure: String? = null
-            try {
-                if (isMap) {
-                    val bytes = resolver.openInputStream(uri)?.use {
-                        RestoreSourceInspector.readBounded(it, RescueMap.MAX_ENCODED_CHARS)
-                    } ?: throw IllegalStateException("cannot open $target")
-                    mapInspection = RestoreSourceInspector.inspectMap(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        text = bytes.toString(Charsets.UTF_8),
-                    )
-                } else {
-                    val header = ByteArray(6)
-                    var read = 0
-                    resolver.openInputStream(uri)?.use { input ->
-                        while (read < header.size) {
-                            val n = input.read(header, read, header.size - read)
-                            if (n <= 0) break
-                            read += n
-                        }
-                    }
-                    imageInspection = RestoreSourceInspector.inspectImage(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        format = usb.image.classifyImageContent(name, header.copyOf(read)),
-                    )
-                }
-            } catch (error: Throwable) {
-                val typed = error.toOperationFailure()
-                val detail = usb.ui.normalizeProviderText(
-                    error.message ?: error.javaClass.simpleName,
-                )
-                if (isMap) {
-                    mapInspection = usb.ui.RescueMapInspection(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        failure = typed,
-                        error = if (typed == null) detail else null,
-                    )
-                } else {
-                    failure = detail
-                }
-            }
-            withContext(Dispatchers.Main.immediate) {
-                if (generation != rescueArchivePickGeneration.get()) return@withContext
-                if (expectedAttachGeneration != null &&
-                    state.device?.attachGeneration != expectedAttachGeneration
-                ) {
-                    onIntent(UiIntent.SetRescueImage(null, null, generation))
-                    onIntent(UiIntent.SetRescueMap(null, null, generation))
-                    onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-                    return@withContext
-                }
-                if (failure != null) {
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(
-                                UiMessageKey.SourceInspectionRejected,
-                                listOf(name ?: target, failure),
-                            ),
-                        ),
-                    )
-                    return@withContext
-                }
-                onIntent(UiIntent.SetRescueArchiveTree(null))
-                mapInspection?.let { inspection ->
-                    onIntent(UiIntent.SetRescueMap(target, inspection, generation))
-                }
-                imageInspection?.let { inspection ->
-                    onIntent(UiIntent.SetRescueImage(target, inspection, generation))
-                }
-            }
-        }
+        safBackup.onRescueFilePicked(uri, state)
     }
 
 
     fun onRescueArchiveFolderPicked(uri: Uri, quiet: Boolean = false) {
-            var imageUri: String? = null
-            var mapUri: String? = null
-            var imageInspection: usb.ui.RescueImageInspection? = null
-            var mapInspection: usb.ui.RescueMapInspection? = null
-            var failureMessage: String? = null
-            try {
-                val folder = SafBackupFolder(resolver, uri)
-                fun entriesOf(documents: List<usb.saf.SafDocument>) = documents.map {
-                    BackupArchive.Entry(
-                        name = it.name,
-                        uri = it.uri.toString(),
-                        isDirectory = it.isDirectory,
-                        sizeBytes = it.sizeBytes,
-                    )
-                }
-                val rootDocuments = folder.listRootFiles()
-                // The shared folder may also hold GPT critical backups; they are not
-                // part of the image+map pair and must not reject it as unexpected.
-                val rootEntries = entriesOf(rootDocuments).filterNot { isGptBackupName(it.name) }
-                // Image creation publishes `usb-rescue-*/disk.img`; scan those archives
-                // too, newest first, so one folder still drives create and restore.
-                val archives = rootDocuments
-                    .filter {
-                        it.isDirectory &&
-                            it.name.startsWith("usb-rescue-", ignoreCase = true)
-                    }
-                    .sortedByDescending { it.name }
-                    .map { entriesOf(folder.listChildren(it.uri)) }
-                val candidates = listOf(rootEntries) + archives
-                val selections = candidates.map { BackupArchive.select(it) }
-                // A filename-complete but corrupt newest map must not hide an older
-                // usable archive; validate the map before accepting the pair.
-                val selection = selections
-                    .filterIsInstance<BackupArchive.Selection.Ready>()
-                    .firstOrNull { ready ->
-                        ready.pair.maps.any { candidate ->
-                            runCatching {
-                                RestoreSourceInspector.inspectMap(
-                                    uri = candidate.uri,
-                                    name = candidate.name,
-                                    sizeBytes = candidate.sizeBytes,
-                                    text = folder.readText(
-                                        Uri.parse(candidate.uri),
-                                        RescueMap.MAX_ENCODED_CHARS,
-                                    ),
-                                )
-                            }.getOrNull()?.let { inspection ->
-                                val summary = inspection.summary
-                                if (inspection.failure != null || inspection.error != null || summary == null) {
-                                    false
-                                } else {
-                                    val sectorSize =
-                                        summary.sectorSize ?: state.diskSectorSize.takeIf { it > 0 }
-                                    val format = classifyRescueImage(
-                                        resolver,
-                                        Uri.parse(ready.pair.image.uri),
-                                        ready.pair.image.name,
-                                    )
-                                    (summary.kind != usb.diagnostics.MapKind.COPY ||
-                                        summary.nonTriedSectors == 0UL) &&
-                                        (sectorSize == null ||
-                                            usb.ui.rescueImageLengthIssue(
-                                                ready.pair.image.sizeBytes,
-                                                summary.sectorCount,
-                                                sectorSize,
-                                                format,
-                                            ) == null)
-                                }
-                            } == true
-                        }
-                    }
-                    ?: selections
-                        .filterIsInstance<BackupArchive.Selection.Invalid>()
-                        .firstOrNull { it.problem != BackupArchive.Problem.Empty }
-                    ?: BackupArchive.select(emptyList())
-                when (selection) {
-                    is BackupArchive.Selection.Invalid -> invalid = selection
-                    is BackupArchive.Selection.Ready -> {
-                        val pair = selection.pair
-                        imageUri = pair.image.uri
-                        val imageFormat = classifyRescueImage(
-                            resolver,
-                            Uri.parse(pair.image.uri),
-                            pair.image.name,
-                        )
-                        imageInspection = RestoreSourceInspector.inspectImage(
-                            uri = pair.image.uri,
-                            name = pair.image.name,
-                            sizeBytes = pair.image.sizeBytes,
-                            format = imageFormat,
-                            lastModified = contentLastModified(
-                                resolver,
-                                Uri.parse(pair.image.uri),
-                            ),
-                        )
-                        val imageBytes = pair.image.sizeBytes
-                        val rejections = mutableListOf<String>()
-                        // Canonical first, then newest generation. A truncated/older map
-                        // never hides a valid one; a partial COPY is not chosen.
-                        for (candidate in pair.maps) {
-                            val inspection = try {
-                                RestoreSourceInspector.inspectMap(
-                                    uri = candidate.uri,
-                                    name = candidate.name,
-                                    sizeBytes = candidate.sizeBytes,
-                                    text = folder.readText(
-                                        Uri.parse(candidate.uri),
-                                        RescueMap.MAX_ENCODED_CHARS,
-                                    ),
-                                )
-                            } catch (failure: Throwable) {
-                                rejections += "${candidate.name}: " +
-                                    usb.ui.normalizeProviderText(
-                                        failure.message ?: failure.javaClass.simpleName,
-                                    )
-                                continue
-                            }
-                            val summary = inspection.summary
-                            if (inspection.failure != null || inspection.error != null || summary == null) {
-                                rejections += "${candidate.name}: " +
-                                    (inspection.error ?: "map details unavailable")
-                                continue
-                            }
-                            if (summary.kind == usb.diagnostics.MapKind.COPY &&
-                                summary.nonTriedSectors > 0UL
-                            ) {
-                                rejections += "${candidate.name}: incomplete checkpoint " +
-                                    "(${summary.nonTriedSectors} nontried sectors)"
-                                continue
-                            }
-                            val liveSectorSize = state.diskSectorSize.takeIf { it > 0 }
-                            if (summary.sectorSize != null && liveSectorSize != null &&
-                                summary.sectorSize != liveSectorSize
-                            ) {
-                                rejections += "${candidate.name}: sector size " +
-                                    "${summary.sectorSize} != $liveSectorSize"
-                                continue
-                            }
-                            if (liveSectorSize != null) {
-                                val liveSectors = state.device?.capacityBytes?.let {
-                                    it / liveSectorSize.toULong()
-                                }
-                                if (liveSectors != null && summary.sectorCount > liveSectors) {
-                                    rejections += "${candidate.name}: covers " +
-                                        "${summary.sectorCount} > $liveSectors sectors"
-                                    continue
-                                }
-                            }
-                            val sectorSize = summary.sectorSize
-                                ?: state.diskSectorSize.takeIf { it > 0 }
-                            if (sectorSize != null) {
-                                when (
-                                    usb.ui.rescueImageLengthIssue(
-                                        imageBytes,
-                                        summary.sectorCount,
-                                        sectorSize,
-                                        imageFormat,
-                                    )
-                                ) {
-                                    usb.ui.RescueImageLengthIssue.SHORT -> {
-                                        val expected = BackupArchive.expectedImageBytes(
-                                            summary.sectorCount,
-                                            sectorSize,
-                                        )
-                                        rejections += "${candidate.name}: image is " +
-                                            "$imageBytes bytes; map needs at least $expected"
-                                        continue
-                                    }
-                                    usb.ui.RescueImageLengthIssue.OVERFLOW -> {
-                                        rejections += "${candidate.name}: geometry overflows"
-                                        continue
-                                    }
-                                    null -> Unit
-                                }
-                            }
-                            mapUri = candidate.uri
-                            mapInspection = inspection
-                            break
-                        }
-                        if (mapUri == null) {
-                            failureMessage = rejections.joinToString("; ").ifEmpty {
-                                "no readable map for ${pair.image.name}"
-                            }
-                        }
-                    }
-                }
-            } catch (failure: Throwable) {
-                failureMessage = usb.ui.normalizeProviderText(
-                    failure.message ?: failure.javaClass.simpleName,
-                )
-            }
-            withContext(Dispatchers.Main.immediate) {
-                if (generation != rescueArchivePickGeneration.get()) return@withContext
-                if (expectedAttachGeneration != null &&
-                    state.device?.attachGeneration != expectedAttachGeneration
-                ) {
-                    onIntent(UiIntent.SetRescueArchiveTree(null))
-                    onIntent(UiIntent.SetRescueImage(null, null, generation))
-                    onIntent(UiIntent.SetRescueMap(null, null, generation))
-                    onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-                    return@withContext
-                }
-                val rejection = failureMessage
-                if (rejection != null) {
-                    onIntent(UiIntent.SetRescueArchiveTree(null))
-                    onIntent(UiIntent.SetRescueImage(null, null, generation))
-                    onIntent(UiIntent.SetRescueMap(null, null, generation))
-                    if (!quiet) {
-                        onIntent(
-                            UiIntent.Status(
-                                UiMessage.Key(UiMessageKey.ArchiveUnreadable),
-                            ),
-                        )
-                    }
-                    return@withContext
-                }
-                invalid?.let {
-                    onIntent(UiIntent.SetRescueArchiveTree(null))
-                    onIntent(UiIntent.SetRescueImage(null, null, generation))
-                    onIntent(UiIntent.SetRescueMap(null, null, generation))
-                    if (!quiet) onIntent(UiIntent.Status(UiReducer.archiveInvalidMessage(it)))
-                    return@withContext
-                }
-                onIntent(UiIntent.SetRescueArchiveTree(uri.toString()))
-                onIntent(UiIntent.SetRescueImage(imageUri, imageInspection, generation))
-                onIntent(UiIntent.SetRescueMap(mapUri, mapInspection, generation))
-            }
-        }
+        safBackup.onRescueArchiveFolderPicked(uri, quiet, state)
     }
 
     fun onUsbDeviceAttached(
@@ -2772,7 +2458,7 @@ class MainViewModel(
                                 UiMessageKey.CannotReadPartitionTable
                             }
                             onIntent(UiIntent.Status(
-                                UiMessage.Key(key),
+                                UiMessage.Key(key, listOf(err.message ?: err.javaClass.simpleName)),
                             ))
                         }
                     } }
@@ -2835,8 +2521,16 @@ class MainViewModel(
                                         UiMessageKey.PermissionRequired
                                     else -> UiMessageKey.CannotReadPartitionTable
                                 }
-                                // Throwable detail stays in logs/journal, not status Key args.
-                                onIntent(UiIntent.Status(UiMessage.Key(key)))
+                                val detail = buildString {
+                                    append(outcome.cause.message ?: outcome.cause.javaClass.simpleName)
+                                    probeCloseFailure?.let { closeFailure ->
+                                        if (closeFailure !== outcome.cause && outcome.cause.suppressed.none { it === closeFailure }) {
+                                            append("; release: ")
+                                            append(closeFailure.message ?: closeFailure.javaClass.simpleName)
+                                        }
+                                    }
+                                }
+                                onIntent(UiIntent.Status(UiMessage.Key(key, listOf(detail))))
                             }
                         }
                     }
@@ -2977,7 +2671,7 @@ class MainViewModel(
                                 UiMessageKey.CannotReadPartitionTable
                             }
                             onIntent(UiIntent.Status(
-                                UiMessage.Key(key),
+                                UiMessage.Key(key, listOf(err.message ?: err.javaClass.simpleName)),
                             ))
                         }
                     }
@@ -3026,7 +2720,10 @@ class MainViewModel(
                                 else -> UiMessageKey.CannotReadPartitionTable
                             }
                             onIntent(UiIntent.Status(
-                                UiMessage.Key(key),
+                                UiMessage.Key(
+                                    key,
+                                    listOf(outcome.cause.message ?: outcome.cause.javaClass.simpleName),
+                                ),
                             ))
                         }
                     }
@@ -3140,12 +2837,9 @@ class MainViewModel(
                     // still surfaces its cause (claim stays latched fail-closed);
                     // busy/stale stays a rescan prompt with nothing touched.
                     if (result is CloseEpochResult.ClosedFailed) {
-                        onIntent(
-                            UiIntent.Status(
-                                result.error.toOperationFailure()?.let(UiMessage::Failure)
-                                    ?: UiMessage.Key(UiMessageKey.VolumeSyncUnconfirmed),
-                            ),
-                        )
+                        onIntent(UiIntent.Status(UiMessage.Raw(
+                            result.error.message ?: result.error.javaClass.simpleName,
+                        )))
                     }
                     onIntent(
                         UiIntent.EjectResulted(
@@ -3174,6 +2868,7 @@ class MainViewModel(
                                 identity = pinIdentity,
                                 attachGeneration = pinGeneration,
                                 succeeded = false,
+                                message = result.error.message ?: result.error.javaClass.simpleName,
                             ),
                         )
                     is CloseEpochResult.NotOwned ->
@@ -3231,6 +2926,7 @@ class MainViewModel(
                 UiIntent.Status(
                     UiMessage.Key(
                         UiMessageKey.VolumeSyncUnconfirmed,
+                        listOf(error.message ?: error.javaClass.simpleName),
                     ),
                 ),
             )
@@ -3612,6 +3308,7 @@ class MainViewModel(
                                 UiIntent.Status(
                                     UiMessage.Key(
                                         UiMessageKey.DeleteStagingFailed,
+                                        listOf(detail),
                                     ),
                                 ),
                             )
@@ -3742,6 +3439,7 @@ class MainViewModel(
                     if (failure !is java.util.concurrent.CancellationException &&
                         measurementScope.isActive
                     ) {
+                        val detail = failure?.let { it.message ?: it.javaClass.simpleName }
                         val measured = outcome.getOrNull()
                         withContext(Dispatchers.Main.immediate) {
                             onIntent(
@@ -3750,7 +3448,7 @@ class MainViewModel(
                                     source = effect.source,
                                     bytes = measured?.bytes,
                                     sha256 = measured?.sha256,
-                                    error = null,
+                                    error = detail,
                                     errorKind =
                                         if (failure == null) null else RawMeasureError.Failed,
                                 ),
@@ -4298,7 +3996,9 @@ class MainViewModel(
                     // reopen the folder picker instead of leaving only a generic I/O error.
                     post(
                         UiIntent.Status(
-                            UiMessage.Raw("import folder is gone; pick it again"),
+                            UiMessage.Raw(
+                                failure.message ?: "import folder is gone; pick it again",
+                            ),
                         ),
                     )
                     post(
@@ -4498,12 +4198,7 @@ class MainViewModel(
                 val outcome = handle.await()
                 ticker.cancel()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -4556,8 +4251,8 @@ class MainViewModel(
                         }
                     }
                     onIntent(UiIntent.LoadWindowsImageLinks)
-                } else if (state.operation?.token == token && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                     if (op.failureCause is usb.ventoy.ImportDirectoryMissingException) {
                         // The cached folder list just proved stale: re-read it and reopen the
                         // picker for the same import kind on this exact attachment.
@@ -4627,12 +4322,7 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -4645,8 +4335,8 @@ class MainViewModel(
                 )
                 if (state.operation?.token == token && result.state == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
-                } else if (state.operation?.token == token && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
                 if (activeHandle === handle) activeHandle = null
@@ -4710,12 +4400,7 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -4726,7 +4411,7 @@ class MainViewModel(
                         ),
                     ),
                 )
-                if (state.operation?.token == token && statusMessage != null) onIntent(UiIntent.Status(statusMessage))
+                if (state.operation?.token == token && message != null) onIntent(UiIntent.Status(UiMessage.Raw(message)))
             } finally {
                 activeHandles.remove(handle)
             }
@@ -4962,20 +4647,15 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(UiIntent.OperationUpdated(result.toProgress(
                     token = token, title = opTitle,
                     cancelable = false, resultMessage = op.result,
                 )))
                 if (state.operation?.token == token && result.state == OperationState.Completed) {
                     onIntent(UiIntent.LoadAutounattend(xmlName))
-                } else if (state.operation?.token == token && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally { activeHandles.remove(handle) }
         }
@@ -5095,12 +4775,7 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -5145,8 +4820,8 @@ class MainViewModel(
                         }
                     }
                     onIntent(UiIntent.LoadWindowsImageLinks)
-                } else if (state.operation?.token == token && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
                 activeHandles.remove(handle)
@@ -5854,12 +5529,7 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -5870,8 +5540,8 @@ class MainViewModel(
                         ),
                     )
                 )
-                if (state.operation?.token == token && result.state != OperationState.Completed && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                if (state.operation?.token == token && result.state != OperationState.Completed && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
                 activeHandles.remove(handle)
@@ -5965,12 +5635,7 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -5981,8 +5646,8 @@ class MainViewModel(
                         ),
                     )
                 )
-                if (state.operation?.token == token && result.state != OperationState.Completed && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                if (state.operation?.token == token && result.state != OperationState.Completed && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
                 activeHandles.remove(handle)
@@ -6083,12 +5748,7 @@ class MainViewModel(
             try {
                 val outcome = handle.await()
                 val result = outcome.toOperationResult(op.failureCause)
-                val statusMessage = result.failure?.let(UiMessage::Failure)
-                    ?: when (result.state) {
-                        OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                        OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                        else -> null
-                    }
+                val message = result.toMessage()
                 onIntent(
                     UiIntent.OperationUpdated(
                         result.toProgress(
@@ -6101,8 +5761,8 @@ class MainViewModel(
                 if (state.operation?.token == token && result.state == OperationState.Completed) {
                     onIntent(UiIntent.LoadWindowsImageLinks)
                     onIntent(UiIntent.ClearWindowsSelection)
-                } else if (state.operation?.token == token && statusMessage != null) {
-                    onIntent(UiIntent.Status(statusMessage))
+                } else if (state.operation?.token == token && message != null) {
+                    onIntent(UiIntent.Status(UiMessage.Raw(message)))
                 }
             } finally {
                 activeHandles.remove(handle)
@@ -6318,19 +5978,14 @@ class MainViewModel(
                     is usb.operation.OperationState.Failed -> {
                         val cause = outcome.cause
                         val failure = cause.toOperationFailure()
-                        val detail = FilesOperationPolicy.technicalDetail(cause)
+                        val message = FilesOperationPolicy.technicalDetail(cause)
                         if (plan.postBoundFailure) {
-                            onIntent(listFailure!!(failure, detail))
+                            onIntent(listFailure!!(failure, message))
                         } else if (state.operation?.token == token) {
                             if (plan.postStatus) {
-                                onIntent(
-                                    UiIntent.Status(
-                                        failure?.let(UiMessage::Failure)
-                                            ?: UiMessage.Key(UiMessageKey.FailedStatus),
-                                    ),
-                                )
+                                onIntent(UiIntent.Status(UiMessage.Raw(message)))
                             } else {
-                                onIntent(UiIntent.AppendLog(logLine("$label failed: $detail")))
+                                onIntent(UiIntent.AppendLog(logLine("$label failed: $message")))
                             }
                         }
                         if (plan.postOperationProgress) {
@@ -6350,7 +6005,7 @@ class MainViewModel(
                     }
                     is usb.operation.OperationState.Cancelled -> {
                         if (plan.postBoundFailure) {
-                            onIntent(listFailure!!(OperationFailure.Cancelled, "Cancelled"))
+                            onIntent(listFailure!!(null, "Cancelled"))
                         }
                         if (plan.postOperationProgress) {
                             onIntent(
@@ -6371,19 +6026,15 @@ class MainViewModel(
                     is usb.operation.OperationState.Partial -> {
                         // withWritableVolume already closed under lock; do not close again.
                         val cause = operation.failureCause
-                        val failure = cause.toOperationFailure()
-                        val detail = FilesOperationPolicy.technicalDetail(
-                            cause ?: Exception("Incomplete operation"),
-                        )
-                        if (plan.postBoundFailure) {
-                            onIntent(listFailure!!(failure, detail))
-                        } else if (state.operation?.token == token && plan.postStatus) {
-                            onIntent(
-                                UiIntent.Status(
-                                    failure?.let(UiMessage::Failure)
-                                        ?: UiMessage.Key(UiMessageKey.PartialStatus),
-                                ),
+                        val failure = cause?.toOperationFailure()
+                        val message =
+                            FilesOperationPolicy.technicalDetail(
+                                cause ?: Exception("Incomplete operation"),
                             )
+                        if (plan.postBoundFailure) {
+                            onIntent(listFailure!!(failure, message))
+                        } else if (state.operation?.token == token && plan.postStatus) {
+                            onIntent(UiIntent.Status(UiMessage.Raw(message)))
                         }
                         if (plan.postOperationProgress) {
                             onIntent(
@@ -6439,7 +6090,6 @@ class MainViewModel(
     private class ReadOnlySink {
         @Volatile var readScanResult: ReadScanOutcome? = null
         @Volatile var smartResult: SmartOutcome? = null
-        @Volatile var resultMessage: String? = null
     }
 
 
@@ -6549,20 +6199,17 @@ class MainViewModel(
                     bytesTotal = operation.bytesTotal,
                     bytesPerSecond = operation.currentBytesPerSecond(),
                     cancelable = cancelable,
-                    resultMessage = sink.resultMessage ?: operation.result?.takeIf { it.isNotEmpty() },
+                    resultMessage = operation.result?.takeIf { it.isNotEmpty() },
                     readScanResult = sink.readScanResult,
                     smartResult = sink.smartResult,
                 )
                 when (outcome) {
                     is usb.operation.OperationState.Failed -> {
-                        val statusMessage = result.failure?.let(UiMessage::Failure)
-                            ?: when (result.state) {
-                                OperationState.Failed -> UiMessage.Key(UiMessageKey.FailedStatus)
-                                OperationState.Partial -> UiMessage.Key(UiMessageKey.PartialStatus)
-                                else -> null
-                            }
-                        if (state.operation?.token == token && statusMessage != null) {
-                            onIntent(UiIntent.Status(statusMessage))
+                        val message = result.toMessage()
+                            ?: outcome.cause.message
+                            ?: outcome.cause.javaClass.simpleName
+                        if (state.operation?.token == token) {
+                            onIntent(UiIntent.Status(UiMessage.Raw(message)))
                         }
                         onIntent(UiIntent.OperationUpdated(progress))
                         if (state.operation?.token == token) {
