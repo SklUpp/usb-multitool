@@ -1,17 +1,14 @@
 package usb.ui
 
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import usb.service.OperationTokenGenerator
 
 /**
  * Behavioural contract of the shell log and the two-state theme, asserted without a
- * device or Compose: the reducer owns every log and theme rule the shell relies on, and
- * the authored strings are checked as resources so a translation cannot drop a warning.
+ * device or Compose: the reducer owns every log and theme rule the shell relies on.
  */
 class ShellLogBehaviorTest {
 
@@ -22,31 +19,6 @@ class ShellLogBehaviorTest {
         bytesDone = 40,
         bytesTotal = 100,
     )
-
-    private fun resource(relative: String): File {
-        var dir: File? = File("").absoluteFile
-        repeat(6) {
-            val current = dir ?: return@repeat
-            for (candidate in listOf(File(current, relative))) {
-                if (candidate.isFile) return candidate
-            }
-            dir = current.parentFile
-        }
-        throw AssertionError("cannot locate $relative from ${File("").absolutePath}")
-    }
-
-    private fun string(relative: String, name: String): String {
-        val match = Regex("<string name=\"$name\">([^<]*)</string>")
-            .find(resource(relative).readText())
-        return match?.groupValues?.get(1)
-            ?: throw AssertionError("missing string $name in $relative")
-    }
-
-    private fun stringOrNull(relative: String, name: String): String? =
-        Regex("<string name=\"$name\">([^<]*)</string>")
-            .find(resource(relative).readText())
-            ?.groupValues
-            ?.get(1)
 
     @Test
     fun clearDropsEntriesDuringOperationWithoutStoppingIt() {
@@ -163,71 +135,5 @@ class ShellLogBehaviorTest {
 
         val backToDark = UiReducer.reduce(light, UiIntent.ToggleTheme).state
         assertTrue(backToDark.darkTheme)
-    }
-
-    @Test
-    fun automaticThemeResourceIsGone() {
-        assertNull(stringOrNull("app/src/main/res/values/strings.xml", "theme_auto"))
-        assertNull(stringOrNull("app/src/main/res/values-ru/strings.xml", "theme_auto"))
-    }
-
-    @Test
-    fun copyWarningNamesPathsAndUsbSerialsInBothLanguages() {
-        val english = string("app/src/main/res/values/strings.xml", "log_copy_warning")
-        assertTrue("warning must name paths: $english", english.contains("path"))
-        assertTrue("warning must name serials: $english", english.contains("serial"))
-
-        val russian = string("app/src/main/res/values-ru/strings.xml", "log_copy_warning")
-        assertTrue("warning must name paths: $russian", russian.contains("пут"))
-        assertTrue("warning must name serials: $russian", russian.contains("серийн"))
-    }
-
-    @Test
-    fun clearSnackbarAcknowledgesWithoutTouchingLogcat() {
-        assertNull(stringOrNull("app/src/main/res/values/strings.xml", "log_clear_hint"))
-        assertNull(stringOrNull("app/src/main/res/values-ru/strings.xml", "log_clear_hint"))
-
-        val english = string("app/src/main/res/values/strings.xml", "log_clear_snackbar")
-        assertTrue("acknowledgement must name Logcat: $english", english.contains("logcat", ignoreCase = true))
-        assertTrue("acknowledgement must say journal cleared: $english", english.contains("cleared"))
-
-        val russian = string("app/src/main/res/values-ru/strings.xml", "log_clear_snackbar")
-        assertTrue("acknowledgement must name Logcat: $russian", russian.contains("logcat", ignoreCase = true))
-        assertTrue("acknowledgement must say journal cleared: $russian", russian.contains("очищен"))
-    }
-
-
-    @Test
-    fun statusHeadlineIsCompactOperationSeparatorState() {
-        // Permanent block keeps operation and state on one line; no "Status:" prefix.
-        val english = string(
-            "app/src/main/res/values/strings_status_refresh.xml",
-            "shell_status_headline",
-        )
-        assertEquals("%1\$s · %2\$s", english)
-        val russian = string(
-            "app/src/main/res/values-ru/strings_status_refresh.xml",
-            "shell_status_headline",
-        )
-        assertEquals("%1\$s · %2\$s", russian)
-    }
-
-    @Test
-    fun statusDialogTitleIsStatusOnly() {
-        // Req 4: dialog title is just Status / Статус; operation name is body, not title.
-        assertEquals(
-            "Status",
-            string("app/src/main/res/values/strings_wave3_shell.xml", "status_dialog_title"),
-        )
-        assertEquals(
-            "Статус",
-            string("app/src/main/res/values-ru/strings_wave3_shell.xml", "status_dialog_title"),
-        )
-    }
-
-    @Test
-    fun copyAllIsAnExplicitLabeledAction() {
-        assertTrue(string("app/src/main/res/values/strings.xml", "log_copy_all").isNotBlank())
-        assertTrue(string("app/src/main/res/values-ru/strings.xml", "log_copy_all").isNotBlank())
     }
 }

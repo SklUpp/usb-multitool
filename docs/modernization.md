@@ -52,6 +52,40 @@ Compose BOM 2025.12.01, `compileSdk`/`targetSdk` 36, `minSdk` 28.
 | exFAT buffers | **Уже сделано** | `exfat_fsck_jni.cpp` держит один persistent direct `ByteBuffer` на handle (`kScratchBytes`, `HandleRec.scratch_bb`), большие запросы режет на чанки; `allocateDirect` вызывается только при open |
 | Wipe | **Не переносить** | `Diagnostics.wipe()` уже пишет по 64 KiB одним переиспользуемым буфером. Узкое место — USB/флеш-контроллер, а не `memset`; native-цикл всё равно должен вернуться в Java USB stack за записью |
 
+### План портирования, если понадобится
+
+Порядок работ и границы, чтобы перенос не обошёл подтверждения, отмену и учёт прогресса.
+
+#### 1. XZ: единственный кандидат с реальным выигрышем по CPU
+
+- Точка входа: `ImageSource.wrap()`/`openRaw()`, формат `ImageFormat.XZ`.
+- Реализация: C API `liblzma` (`lzma_stream_decoder`, `lzma_code`, `lzma_end`) в существующем CMake-таргете `usb_native`; Rust `xz2` не даёт выигрыша, потому что всё равно связывает liblzma и добавляет второй мост.
+- JNI-контракт: `nativeOpenXz(source, memLimitKb) -> handle`, `nativeReadXz(handle, directBuffer) -> int`, `nativeCloseXz(handle)`. Один persistent direct buffer 64 KiB на handle; без аллокаций на чтение.
+- Источник: для `File`/`ParcelFileDescriptor` передавать fd; для `ContentResolver`/HTTP без fd — Java read-callback либо оставить Java-путь. Нельзя требовать seekable fd от SAF.
+- Лимит: `lzma_stream_decoder(..., memlimit, ...)`; `LZMA_MEM_ERROR` маппить в `IOException`, а не в native abort. Это не отменяет общий RSS: словарь всё равно занимает память, просто вне ART heap.
+- Отмена/закрытие: `close()` из другого потока вызывает `lzma_end`; `nativeReadXz` проверяет cancel-флаг, иначе отмена повиснет до конца блока.
+- Совместимость: сохранить текущий контракт `InputStream`/`CountedInputStream`, `decodedSize`, `snapshot`, `skip` и подсчёт SHA-256 на стороне Kotlin.
+- Приёмка: benchmark на реальном ARM64-телефоне (decode time, wall time, PSS/native heap), корпус битых XZ, словарь >64 MiB, concatenated/truncated streams. Переключать default только если decode > I/O и лимит памяти доказан.
+
+#### 2. exFAT: перенос уже не нужен
+
+- Сейчас `HandleRec` хранит `scratch_bb` (global ref) и `scratch_ptr`; `java_transfer` режет запрос на `scratch_bytes` и вызывает Java read/write без `allocateDirect` на сектор.
+- Замена direct ByteBuffer на `malloc` не даёт выигрыша: обе области вне Java heap; меняется только владелец и lifetime.
+- Если трогать, то только для устранения конкретного профиля (например, JNI GlobalRef pressure), с тестом на close/GC и без изменения FS-контракта.
+
+#### 3. Wipe: native-цикл не оправдан
+
+- `Diagnostics.wipe()` уже использует один `ByteBuffer` и `TransferPlan.MAX_CHUNK`; накладные — USB Bulk-Only/SCSI и FTL, не `memset`.
+- Native wipe должен был бы вызывать тот же `usb_block_write`, но при этом сохранить `DestructiveConfirmation`, `DiskOperation` token/progress/cancel и телеметрию. Иначе появляется второй путь записи в обход защиты — это не optimization, а security regression.
+- Допустимая локальная оптимизация без native: переиспользуемый direct zero-buffer и/или chunk size, подтверждённый SCSI/USB стеком.
+
+#### Условия запуска портирования
+
+1. Профиль показывает, что декодирование/нуление — узкое место, а не USB I/O.
+2. Для XZ есть требование поддерживать словари >64 MiB либо decode заметно быстрее Java.
+3. Реализация идёт за feature flag с Java fallback; default не меняется до benchmark + fuzz + release-проверки.
+4. Любой native-путь записи обязан проходить через существующие confirmation/operation guards, а не дублировать их.
+
 ## Проверено: менять не нужно
 
 - `ActivityResultContracts.CreateDocument(String)` — актуальная перегрузка; без параметра — deprecated.
