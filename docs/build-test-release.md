@@ -95,9 +95,31 @@ Artifacts:
 - `app-debug-apk` — debug APK (`verify`, always);
 - `unit-test-reports` — JVM test reports/results (`unit-tests`, on failure).
 
-APK не подписывается release-ключом и предназначен для тестирования, не для
-распространения. Release workflow отсутствует; версия задаётся в
-`app/build.gradle.kts`.
+## Release
+
+Workflow `.github/workflows/android-release.yml`.
+
+Триггеры:
+- push тега `v*` — собрать подписанный APK и опубликовать GitHub Release;
+- `workflow_dispatch` с существующим тегом — пересобрать/перезалить assets;
+- `workflow_dispatch` без тега — только artifact, без Release.
+
+Секреты репозитория:
+- `ANDROID_KEYSTORE_BASE64` — keystore в base64;
+- `ANDROID_KEYSTORE_PASSWORD`;
+- `ANDROID_KEY_ALIAS`;
+- `ANDROID_KEY_PASSWORD`.
+
+Workflow собирает `:app:assembleRelease` и `:app:lintRelease`, проверяет
+16 KiB alignment и подпись, кладёт `usb-multitool-<version>-<versionCode>.apk`
+и `.sha256` в artifact, затем создаёт/обновляет Release. `versionName` берётся
+из тега без `v`; `versionCode = 1000 + github.run_number`. Локальный release
+без этих секретов не подписывается и для распространения не годится.
+
+Fallback версии — `defaultConfig` в `app/build.gradle.kts` (`versionCode = 1`,
+`versionName = "0.1.0"`); release workflow переопределяет обе через
+`-PreleaseVersionCode`/`-PreleaseVersionName`. Тег обязан иметь вид
+`vMAJOR.MINOR.PATCH`; workflow создаёт Release и загружает APK + SHA-256.
 
 ## Что покрыто тестами
 

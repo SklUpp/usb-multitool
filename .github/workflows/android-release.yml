@@ -1,0 +1,198 @@
+name: android-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build/release (for example v0.2.0). Leave empty to build an artifact only."
+        required: false
+        type: string
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Resolve version
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+            publish=true
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            publish=true
+          else
+            tag=""
+            publish=false
+          fi
+
+          if [ -n "$tag" ]; then
+            case "$tag" in
+              v*) ;;
+              *) echo "Release tag must start with v: $tag" >&2; exit 1 ;;
+            esac
+            version="${tag#v}"
+          else
+            version="0.1.0"
+          fi
+
+          code=$((1000 + RUN_NUMBER))
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "versionCode=$code"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.meta.outputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Fetch pinned engines
+        run: ./scripts/fetch-third-party.sh
+
+      - name: Cache Rust toolchain and cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup/toolchains/1.99.1-*
+          key: rust-1.99.1-${{ hashFiles('app/src/main/rust/sf-bridge/Cargo.lock') }}
+
+      - name: Set up Rust 1.99.1 for the rescue engine
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup target add --toolchain 1.99.1 aarch64-linux-android
+
+      - name: SectorForge engine fault tests
+        run: cargo +1.99.1 test --locked --manifest-path app/src/main/rust/sf-bridge/Cargo.toml
+
+      - name: Set up Java 21
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Cache Android SDK and NDK
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/29.0.14206865
+            /usr/local/lib/android/sdk/cmake/3.22.1
+            /usr/local/lib/android/sdk/platforms/android-36
+            /usr/local/lib/android/sdk/build-tools/36.0.0
+          key: android-release-sdk-${{ hashFiles('gradle/libs.versions.toml') }}
+
+      - name: Install SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865" \
+            "cmake;3.22.1"
+
+      - name: Materialize signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?ANDROID_KEYSTORE_BASE64 secret is required}"
+          : "${KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD secret is required}"
+          : "${KEY_ALIAS:?ANDROID_KEY_ALIAS secret is required}"
+          : "${KEY_PASSWORD:?ANDROID_KEY_PASSWORD secret is required}"
+
+          keystore="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          test -s "$keystore"
+
+          {
+            echo "USB_KEYSTORE_PATH=$keystore"
+            echo "USB_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "USB_KEY_ALIAS=$KEY_ALIAS"
+            echo "USB_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed release
+        env:
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          VERSION_CODE: ${{ steps.meta.outputs.versionCode }}
+        run: |
+          ./gradlew :app:assembleRelease :app:lintRelease --no-daemon \
+            -PreleaseVersionName="$VERSION_NAME" \
+            -PreleaseVersionCode="$VERSION_CODE"
+
+      - name: Verify 16 KB page-size alignment
+        run: ./scripts/check-16kb-alignment.sh app/build/outputs/apk/release/*.apk
+
+      - name: Verify signature
+        run: |
+          apk=$(find app/build/outputs/apk/release -name '*.apk' -type f | head -1)
+          test -n "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk"
+
+      - name: Package release assets
+        env:
+          VERSION_NAME: ${{ steps.meta.outputs.version }}
+          VERSION_CODE: ${{ steps.meta.outputs.versionCode }}
+        run: |
+          set -euo pipefail
+          apk=$(find app/build/outputs/apk/release -name '*.apk' -type f | head -1)
+          test -n "$apk"
+          mkdir -p dist
+          out="dist/usb-multitool-${VERSION_NAME}-${VERSION_CODE}.apk"
+          cp "$apk" "$out"
+          (cd dist && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: app-release-apk
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          assets=(dist/*.apk dist/*.sha256)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" \
+              --title "$TAG" \
+              --notes "Build from ${GITHUB_SHA}."
+          fi

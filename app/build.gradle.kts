@@ -41,8 +41,15 @@ android {
         // Bump versionCode by 1 when a new installable version is released (not on every
         // CI build). versionName follows MAJOR.MINOR.PATCH and never decreases.
         // See README → App versions.
-        versionCode = 1
-        versionName = "0.1.0"
+        // Release workflows override these through Gradle properties; local builds keep
+        // the checked-in defaults.
+        val releaseVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.toIntOrNull()
+        val releaseVersionName = providers.gradleProperty("releaseVersionName").orNull
+        require(releaseVersionCode == null || releaseVersionCode > 0) {
+            "releaseVersionCode must be a positive integer"
+        }
+        versionCode = releaseVersionCode ?: 1
+        versionName = releaseVersionName?.takeIf { it.isNotBlank() } ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += listOf("arm64-v8a")

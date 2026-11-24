@@ -144,11 +144,12 @@ APK подписан debug-ключом и предназначен для те�
 
 ### Версии приложения
 
-Единственный источник версии — `defaultConfig` в `app/build.gradle.kts` (сейчас `versionCode = 1`, `versionName = "0.1.0"`).
+Fallback версии — `defaultConfig` в `app/build.gradle.kts` (`versionCode = 1`, `versionName = "0.1.0"`); release workflow переопределяет её.
 
-- `versionCode` увеличивается на 1 при выпуске новой устанавливаемой версии, а не на каждом прогоне CI: проверочные сборки версию не меняют. Выпущенные значения `versionCode` не повторяются и не уменьшаются, иначе Android не сможет сравнить две установки.
-- `versionName` следует MAJOR.MINOR.PATCH и не убывает; тег, когда теги появятся, — `v<versionName>`.
+- `versionCode` релиза = `1000 + github.run_number`; проверочные debug-сборки не меняют версию. Выпущенные значения не повторяются и не уменьшаются.
+- `versionName` берётся из тега `v<MAJOR.MINOR.PATCH>`; Release workflow собирает подписанный APK и публикует GitHub Release.
 - Заголовок приложения показывает установленную `versionName` из `PackageManager`: после сайдлоада видно версию, реально стоящую на устройстве.
+- Секреты подписи и запуск: [docs/build-test-release.md](docs/build-test-release.md#release).
 
 Стек: Kotlin 2.2.10, Jetpack Compose (BOM 2025.12.01), AGP 8.13.2, Gradle 8.13, NDK 29.0.14206865, CMake 3.22.1, Java 21 в CI. Тесты — JUnit 4, MockK, kotlinx-coroutines-test; native host-тесты собираются обычным `make`/`gcc`.
 
