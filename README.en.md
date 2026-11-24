@@ -142,11 +142,12 @@ All Gradle/NDK commands run only in GitHub Actions. The exact step order, the
 
 ### App versions
 
-`defaultConfig` in `app/build.gradle.kts` is the only source of the version (currently `versionCode = 1`, `versionName = "0.1.0"`).
+`defaultConfig` in `app/build.gradle.kts` is the fallback version (`versionCode = 1`, `versionName = "0.1.0"`); the release workflow overrides it.
 
-- `versionCode` increases by 1 when a new installable version is released, not on every CI run: verification builds keep the version unchanged. Released `versionCode` values never repeat or decrease, otherwise Android cannot compare two installs.
-- `versionName` follows MAJOR.MINOR.PATCH and never decreases; a release tag, once tags exist, is `v<versionName>`.
+- Release `versionCode` is `1000 + github.run_number`; verification debug builds keep the default version. Released values never repeat or decrease.
+- `versionName` comes from the `v<MAJOR.MINOR.PATCH>` tag; the release workflow builds the signed APK and publishes a GitHub Release.
 - The app header shows the installed `versionName` from `PackageManager`, so after a sideload it displays the version actually on the device.
+- Signing secrets and release commands: [docs/build-test-release.md](docs/build-test-release.md#release).
 
 The project uses Kotlin 2.2.10, Jetpack Compose (BOM 2025.12.01), AGP 8.13.2, Gradle 8.13, NDK 29.0.14206865, CMake 3.22.1, and Java 21 in CI. Tests use JUnit 4, MockK, and kotlinx-coroutines-test. Native host tests build with `make` and `gcc`.
 
