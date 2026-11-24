@@ -970,4 +970,6 @@
     <string name="msg_rescue_map_required">Выберите файл карты .map</string>
     <string name="partitions_raw_range_whole_disk">Начало диска: таблица разделов и загрузочные секторы в пределах образа будут перезаписаны</string>
     <string name="msg_upload_selection_empty">Файлы не выбраны</string>
+    <string name="action_starting">Запуск…</string>
+    <string name="action_cancelling">Отмена…</string>
 </resources>

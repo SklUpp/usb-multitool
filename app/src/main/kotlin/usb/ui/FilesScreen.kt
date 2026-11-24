@@ -1,6 +1,5 @@
 package usb.ui
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.RepeatMode
@@ -73,6 +72,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -265,7 +265,7 @@ fun FilesScreen(
             Surface(
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.tertiaryContainer,
-                modifier = Modifier.fillMaxWidth().animateContentSize(),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text = blockedRelease!!.localized(),
@@ -312,7 +312,7 @@ fun FilesScreen(
                     Surface(
                         shape = MaterialTheme.shapes.small,
                         color = MaterialTheme.colorScheme.tertiaryContainer,
-                        modifier = Modifier.fillMaxWidth().animateContentSize(),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
                             text = blockedRelease!!.localized(),
@@ -796,13 +796,18 @@ private fun FilesPickScreen(
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) { target ->
         val listState = rememberLazyListState()
-        LaunchedEffect(
+        val scrollKey = listOf(
             target.partitionId,
             target.path,
             target.identity,
             target.attachGeneration,
-        ) {
-            listState.scrollToItem(0)
+        ).joinToString("|")
+        var lastScrollKey by rememberSaveable { mutableStateOf<String?>(null) }
+        LaunchedEffect(scrollKey) {
+            if (lastScrollKey != scrollKey) {
+                lastScrollKey = scrollKey
+                listState.scrollToItem(0)
+            }
         }
         LazyColumn(
             state = listState,
@@ -915,7 +920,7 @@ private fun FilesPickScreen(
                         }
                     EmptyHint(stringResource(emptyText))
                 }
-                    else -> items(pickRows, key = { it.name }) { entry ->
+                    else -> items(pickRows, key = { "pick-file:${it.name}" }) { entry ->
                     // Snapshot row: leaving content never sees live-list swaps mid-transition.
                     val picked = selectedPickState?.value?.takeIf { it.name == entry.name }
                         ?.takeIf { live -> live in pickRows }
@@ -1040,13 +1045,18 @@ private fun FolderCard(
 ) {
     val loadingDescription = stringResource(R.string.files_listing)
     val listState = rememberLazyListState()
-    LaunchedEffect(
+    val scrollKey = listOf(
         state.selectedPartitionId,
         state.currentPath,
         state.device?.identity,
         state.device?.attachGeneration,
-    ) {
-        listState.scrollToItem(0)
+    ).joinToString("|")
+    var lastScrollKey by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(scrollKey) {
+        if (lastScrollKey != scrollKey) {
+            lastScrollKey = scrollKey
+            listState.scrollToItem(0)
+        }
     }
     val rows = remember(state.files) {
         state.files.sortedWith(
@@ -1087,7 +1097,7 @@ private fun FolderCard(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 80.dp),
+                contentPadding = PaddingValues(bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 userScrollEnabled = true
             ) {
@@ -1173,7 +1183,7 @@ private fun FolderCard(
                             )
                         }
                     }
-                    else -> items(visibleRows, key = { it.name }) { entry ->
+                    else -> items(visibleRows, key = { "file:${it.name}" }) { entry ->
                         FileRow(
                             entry = entry,
                             actionsEnabled = canAct && !locked,
@@ -1913,6 +1923,23 @@ internal fun filesBatchConflictPathDisplay(conflict: FilesConflict): String {
     return conflict.name
 }
 
+/** Pulsing border only while bytes move; idle/terminal rows stay static. */
+@Composable
+private fun uploadOutlineAlpha(running: Boolean): Float {
+    if (!running) return 0.25f
+    val infinite = rememberInfiniteTransition(label = "upload-outline")
+    val glow by infinite.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "upload-outline-alpha",
+    )
+    return glow
+}
+
 /**
  * Expanded copy control: the picker button grows into one 56 dp row with the current
  * SAF name, percent and live speed. The outline pulses only while bytes are moving, so
@@ -1925,19 +1952,14 @@ private fun UploadProgressRow(
     modifier: Modifier = Modifier,
 ) {
     val running = operation.state == OperationState.Running || operation.state == OperationState.Queued
-    val failed = operation.state == OperationState.Failed
+    val failed = operation.state == OperationState.Failed ||
+        operation.state == OperationState.Cancelled ||
+        operation.state == OperationState.Partial
     val cancelLabel = stringResource(R.string.action_cancel)
+    val cancellingLabel = stringResource(R.string.action_cancelling)
     val shape = RoundedCornerShape(28.dp)
-    val infinite = rememberInfiniteTransition(label = "upload-outline")
-    val glow by infinite.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "upload-outline-alpha",
-    )
+    var cancelRequested by remember(operation.token) { mutableStateOf(false) }
+    val glow = uploadOutlineAlpha(running && !cancelRequested && operation.bytesPerSecond > 0L)
     val container = when {
         failed -> MaterialTheme.colorScheme.errorContainer
         operation.state == OperationState.Completed -> MaterialTheme.colorScheme.secondaryContainer
@@ -1956,7 +1978,7 @@ private fun UploadProgressRow(
             .heightIn(min = 56.dp)
             .border(
                 width = 2.dp,
-                color = content.copy(alpha = if (running) glow else 0.25f),
+                color = content.copy(alpha = glow),
                 shape = shape,
             ),
     ) {
@@ -1968,13 +1990,22 @@ private fun UploadProgressRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(32.dp)) {
-                CircularProgressIndicator(
-                    progress = { operation.fraction },
-                    modifier = Modifier.fillMaxSize(),
-                    strokeWidth = 2.5.dp,
-                    color = content,
-                    trackColor = content.copy(alpha = 0.25f),
-                )
+                if (operation.bytesTotal > 0L) {
+                    CircularProgressIndicator(
+                        progress = { operation.fraction },
+                        modifier = Modifier.fillMaxSize(),
+                        strokeWidth = 2.5.dp,
+                        color = content,
+                        trackColor = content.copy(alpha = 0.25f),
+                    )
+                } else {
+                    CircularProgressIndicator(
+                        modifier = Modifier.fillMaxSize(),
+                        strokeWidth = 2.5.dp,
+                        color = content,
+                        trackColor = content.copy(alpha = 0.25f),
+                    )
+                }
                 if (!running) {
                     GlyphIcon(
                         glyph = if (failed) Glyph.Close else Glyph.Check,
@@ -1996,8 +2027,14 @@ private fun UploadProgressRow(
                 val speed = operation.bytesPerSecond
                     .takeIf { running && it > 0L }
                     ?.let(::formatBinaryBytesPerSecond)
+                val progressText = when {
+                    cancelRequested -> cancellingLabel
+                    operation.bytesTotal <= 0L ->
+                        formatBinarySize(operation.bytesDone)
+                    else -> listOfNotNull("$percent%", speed).joinToString(", ")
+                }
                 Text(
-                    text = listOfNotNull("$percent%", speed).joinToString(", "),
+                    text = progressText,
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = FontFamily.Monospace,
                         fontFeatureSettings = "tnum",
@@ -2006,11 +2043,23 @@ private fun UploadProgressRow(
             }
             if (running && onCancel != null) {
                 IconButton(
-                    onClick = onCancel,
+                    onClick = {
+                        cancelRequested = true
+                        onCancel()
+                    },
+                    enabled = !cancelRequested,
                     modifier = Modifier
                         .size(48.dp)
-                        .semantics { contentDescription = stringResource(R.string.action_cancel) },
-                ) { GlyphIcon(Glyph.Stop, size = 20.dp, tint = content) }
+                        .semantics {
+                            contentDescription = if (cancelRequested) cancellingLabel else cancelLabel
+                        },
+                ) {
+                    GlyphIcon(
+                        glyph = Glyph.Stop,
+                        size = 20.dp,
+                        tint = content,
+                    )
+                }
             }
         }
     }

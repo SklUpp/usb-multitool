@@ -340,7 +340,7 @@ internal fun OperationStatusHost(
                 val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
                 val animatedFraction by animateFloatAsState(
                     targetValue = fraction,
-                    animationSpec = tween(240),
+                    animationSpec = tween(100),
                     label = "status-progress",
                 )
                 val percent = "${(animatedFraction * 100f).roundToInt()}%"

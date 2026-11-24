@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -240,6 +241,7 @@ internal fun ShellTabs(
     val layoutDirection = LocalLayoutDirection.current
     val context = LocalContext.current
     val reducedMotion = remember(context) { reducedMotionEnabled(context) }
+    val tabStateHolder = rememberSaveableStateHolder()
     val swipeThreshold = with(density) {
         ShellSwipePolicy.THRESHOLD_DP.dp.toPx()
     }
@@ -340,6 +342,7 @@ internal fun ShellTabs(
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
+                        tabStateHolder.SaveableStateProvider(target.name) {
                         when (target) {
                             ShellTab.Files -> FilesScreen(
                                 state = state,
@@ -383,6 +386,7 @@ internal fun ShellTabs(
                                 onBack = onBackFromSettings,
                                 onPickBackupFolder = onPickBackupFolder,
                             )
+                        }
                         }
                     }
                 }

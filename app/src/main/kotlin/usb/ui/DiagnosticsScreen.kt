@@ -3,7 +3,6 @@ package usb.ui
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.net.URLDecoder
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -661,7 +660,6 @@ fun DiagnosticsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .animateContentSize()
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {

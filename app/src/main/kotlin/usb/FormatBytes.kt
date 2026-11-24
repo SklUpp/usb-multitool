@@ -13,6 +13,16 @@ fun formatBinaryBytesPerSecond(bytesPerSecond: Long): String {
     val gib = mib / 1024.0
     return String.format(Locale.US, "%.2f GiB/s", gib)
 }
+/** Binary byte count for a progress row; Locale.US keeps unit tests deterministic. */
+fun formatBinarySize(bytes: Long): String {
+    require(bytes >= 0L) { "size must be non-negative" }
+    if (bytes < 1024L) return "$bytes B"
+    val kib = bytes / 1024.0
+    if (kib < 1024.0) return String.format(Locale.US, "%.1f KiB", kib)
+    val mib = kib / 1024.0
+    if (mib < 1024.0) return String.format(Locale.US, "%.2f MiB", mib)
+    return String.format(Locale.US, "%.2f GiB", mib / 1024.0)
+}
 /**
  * Whole seconds left from [bytesDone] to [bytesTotal] at [bytesPerSecond].
  * Null (omit ETA) when the total is unknown, speed is not positive, or nothing

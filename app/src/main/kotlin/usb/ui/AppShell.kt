@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -829,7 +830,23 @@ internal fun OperationAction(
         ownerTab = ownerTab,
         matchesTitle = matchesTitle,
     )
+    // Apply and Cancel share one slot. Hold the apply state briefly after dispatch:
+    // a second tap must not hit the Cancel button that replaces it mid-transition.
+    var starting by remember { mutableStateOf(false) }
+    LaunchedEffect(token, starting) {
+        if (starting) {
+            delay(600)
+            starting = false
+        }
+    }
     when {
+        token != null && applyButton != null && starting -> {
+            Button(
+                onClick = {},
+                enabled = false,
+                modifier = modifier,
+            ) { Text(stringResource(R.string.action_starting)) }
+        }
         token != null && applyButton != null -> {
             Button(
                 onClick = { onIntent(UiIntent.CancelOperation(token)) },
@@ -911,7 +928,7 @@ private fun StatusDialog(
     val op = state.operation
     val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
     val cancelable = running && op?.cancelable == true
-    var cancelTarget by remember { mutableStateOf<OperationProgress?>(null) }
+    var cancelTarget by remember(op?.token) { mutableStateOf<OperationProgress?>(null) }
     val closeLabel = stringResource(R.string.shell_status_close)
     val failureText = op?.failure
         ?.takeIf { it != OperationFailure.Cancelled }
@@ -968,6 +985,10 @@ private fun StatusDialog(
                     )
                 }
                 if (state.operationLogLines.isNotEmpty()) {
+                    val journalState = rememberLazyListState()
+                    LaunchedEffect(state.operationLogLines.size) {
+                        journalState.animateScrollToItem(state.operationLogLines.lastIndex)
+                    }
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerHighest,
                         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -977,6 +998,7 @@ private fun StatusDialog(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         LazyColumn(
+                            state = journalState,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 420.dp)
@@ -1229,7 +1251,12 @@ private fun LogScreen(
         if (lines.isEmpty()) {
             EmptyHint(stringResource(R.string.log_empty))
         } else {
+            val logState = rememberLazyListState()
+            LaunchedEffect(lines.size) {
+                logState.animateScrollToItem(lines.lastIndex)
+            }
             LazyColumn(
+                state = logState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)

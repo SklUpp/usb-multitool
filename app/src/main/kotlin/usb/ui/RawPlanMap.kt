@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -316,7 +317,7 @@ private fun RawUnifiedMap(
         val maxPanPx = (contentPx - availablePx).coerceAtLeast(0f)
         // Pan must survive contentPx remeasures: remember(contentPx) recreated state at 0
         // on every width tweak, so a new drag looked like a jump back to the strip start.
-        var panOffset by remember { mutableStateOf(0f) }
+        var panOffset by rememberSaveable { mutableStateOf(0f) }
         fun currentPan(): Float = panOffset.coerceIn(0f, maxPanPx)
         fun panTo(value: Float) {
             panOffset = value.coerceIn(0f, maxPanPx)

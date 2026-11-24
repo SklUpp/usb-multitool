@@ -969,4 +969,6 @@
     <string name="msg_rescue_map_required">Choose a .map sector map file</string>
     <string name="partitions_raw_range_whole_disk">Disk start: the partition table and boot sectors inside the image will be overwritten</string>
     <string name="msg_upload_selection_empty">No files selected</string>
+    <string name="action_starting">Starting…</string>
+    <string name="action_cancelling">Cancelling…</string>
 </resources>

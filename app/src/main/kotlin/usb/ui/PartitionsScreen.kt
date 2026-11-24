@@ -727,7 +727,7 @@ fun PartitionsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(screenScroll)
-                .padding(bottom = 16.dp),
+                .padding(top = if (pinnedVisible) 72.dp else 0.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             SectionCard(
