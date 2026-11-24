@@ -17,7 +17,6 @@ import usb.service.OperationToken
 import usb.operation.syncDestructiveDisk
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
-import usb.partition.PartitionRef
 import usb.partition.PartitionTable
 import usb.partition.PartitionType
 import usb.partition.PartitionWriter
@@ -30,10 +29,19 @@ import usb.ui.DestructiveAction
 import usb.ui.OperationProgress
 import usb.ui.OperationState
 import usb.ui.OperationTitle
+import usb.ui.PartitionRef
 import usb.ui.PartitionRole
+import usb.ui.toTableScheme
 import usb.ui.UiEffect
 import usb.ui.UiIntent
 import usb.ui.toOperationResult
+import usb.fs.FormatCatalog
+import usb.fs.Formatter
+import usb.fs.Filesystem
+import usb.diagnostics.Diagnostics
+import usb.diagnostics.RescueMap
+import usb.diagnostics.RescueOperations
+import usb.diagnostics.RescueRestorePrep
 import usb.ventoy.VentoyAssets
 import usb.ventoy.VentoyOperations
 import java.io.File
@@ -57,7 +65,7 @@ internal class DestructiveOperationCoordinator(
     private val activeHandles: MutableSet<OperationHandle>,
     private val refreshPartitions: () -> Unit,
     private val readBlob: (String, Int) -> ByteArray,
-    private val readText: (Uri, Int) -> String,
+    private val readText: (String, Int) -> String,
     private val contentInfo: (android.content.ContentResolver, Uri) -> Pair<String?, Long?>,
     private val contentLastModified: (android.content.ContentResolver, Uri) -> Long?,
     private val backupDirectory: () -> File,
@@ -460,7 +468,7 @@ internal class DestructiveOperationCoordinator(
                                     }
                                     val mapText = readText(
                                         mapUri,
-                                        maxChars = RescueMap.MAX_ENCODED_CHARS,
+                                        RescueMap.MAX_ENCODED_CHARS,
                                     )
                                     confirmed.rescueMapInspection?.sha256?.let { expected ->
                                         require(usb.ui.RestoreSourceInspector.sha256Text(mapText) == expected) {
