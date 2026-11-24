@@ -18,7 +18,7 @@ object FilesOperationPolicy {
      * or a NUL byte.
      * Never silently trims — a name that would change under trim is rejected so
      * recursive delete/upload cannot retarget a distinct sibling (e.g. EXT `victim `).
-     * Mirrors UiReducer.validEntryName at the policy boundary (UI gating is not enough
+     * Mirrors FilesReducer.validEntryName at the policy boundary (UI gating is not enough
      * for SAF-reported display names).
      */
     fun requireChildName(rawName: String, source: String): String {

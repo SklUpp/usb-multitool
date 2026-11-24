@@ -28,7 +28,7 @@ class FilesOperationPolicyTest {
 
     @Test
     fun requireChildNameRejectsTraversalSeparatorAndNul() {
-        // Same rule set as UiReducer.validEntryName, plus NUL (illegal in FAT names).
+        // Same rule set as FilesReducer.validEntryName, plus NUL (illegal in FAT names).
         for (raw in listOf("", "   ", ".", "..", "/", "dir/", "a\\b", "..\\x", "a\u0000b")) {
             val error =
                 assertThrows(IllegalArgumentException::class.java) {

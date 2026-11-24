@@ -3016,13 +3016,6 @@ object UiReducer {
     }
 
     /**
-     * Directory-list failures that mean the path is gone (safe to fall back to root).
-     * FatFs absence is the exact nativeList shape `list failed: FR_NO_FILE|FR_NO_PATH`
-     * from fat_jni — never a bare trailing ": 5" from an unrelated I/O exception.
-     * EXT/NTFS absence is the exact jni message `Path not found` (ENOENT only).
-     * Generic `directory listing failed` / EIO stay as [AppUiState.filesFailure].
-     */
-    /**
      * Explicit reason writes to the selected partition are refused, or null when allowed.
      * An EFI partition stays untouched unless the override names that exact partition;
      * lifting it for one ESP never unlocks another.
@@ -3040,10 +3033,6 @@ object UiReducer {
     }
 
     /**
-     * A single FAT entry name: no separators, no dot entries.
-     * Policy twin: [usb.files.FilesOperationPolicy.requireChildName].
-     */
-    /**
      * Canonical equality with the writer via pure [XmlPath.resolve] (no VentoySetup/USB).
      */
     internal fun sameXmlTarget(loaded: String, requested: String): Boolean =
@@ -3053,12 +3042,6 @@ object UiReducer {
         } catch (_: IllegalArgumentException) {
             false
         }
-
-    /**
-     * Refuse the destructive GPT confirmation when the selected file failed bounded
-     * validation or no longer matches the live geometry. A missing inspection is treated
-     * as unavailable, not as a pass; the restore path still revalidates against the disk.
-     */
 
     internal fun isMissingDirectoryListError(message: String): Boolean =
         FilesReducer.isMissingDirectoryListError(message)
