@@ -260,7 +260,7 @@ class MainViewModel(
         data class Download(
             override val selection: FilesBatchSelection,
             val treeUri: String,
-            val cursor: usb.files.FilesOperations.BatchDownloadCursor,
+            val cursor: usb.files.transfer.DownloadCursor,
             val conflict: FilesConflict,
         ) : ParkedFilesBatch()
         data class UploadDocs(
@@ -278,7 +278,7 @@ class MainViewModel(
 
     private class FilesBatchConflictPark(
         val conflict: FilesConflict,
-        val cursor: usb.files.FilesOperations.BatchDownloadCursor? = null,
+        val cursor: usb.files.transfer.DownloadCursor? = null,
         val remainingUris: List<String> = emptyList(),
     ) : Exception("batch conflict parked: ${conflict.pathLabel}")
     private var windowsImageHandle: OperationHandle? = null
@@ -6529,7 +6529,7 @@ class MainViewModel(
         val resolver = getApplication<Application>().contentResolver
         val pin = currentAttachmentPin()
         val rootNames = selection.items.map { it.name }
-        var parkCursor = usb.files.FilesOperations.BatchDownloadCursor(remainingRoots = rootNames)
+        var parkCursor = usb.files.transfer.DownloadCursor(remainingRoots = rootNames)
         val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
         submitFilesOperation(
             title = OperationTitle.DownloadBatch(selection.items.size),

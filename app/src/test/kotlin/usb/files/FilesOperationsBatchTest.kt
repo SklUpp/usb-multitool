@@ -546,7 +546,7 @@ class FilesOperationsBatchTest {
         val (saf, resolver) = RecordingResolver.paired()
         // Conflicting second root so first write mutates then park.
         saf.createExclusiveFile(saf.root, "b.bin", "application/octet-stream")
-        var cursor: FilesOperations.BatchDownloadCursor? = null
+        var cursor: usb.files.transfer.DownloadCursor? = null
         val op = DiskOperation("dl-partial-park")
         val parked = assertThrows(RuntimeException::class.java) {
             FilesOperations.downloadChildren(
@@ -582,7 +582,7 @@ class FilesOperationsBatchTest {
         saf.createExclusiveFile(existingRoot, "keep.bin", "application/octet-stream")
         val existingA = saf.createExclusiveFile(existingRoot, "a.bin", "application/octet-stream")
         resolver.seedOutput(existingA, byteArrayOf(7, 7))
-        val resume = FilesOperations.BatchDownloadCursor(
+        val resume = usb.files.transfer.DownloadCursor(
             remainingRoots = listOf("folder"),
             activeRoot = "folder",
             remainingRelative = listOf("a.bin", "b.bin"),
@@ -639,7 +639,7 @@ class FilesOperationsBatchTest {
             }
         }
         resolver = RecordingResolver.inputsOnly()
-        var cursor: FilesOperations.BatchDownloadCursor? = null
+        var cursor: usb.files.transfer.DownloadCursor? = null
         val op = DiskOperation("dl-ancestor-tail")
         val parked = assertThrows(RuntimeException::class.java) {
             FilesOperations.downloadChildren(
@@ -684,7 +684,7 @@ class FilesOperationsBatchTest {
             }
         }
         resolver = RecordingResolver.inputsOnly()
-        var cursor: FilesOperations.BatchDownloadCursor? = null
+        var cursor: usb.files.transfer.DownloadCursor? = null
         val op = DiskOperation("dl-same-name-nested")
         val parked = assertThrows(RuntimeException::class.java) {
             FilesOperations.downloadChildren(

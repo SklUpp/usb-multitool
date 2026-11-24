@@ -134,22 +134,11 @@ fun FilesBatchSelection.matches(state: AppUiState): Boolean {
 fun FilesBatchSelection.requiresTreeDestination(): Boolean =
     items.size != 1 || items.single().isDirectory
 
-enum class FilesConflictDecision {
-    Skip,
-    ReplaceFile,
-    Cancel,
-}
+/** UI alias for transfer conflict decision; domain type lives in usb.files.transfer. */
+typealias FilesConflictDecision = usb.files.transfer.TransferDecision
 
-/**
- * One name collision discovered during batch transfer. [destinationEmpty] is non-null only for
- * directory destinations (true = verified empty and reusable; false = nonempty, fail-closed).
- */
-data class FilesConflict(
-    val pathLabel: String,
-    val name: String,
-    val isDirectory: Boolean,
-    val destinationEmpty: Boolean? = null,
-)
+/** UI alias for transfer conflict; domain type lives in usb.files.transfer. */
+typealias FilesConflict = usb.files.transfer.TransferConflict
 
 
 

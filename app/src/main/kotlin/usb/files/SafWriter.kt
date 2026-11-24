@@ -37,7 +37,7 @@ class SafWriter(
             if (offset != expectedSize) {
                 error("download size mismatch: got $offset, expected $expectedSize")
             }
-            reportedSize = FilesOperations.openableSizeBytes(resolver, destination)
+            reportedSize = OpenableSafHelpers.openableSizeBytes(resolver, destination)
             if (expectedSize > 0L && reportedSize == 0L) {
                 error("provider reports empty destination after $expectedSize bytes")
             }
