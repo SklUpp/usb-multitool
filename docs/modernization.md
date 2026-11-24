@@ -20,7 +20,7 @@ Compose BOM 2025.12.01, `compileSdk`/`targetSdk` 36, `minSdk` 28.
 ## Очередь правок
 
 Приоритеты: **P1** — сделать до следующего крупного релиза; **P2** — при
-следующем обновлении toolchain; **P3** — гигиена/размер APK; **P4** — косметика.
+следующем обновлении toolchain; **P3** — гигиена/размер APK.
 
 | # | Приоритет | Область | Пути | Проблема | Официальная замена |
 |---|---|---|---|---|---|
@@ -30,18 +30,21 @@ Compose BOM 2025.12.01, `compileSdk`/`targetSdk` 36, `minSdk` 28.
 | 4 | P1 | Ventoy download | `MainActivity.kt:212, 3690-3712`; `VentoyDownloader.kt:556, 595-610` | Долгий HTTPS-download (до 512 MiB) живёт в Activity-scope без foreground service. На Android 15 фоновая сеть вне lifecycle может быть оборвана; задача не переживает смерть процесса | `lifecycleScope`/`repeatOnLifecycle(STARTED)` для UI-bound загрузки либо `WorkManager`/`dataSync` foreground service для продолжения в фоне |
 | 5 | P1 | System bars | `MainActivity.kt:5697-5710` | `statusBarColor`/`navigationBarColor` deprecated в API 35 и не работают в enforced edge-to-edge. Контраст иконок уже исправлен, но сами цвета — мёртвый код | `enableEdgeToEdge`/`SystemBarStyle` из activity 1.17+ и фон под `WindowInsets`; обновлять appearance при смене темы |
 | 6 | P1 | Kotlin DSL | `app/build.gradle.kts:109-111` | `kotlinOptions` deprecated с Kotlin 2.0; блокирует переход на Kotlin 2.3/AGP 9 | `kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }` вне `android {}` |
-| 7 | P2 | Toolchain matrix | `gradle/libs.versions.toml:2-3` | KGP 2.2.10 официально полностью поддерживается с AGP до 8.10.0; проект на AGP 8.13.2. После миграции `kotlinOptions` перейти на Kotlin 2.3.x, поддерживаемый AGP 8.13 | [Kotlin Gradle compatibility](https://kotlinlang.org/docs/gradle-configure-project.html), [AGP 8.13 release notes](https://developer.android.com/build/releases/agp-8-13-0-release-notes) |
-| 8 | P2 | Version lookup | `VentoyUpstreamCache.kt:14`; `AppShell.kt:783` | `getPackageInfo(String, Int)` deprecated на API 33+ | `PackageInfoFlags.of(0)` с legacy fallback ниже 33 |
-| 9 | P3 | Cancel semantics | `MainActivity.kt:5546-5552` | Отмена `OpenMultipleDocuments` приходит пустым списком и показывается как «ничего не выбрано» | Различать отмену через `StartActivityForResult` только если UX требует; иначе считать пустой выбор тихим cancel |
-| 10 | P3 | Документация | `README.md:104`, `README.en.md:102`, `MainActivity.kt:5897` | Утверждается, что `MANAGE_EXTERNAL_STORAGE` объявлен в манифесте; фактически его нет (это правильно) | Удалить строку/комментарий; не добавлять разрешение |
-| 11 | P3 | Build hygiene | `build.gradle.kts:7-10`; `gradle/libs.versions.toml:4-6, 37-38` | `dependencyLocking` без lockfile ничего не блокирует; SDK-алиасы не используются; `tukaani-xz` дублирует `xz` | Либо `--write-locks` и commit lockfile, либо убрать блок; удалить неиспользуемые aliases |
-| 12 | P3 | Dead code | `FilesOperations.kt:22-23` | Устаревший `typealias BatchDownloadCursor` без ссылок | Удалить typealias; фасад `FilesOperations` оставить, пока есть вызовы |
-| 13 | P3 | Date formatting | `AppTraceLogger.kt:85` | Статический `SimpleDateFormat` корректен только пока вызовы идут под общим lock; хрупко при рефакторинге | `java.time`/`DateTimeFormatter` или локальный formatter |
-| 14 | P3 | Receiver lifecycle | `MainActivity.kt` receiver comment; `MainActivity.kt:5856, 5869-5879` | Комментарий обещает unregister между `onStop/onStart`, но `UsbAttachController.stop()` вызывается только из `onDestroy`; Android 14 кэширует broadcast'ы | Исправить комментарий; при необходимости регистрировать/снимать receiver в `onStart`/`onStop` и перепроверять live-устройства |
-| 15 | P3 | Icons | `gradle/libs.versions.toml:27`; `FilesScreen.kt`, `PartitionsScreen.kt`, `VentoyScreen.kt` | `material-icons-extended` больше не рекомендуется и заметно увеличивает APK | Перейти на нужные vector drawables/Material Symbols |
-| 16 | P3 | CI actions | `.github/workflows/android-debug.yml` | `actions/setup-java@v4` больше не обновляется; `checkout/cache/setup-java/upload-artifact` работают на принудительном Node 24 из-за Node 20 deprecation | Обновить majors actions и проверить, что pinned SHAs обновлены осознанно |
-| 17 | P4 | Opt-ins | `RawPlanMap.kt:81`, `PartitionsScreen.kt:121,1447,2210`, `AutounattendSection.kt:1675,2195,2651` | `@OptIn(ExperimentalLayoutApi::class)` на стабильной перегрузке `FlowRow` | Удалить лишние opt-in; experimental-перегрузку не использовать |
-| 18 | P4 | Compose BOM | `gradle/libs.versions.toml:8` | BOM 2025.12.01 старый, но обновление на 2026.11 требует `compileSdk 37.1`, AGP 9/Gradle 9.1; заодно меняет `FlowRow` на `FlexBox` и депрецирует `VisualTransformation` | Не обновлять вслепую: отдельная миграция AGP 9 + BOM, с проверкой UI-тестов |
+| 7 | P2 | Version lookup | `VentoyUpstreamCache.kt:14`; `AppShell.kt:783` | `getPackageInfo(String, Int)` deprecated на API 33+ | `PackageInfoFlags.of(0)` с legacy fallback ниже 33 |
+| 8 | P3 | Документация | `README.md:104`, `README.en.md:102`, `MainActivity.kt:5897` | Утверждается, что `MANAGE_EXTERNAL_STORAGE` объявлен в манифесте; фактически его нет (это правильно) | Удалить строку/комментарий; не добавлять разрешение |
+| 9 | P3 | Build hygiene | `build.gradle.kts:7-10`; `gradle/libs.versions.toml:4-6, 37-38` | `dependencyLocking` без lockfile ничего не блокирует; SDK-алиасы не используются; `tukaani-xz` дублирует `xz` | Либо `--write-locks` и commit lockfile, либо убрать блок; удалить неиспользуемые aliases |
+| 10 | P3 | Dead code | `FilesOperations.kt:22-23` | Устаревший `typealias BatchDownloadCursor` без ссылок | Удалить typealias; фасад `FilesOperations` оставить, пока есть вызовы |
+| 11 | P3 | Receiver lifecycle | `MainActivity.kt` receiver comment; `MainActivity.kt:5856, 5869-5879` | Комментарий обещает unregister между `onStop/onStart`, но `UsbAttachController.stop()` вызывается только из `onDestroy`; Android 14 кэширует broadcast'ы | Исправить комментарий; при необходимости регистрировать/снимать receiver в `onStart`/`onStop` и перепроверять live-устройства |
+| 12 | P3 | Icons | `gradle/libs.versions.toml:27`; `FilesScreen.kt`, `PartitionsScreen.kt`, `VentoyScreen.kt` | `material-icons-extended` больше не рекомендуется и заметно увеличивает APK | Перейти на нужные vector drawables/Material Symbols |
+| 13 | P3 | CI actions | `.github/workflows/android-debug.yml` | `actions/setup-java@v4` больше не обновляется; `checkout/cache/setup-java/upload-artifact` работают на принудительном Node 24 из-за Node 20 deprecation | Обновить majors actions и проверить, что pinned SHAs обновлены осознанно |
+
+### Снято с плана как нерелевантное
+
+- **Toolchain matrix (KGP 2.2.10 + AGP 8.13.2).** Текущая сборка зелёная; ограничение официальной матрицы имеет значение только при обновлении Kotlin/AGP, а не сейчас. Рассматривать в той же миграции, что и `kotlinOptions`.
+- **Cancel semantics для `OpenMultipleDocuments`.** Пустой список — штатный результат и для отмены, и для пустого выбора; текущее сообщение нейтрально и не теряет данные. Отдельная миграция на `StartActivityForResult` не оправдана.
+- **`SimpleDateFormat` в `AppTraceLogger`.** Форматтер приватный и вызывается только внутри `synchronized`-блока; текущей гонки нет. Менять только при выносе `buildLine` из-под lock.
+- **Лишние `@OptIn(ExperimentalLayoutApi::class)`.** Это предупреждения компилятора, не дефект поведения; удаление требует проверки конкретной перегрузки `FlowRow` и не входит в план улучшений.
+- **Обновление Compose BOM.** Сейчас заблокировано `compileSdk 37.1`/AGP 9/Gradle 9.1 и меняет API (`FlowRow`→`FlexBox`, `VisualTransformation`). Это отдельная крупная миграция, а не пункт текущего плана.
 
 ## Перенос в native: решение
 
