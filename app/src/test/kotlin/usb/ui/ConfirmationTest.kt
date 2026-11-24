@@ -372,6 +372,18 @@ class UiStateMachineTest {
         val resumed = UiReducer.reduce(restarted, UiIntent.DownloadFile(binding, "content://out/7", fromPicker = true))
         assertEquals(binding, (resumed.effects.single() as UiEffect.DownloadFile).binding)
 
+        // A refreshed listing may report another size while SAF is open. The service
+        // re-stats the exact path; the reducer must not reject a valid pick here.
+        val resized = ready().copy(
+            currentPath = "/docs",
+            files = listOf(FileEntry("manual.pdf", false, 99uL)),
+        )
+        val afterRefresh = UiReducer.reduce(
+            resized,
+            UiIntent.DownloadFile(binding, "content://out/7", fromPicker = true),
+        )
+        assertEquals(binding, (afterRefresh.effects.single() as UiEffect.DownloadFile).binding)
+
         val swapped =
             UiReducer.reduce(
                 restarted.copy(device = device.copy(attachGeneration = 1L)),

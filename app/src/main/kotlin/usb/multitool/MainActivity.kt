@@ -1441,9 +1441,10 @@ class MainViewModel(
             return
         }
         if (sameDevice && state.presence == DevicePresence.Ready && !state.deviceBusy) {
-            // Returning from a SAF picker must not flip a live, already-probed stick to Busy:
-            // the picker result is delivered before a re-probe can publish Ready again, and
-            // the queued upload would be rejected with "device busy".
+            // Returning from a SAF picker must not re-probe a live attachment: the probe
+            // resets partitions/path and can contend with the cached files mount, leaving
+            // the Files tab empty exactly when the picker result is delivered. Permission
+            // and recovery paths still proceed because their presence is not Ready.
             return
         }
         if (sameDevice && inspectionOwner.active?.let(::inspectionAttachmentStillHere) == true) {
