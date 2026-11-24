@@ -60,7 +60,6 @@ class SafBackupCoordinatorTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Before
     fun setUp() {
-        Dispatchers.setMain(Dispatchers.Main)
         val app = RuntimeEnvironment.getApplication()
         resolver = app.contentResolver
         shadow = Shadow.extract(resolver)
@@ -77,7 +76,6 @@ class SafBackupCoordinatorTest {
     @After
     fun tearDown() {
         scope.cancel()
-        Dispatchers.resetMain()
     }
 
     @Test

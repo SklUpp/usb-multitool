@@ -61,7 +61,10 @@ class SafPickerCoordinatorTest {
             ),
             selectedPartitionId = "p1",
             currentPath = "/",
-            files = listOf(FileEntry("a.bin", false, 10UL)),
+            files = listOf(
+                FileEntry("a.bin", false, 10UL),
+                FileEntry("other.bin", false, 10UL),
+            ),
             filesListingState = FilesListingState.Loaded,
         )
 
