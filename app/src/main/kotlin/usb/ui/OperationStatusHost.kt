@@ -132,7 +132,7 @@ private fun rememberOperationStatusFacts(
     }
 }
 
-internal fun computeOperationStatusFacts(
+private fun computeOperationStatusFacts(
     op: OperationProgress,
     diskSectorSize: Int,
     resources: Resources,
@@ -220,6 +220,20 @@ internal fun computeOperationStatusFacts(
         tone = tone,
     )
 }
+
+/** Readback fact for the details dialog; keeps [OperationStatusFacts] private. */
+internal fun rawReadbackSummary(
+    op: OperationProgress,
+    diskSectorSize: Int,
+    resources: Resources,
+): String? = computeOperationStatusFacts(
+    op = op,
+    diskSectorSize = diskSectorSize,
+    resources = resources,
+    name = "",
+    stateLabel = "",
+    result = null,
+).readback
 
 /**
  * Permanent status block under the header: inset `surfaceContainer*` band (not a card,

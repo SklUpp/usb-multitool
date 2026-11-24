@@ -924,11 +924,7 @@ private fun StatusDialog(
     }
     val statusLine = state.statusMessage?.localized()
     val readback = op?.let {
-        computeOperationStatusFacts(
-            LocalContext.current.resources,
-            it,
-            state.diskSectorSize,
-        ).readback
+        rawReadbackSummary(it, state.diskSectorSize, LocalContext.current.resources)
     }
     val detailLine = failureText
         ?: readback

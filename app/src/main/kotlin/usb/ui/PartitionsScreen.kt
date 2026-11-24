@@ -1745,7 +1745,7 @@ private fun RawWriteSection(
                     RawPlanMap(
                         geometry = liveGeometry,
                         startLba = alignedCustomStart ?: 0UL,
-                        sectorCount = sourceSectors,
+                        sectorCount = sourceSectors?.toULong(),
                         onStartChange = { started ->
                             customStart = started.toString()
                             rawSectorSize?.let { size ->
