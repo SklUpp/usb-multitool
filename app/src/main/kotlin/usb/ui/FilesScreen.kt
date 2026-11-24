@@ -98,6 +98,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import usb.formatBinaryBytesPerSecond
+import usb.formatBinarySize
 import usb.formatEtaDuration
 import usb.fs.FilesystemUsage
 import usb.fs.FilesystemUsagePhase
