@@ -93,6 +93,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.text.KeyboardActions
@@ -2151,6 +2152,19 @@ private data class StripGeometry(
     val valid: Boolean,
     val segments: List<StripSegment>,
 )
+
+private data class StripVisibility(
+    val special: Boolean,
+    val reserved: Boolean,
+    val partition: Boolean,
+    val free: Boolean,
+    val gap: Boolean,
+)
+
+private data class StripWidths(
+    val widths: List<Dp>,
+    val contentWidth: Dp,
+)
 private fun segmentStart(segment: StripSegment): ULong =
     segment.partition?.startLba ?: segment.free?.startLba ?: segment.gapStart ?: 0UL
 
@@ -2259,14 +2273,24 @@ private fun PartitionSelectStrip(
     val freeFill = MaterialTheme.colorScheme.surfaceContainerHigh
     val gapFill = MaterialTheme.colorScheme.outlineVariant
     val outline = MaterialTheme.colorScheme.outline
-    val hasSpecial = segments.any { it.partition?.special == true }
-    val hasReserved = segments.any { it.partition?.reserved == true }
-    val hasPartition = segments.any { seg ->
-        val p = seg.partition
-        p != null && !p.special && !p.reserved
+    val visibility = remember(segments) {
+        var special = false
+        var reserved = false
+        var partition = false
+        var free = false
+        var gap = false
+        for (segment in segments) {
+            val p = segment.partition
+            if (p != null) {
+                if (p.special) special = true
+                if (p.reserved) reserved = true
+                if (!p.special && !p.reserved) partition = true
+            }
+            if (segment.free != null) free = true
+            if (segment.gapSectorCount != null) gap = true
+        }
+        StripVisibility(special, reserved, partition, free, gap)
     }
-    val hasFree = segments.any { it.free != null }
-    val hasGap = segments.any { it.gapSectorCount != null }
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -2275,20 +2299,27 @@ private fun PartitionSelectStrip(
     ) {
         // Keep tiny partitions selectable without hiding larger proportions. When the
         // minimum widths no longer fit, the strip scrolls instead of collapsing to pixels.
-        val minimumSegmentWidth = 12.dp
-        val rawWidths = segments.map { segment ->
-            (maxWidth * (segmentSpan(segment).toDouble() / diskSectorCount.toDouble()).toFloat())
-                .coerceAtLeast(minimumSegmentWidth)
+        val strip = remember(segments, maxWidth) {
+            val minimumSegmentWidth = 12.dp
+            val rawWidths = segments.map { segment ->
+                (maxWidth * (segmentSpan(segment).toDouble() / diskSectorCount.toDouble()).toFloat())
+                    .coerceAtLeast(minimumSegmentWidth)
+            }
+            val rawTotal = rawWidths.fold(0.dp) { total, width -> total + width }
+            val widths = if (rawTotal < maxWidth && rawTotal > 0.dp) {
+                val scale = maxWidth.value / rawTotal.value
+                rawWidths.map { it * scale }
+            } else {
+                rawWidths
+            }
+            StripWidths(
+                widths = widths,
+                contentWidth = widths.fold(0.dp) { total, width -> total + width }
+                    .coerceAtLeast(maxWidth),
+            )
         }
-        val rawTotal = rawWidths.fold(0.dp) { total, width -> total + width }
-        val widths = if (rawTotal < maxWidth && rawTotal > 0.dp) {
-            val scale = maxWidth.value / rawTotal.value
-            rawWidths.map { it * scale }
-        } else {
-            rawWidths
-        }
-        val contentWidth = widths.fold(0.dp) { total, width -> total + width }
-            .coerceAtLeast(maxWidth)
+        val widths = strip.widths
+        val contentWidth = strip.contentWidth
         val stripScroll = rememberScrollState()
         val density = LocalDensity.current
         LaunchedEffect(
@@ -2414,35 +2445,35 @@ private fun PartitionSelectStrip(
             borderColor = MaterialTheme.colorScheme.primary,
             label = stringResource(R.string.partitions_strip_legend_selected),
         )
-        if (hasSpecial) {
+        if (visibility.special) {
             StripLegend(
                 color = specialFill,
                 borderColor = outline,
                 label = stringResource(R.string.partitions_strip_legend_special),
             )
         }
-        if (hasReserved) {
+        if (visibility.reserved) {
             StripLegend(
                 color = reservedFill,
                 borderColor = outline,
                 label = stringResource(R.string.partitions_strip_legend_reserved),
             )
         }
-        if (hasPartition) {
+        if (visibility.partition) {
             StripLegend(
                 color = partitionFill,
                 borderColor = outline,
                 label = stringResource(R.string.partitions_strip_legend_partition),
             )
         }
-        if (hasFree) {
+        if (visibility.free) {
             StripLegend(
                 color = freeFill,
                 borderColor = outline,
                 label = stringResource(R.string.partitions_strip_free),
             )
         }
-        if (hasGap) {
+        if (visibility.gap) {
             StripLegend(
                 color = gapFill,
                 borderColor = outline,

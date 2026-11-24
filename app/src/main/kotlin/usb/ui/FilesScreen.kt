@@ -1078,10 +1078,13 @@ private fun FolderCard(
         state.device?.identity,
         state.device?.attachGeneration,
     ) { mutableStateOf(false) }
-    val visibleRows = if (fileFilter.isBlank()) {
-        rows
-    } else {
-        rows.filter { it.name.contains(fileFilter.trim(), ignoreCase = true) }
+    val filterQuery = fileFilter.trim()
+    val visibleRows = remember(rows, filterQuery) {
+        if (filterQuery.isEmpty()) {
+            rows
+        } else {
+            rows.filter { it.name.contains(filterQuery, ignoreCase = true) }
+        }
     }
     val rowsState = state.filesListingState.name
     val rowsFailure = state.filesFailure

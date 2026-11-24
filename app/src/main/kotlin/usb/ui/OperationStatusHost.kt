@@ -17,6 +17,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -338,12 +340,11 @@ internal fun OperationStatusHost(
             if (running) {
                 val total = operation?.bytesTotal ?: 0L
                 val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
-                val animatedFraction by animateFloatAsState(
+                val animatedFraction = animateFloatAsState(
                     targetValue = fraction,
                     animationSpec = tween(100),
                     label = "status-progress",
                 )
-                val percent = "${(animatedFraction * 100f).roundToInt()}%"
                 Box(
                     modifier = Modifier
                         .size(46.dp)
@@ -352,7 +353,7 @@ internal fun OperationStatusHost(
                 ) {
                     if (total > 0L) {
                         CircularProgressIndicator(
-                            progress = { animatedFraction },
+                            progress = { animatedFraction.value },
                             modifier = Modifier.fillMaxSize(),
                             color = MaterialTheme.colorScheme.primary,
                             strokeWidth = 3.dp,
@@ -367,15 +368,24 @@ internal fun OperationStatusHost(
                         )
                     }
                     if (total > 0L) {
-                        Text(
-                            text = percent,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                        )
+                        ProgressPercentText(animatedFraction)
                     }
                 }
             }
         }
     }
+}
+
+/** Recompute the label only when the rounded percentage changes, not every animation frame. */
+@Composable
+private fun ProgressPercentText(fraction: State<Float>) {
+    val percent by remember(fraction) {
+        derivedStateOf { "${(fraction.value * 100f).roundToInt()}%" }
+    }
+    Text(
+        text = percent,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+    )
 }

@@ -400,8 +400,8 @@ private fun RawUnifiedMap(
                 ) {
                     Canvas(Modifier.fillMaxSize()) {
                         drawRect(trackColor, Offset.Zero, size)
+                        var x = 0f
                         segments.forEachIndexed { index, segment ->
-                            val x = widthsPx.take(index).sum() + gapPx * index
                             val w = widthsPx[index]
                             val color = when {
                                 segment.rawObjects.any { it.kind == RawObjectKind.BootArea } -> bootColor
@@ -416,6 +416,7 @@ private fun RawUnifiedMap(
                                 Size(w, size.height),
                                 style = Stroke(1.dp.toPx()),
                             )
+                            x += w + gapPx
                         }
                         val rx = xForLba(startLba)
                         sectorCount?.let { count ->
