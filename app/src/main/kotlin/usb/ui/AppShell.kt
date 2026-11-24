@@ -1964,5 +1964,3 @@ internal fun GlyphIcon(
         }
     }
 }
-
-@Composable

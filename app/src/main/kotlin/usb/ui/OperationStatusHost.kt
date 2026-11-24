@@ -107,13 +107,20 @@ private fun rememberOperationStatusFacts(
     val name = OperationPresentation.label(operation.title)
     val stateLabel = OperationPresentation.stateLabel(operation.state, operation.phase)
     val resources = LocalResources.current
-    return remember(operation, diskSectorSize, resources, name, stateLabel) {
+    // smartSummary / readScanSummary are @Composable; resolve here before remember.
+    val result = (operation.errorMessage
+        ?: operation.smartResult?.let { smartSummary(it) }
+        ?: operation.readScanResult?.let { readScanSummary(it) }
+        ?: operation.resultMessage)
+        ?.let(::normalizeProviderText)
+    return remember(operation, diskSectorSize, resources, name, stateLabel, result) {
         computeOperationStatusFacts(
             op = operation,
             diskSectorSize = diskSectorSize,
             resources = resources,
             name = name,
             stateLabel = stateLabel,
+            result = result,
         )
     }
 }
@@ -124,6 +131,7 @@ private fun computeOperationStatusFacts(
     resources: Resources,
     name: String,
     stateLabel: String,
+    result: String?,
 ): OperationStatusFacts {
     val running = op.state == OperationState.Running || op.state == OperationState.Queued
     // The state is its own field, so the metric never falls back to repeating it.
@@ -181,13 +189,6 @@ private fun computeOperationStatusFacts(
         }
         listOfNotNull(text, average).joinToString(" ") to tone
     }
-    // Terminal outcome (error, read-scan summary or result); it must outlive the
-    // operation, so it cannot be a snackbar.
-    val result = (op.errorMessage
-        ?: op.smartResult?.let { smartSummary(it) }
-        ?: op.readScanResult?.let { readScanSummary(it) }
-        ?: op.resultMessage)
-        ?.let(::normalizeProviderText)
     val tone = when {
         op.state == OperationState.Failed || op.errorMessage != null -> StatusTone.Error
         op.state == OperationState.Partial -> StatusTone.Warning
