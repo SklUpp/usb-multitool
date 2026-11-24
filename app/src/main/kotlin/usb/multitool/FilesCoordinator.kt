@@ -943,7 +943,7 @@ class FilesCoordinator(
                     }
                     is usb.operation.OperationState.Cancelled -> {
                         if (plan.postBoundFailure) {
-                            intents(listFailure!!("Cancelled"))
+                            intents(listFailure!!(null, "Cancelled"))
                         }
                         if (plan.postOperationProgress) {
                             intents(
