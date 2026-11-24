@@ -7,16 +7,6 @@ Compose BOM 2025.12.01, `compileSdk`/`targetSdk` 36, `minSdk` 28.
 могут привести к падению, потере данных или неработоспособности на актуальных
 версиях Android, исправляются сразу, а не откладываются сюда.
 
-## Исправлено сразу
-
-| Область | Файл | Что было |
-|---|---|---|
-| SAF/file URI | `ImageSource.kt` (`openRaw`) | `uri.path!!` падал с `NullPointerException` на opaque `file:` URI; теперь явный `IOException` |
-| Coroutines | `ProbePublication.kt` | `catch (Throwable)` проглатывал `CancellationException`, и `publish()` мог выполняться после отмены; теперь отмена пробрасывается после `close()` |
-| Android 15+ UI | `MainActivity.kt` (`configureSystemBars`) | иконки системных баров всегда были светлыми; в светлой теме они сливались с фоном. Теперь контраст зависит от `darkTheme` и обновляется через `SideEffect` |
-| USB permission | `UsbAttachController.kt` | `PendingIntent` без `FLAG_UPDATE_CURRENT` мог вернуть старый token после смерти процесса; добавлено обновление extras, `FLAG_MUTABLE` сохранён |
-| Exported Activity | `UsbAttachController.kt` (`probeAttachedDevice`) | битый `Parcelable` из внешнего explicit intent мог уронить `onStart`; разбор обёрнут в `runCatching` |
-
 ## Очередь правок
 
 Приоритеты: **P1** — сделать до следующего крупного релиза; **P2** — при
@@ -79,17 +69,6 @@ Compose BOM 2025.12.01, `compileSdk`/`targetSdk` 36, `minSdk` 28.
 2. Для XZ есть требование поддерживать словари >64 MiB либо decode заметно быстрее Java.
 3. Реализация идёт за feature flag с Java fallback; default не меняется до benchmark + fuzz + release-проверки.
 4. Любой native-путь записи обязан проходить через существующие confirmation/operation guards, а не дублировать их.
-
-## Проверено: менять не нужно
-
-- `ActivityResultContracts.CreateDocument(String)` — актуальная перегрузка; без параметра — deprecated.
-- `OpenDocument`, `OpenDocumentTree`, `OpenMultipleDocuments`, `RequestPermission` — актуальны.
-- `takePersistableUriPermission` присутствует на всех сохраняемых URI; проблема в освобождении, не в получении.
-- Нет `READ/WRITE_EXTERNAL_STORAGE`, `MANAGE_EXTERNAL_STORAGE`, `Environment.getExternalStorageDirectory`.
-- `ContextCompat.registerReceiver(..., RECEIVER_NOT_EXPORTED)` и `FLAG_MUTABLE` для USB `PendingIntent` корректны для Android 14.
-- Foreground service `connectedDevice` и `startForeground` с типом на API 34+ корректны.
-- Compose compiler plugin подключён; `composeOptions`/`kotlinCompilerExtensionVersion` отсутствуют.
-- 16 KB page-size флаги и CI-проверка присутствуют.
 
 ## Источники
 
