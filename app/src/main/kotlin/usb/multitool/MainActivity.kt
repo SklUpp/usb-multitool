@@ -50,7 +50,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -113,16 +112,8 @@ import usb.fs.UsbFsDirEntry
 import usb.fs.Filesystem
 import usb.fs.FormatCatalog
 import usb.fs.Formatter
-import usb.fs.FilesystemUsage
-import usb.fs.FilesystemUsageKey
-import usb.fs.FilesystemUsageReason
-import usb.fs.FilesystemUsageSnapshot
-import usb.ui.filesystemUsageKey
 import usb.ui.withStatus
-import usb.ui.needsFilesystemUsageBatch
-import usb.ui.scheduleFilesystemUsageBatchRequest
 import usb.ui.fatChildPath
-import usb.ui.RawMeasureError
 import usb.ui.rawSourceKey
 import usb.ui.FilesDownloadBinding
 import usb.ui.FilesBatchSelection
@@ -149,8 +140,6 @@ import usb.partition.TableInitializer
 import usb.partition.VirtualPartition
 import usb.partition.isProtectedSystemPartition
 import usb.image.ImageSource
-import usb.image.MeasurementHandle
-import usb.image.CloseCapacityException
 import usb.image.ImageStaging
 import usb.image.stageRawImageChunks
 import usb.image.RawWriter
@@ -232,20 +221,21 @@ class MainViewModel(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     /** Survives ViewModel scope cancellation so completion can still release the handle. */
-    private val mainHandler =
-        android.os.Handler(android.os.Looper.getMainLooper())
     private var activeHandle: OperationHandle? = null
     private var rawSourceHandle: OperationHandle? = null
-    private var rawMeasureJob: Job? = null
-    private var rawMeasureHandle: MeasurementHandle? = null
     internal val pendingDownloadBinding: FilesDownloadBinding?
         get() = safPicker.pendingDownloadBinding
     internal val pendingDownloadRequestId: Long
         get() = safPicker.pendingDownloadRequestId
     @Volatile private var pendingRawStagingPath: String? = null
-    private var rawMeasureRunning = false
-    /** Latest source waiting for a blocked provider pass to return; never starts in parallel. */
-    private var pendingRawMeasureEffect: UiEffect.MeasureRawSource? = null
+    private val rawMeasurement by lazy {
+        RawSourceMeasurementCoordinator(
+            scope = scope,
+            resolver = { getApplication<Application>().contentResolver },
+            state = { state },
+            onIntent = ::onIntent,
+        )
+    }
     // Parked batch transfer and conflict types now live on FilesCoordinator.
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
@@ -499,19 +489,18 @@ class MainViewModel(
             deviceKey = ::deviceKey,
         )
     }
-    /**
-     * Newest batch plan. An unchanged plan over a complete map is not measured again;
-     * a write terminal clears the map and forces one fresh pass.
-     */
-    @Volatile private var lastUsageBatchKeys: Set<FilesystemUsageKey>? = null
-    /**
-     * The single owner of free-space measurement. Batch steps and the legacy selected
-     * effect both run here, so two jobs can never race for the USB claim.
-     */
-    private var usageBatchJob: Job? = null
-    /** Token of the live batch job; a replaced job never clears the flag for its successor. */
-    @Volatile private var usageBatchToken = 0L
-    @Volatile private var usageBatchInFlight = false
+    private val filesystemUsage by lazy {
+        FilesystemUsageCoordinator(
+            scope = scope,
+            state = { state },
+            updateState = { state = it },
+            attachment = { attachment.snapshot() },
+            deviceKey = ::deviceKey,
+            session = filesSession,
+            intents = ::onIntent,
+            deferredIntents = ::onIntentDeferred,
+        )
+    }
     @Volatile private var stagedConsumedPath: String? = null
 
     /**
@@ -539,7 +528,7 @@ class MainViewModel(
         inspectionOwner.cancel(cancelUsb = true)
         // Cancel usage/mount jobs first so async close cannot observe an empty session
         // while a still-running measure mounts after the close.
-        cancelUsageBatch(markWaiting = false)
+        filesystemUsage.cancel(markWaiting = false)
         val sessionToClose = filesSession
         safPicker.closeEffects()
         super.onCleared()
@@ -902,8 +891,8 @@ class MainViewModel(
         if (completionResult != null && completionGenerationAccepted) state = completionResult.state
         if (acceptedOperationIntent && intent is UiIntent.OperationBegan) {
             // Fence background measurement before any effects can start user I/O.
-            cancelUsageBatch(markWaiting = true)
-            lastUsageBatchKeys = null
+            filesystemUsage.cancel(markWaiting = true)
+            filesystemUsage.resetPlan()
         }
         if (acceptedOperationIntent) {
             adjustedResult.effects.forEach { effect ->
@@ -913,7 +902,7 @@ class MainViewModel(
         if (completionGenerationAccepted) {
             completionResult?.effects?.forEach { effect -> handleEffect(effect) }
         }
-        if (acceptedOperationIntent || completionGenerationAccepted) refreshFilesystemUsage(intent)
+        if (acceptedOperationIntent || completionGenerationAccepted) filesystemUsage.refresh(intent)
         if (state.tab != previousTab) {
             ShellTabPersistence.write(savedStateHandle, state.tab)
         }
@@ -1912,10 +1901,10 @@ class MainViewModel(
             }
             is UiEffect.LoadFilesystemUsage -> {
                 // Legacy selected-only effect funnels into the one batch owner.
-                runFilesystemUsageBatch(listOf(effect.partitionId to effect.usageKey))
+                filesystemUsage.startBatch(listOf(effect.partitionId to effect.usageKey))
             }
             is UiEffect.LoadFilesystemUsageBatch -> {
-                runFilesystemUsageBatch(effect.steps)
+                filesystemUsage.startBatch(effect.steps)
             }
             is UiEffect.EjectDevice -> runEject(effect.ejectGeneration)
             is UiEffect.RescanAfterEject -> rescanAfterEject(effect.ejectGeneration)
@@ -1952,9 +1941,9 @@ class MainViewModel(
                 rawSourceHandle = null
             }
 
-            is UiEffect.MeasureRawSource -> measureRawSource(effect)
+            is UiEffect.MeasureRawSource -> rawMeasurement.measure(effect)
 
-            UiEffect.CancelRawSourceMeasure -> cancelRawMeasurement()
+            UiEffect.CancelRawSourceMeasure -> rawMeasurement.cancel()
 
             is UiEffect.LoadWindowsIsoCandidates -> {
                 loadWindowsImageCandidates(effect.requestGeneration)
@@ -2754,8 +2743,8 @@ class MainViewModel(
                 ),
             )
         }
-        lastUsageBatchKeys = null
-        cancelUsageBatch(markWaiting = false)
+        filesystemUsage.resetPlan()
+        filesystemUsage.cancel(markWaiting = false)
         inspectionOwner.cancel(cancelUsb = true)
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         // Keep handles registered until their workers finish real close; cancellation is not close.
@@ -2955,275 +2944,6 @@ class MainViewModel(
             if (block == null) action(partitionId) else onIntent(UiIntent.Status(block))
         }
 
-    /**
-     * Schedule one sequential free-space batch for every measurable partition. Selected
-     * rows read `partitionUsage`/`filesystemUsage`; no second selected-only job is
-     * opened, so batch and selected can never race for the USB claim.
-     *
-     * A user operation cancels the batch and leaves unfinished partitions `Waiting`
-     * (never `Unavailable`, never Busy-as-disconnect). A terminal write clears the map,
-     * so the next refresh measures it again; a paused batch resumes on a later
-     * operation terminal or device refresh, avoiding a Busy retry loop.
-     */
-    private fun refreshFilesystemUsage(intent: UiIntent) {
-        if (intent is UiIntent.OperationBegan) return
-        if (intent is UiIntent.DeviceChanged && state.actionsEnabled) {
-            lastUsageBatchKeys = null
-        }
-        // Events that drop parked phases must also forget the last plan, or resume is skipped.
-        if (intent is UiIntent.DismissConfirmation ||
-            intent is UiIntent.EjectResulted ||
-            intent is UiIntent.SelectPartition
-        ) {
-            lastUsageBatchKeys = null
-        }
-        val finished =
-            intent is UiIntent.OperationUpdated &&
-                intent.progress.state != OperationState.Running &&
-                intent.progress.state != OperationState.Queued
-        // Busy/confirmation/operation: no second claim. Phases stay Waiting.
-        if (!state.actionsEnabled) return
-        val scheduled = scheduleFilesystemUsageBatchRequest(
-            state = state,
-            lastBatchKeys = lastUsageBatchKeys,
-            batchInFlight = usageBatchInFlight,
-            operationFinished = finished,
-        ) ?: return
-        lastUsageBatchKeys = scheduled.steps.map { it.second }.toSet()
-        state = scheduled.state
-        handleEffect(scheduled.effect)
-    }
-
-    /**
-     * Stop the one usage job. Cancellation does not interrupt a coroutine already inside
-     * the session monitor (synchronized is not interruptible); the step refuses to open
-     * a volume once it observes the cancellation, and the epoch is closed on the way out.
-     * [markWaiting] turns Queued/Calculating into Waiting for the next batch pass.
-     */
-    private fun cancelUsageBatch(markWaiting: Boolean) {
-        usageBatchJob?.cancel()
-        usageBatchInFlight = false
-        usageBatchToken += 1L
-        if (markWaiting) {
-            state = UiReducer.reduce(state, UiIntent.CancelFilesystemUsageBatch).state
-        }
-    }
-
-    private sealed interface UsageStepOutcome {
-        data class Measured(val snapshot: FilesystemUsageSnapshot, val epoch: Long? = null) : UsageStepOutcome
-        /** Exclusive claim or a user operation owns the session: pause, do not fail. */
-        data object Deferred : UsageStepOutcome
-        /** Attachment/geometry/epoch changed: drop this step, publish nothing. */
-        data object Stale : UsageStepOutcome
-    }
-
-    /**
-     * Sequential batch owner. Steps run one at a time: never two mounts, never a second
-     * claim. Reading free space is one blocking engine call with no progress callback, so
-     * phases stay ordinal (Queued/Waiting/Calculating) and never fake a percentage.
-     *
-     * `Waiting` is published before contending for the shared session lock; `Calculating`
-     * only from inside the lock, immediately before the engine call. A step that observes
-     * a cancellation, an attachment change, a write fence or a Busy claim publishes
-     * nothing stale — the batch stops and unfinished partitions stay Waiting.
-     */
-    private fun runFilesystemUsageBatch(steps: List<Pair<String, FilesystemUsageKey>>) {
-        if (steps.isEmpty()) return
-        val live = attachment.snapshot()
-        val expectedGeneration = live.generation
-        val expectedIdentity = state.device?.identity
-        val pin = live.device?.let { AttachmentPin(live.generation, deviceKey(it)!!) }
-        val generation = state.filesystemUsageBatchGeneration
-        // A cancelled synchronized call may still be running. Join it before opening
-        // another volume; cancellation alone does not release the session monitor.
-        val previousJob = usageBatchJob
-        previousJob?.cancel()
-        usageBatchToken += 1L
-        val token = usageBatchToken
-        usageBatchInFlight = true
-        usageBatchJob = scope.launch(Dispatchers.IO) {
-            try {
-                previousJob?.join()
-                for ((partitionId, key) in steps) {
-                    val proceed = withContext(Dispatchers.Main.immediate) {
-                        state.filesystemUsageBatchGeneration == generation &&
-                            state.actionsEnabled
-                    }
-                    if (!proceed) {
-                        withContext(Dispatchers.Main.immediate) {
-                            if (state.filesystemUsageBatchGeneration == generation) {
-                                onIntent(
-                                    UiIntent.FilesystemUsageStepDeferred(generation, partitionId, key),
-                                )
-                            }
-                        }
-                        break
-                    }
-                    // Contending for the session monitor: Waiting, not Calculating.
-                    onIntentDeferred(
-                        UiIntent.FilesystemUsageStepWaiting(generation, partitionId, key),
-                    )
-                    var retries = 0
-                    var outcome = measureUsageStep(
-                        generation = generation,
-                        partitionId = partitionId,
-                        key = key,
-                        expectedGeneration = expectedGeneration,
-                        expectedIdentity = expectedIdentity,
-                        pin = pin,
-                    )
-                    while (outcome == UsageStepOutcome.Deferred && retries < 3) {
-                        // No release notification exists. Bounded backoff avoids a retry
-                        // storm; cancellation interrupts the delay before another open.
-                        onIntentDeferred(UiIntent.FilesystemUsageStepWaiting(generation, partitionId, key))
-                        delay(1000L)
-                        val stillCurrent = withContext(Dispatchers.Main.immediate) {
-                            state.actionsEnabled && state.filesystemUsageBatchGeneration == generation &&
-                                state.partitions.firstOrNull { it.id == partitionId }
-                                    ?.let { state.filesystemUsageKey(it) } == key
-                        }
-                        if (!stillCurrent) break
-                        retries++
-                        outcome = measureUsageStep(
-                            generation, partitionId, key, expectedGeneration, expectedIdentity, pin,
-                        )
-                    }
-                    when (val result = outcome) {
-                        UsageStepOutcome.Deferred -> {
-                            withContext(Dispatchers.Main.immediate) {
-                                onIntent(UiIntent.FilesystemUsageStepDeferred(generation, partitionId, key))
-                            }
-                            break
-                        }
-                        UsageStepOutcome.Stale -> {
-                            // Attachment/geometry fence: park unfinished as Waiting.
-                            // Do not clear phases or bump generation here — that would let
-                            // finally reschedule immediately and thrash mount/close.
-                            // Resume only on terminal / DeviceChanged / dismiss / reselect.
-                            withContext(Dispatchers.Main.immediate) {
-                                onIntent(UiIntent.FilesystemUsageStepDeferred(generation, partitionId, key))
-                            }
-                            break
-                        }
-                        is UsageStepOutcome.Measured -> {
-                            try {
-                                withContext(Dispatchers.Main.immediate) {
-                                    onIntent(
-                                        UiIntent.FilesystemUsageStepResulted(
-                                            generation = generation,
-                                            partitionId = partitionId,
-                                            key = result.snapshot.key,
-                                            usage = result.snapshot.usage,
-                                            access = result.snapshot.access,
-                                        ),
-                                    )
-                                }
-                            } catch (cancel: kotlinx.coroutines.CancellationException) {
-                                result.epoch?.let { epoch ->
-                                    filesSession.withLock { filesSession.closeIfEpochLocked(epoch) }
-                                }
-                                throw cancel
-                            }
-                        }
-                    }
-                }
-            } finally {
-                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
-                    // A replacement job already raised the token; never clear its flag.
-                    if (usageBatchToken == token) {
-                        usageBatchInFlight = false
-                        usageBatchJob = null
-                        if (state.filesystemUsageBatchGeneration != generation && state.actionsEnabled) {
-                            lastUsageBatchKeys = null
-                            refreshFilesystemUsage(UiIntent.RequestFilesystemUsageBatch)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * One step under the files session lock. A volume that will not open reports
-     * "unavailable" instead of an invented value; a Busy claim/user operation defers the
-     * step instead of failing it. The epoch is closed on cancel/failure so `onCleared`
-     * cannot race past an empty session and leave the claim held.
-     */
-    private suspend fun measureUsageStep(
-        generation: Long,
-        partitionId: String,
-        key: FilesystemUsageKey,
-        expectedGeneration: Long,
-        expectedIdentity: String?,
-        pin: AttachmentPin?,
-    ): UsageStepOutcome {
-        val jobContext = kotlinx.coroutines.currentCoroutineContext()
-        var releaseEpoch: Long? = null
-        val outcome = try {
-            filesSession.withLock {
-                when {
-                    !jobContext.isActive -> UsageStepOutcome.Stale
-                    attachGeneration != expectedGeneration ||
-                        attachGeneration != key.attachGeneration ||
-                        expectedIdentity == null ||
-                        expectedIdentity != key.identity -> UsageStepOutcome.Stale
-                    else -> {
-                        var acquired: Long? = null
-                        try {
-                            // Lock held: the real engine call starts now.
-                            onIntentDeferred(
-                                UiIntent.FilesystemUsageStepCalculating(generation, partitionId, key),
-                            )
-                            val measured =
-                                filesSession.withAcquireRecorder({ epoch -> acquired = epoch }) {
-                                    filesSession.filesystemUsageForLocked(pin, partitionId, key) {
-                                        jobContext.ensureActive()
-                                    }
-                                }
-                            if (!jobContext.isActive) {
-                                acquired?.let { filesSession.closeIfEpochLocked(it) }
-                                UsageStepOutcome.Stale
-                            } else {
-                                UsageStepOutcome.Measured(measured, acquired)
-                            }
-                        } catch (cancel: kotlinx.coroutines.CancellationException) {
-                            acquired?.let { filesSession.closeIfEpochLocked(it) }
-                            releaseEpoch = null
-                            throw cancel
-                        } catch (changed: AttachmentChangedException) {
-                            acquired?.let { filesSession.closeIfEpochLocked(it) }
-                            releaseEpoch = null
-                            UsageStepOutcome.Stale
-                        } catch (busy: UsbExclusiveClaim.BusyException) {
-                            // Another exclusive owner: pause, never report Unavailable.
-                            acquired?.let { filesSession.closeIfEpochLocked(it) }
-                            releaseEpoch = null
-                            UsageStepOutcome.Deferred
-                        } catch (failure: Throwable) {
-                            // A mounted-but-unmeasured volume must not retain the claim.
-                            acquired?.let { filesSession.closeIfEpochLocked(it) }
-                            releaseEpoch = null
-                            UsageStepOutcome.Measured(
-                                FilesystemUsageSnapshot(
-                                    key,
-                                    FilesystemUsage.Unavailable(FilesystemUsageReason.IoFailure),
-                                ),
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (cancel: kotlinx.coroutines.CancellationException) {
-            val epoch = releaseEpoch
-            if (epoch != null) {
-                filesSession.withLock { filesSession.closeIfEpochLocked(epoch) }
-            }
-            throw cancel
-        }
-        // Success keeps the RO mount cached for the next browse.
-        return outcome
-    }
-
     fun listDirectory(path: String) = filesCoordinator.list(path)
 
     private fun createFolder(path: String, name: String) {
@@ -3366,139 +3086,6 @@ class MainViewModel(
     // Source choosers: raw image, Ventoy link candidates, and phone import.
     // ---------------------------------------------------------------------
 
-    /**
-     * Read-only decode-count pass for the raw source. No temporary uncompressed file:
-     * bytes are discarded as they are decoded, and cancellation is checked between
-     * chunks. The result is bound to the reducer generation; a stale pass is ignored.
-     */
-    private fun measureRawSource(effect: UiEffect.MeasureRawSource) {
-        MeasurementHandle.retryDeferredCloses()
-        if (rawMeasureRunning) {
-            // Keep newest source pending. The old provider read remains guarded until its
-            // coroutine returns; cancellation only asks the provider stream to close.
-            pendingRawMeasureEffect = effect
-            onIntent(
-                UiIntent.RawSourceMeasurementWaiting(
-                    generation = effect.generation,
-                    source = effect.source,
-                ),
-            )
-            rawMeasureHandle?.cancel()
-            rawMeasureJob?.cancel()
-            return
-        }
-        startRawMeasurement(effect)
-    }
-
-    private fun startPendingRawMeasurement() {
-        val effect = pendingRawMeasureEffect ?: return
-        pendingRawMeasureEffect = null
-        // A newer pick/cancel may have superseded this request while the provider was
-        // blocked. Never revive a stale URI or generation.
-        if (state.rawSizeGeneration != effect.generation || state.rawSourceKey != effect.source) {
-            return
-        }
-        onIntent(
-            UiIntent.RawSourceMeasurementStarted(
-                generation = effect.generation,
-                source = effect.source,
-            ),
-        )
-        startRawMeasurement(effect)
-    }
-
-    private fun startRawMeasurement(effect: UiEffect.MeasureRawSource) {
-        rawMeasureHandle?.cancel()
-        val handle = try {
-            MeasurementHandle()
-        } catch (_: CloseCapacityException) {
-            onIntent(measureError(effect, RawMeasureError.CloseCapacity))
-            return
-        }
-        rawMeasureHandle = handle
-        rawMeasureRunning = true
-        val resolver = getApplication<Application>().contentResolver
-        val job =
-            try {
-                scope.launch(Dispatchers.IO) {
-                    val measurementScope = this
-                    val outcome = runCatching {
-                        val source =
-                            if (effect.staged) {
-                                ImageSource.fromFile(java.io.File(effect.source))
-                            } else {
-                                ImageSource.fromContentUri(Uri.parse(effect.source), resolver)
-                            }
-                        source.measureDecoded(
-                            isActive = { measurementScope.isActive },
-                            limitBytes = effect.limitBytes,
-                            handle = handle,
-                        )
-                    }
-                    val failure = outcome.exceptionOrNull()
-                    if (failure !is java.util.concurrent.CancellationException &&
-                        measurementScope.isActive
-                    ) {
-                        val detail = failure?.let { it.message ?: it.javaClass.simpleName }
-                        val measured = outcome.getOrNull()
-                        withContext(Dispatchers.Main.immediate) {
-                            onIntent(
-                                UiIntent.RawSourceMeasured(
-                                    generation = effect.generation,
-                                    source = effect.source,
-                                    bytes = measured?.bytes,
-                                    sha256 = measured?.sha256,
-                                    error = detail,
-                                    errorKind =
-                                        if (failure == null) null else RawMeasureError.Failed,
-                                ),
-                            )
-                        }
-                    }
-                }
-            } catch (failure: Throwable) {
-                handle.cancel()
-                handle.abandon()
-                rawMeasureRunning = false
-                rawMeasureHandle = null
-                rawMeasureJob = null
-                throw failure
-            }
-        rawMeasureJob = job
-        job.invokeOnCompletion {
-            // Runs even if the coroutine was cancelled before its body started; for a
-            // blocked provider read this is delayed until the read actually returns.
-            // Handle release must not depend on [scope], which is cancelled on destroy.
-            handle.cancel()
-            handle.abandon()
-            mainHandler.post {
-                rawMeasureRunning = false
-                if (rawMeasureJob === job) rawMeasureJob = null
-                if (rawMeasureHandle === handle) rawMeasureHandle = null
-                startPendingRawMeasurement()
-            }
-        }
-    }
-
-    private fun measureError(
-        effect: UiEffect.MeasureRawSource,
-        kind: RawMeasureError,
-    ): UiIntent.RawSourceMeasured =
-        UiIntent.RawSourceMeasured(
-            generation = effect.generation,
-            source = effect.source,
-            bytes = null,
-            errorKind = kind,
-        )
-
-    /** Close the tracked provider stream, if any. No new pass is queued. */
-    private fun cancelRawMeasurement() {
-        pendingRawMeasureEffect = null
-        rawMeasureHandle?.cancel()
-        rawMeasureHandle = null
-        rawMeasureJob?.cancel()
-        rawMeasureJob = null
-    }
     private fun loadRawSourceCandidates(binding: PartitionBinding, generation: Long) {
         val pin = currentAttachmentPin()
         val identity = state.device?.identity
