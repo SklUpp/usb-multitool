@@ -138,24 +138,6 @@ class FilesScreenModelTest {
     }
 
     @Test
-    fun resolveListingSelectionDropsMissingNames() {
-        val files = listOf(
-            FileEntry("a.bin", false, 1uL),
-            FileEntry("docs", true, 0uL),
-        )
-        val selection = resolveListingSelection(files, setOf("a.bin", "gone", "docs"))
-        assertEquals(listOf(files[0], files[1]), selection.entries)
-        assertNull(selection.single)
-    }
-
-    @Test
-    fun toggleSelectedNameAddsAndRemoves() {
-        assertEquals(setOf("a"), toggleSelectedName(emptySet(), "a"))
-        assertEquals(emptySet<String>(), toggleSelectedName(setOf("a"), "a"))
-        assertEquals(setOf("a", "b"), toggleSelectedName(setOf("a"), "b"))
-    }
-
-    @Test
     fun singleFileBatchActionsStayEnabled() {
         val file = FileEntry("win.iso", false, 42uL).toBatchItem()
         assertTrue(filesBatchDownloadEnabled(true, listOf(file)))

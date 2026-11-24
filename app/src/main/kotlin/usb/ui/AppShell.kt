@@ -163,7 +163,6 @@ import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
 import usb.image.ReadbackProblem
 import usb.image.ReadbackVerdict
-import usb.operation.DiskOperationPhase
 import usb.multitool.R
 import usb.service.OperationToken
 import java.util.Locale
@@ -1353,18 +1352,9 @@ private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
         op.state == OperationState.Completed -> StatusTone.Success
         else -> StatusTone.Neutral
     }
-    val phaseLabel = op.phase?.let { phase ->
-        stringResource(
-            when (phase) {
-                DiskOperationPhase.Write -> R.string.op_phase_write
-                DiskOperationPhase.Sync -> R.string.op_phase_sync
-                DiskOperationPhase.Verify -> R.string.op_phase_verify
-            },
-        )
-    }
     return OperationStatusFacts(
-        name = operationLabel(op),
-        state = phaseLabel ?: operationStateLabel(op.state),
+        name = OperationPresentation.label(op),
+        state = OperationPresentation.stateLabel(op.state, op.phase),
         progress = progress,
         readback = readback?.first,
         readbackTone = readback?.second ?: StatusTone.Neutral,
@@ -1395,11 +1385,10 @@ internal fun ApplyCancelButton(
     matchesTitle: (OperationTitle) -> Boolean = { true },
 ) {
     val operation = state.operation
-    val cancelable = operation != null &&
-        operation.cancelable &&
-        operation.title.originTab() == ownerTab &&
-        matchesTitle(operation.title) &&
-        (operation.state == OperationState.Running || operation.state == OperationState.Queued)
+    val cancelable = OperationPresentation.isCancelable(operation) &&
+        operation != null &&
+        OperationPresentation.tab(operation.title) == ownerTab &&
+        matchesTitle(operation.title)
     if (cancelable) {
         Button(
             onClick = { onIntent(UiIntent.CancelOperation(operation.token)) },
@@ -1426,8 +1415,7 @@ internal fun ApplyCancelButton(
 /**
  * Cancel action shared by every long-operation surface. It is visible only while the
  * serialized operation is queued/running and cancelable, and always targets that exact
- * token. Direct cancel matches the existing Ventoy/ISO progress action; the status dialog
- * keeps its explicit two-step confirmation.
+ * token. Direct cancel matches the existing Ventoy/ISO progress action.
  */
 @Composable
 internal fun CancelOperationButton(
@@ -1437,12 +1425,8 @@ internal fun CancelOperationButton(
     modifier: Modifier = Modifier,
 ) {
     val operation = state.operation ?: return
-    if (ownerTab != null && operation.title.originTab() != ownerTab) return
-    if (!operation.cancelable ||
-        (operation.state != OperationState.Running && operation.state != OperationState.Queued)
-    ) {
-        return
-    }
+    if (ownerTab != null && OperationPresentation.tab(operation.title) != ownerTab) return
+    if (!OperationPresentation.isCancelable(operation)) return
     TextButton(
         onClick = { onIntent(UiIntent.CancelOperation(operation.token)) },
         modifier = modifier.heightIn(min = 48.dp),
@@ -1451,6 +1435,37 @@ internal fun CancelOperationButton(
             text = stringResource(R.string.action_cancel),
             color = MaterialTheme.colorScheme.error,
         )
+    }
+}
+
+enum class ActionListLayout { Column, Row }
+
+/**
+ * Shared action list for repeated action buttons / button pairs, laid out
+ * vertically in a Column or horizontally in a Row.
+ */
+@Composable
+internal fun ActionList(
+    items: List<@Composable () -> Unit>,
+    layout: ActionListLayout = ActionListLayout.Column,
+    modifier: Modifier = Modifier,
+    spacing: Dp = 8.dp,
+) {
+    if (layout == ActionListLayout.Column) {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(spacing),
+        ) {
+            items.forEach { it() }
+        }
+    } else {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(spacing),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items.forEach { it() }
+        }
     }
 }
 
@@ -1576,178 +1591,6 @@ private fun OperationStatusLine(
     }
 }
 
-/**
- * Centred status dialog from the status block. Title is always Status; below it one compact
- * operation line (name + status, single line), then the temporary
- * operation journal in the shared journal format. The journal stays until the next operation
- * and auto-scrolls to its newest line. Two-step cancel when running; Close only dismisses —
- * cancel stays the destructive confirmButton.
- */
-@Composable
-private fun StatusDialog(
-    state: AppUiState,
-    onIntent: (UiIntent) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val op = state.operation
-    val facts = operationStatusFacts(state)
-    val newerStatus = newerStandaloneStatusMessage(state)
-    val newerStatusText = newerStatus?.localized()
-    val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
-    val cancelable = running == true && op?.cancelable == true
-    data class CancelRequest(val token: OperationToken, val name: String)
-    var cancelRequest by remember { mutableStateOf<CancelRequest?>(null) }
-    val closeLabel = stringResource(R.string.shell_status_close)
-    val techLines = state.operationLogLines
-    // One compact line: operation name + current status/output. Prefer real progress while
-    // running; otherwise the localized readback / terminal result. Never invent a percent.
-    val compactStatus = facts?.let { fact ->
-        val progressLine = listOfNotNull(fact.state, fact.progress)
-            .joinToString(" ")
-            .takeIf { it.isNotEmpty() }
-        val output = fact.readback ?: fact.result
-        val statusLine = when {
-            running && progressLine != null -> progressLine
-            output != null -> output
-            progressLine != null -> progressLine
-            else -> fact.state
-        }
-        val statusTone = when {
-            running && progressLine != null -> fact.tone
-            fact.readback != null -> fact.readbackTone
-            fact.result != null -> fact.resultTone
-            else -> fact.tone
-        }
-        val detail = newerStatusText ?: statusLine
-        listOf(
-            listOfNotNull(fact.name, detail).joinToString(" ") to statusTone,
-        )
-    } ?: state.statusMessage?.let {
-        listOf(it.localized() to StatusTone.Neutral)
-    }.orEmpty()
-    val dialogContainer = MaterialTheme.colorScheme.surfaceContainerHigh
-    val dialogTitleColor = MaterialTheme.colorScheme.onSurface
-    val dialogTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val dialogShape = MaterialTheme.shapes.extraLarge
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = dialogContainer,
-        titleContentColor = dialogTitleColor,
-        textContentColor = dialogTextColor,
-        shape = dialogShape,
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = stringResource(R.string.status_dialog_title),
-                    modifier = Modifier.semantics { heading() },
-                    style = MaterialTheme.typography.titleMedium,
-                    color = dialogTitleColor,
-                )
-                // Header/subheader stay fixed; only the journal below scrolls.
-                compactStatus.firstOrNull()?.let { (text, tone) ->
-                    Text(
-                        text = text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (tone == StatusTone.Neutral) {
-                            dialogTitleColor
-                        } else {
-                            tone.contentColor()
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        },
-        text = {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                shape = MaterialTheme.shapes.small,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (techLines.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.log_empty),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                            color = dialogTextColor,
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 420.dp)
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(techLines.size) { index ->
-                            JournalLine(line = techLines[index])
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            if (cancelable && op != null && facts != null) {
-                TextButton(
-                    onClick = { cancelRequest = CancelRequest(op.token, facts.name) },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.action_cancel),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text(closeLabel) }
-        },
-    )
-    cancelRequest?.let { request ->
-        AlertDialog(
-            onDismissRequest = { cancelRequest = null },
-            containerColor = dialogContainer,
-            titleContentColor = dialogTitleColor,
-            textContentColor = dialogTextColor,
-            shape = dialogShape,
-            title = { Text(stringResource(R.string.cancel_operation_title)) },
-            text = { Text(stringResource(R.string.cancel_operation_body, request.name)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        cancelRequest = null
-                        onIntent(UiIntent.CancelOperation(request.token))
-                    },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) {
-                    Text(stringResource(R.string.cancel_operation_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { cancelRequest = null },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-}
 
 /** One monospace journal row shared by the status dialog and the full log screen. */
 @Composable

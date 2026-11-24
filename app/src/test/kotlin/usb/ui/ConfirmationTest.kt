@@ -391,6 +391,98 @@ class UiStateMachineTest {
         assertTrue(!pin.copy(attachGeneration = 1L).matches(state))
     }
 
+    data class AttachmentPinTableCase(
+        val desc: String,
+        val pin: UiAttachmentPin,
+        val state: AppUiState,
+        val dir: String? = null,
+        val expected: Boolean,
+    )
+
+    @Test
+    fun attachmentPinTableDrivenMatching() {
+        val baseState = ready().copy(currentPath = "/docs", files = emptyList())
+        val validPin = UiAttachmentPin(device.identity, device.attachGeneration, "1", 0uL, 2048uL)
+
+        val cases = listOf(
+            AttachmentPinTableCase(
+                desc = "matching identity, generation, partition, geometry, and directory",
+                pin = validPin,
+                state = baseState,
+                dir = "/docs",
+                expected = true,
+            ),
+            AttachmentPinTableCase(
+                desc = "matching without directory filter",
+                pin = validPin,
+                state = baseState,
+                dir = null,
+                expected = true,
+            ),
+            AttachmentPinTableCase(
+                desc = "directory mismatch",
+                pin = validPin,
+                state = baseState,
+                dir = "/other",
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "device missing (null)",
+                pin = validPin,
+                state = baseState.copy(device = null),
+                dir = null,
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "identity mismatch",
+                pin = validPin.copy(identity = "other-identity"),
+                state = baseState,
+                dir = null,
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "generation mismatch",
+                pin = validPin.copy(attachGeneration = 999L),
+                state = baseState,
+                dir = null,
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "selectedPartitionId mismatch",
+                pin = validPin,
+                state = baseState.copy(selectedPartitionId = "2"),
+                dir = null,
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "startLba mismatch",
+                pin = validPin.copy(startLba = 2048uL),
+                state = baseState,
+                dir = null,
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "sectorCount mismatch",
+                pin = validPin.copy(sectorCount = 1024uL),
+                state = baseState,
+                dir = null,
+                expected = false,
+            ),
+            AttachmentPinTableCase(
+                desc = "partition not found in partitions list",
+                pin = validPin,
+                state = baseState.copy(partitions = emptyList()),
+                dir = null,
+                expected = false,
+            ),
+        )
+
+        for (case in cases) {
+            val result = case.pin.matches(case.state, case.dir)
+            assertEquals("Failed case: ${case.desc}", case.expected, result)
+        }
+    }
+
     @Test
     fun staleDownloadBindingFailsClosedAfterDirectoryOrAttachmentChange() {
         val state = ready().copy(currentPath = "/docs", files = listOf(FileEntry("manual.pdf", false, 42uL)))

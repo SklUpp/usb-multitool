@@ -169,14 +169,6 @@ fun FilesScreen(
     }
     // Attach generation/identity are keys too: the same partition id and path on another
     // stick must not keep a highlighted entry or a captured rename target.
-    var selectedNames by remember(
-        state.selectedPartitionId,
-        state.currentPath,
-        state.device?.identity,
-        state.device?.attachGeneration,
-    ) {
-        mutableStateOf(emptySet<String>())
-    }
     var showNewFolderDialog by remember(
         state.selectedPartitionId,
         state.currentPath,
@@ -328,8 +320,6 @@ fun FilesScreen(
                 state = state,
                 canAct = canAct,
                 canWrite = canWrite,
-                selectedNames = emptySet(),
-                onToggleSelect = { actionEntry = it },
                 onAction = { actionEntry = it },
                 onNavigate = { entry ->
                     onIntent(UiIntent.OpenDirectory(fatChildPath(state.currentPath, entry.name)))
@@ -573,7 +563,6 @@ fun FilesScreen(
                 TextButton(onClick = {
                     if (pinned.matches(state)) onIntent(UiIntent.DeleteBatch(pinned))
                     else onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-                    selectedNames = emptySet()
                     pendingDeleteSelection = null
                 }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) }
             },
@@ -833,83 +822,13 @@ private fun FilesPickScreen(
                         title = stringResource(R.string.import_title),
                         titleColor = MaterialTheme.colorScheme.onSurface,
                     ) {
-                        val failed =
-                            copying.state == OperationState.Failed ||
-                                copying.state == OperationState.Partial
-                        Text(
-                            text =
-                                "${operationLabel(copying)}: " +
-                                    operationStateLabel(copying.state),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color =
-                                if (failed) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
+                        OperationInfo(
+                            operation = copying,
+                            showDetails = true,
+                            onCancel = if (copying.state == OperationState.Running && copying.cancelable) {
+                                { onIntent(UiIntent.CancelOperation(copying.token)) }
+                            } else null,
                         )
-                        if (copying.bytesTotal > 0L) {
-                            LinearProgressIndicator(
-                                progress = { copying.fraction },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 4.dp),
-                            )
-                            Text(
-                                text =
-                                    "${DeviceIdentity.formatCapacity(copying.bytesDone.coerceAtLeast(0L).toULong())}" +
-                                        " / ${DeviceIdentity.formatCapacity(copying.bytesTotal.toULong())}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            val copyPercent =
-                                if (copying.bytesTotal > 0L) "${(copying.fraction * 100).toInt()}%" else null
-                            val copySpeed =
-                                copying
-                                    .takeIf {
-                                        it.state == OperationState.Running && it.bytesPerSecond > 0L
-                                    }
-                                    ?.let { formatBinaryBytesPerSecond(it.bytesPerSecond) }
-                            val copyEta =
-                                if (copying.state == OperationState.Running) {
-                                    remainingSeconds(
-                                        copying.bytesDone,
-                                        copying.bytesTotal,
-                                        copying.bytesPerSecond,
-                                    )?.let { stringResource(R.string.op_eta, formatEtaDuration(it)) }
-                                } else {
-                                    null
-                                }
-                            val copyProgress = operationProgressFacts(copyPercent, copySpeed, copyEta)
-                            if (copyProgress.isNotEmpty()) {
-                                Text(
-                                    text = copyProgress,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        (copying.errorMessage ?: copying.resultMessage)?.let { message ->
-                            Text(
-                                text = normalizeProviderText(message),
-                                style = MaterialTheme.typography.bodySmall,
-                                color =
-                                    if (failed) {
-                                        MaterialTheme.colorScheme.error
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                            )
-                        }
-                        if (copying.state == OperationState.Running && copying.cancelable) {
-                            TextButton(
-                                onClick = { onIntent(UiIntent.CancelOperation(copying.token)) },
-                            enabled = copying.cancelable,
-                            ) {
-                                Text(stringResource(R.string.action_cancel))
-                            }
-                        }
                     }
                 }
             }
@@ -1116,8 +1035,6 @@ private fun FolderCard(
     state: AppUiState,
     canAct: Boolean,
     canWrite: Boolean,
-    selectedNames: Set<String>,
-    onToggleSelect: (FileEntry) -> Unit,
     onNavigate: (FileEntry) -> Unit,
     onRefresh: () -> Unit,
     onOpenPath: (String) -> Unit,
@@ -1264,10 +1181,7 @@ private fun FolderCard(
                     else -> items(visibleRows, key = { it.name }) { entry ->
                         FileRow(
                             entry = entry,
-                            isSelected = entry.name in selectedNames,
-                            multiSelectActive = selectedNames.isNotEmpty(),
                             actionsEnabled = canAct && !locked,
-                            onToggleSelect = { onToggleSelect(entry) },
                             onNavigate = { onNavigate(entry) },
                             onAction = { onAction(entry) },
                         )
@@ -1711,28 +1625,23 @@ internal fun WriteAccessBadge(access: PartitionWriteAccess) {
 @Composable
 private fun FileRow(
     entry: FileEntry,
-    isSelected: Boolean,
-    multiSelectActive: Boolean,
     actionsEnabled: Boolean,
-    onToggleSelect: () -> Unit,
     onNavigate: () -> Unit,
     onAction: () -> Unit = {},
     showActions: Boolean = true,
 ) {
     val moreActionsDescription = stringResource(R.string.files_more_actions)
     val clickLabel = when {
-        multiSelectActive || !entry.isDirectory -> stringResource(R.string.files_more_actions)
+        !entry.isDirectory -> stringResource(R.string.files_more_actions)
         else -> stringResource(R.string.files_open_folder)
     }
     val longClickLabel = stringResource(R.string.files_more_actions)
     val contentColor = when {
         !actionsEnabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
         else -> MaterialTheme.colorScheme.onSurface
     }
     val supportingColor = when {
         !actionsEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-        isSelected -> MaterialTheme.colorScheme.onSecondaryContainer
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     ListItem(
@@ -1740,7 +1649,7 @@ private fun FileRow(
             Text(
                 text = entry.name,
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (entry.isDirectory || isSelected) {
+                fontWeight = if (entry.isDirectory) {
                     FontWeight.Medium
                 } else {
                     FontWeight.Normal
@@ -1791,31 +1700,22 @@ private fun FileRow(
             null
         },
         colors = ListItemDefaults.colors(
-            containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                Color.Transparent
-            },
+            containerColor = Color.Transparent,
             headlineColor = contentColor,
             supportingColor = supportingColor,
         ),
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .semantics { selected = isSelected }
             .combinedClickable(
                 enabled = actionsEnabled,
                 onClickLabel = clickLabel,
                 onLongClickLabel = longClickLabel,
                 role = Role.Button,
                 onClick = {
-                    when {
-                        multiSelectActive -> onToggleSelect()
-                        entry.isDirectory -> onNavigate()
-                        else -> onToggleSelect()
-                    }
+                    if (entry.isDirectory) onNavigate() else onAction()
                 },
-                onLongClick = onToggleSelect,
+                onLongClick = onAction,
             )
             .heightIn(min = 48.dp),
     )
@@ -1981,24 +1881,6 @@ internal fun partitionSizeBytes(partition: PartitionTab, sectorSize: Int?): ULon
 internal fun partitionDisplayName(partition: PartitionTab): String =
     partition.name.ifBlank { partition.id } +
         partition.volumeLabel.orEmpty().trim().takeIf { it.isNotEmpty() }?.let { " ($it)" }.orEmpty()
-
-/** Live listing entries still present for the remembered selected names. */
-internal data class ListingSelection(
-    val entries: List<FileEntry>,
-) {
-    val single: FileEntry? = entries.singleOrNull()
-}
-
-internal fun resolveListingSelection(
-    files: List<FileEntry>,
-    selectedNames: Set<String>,
-): ListingSelection {
-    if (selectedNames.isEmpty()) return ListingSelection(emptyList())
-    return ListingSelection(files.filter { it.name in selectedNames })
-}
-
-internal fun toggleSelectedName(selectedNames: Set<String>, name: String): Set<String> =
-    if (name in selectedNames) selectedNames - name else selectedNames + name
 
 internal fun FileEntry.toBatchItem(): FilesBatchItem =
     FilesBatchItem(name = name, isDirectory = isDirectory, sizeBytes = sizeBytes)

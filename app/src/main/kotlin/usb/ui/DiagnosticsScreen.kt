@@ -224,14 +224,13 @@ fun DiagnosticsScreen(
                 }
                 val checkOp = state.operation
                 val checkLines = when {
-                    checkOp?.title == OperationTitle.SelfTest ->
-                        checkOp.errorMessage?.lines()?.filter { it.isNotBlank() }
-                            ?: checkOp.resultMessage?.lines()?.filter { it.isNotBlank() }
-                            .orEmpty()
-                    checkOp?.title == OperationTitle.ReadScan ->
-                        checkOp.readScanResult?.let { listOf(readScanSummary(it)) }.orEmpty()
                     checkOp?.title == OperationTitle.SmartRead ->
-                        state.smartResult?.let { smartInspectionLines(it) }.orEmpty()
+                        (checkOp.smartResult ?: state.smartResult)
+                            ?.let { smartInspectionLines(it) }
+                            .orEmpty()
+                    checkOp?.title == OperationTitle.SelfTest ||
+                        checkOp?.title == OperationTitle.ReadScan ->
+                        OperationPresentation.lines(checkOp)
                     state.smartResult != null ->
                         smartInspectionLines(state.smartResult)
                     else -> emptyList()
@@ -407,45 +406,49 @@ fun DiagnosticsScreen(
                 rescueMap != null &&
                 rescueMap.error == null &&
                 rescueMap.summary?.sectorSize != null
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = { requestCreate(onStartRescueBackup) },
-                    enabled = state.actionsEnabled && backupFolderReady,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                ) {
-                    GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.diagnostics_create_image),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                ApplyCancelButton(
-                    state = state,
-                    onIntent = onIntent,
-                    ownerTab = ShellTab.Diagnostics,
-                    label = stringResource(R.string.diagnostics_restore_image),
-                    enabled = state.actionsEnabled && rescueReady,
-                    onClick = {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+            ActionList(
+                items = listOf(
+                    {
+                        FilledTonalButton(
+                            onClick = { requestCreate(onStartRescueBackup) },
+                            enabled = state.actionsEnabled && backupFolderReady,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            GlyphIcon(glyph = Glyph.Copy, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.diagnostics_create_image),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    ),
-                    matchesTitle = { title ->
-                        title == OperationTitle.RescueBackup ||
-                            title == OperationTitle.Destructive(DestructiveAction.RESCUE_RESTORE)
+                    {
+                        ApplyCancelButton(
+                            state = state,
+                            onIntent = onIntent,
+                            ownerTab = ShellTab.Diagnostics,
+                            label = stringResource(R.string.diagnostics_restore_image),
+                            enabled = state.actionsEnabled && rescueReady,
+                            onClick = {
+                                onIntent(UiIntent.RequestDestructive(DestructiveAction.RESCUE_RESTORE))
+                            },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
+                            matchesTitle = { title ->
+                                title == OperationTitle.RescueBackup ||
+                                    title == OperationTitle.Destructive(DestructiveAction.RESCUE_RESTORE)
+                            },
+                        )
                     },
-                )
-            }
+                ),
+                layout = ActionListLayout.Column,
+            )
             if (state.rescueImageUri != null || state.rescueMapUri != null) {
                 val restoreLines = buildList {
                     if (state.rescueImageUri != null) {
@@ -515,49 +518,53 @@ fun DiagnosticsScreen(
                 state.backupInspection?.takeIf { it.uri == state.backupUri }?.let {
                     it.error == null && it.summary != null
                 } == true
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = { requestCreate(onCreateGptCopy) },
-                    enabled = state.actionsEnabled &&
-                        state.partitionScheme == usb.partition.TableScheme.GPT &&
-                        backupFolderReady,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                ) {
-                    GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.diagnostics_create_gpt_copy),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Button(
-                    onClick = {
-                        onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
+            ActionList(
+                items = listOf(
+                    {
+                        FilledTonalButton(
+                            onClick = { requestCreate(onCreateGptCopy) },
+                            enabled = state.actionsEnabled &&
+                                state.partitionScheme == usb.partition.TableScheme.GPT &&
+                                backupFolderReady,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.diagnostics_create_gpt_copy),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     },
-                    enabled = state.actionsEnabled && gptRestoreReady,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    ),
-                ) {
-                    GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.diagnostics_restore_gpt),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+                    {
+                        Button(
+                            onClick = {
+                                onIntent(UiIntent.RequestDestructive(DestructiveAction.GPT_RESTORE))
+                            },
+                            enabled = state.actionsEnabled && gptRestoreReady,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
+                        ) {
+                            GlyphIcon(glyph = Glyph.Gpt, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.diagnostics_restore_gpt),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                ),
+                layout = ActionListLayout.Column,
+            )
             if (state.backupUri != null) {
                 InspectionText(
                     gptBackupInspectionLines(

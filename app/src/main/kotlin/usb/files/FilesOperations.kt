@@ -2,10 +2,7 @@ package usb.files
 
 import android.content.ContentResolver
 import android.net.Uri
-import android.os.ParcelFileDescriptor
-import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.OutputStream
 import kotlinx.coroutines.CancellationException
@@ -287,7 +284,6 @@ object FilesOperations {
     ) {
         var offset = 0L
         var size = 0L
-        var reportedSize: Long? = null
         try {
             val source = volume.stat(target)
             require(!source.isDirectory) { "download source is a directory: $target" }
@@ -300,20 +296,23 @@ object FilesOperations {
             }
             if (!operation.isActive()) throw CancellationException("Download cancelled")
             operation.mutationAttempted = true
-            writeSyncedDownload(resolver, destination) { stream ->
-                offset = streamVolume(volume, target, size, stream, operation)
+            offset = SafWriter(resolver).write(destination, expectedSize = size) { stream ->
+                streamVolume(volume, target, size, stream, operation)
             }
-            if (offset != size) error("download size mismatch: got $offset, expected $size")
-            reportedSize = openableSizeBytes(resolver, destination)
-            if (size > 0L && reportedSize == 0L) {
-                error("provider reports empty destination after $size bytes")
-            }
+        } catch (failure: SafWriteException) {
+            val original = failure.cause ?: failure
+            operation.state = OperationState.Partial
+            operation.failureCause = usb.device.DiskException.IoFailure(
+                "Download failed after ${failure.bytesWritten} of $size bytes; ${failure.cleanupNote}",
+                original,
+            )
+            throw original
         } catch (failure: Throwable) {
             val emptyDestination =
                 offset == 0L ||
-                    (reportedSize == 0L && destinationHasData(resolver, destination) == false)
+                    (openableSizeBytes(resolver, destination) == 0L && SafWriter.destinationHasData(resolver, destination) == false)
             val cleanupNote = if (emptyDestination) {
-                if (deleteDownloadedDocument(resolver, destination, failure)) {
+                if (SafWriter.deleteDocument(resolver, destination, failure)) {
                     "empty destination deleted"
                 } else {
                     "destination retained"
@@ -328,27 +327,6 @@ object FilesOperations {
             )
             throw failure
         }
-    }
-
-    /** True/false when the provider can be opened; null when the check itself failed. */
-    private fun destinationHasData(resolver: ContentResolver, destination: Uri): Boolean? =
-        runCatching {
-            resolver.openInputStream(destination)?.use { it.read() != -1 }
-        }.getOrNull()
-
-    /** Remove a destination this download created but did not fill. */
-    private fun deleteDownloadedDocument(
-        resolver: ContentResolver,
-        destination: Uri,
-        failure: Throwable,
-    ): Boolean {
-        val byDocuments = runCatching {
-            DocumentsContract.deleteDocument(resolver, destination)
-        }.onFailure(failure::addSuppressed).getOrDefault(false)
-        if (byDocuments) return true
-        return runCatching { resolver.delete(destination, null, null) }
-            .onFailure(failure::addSuppressed)
-            .getOrDefault(0) > 0
     }
 
     /** Copy [size] bytes from [volume] to [stream], reporting progress. */
@@ -907,7 +885,7 @@ object FilesOperations {
     ) {
         var offset = 0L
         try {
-            writeSyncedDownload(resolver, target.uri) { stream ->
+            SafWriter(resolver).writeSynced(target.uri) { stream ->
                 offset = streamVolume(volume, sourcePath, size, stream, operation)
             }
             if (offset != size) error("download size mismatch: got $offset, expected $size")
@@ -933,76 +911,6 @@ object FilesOperations {
         }
     }
 
-    /**
-     * Opens a fresh download destination for truncating writes. Mirrors
-     * [usb.saf.SafSyncedOutput] but tolerates providers that reject `wt`.
-     */
-    private fun openDownloadDescriptor(
-        resolver: ContentResolver,
-        destination: Uri,
-    ): ParcelFileDescriptor? {
-        // Some providers reject the non-standard "t" flag. Every destination is a fresh
-        // CreateDocument, so "w" is already truncated; retry only on open failure.
-        val truncating = try {
-            resolver.openFileDescriptor(destination, "wt")
-        } catch (_: FileNotFoundException) {
-            null
-        } catch (_: IllegalArgumentException) {
-            null
-        } catch (_: SecurityException) {
-            null
-        } catch (_: UnsupportedOperationException) {
-            null
-        }
-        if (truncating != null) return truncating
-        return try {
-            resolver.openFileDescriptor(destination, "w")
-        } catch (_: FileNotFoundException) {
-            null
-        } catch (_: IllegalArgumentException) {
-            null
-        } catch (_: SecurityException) {
-            null
-        } catch (_: UnsupportedOperationException) {
-            null
-        }
-    }
-
-    private fun writeSyncedDownload(
-        resolver: ContentResolver,
-        destination: Uri,
-        write: (OutputStream) -> Unit,
-    ) {
-        val descriptor = openDownloadDescriptor(resolver, destination)
-        if (descriptor == null) {
-            // Last provider route: openOutputStream handles providers whose document
-            // descriptor rejects both "wt" and "w" but still accepts a write stream.
-            val stream = resolver.openOutputStream(destination, "w")
-                ?: error("cannot open $destination for writing")
-            try {
-                write(stream)
-                stream.flush()
-            } finally {
-                stream.close()
-            }
-            return
-        }
-        val stream = try {
-            ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
-        } catch (failure: Throwable) {
-            runCatching { descriptor.close() }.onFailure(failure::addSuppressed)
-            throw failure
-        }
-        try {
-            write(stream)
-            stream.flush()
-            descriptor.fileDescriptor.sync()
-        } catch (failure: Throwable) {
-            runCatching { stream.close() }.onFailure(failure::addSuppressed)
-            throw failure
-        }
-        stream.close()
-    }
     private fun resolveDownloadDirectory(
         childName: String,
         pathLabel: String,
