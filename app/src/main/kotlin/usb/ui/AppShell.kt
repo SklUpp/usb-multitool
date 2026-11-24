@@ -1,99 +1,74 @@
 package usb.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
+
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import kotlin.math.roundToInt
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
-import android.provider.Settings
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.systemGestures
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.lightColorScheme
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.content.res.Configuration
-import android.net.Uri
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -101,51 +76,42 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.foundation.focusGroup
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.runtime.saveable.listSaver
-import androidx.compose.runtime.saveable.rememberSaveable
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.CollectionInfo
-import androidx.compose.ui.semantics.CollectionItemInfo
-import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.CollectionItemInfo
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.collectionItemInfo
-import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.paneTitle
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -155,44 +121,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import usb.formatBinaryBytesPerSecond
-import usb.formatEtaDuration
-import usb.remainingSeconds
+import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import usb.fs.FilesystemSpace
 import usb.fs.FilesystemUsage
-import usb.image.ReadbackProblem
-import usb.image.ReadbackVerdict
 import usb.multitool.R
-import usb.service.OperationToken
 import java.util.Locale
-private fun reducedMotionEnabled(context: Context): Boolean = runCatching {
-    Settings.Global.getFloat(
-        context.contentResolver,
-        Settings.Global.ANIMATOR_DURATION_SCALE,
-        1f,
-    ) == 0f
-}.getOrDefault(false)
-
-private fun usbContentAvailable(presence: DevicePresence): Boolean =
-    presence == DevicePresence.Ready || presence == DevicePresence.Busy
-
-/**
- * Which tab may render its content. An open Files pick session stays mounted even when the
- * stick disappears: the reducer still owns exit/cancel, and hiding it would strand the
- * session behind a disabled header with no visible close control.
- */
-internal fun shellTabContentVisible(
-    tab: ShellTab,
-    presence: DevicePresence,
-    pickOpen: Boolean,
-): Boolean =
-    when {
-        tab == ShellTab.Files && pickOpen -> true
-        tab == ShellTab.Files || tab == ShellTab.Partitions -> usbContentAvailable(presence)
-        else -> true
-    }
-
 
 /**
  * Four-tab shell over [AppUiState]. Talks only through [onIntent]; never opens USB.
@@ -264,16 +199,6 @@ fun AppShell(
     val localizedContext = remember(baseContext, state.language) {
         createLocalizedContext(baseContext, state.language)
     }
-    // A deliberate swipe is measured in dp so it feels the same at every density.
-    val density = LocalDensity.current
-    val layoutDirection = LocalLayoutDirection.current
-    val swipeThreshold = with(density) {
-        ShellSwipePolicy.THRESHOLD_DP.dp.toPx()
-    }
-    // Gestures starting in these physical edges perform system Back, not a tab swipe.
-    val systemGestures = WindowInsets.systemGestures
-    val leftBackEdge = systemGestures.getLeft(density, layoutDirection).toFloat()
-    val rightBackEdge = systemGestures.getRight(density, layoutDirection).toFloat()
     CompositionLocalProvider(
         LocalContext provides localizedContext,
         LocalResources provides localizedContext.resources,
@@ -285,7 +210,7 @@ fun AppShell(
             mutableStateOf(ShellPanelState())
         }
         val pickOpen = state.filesPickMode != null
-        // Shell status lives in OperationStatusLine only; LogScreen keeps its own host.
+        // Shell status lives in OperationStatusHost only; LogScreen keeps its own host.
         var settingsReturnTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         // Last mutable work tab. Diagnostics has no Back entry of its own, so it uses
         // this to return to the operation that sent the user there.
@@ -294,6 +219,58 @@ fun AppShell(
         var operationOriginToken by rememberSaveable { mutableStateOf<String?>(null) }
         val operationLocked = state.deviceBusy
         val operationToken = state.operation?.token?.toString()
+        var restoreLogFocus by remember { mutableStateOf(false) }
+        val onSelectTab = remember(onIntent) { { tab: ShellTab -> onIntent(UiIntent.SelectTab(tab)) } }
+        val latestTab = rememberUpdatedState(state.tab)
+        val openSettings = remember(onIntent) {
+            {
+                if (latestTab.value in PrimaryShellTabs) {
+                    settingsReturnTab = latestTab.value.name
+                }
+                onIntent(UiIntent.SelectTab(ShellTab.Settings))
+            }
+        }
+        val openLog = remember {
+            {
+                restoreLogFocus = true
+                panels = panels.openJournalScreen()
+            }
+        }
+        val backFromSettings = remember(onIntent) {
+            {
+                onIntent(
+                    UiIntent.SelectTab(
+                        ShellTabPersistence.decode(settingsReturnTab) ?: ShellTab.Files,
+                    ),
+                )
+            }
+        }
+        val openBackupSettings = remember(onIntent) {
+            {
+                settingsReturnTab = ShellTab.Diagnostics.name
+                onIntent(UiIntent.SelectTab(ShellTab.Settings))
+            }
+        }
+        val requestEject = remember(onIntent) { { onIntent(UiIntent.RequestEject) } }
+        val requestEjectRescan = remember(onIntent) { { onIntent(UiIntent.RequestEjectRescan) } }
+        val readOnlyReturn = remember(operationOriginTab, lastWorkTab) {
+            ShellTabPersistence.decode(operationOriginTab ?: lastWorkTab)
+        }
+        val shellTabsModel = remember(state.tab, operationLocked, readOnlyReturn) {
+            ShellTabsModel(
+                PrimaryShellTabs.map { tab ->
+                    ShellTabEntry(
+                        tab = tab,
+                        enabled = !shellTabSwitchBlocked(
+                            tab = tab,
+                            selected = state.tab,
+                            operationLocked = operationLocked,
+                            readOnlyReturn = readOnlyReturn,
+                        ),
+                    )
+                },
+            )
+        }
         LaunchedEffect(state.tab) {
             if (state.tab == ShellTab.Files || state.tab == ShellTab.Ventoy ||
                 state.tab == ShellTab.Partitions
@@ -352,9 +329,7 @@ fun AppShell(
         val logButtonFocus = remember { FocusRequester() }
         val logScreenFocus = remember { FocusRequester() }
         val focusManager = LocalFocusManager.current
-        var restoreLogFocus by remember { mutableStateOf(false) }
         val haptic = LocalHapticFeedback.current
-        val reducedMotion = reducedMotionEnabled(baseContext)
         var terminalHapticToken by rememberSaveable { mutableStateOf<Long?>(null) }
         var previousPresence by remember { mutableStateOf(state.presence) }
         LaunchedEffect(state.presence) {
@@ -440,46 +415,11 @@ fun AppShell(
                         ),
                 ) {
                     if (!panels.journalScreenOpen && !pickOpen) {
-                        NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            tonalElevation = 3.dp,
-                        ) {
-                            PrimaryShellTabs.forEach { tab ->
-                                // Reducer also refuses the switch; the disabled state names it
-                                // up front. Presence alone never disables: empty states stay
-                                // navigable, only a live operation pins the tab.
-                                val readOnlyScreen =
-                                    state.tab == ShellTab.Settings ||
-                                        state.tab == ShellTab.Diagnostics
-                                val readOnlyReturn = ShellTabPersistence.decode(
-                                    operationOriginTab ?: lastWorkTab,
-                                )
-                                val switchBlocked = tab != state.tab &&
-                                    tab != ShellTab.Diagnostics &&
-                                    !(readOnlyScreen && tab == readOnlyReturn) &&
-                                    operationLocked
-                                NavigationBarItem(
-                                    selected = state.tab == tab,
-                                    onClick = { onIntent(UiIntent.SelectTab(tab)) },
-                                    enabled = !switchBlocked,
-                                    icon = { TabIcon(tab) },
-                                    label = {
-                                        Text(
-                                            text = tab.title(),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
-                                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    ),
-                                )
-                            }
-                        }
+                        ShellTabBar(
+                            selected = state.tab,
+                            entries = shellTabsModel,
+                            onSelect = onSelectTab,
+                        )
                     }
                 }
                 }
@@ -492,42 +432,12 @@ fun AppShell(
                     .fillMaxSize(),
             ) {
                 if (compactHeight && !panels.journalScreenOpen && !pickOpen) {
-                    NavigationRail(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ShellTabRail(
+                        selected = state.tab,
+                        entries = shellTabsModel,
+                        onSelect = onSelectTab,
                         modifier = Modifier.fillMaxHeight(),
-                    ) {
-                        PrimaryShellTabs.forEach { tab ->
-                            val readOnlyScreen = state.tab == ShellTab.Settings ||
-                                state.tab == ShellTab.Diagnostics
-                            val readOnlyReturn = ShellTabPersistence.decode(
-                                operationOriginTab ?: lastWorkTab,
-                            )
-                            val switchBlocked = tab != state.tab &&
-                                tab != ShellTab.Diagnostics &&
-                                !(readOnlyScreen && tab == readOnlyReturn) &&
-                                operationLocked
-                            NavigationRailItem(
-                                selected = state.tab == tab,
-                                onClick = { onIntent(UiIntent.SelectTab(tab)) },
-                                enabled = !switchBlocked,
-                                icon = { TabIcon(tab) },
-                                label = {
-                                    Text(
-                                        text = tab.title(),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                colors = NavigationRailItemDefaults.colors(
-                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                ),
-                            )
-                        }
-                    }
+                    )
                 }
                 Box(
                     modifier = Modifier
@@ -544,25 +454,29 @@ fun AppShell(
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp),
                         ) {
-                            DeviceHeader(
-                                state = state,
-                                logButtonFocus = logButtonFocus,
+                            ShellHeader(
+                                device = state.device,
+                                presence = state.presence,
+                                partitionScheme = state.partitionScheme,
+                                operationLocked = operationLocked,
+                                ejectInFlight = state.ejectInFlight,
+                                ejected = state.ejected,
                                 journalOpen = panels.journalScreenOpen,
-                                onIntent = onIntent,
-                                onOpenSettings = {
-                                    if (state.tab in PrimaryShellTabs) {
-                                        settingsReturnTab = state.tab.name
-                                    }
-                                    onIntent(UiIntent.SelectTab(ShellTab.Settings))
-                                },
-                                onOpenLog = {
-                                    restoreLogFocus = true
-                                    panels = panels.openJournalScreen()
-                                },
+                                logButtonFocus = logButtonFocus,
+                                onOpenSettings = openSettings,
+                                onOpenLog = openLog,
+                                onRequestEject = requestEject,
+                                onRequestEjectRescan = requestEjectRescan,
                             )
                         }
                         if (!panels.journalScreenOpen) {
-                            OperationStatusLine(state = state)
+                            OperationStatusHost(
+                                operation = state.operation,
+                                diskSectorSize = state.diskSectorSize,
+                                statusMessage = state.statusMessage,
+                                statusSequence = state.statusSequence,
+                                operationStatusSequence = state.operationStatusSequence,
+                            )
                         }
                     }
                     // Tab content and the journal share this weight box: the journal covers
@@ -603,156 +517,29 @@ fun AppShell(
                     // consumed, so a range slider, a horizontally scrolled row or a vertical
                     // list keeps its own gesture. A committed swipe goes through the reducer
                     // exactly like a navigation-bar tap.
-                    Box(
+                    ShellTabs(
+                        state = state,
+                        onIntent = onIntent,
+                        onPickImage = onPickImage,
+                        onPickWindowsFile = onPickWindowsFile,
+                        onPickWindowsImage = onPickWindowsImage,
+                        onPickVentoySettingsFile = onPickVentoySettingsFile,
+                        onRequestDownload = onRequestDownload,
+                        onRequestBatchDownload = onRequestBatchDownload,
+                        onRequestBatchUpload = onRequestBatchUpload,
+                        onPickBackupFolder = onPickBackupFolder,
+                        onPickRescueFile = onPickRescueFile,
+                        onPickGptFile = onPickGptFile,
+                        onStartRescueBackup = onStartRescueBackup,
+                        onCreateGptCopy = onCreateGptCopy,
+                        backupFolderGrantValid = backupFolderGrantValid,
+                        onOpenBackupSettings = openBackupSettings,
+                        onBackFromSettings = backFromSettings,
+                        versionName = installedVersion,
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxWidth()
-                            .then(
-                                if (pickOpen || operationLocked) {
-                                    // Modal pick/operation pins navigation; a sideways drag
-                                    // must not move away from the originating work tab.
-                                    Modifier
-                                } else {
-                                    Modifier.pointerInput(
-                                        state.tab,
-                                        swipeThreshold,
-                                        layoutDirection,
-                                        leftBackEdge,
-                                        rightBackEdge,
-                                    ) {
-                                        detectShellSwipe(
-                                            thresholdPx = swipeThreshold,
-                                            isRtl = layoutDirection == LayoutDirection.Rtl,
-                                            leftBackEdgePx = leftBackEdge,
-                                            rightBackEdgePx = rightBackEdge,
-                                        ) { direction ->
-                                            val target = ShellSwipePolicy.target(state.tab, direction)
-                                            if (target != null && target != state.tab) {
-                                                onIntent(UiIntent.SelectTab(target))
-                                            }
-                                        }
-                                    }
-                                },
-                            ),
-                    ) {
-                        AnimatedContent(
-                            targetState = state.tab,
-                            modifier = Modifier.fillMaxSize(),
-                            transitionSpec = {
-                                val from = PrimaryShellTabs.indexOf(initialState)
-                                val to = PrimaryShellTabs.indexOf(targetState)
-                                val slide = if (from >= 0 && to >= 0 && from != to) {
-                                    val forward = if (to > from) 1 else -1
-                                    if (layoutDirection == LayoutDirection.Rtl) -forward else forward
-                                } else {
-                                    0
-                                }
-                                if (reducedMotion || slide == 0) {
-                                    if (reducedMotion) {
-                                        EnterTransition.None togetherWith ExitTransition.None
-                                    } else {
-                                        fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
-                                    }
-                                } else {
-                                    (
-                                        slideInHorizontally(tween(220)) { width -> slide * width } +
-                                            fadeIn(tween(180))
-                                        ).togetherWith(
-                                        slideOutHorizontally(tween(220)) { width -> -slide * width } +
-                                            fadeOut(tween(120)),
-                                    )
-                                }
-                            },
-                            label = "tab",
-                        ) { target ->
-                            // P2: BeginFilesPick flips tab to Files while the old tab fades
-                            // out. The outgoing tab is not composed at all while pickOpen:
-                            // no pointer, focus, semantics, gestures, or already-running
-                            // handlers can leak. The incoming Files picker stays interactive.
-                            // AnimatedContent still animates: outgoing has no content, so
-                            // only the picker fades/scales in.
-                            if (pickOpen && target != ShellTab.Files) {
-                                Box(modifier = Modifier.fillMaxSize()) {
-                                }
-                            } else {
-                            // Nested presence transition: tab switches fade above;
-                            // USB attach/detach fades the empty state within the same tab.
-                            val visible = shellTabContentVisible(target, state.presence, pickOpen)
-                            AnimatedContent(
-                                targetState = visible,
-                                transitionSpec = {
-                                    if (reducedMotion) {
-                                        EnterTransition.None togetherWith ExitTransition.None
-                                    } else {
-                                        fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
-                                    }
-                                },
-                                label = "presence",
-                            ) { showContent ->
-                            if (!showContent) {
-                                UsbEmptyState(
-                                    presence = state.presence,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            } else {
-                            when (target) {
-                                ShellTab.Files -> FilesScreen(
-                                    state = state,
-                                    onIntent = onIntent,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onRequestDownload = onRequestDownload,
-                                    onRequestBatchDownload = onRequestBatchDownload,
-                                    onRequestBatchUpload = onRequestBatchUpload,
-                                    onRequestDeviceImage = onPickWindowsImage,
-                                )
-                                ShellTab.Ventoy -> VentoyScreen(
-                                    state = state,
-                                    onIntent = onIntent,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onPickWindowsFile = onPickWindowsFile,
-                                    onPickVentoySettingsFile = onPickVentoySettingsFile,
-                                )
-                                ShellTab.Partitions -> PartitionsScreen(
-                                    state = state,
-                                    onIntent = onIntent,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onPickImage = onPickImage,
-                                )
-                                ShellTab.Diagnostics -> DiagnosticsScreen(
-                                    state = state,
-                                    onIntent = onIntent,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onPickBackupFolder = onPickBackupFolder,
-                                    onPickRescueFile = onPickRescueFile,
-                                    onPickGptFile = onPickGptFile,
-                                    onStartRescueBackup = onStartRescueBackup,
-                                    onCreateGptCopy = onCreateGptCopy,
-                                    onOpenBackupSettings = {
-                                        settingsReturnTab = ShellTab.Diagnostics.name
-                                        onIntent(UiIntent.SelectTab(ShellTab.Settings))
-                                    },
-                                    backupFolderGrantValid = backupFolderGrantValid,
-                                )
-                                ShellTab.Settings -> SettingsScreen(
-                                    state = state,
-                                    versionName = installedVersion,
-                                    onIntent = onIntent,
-                                    onBack = {
-                                        onIntent(
-                                            UiIntent.SelectTab(
-                                                ShellTabPersistence.decode(settingsReturnTab)
-                                                    ?: ShellTab.Files,
-                                            ),
-                                        )
-                                    },
-                                    onPickBackupFolder = onPickBackupFolder,
-                                )
-                            }
-                        }
-                    }
-                }
-                }
-                }
+                            .fillMaxWidth(),
+                    )
                 }
 
                 if (panels.journalScreenOpen && !pickOpen) {
@@ -974,9 +761,6 @@ fun RememberedAppShell(
     )
 }
 
-/** Fixed project page: the header opens exactly this address, never state or user input. */
-private const val PROJECT_URL = "https://github.com/SklUpp/usb-multitool"
-
 /**
  * Installed `versionName`, read from [android.content.pm.PackageManager] instead of
  * `BuildConfig`: a sideloaded or repackaged APK then reports the version actually on the
@@ -991,165 +775,6 @@ private fun installedVersionName(context: Context): String? = runCatching {
 }.getOrNull()?.takeIf { it.isNotBlank() }
 
 /**
- * Version label above the language, theme and log buttons; tapping opens [PROJECT_URL].
- * The intent is implicit and this build declares no package-visibility queries, so the
- * resolve step is the launch itself: [ActivityNotFoundException] means "no handler" and is
- * reported in a toast. A pre-flight `resolveActivity` would answer null for a browser the
- * package filter hides on API 30+.
- */
-@Composable
-private fun ProjectVersionButton(versionName: String?) {
-    val context = LocalContext.current
-    val label = if (versionName != null) {
-        stringResource(R.string.app_version_label, versionName)
-    } else {
-        stringResource(R.string.app_version_unknown)
-    }
-    val description = if (versionName != null) {
-        stringResource(R.string.app_version_open, versionName)
-    } else {
-        stringResource(R.string.app_version_open_unknown)
-    }
-    val noBrowser = stringResource(R.string.app_version_no_browser)
-    TextButton(
-        onClick = {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL))
-                .addCategory(Intent.CATEGORY_BROWSABLE)
-            try {
-                context.startActivity(intent)
-            } catch (error: ActivityNotFoundException) {
-                android.util.Log.w("UsbMultitool", "no activity for $PROJECT_URL: ${error.message}")
-                Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
-            }
-        },
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-        modifier = Modifier
-            .heightIn(min = 48.dp)
-            .semantics { contentDescription = description },
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DeviceHeader(
-    state: AppUiState,
-    logButtonFocus: FocusRequester,
-    /** The opaque journal covers the tab content; its own open/more controls are inert. */
-    journalOpen: Boolean,
-    onIntent: (UiIntent) -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenLog: () -> Unit,
-) {
-    val device = state.device
-    val operationLocked = state.deviceBusy
-    val serialLabel = device?.serialNumber?.trim()?.takeIf { it.isNotEmpty() }
-        ?.let { stringResource(R.string.header_serial, it) }
-    val subtitle = when (state.presence) {
-        DevicePresence.Ready -> buildString {
-            append(device?.capacityLabel ?: "USB")
-            state.partitionScheme?.name?.let { append(", ").append(it) }
-            serialLabel?.let { append(" · ").append(it) }
-        }
-        DevicePresence.PermissionRequired -> stringResource(R.string.header_permission)
-        DevicePresence.Busy -> stringResource(R.string.header_busy)
-        DevicePresence.Disconnected -> stringResource(R.string.header_disconnected)
-        DevicePresence.Absent -> stringResource(R.string.header_absent)
-    }
-    var moreOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(operationLocked) {
-        if (operationLocked) moreOpen = false
-    }
-    val logLabel = stringResource(R.string.log_screen_title)
-    val moreLabel = stringResource(R.string.more_actions)
-TopAppBar(
-        expandedHeight = adaptiveTopAppBarHeight(),
-        title = {
-            Column {
-                Text(
-                    text = device?.label ?: stringResource(R.string.app_name),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.semantics { heading() },
-                )
-                Text(
-                    text = subtitle,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        actions = {
-            // Req 16: omit journal/menu controls while the journal layer owns the screen.
-            if (!journalOpen) {
-                IconButton(
-                    onClick = onOpenLog,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .focusRequester(logButtonFocus)
-                        .semantics { contentDescription = logLabel },
-                ) { GlyphIcon(Glyph.Log, size = 22.dp) }
-                Box {
-                    IconButton(
-                        onClick = { moreOpen = true },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .semantics { contentDescription = moreLabel },
-                    ) { GlyphIcon(Glyph.More, size = 22.dp) }
-                    DropdownMenu(
-                        expanded = moreOpen,
-                        onDismissRequest = { moreOpen = false },
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        shadowElevation = 3.dp,
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.settings_title_screen)) },
-                            onClick = { moreOpen = false; onOpenSettings() },
-                        )
-                        val ejectEnabled =
-                            !operationLocked && state.presence == DevicePresence.Ready &&
-                                !state.ejectInFlight && !state.ejected
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_eject)) },
-                            enabled = ejectEnabled,
-                            onClick = { moreOpen = false; onIntent(UiIntent.RequestEject) },
-                        )
-                        if (state.ejected) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_rescan)) },
-                                enabled = !operationLocked && !state.ejectInFlight,
-                                onClick = {
-                                    moreOpen = false
-                                    onIntent(UiIntent.RequestEjectRescan)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        // Scaffold's safeDrawing inset already places the content below the status bar;
-        // the app bar's own status-bar inset would add a second gap above the title.
-        // Keep the M3 default 64 dp height so the two-line title is not clipped at large
-        // fontScale; status block outer pad stays 4+4 dp so idle stack has no dead band.
-        windowInsets = WindowInsets(0, 0, 0, 0),
-    )
-}
-
-/**
  * Requests focus, tolerating a target detached in the same frame.
  * [FocusRequester] has no public `isAttached` check, so only the documented
  * IllegalStateException is handled — and logged, not silently dropped, so unrelated
@@ -1161,211 +786,6 @@ private fun FocusRequester.requestFocusIfAttached(target: String) {
     } catch (error: IllegalStateException) {
         android.util.Log.d("UsbMultitool", "focus request for $target skipped: ${error.message}")
     }
-}
-
-/**
- * Arbiter between the shell swipe and the active tab. Children receive the Main pass first.
- * A consumed down proves nothing: Compose `clickable` consumes every down, so only a
- * consumed move (range slider, horizontally scrolled row, vertical list) aborts the swipe
- * before it can qualify. Once qualified, every change is consumed: that cancels a clickable
- * row's tap before its up. A terminal up still claimed by another handler counts as a
- * cancellation, never as a second action. A pointer that vanishes or a gesture starting in
- * a system back edge dispatches nothing.
- */
-private suspend fun PointerInputScope.detectShellSwipe(
-    thresholdPx: Float,
-    isRtl: Boolean,
-    leftBackEdgePx: Float,
-    rightBackEdgePx: Float,
-    onSwipe: (ShellSwipeDirection) -> Unit,
-) {
-    awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        if (
-            ShellSwipePolicy.startsInSystemBackEdge(
-                xPx = down.position.x,
-                widthPx = size.width.toFloat(),
-                leftInsetPx = leftBackEdgePx,
-                rightInsetPx = rightBackEdgePx,
-            )
-        ) {
-            return@awaitEachGesture
-        }
-        val recognizer = ShellSwipeRecognizer(thresholdPx, isRtl)
-        recognizer.down(down.position.x, down.position.y, down.isConsumed)
-        var endedConsumed = false
-        while (!recognizer.isFinished) {
-            val event = awaitPointerEvent(PointerEventPass.Main)
-            val change = event.changes.firstOrNull { it.id == down.id }
-            if (change == null) {
-                // The system cancelled the stream (back gesture, window change).
-                recognizer.cancel()
-                break
-            }
-            endedConsumed = change.isConsumed
-            if (recognizer.move(change.position.x, change.position.y, change.isConsumed)) {
-                change.consume()
-            }
-            if (!change.pressed) break
-        }
-        recognizer.up(consumed = endedConsumed)?.let(onSwipe)
-    }
-}
-
-/** 48 dp text entry to the full log screen; status controls stay separate. */
-@Composable
-private fun LogOpenButton(
-    lineCount: Int,
-    focusRequester: FocusRequester,
-    onOpenLog: () -> Unit,
-) {
-    val label = stringResource(R.string.log_screen_title)
-    TextButton(
-        onClick = onOpenLog,
-        modifier = Modifier
-            .heightIn(min = 48.dp)
-            .focusRequester(focusRequester)
-            .semantics { contentDescription = "$label, $lineCount" },
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-/**
- * One numeric progress line: percent, throughput and ETA only when measured. Each fact
- * stays separate so a missing speed never hides a known ETA and vice versa.
- */
-internal fun operationProgressFacts(metric: String?, speed: String?, eta: String?): String =
-    listOfNotNull(metric, speed, eta).filter { it.isNotEmpty() }.joinToString(FACT_SEPARATOR)
-
-/** Field separator shared by every status surface: strip, dialog and journal prefix. */
-private const val FACT_SEPARATOR = ", "
-
-/** Colour family of one status fact; `error` is reserved for real failures. */
-private enum class StatusTone { Neutral, Success, Warning, Error }
-
-@Composable
-private fun StatusTone.contentColor(): Color =
-    when (this) {
-        StatusTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
-        StatusTone.Success -> MaterialTheme.colorScheme.primary
-        // Partial / unverified: tertiary (amber), not error — error is reserved for failures.
-        StatusTone.Warning -> MaterialTheme.colorScheme.tertiary
-        StatusTone.Error -> MaterialTheme.colorScheme.error
-    }
-
-/**
- * One fact set for every surface, in one fixed order: name, state, progress
- * ([operationProgressFacts]), readback verdict, result. Missing values stay null and are
- * omitted by the renderer instead of printing an empty or placeholder line.
- */
-private data class OperationStatusFacts(
-    val name: String,
-    val state: String,
-    val progress: String?,
-    val readback: String?,
-    val readbackTone: StatusTone,
-    val result: String?,
-    val resultTone: StatusTone,
-    val tone: StatusTone,
-) {
-    /** One-line strip text; the progress dialog owns the percentage. */
-    val summary: String get() = listOfNotNull(name, state).joinToString(" — ")
-}
-
-internal fun newerStandaloneStatusMessage(state: AppUiState): UiMessage? =
-    state.statusMessage?.takeIf {
-        state.operation?.state?.isTerminal() == true &&
-            state.statusSequence > state.operationStatusSequence
-    }
-
-@Composable
-private fun operationStatusFacts(state: AppUiState): OperationStatusFacts? {
-    val op = state.operation ?: return null
-    val running = op.state == OperationState.Running || op.state == OperationState.Queued
-    // The state is its own field, so the metric never falls back to repeating it.
-    val metric = when {
-        op.bytesTotal > 0L && op.title.reportsCurrentFileBytes() ->
-            stringResource(R.string.op_batch_current_file_pct, (op.fraction * 100).toInt())
-        op.bytesTotal > 0L -> "${(op.fraction * 100).toInt()}%"
-        op.bytesDone > 0L -> DeviceIdentity.formatCapacity(op.bytesDone.toULong())
-        else -> null
-    }
-    val speed =
-        if (running && op.bytesPerSecond > 0L) formatBinaryBytesPerSecond(op.bytesPerSecond) else null
-    val etaSeconds =
-        if (running) remainingSeconds(op.bytesDone, op.bytesTotal, op.bytesPerSecond) else null
-    val eta = etaSeconds?.let { stringResource(R.string.op_eta, formatEtaDuration(it)) }
-    val progress = operationProgressFacts(metric, speed, eta).takeIf { it.isNotEmpty() }
-    // Data-integrity result: stays visible after the operation ends, unlike a snackbar.
-    val readback = op.rawWriteResult?.let { result ->
-        val text = when (val verdict = result.readback) {
-            ReadbackVerdict.Verified ->
-                if (result.writtenBytes.toULong() == result.range.byteLength(state.diskSectorSize)) {
-                    stringResource(R.string.raw_readback_verified)
-                } else {
-                    stringResource(R.string.raw_readback_verified_partial, result.writtenBytes)
-                }
-            ReadbackVerdict.Skipped -> stringResource(R.string.raw_readback_skipped)
-            is ReadbackVerdict.Mismatch -> stringResource(
-                R.string.raw_readback_mismatch,
-                verdict.mismatchedSectors.toLong(),
-                verdict.firstMismatchLba.toLong(),
-            )
-            is ReadbackVerdict.Unverified -> stringResource(
-                R.string.raw_readback_unverified,
-                verdict.range.startLba.toLong(),
-                verdict.range.sectorCount.toLong(),
-            )
-            is ReadbackVerdict.Incomplete -> stringResource(
-                R.string.raw_readback_incomplete,
-                stringResource(
-                    when (verdict.reason) {
-                        ReadbackProblem.Cancelled -> R.string.raw_readback_reason_cancelled
-                        ReadbackProblem.SourceChanged -> R.string.raw_readback_reason_source_changed
-                        ReadbackProblem.IoError -> R.string.raw_readback_reason_io_error
-                    },
-                ),
-            )
-        }
-        val tone = when (result.readback) {
-            is ReadbackVerdict.Mismatch, is ReadbackVerdict.Incomplete -> StatusTone.Error
-            is ReadbackVerdict.Unverified, ReadbackVerdict.Skipped -> StatusTone.Warning
-            ReadbackVerdict.Verified -> StatusTone.Success
-        }
-        val average = result.averageBytesPerSecond?.let {
-            stringResource(R.string.raw_average_speed, usb.formatBinaryBytesPerSecond(it))
-        }
-        listOfNotNull(text, average).joinToString(" ") to tone
-    }
-    // Terminal outcome (error, read-scan summary or result); it must outlive the
-    // operation, so it cannot be a snackbar.
-    val result = (op.errorMessage
-        ?: op.smartResult?.let { smartSummary(it) }
-        ?: op.readScanResult?.let { readScanSummary(it) }
-        ?: op.resultMessage)
-        ?.let(::normalizeProviderText)
-    val tone = when {
-        op.state == OperationState.Failed || op.errorMessage != null -> StatusTone.Error
-        op.state == OperationState.Partial -> StatusTone.Warning
-        op.state == OperationState.Completed -> StatusTone.Success
-        else -> StatusTone.Neutral
-    }
-    return OperationStatusFacts(
-        name = OperationPresentation.label(op.title),
-        state = OperationPresentation.stateLabel(op.state, op.phase),
-        progress = progress,
-        readback = readback?.first,
-        readbackTone = readback?.second ?: StatusTone.Neutral,
-        result = result,
-        resultTone = when {
-            op.errorMessage != null || op.state == OperationState.Failed -> StatusTone.Error
-            op.state == OperationState.Partial -> StatusTone.Warning
-            else -> StatusTone.Neutral
-        },
-        tone = tone,
-    )
 }
 
 /**
@@ -1465,136 +885,13 @@ internal fun ActionList(
     }
 }
 
-/**
- * Permanent status block under the header: inset `surfaceContainer*` band (not a card,
- * not an error banner). Whole block is tappable (48 dp). One-line title
- * `Status: &lt;operation&gt; — &lt;state&gt;` (no subtitle, no separate expand control).
- * Idle/standalone use neutral ink. The title announces running operation state and
- * standalone messages, while the progress track remains visible without becoming a live
- * region. Thin rounded progress track only while running. No dividers.
- */
-@Composable
-private fun OperationStatusLine(
-    state: AppUiState,
-) {
-    val operation = state.operation
-    val running = operation?.state == OperationState.Running ||
-        operation?.state == OperationState.Queued
-    val facts = operationStatusFacts(state)
-    val newerStandaloneText = newerStandaloneStatusMessage(state)?.localized()
-    val lineText = newerStandaloneText
-        ?: facts?.let { fact ->
-            if (running) {
-                fact.summary
-            } else {
-                if (fact.tone == StatusTone.Error) {
-                    fact.result ?: fact.readback ?: fact.summary
-                } else {
-                    fact.readback ?: fact.result ?: fact.summary
-                }
-            }
-        }
-        ?: state.statusMessage?.localized()
-    val progressDescription = stringResource(R.string.shell_status_progress)
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(top = 4.dp, bottom = 4.dp)
-            .heightIn(min = 48.dp, max = 76.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.small,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.status_dialog_title),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = lineText.orEmpty(),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (facts?.tone == StatusTone.Error) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .then(
-                        if (lineText != null) {
-                            Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-                        } else {
-                            Modifier
-                        },
-                    ),
-            )
-            if (running) {
-                val total = operation?.bytesTotal ?: 0L
-                val fraction = (operation?.fraction ?: 0f).coerceIn(0f, 1f)
-                val animatedFraction by animateFloatAsState(
-                    targetValue = fraction,
-                    animationSpec = tween(240),
-                    label = "status-progress",
-                )
-                val percent = "${(animatedFraction * 100f).roundToInt()}%"
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .semantics { contentDescription = progressDescription },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (total > 0L) {
-                        CircularProgressIndicator(
-                            progress = { animatedFraction },
-                            modifier = Modifier.fillMaxSize(),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 3.dp,
-                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        )
-                    } else {
-                        CircularProgressIndicator(
-                            modifier = Modifier.fillMaxSize(),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 3.dp,
-                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        )
-                    }
-                    if (total > 0L) {
-                        Text(
-                            text = percent,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-
 /** One monospace journal row shared by the status dialog and the full log screen. */
 @Composable
 private fun JournalLine(
     line: String,
     modifier: Modifier = Modifier,
 ) {
-    val row = journalRow(line)
+    val row = remember(line) { journalRow(line) }
     val stampColor = MaterialTheme.colorScheme.onSurfaceVariant
     val levelColor = row.tone.contentColor()
     val levelLabel = stringResource(
@@ -1856,85 +1153,6 @@ private fun createLocalizedContext(base: Context, language: AppLanguage): Contex
     config.setLocale(Locale.forLanguageTag(tag))
     return base.createConfigurationContext(config)
 }
-
-@Composable
-private fun LanguagePicker(language: AppLanguage, onIntent: (UiIntent) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val label = stringResource(R.string.language_label)
-    val current = languageName(language)
-    Box {
-        IconButton(
-            onClick = { expanded = true },
-            modifier = Modifier
-                .size(48.dp)
-                .semantics { contentDescription = "$label: $current" },
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_language),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            shadowElevation = 3.dp,
-        ) {
-            AppLanguage.entries.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(languageName(option)) },
-                    onClick = {
-                        expanded = false
-                        onIntent(UiIntent.SetLanguage(option))
-                    },
-                    trailingIcon = if (option == language) {
-                        {
-                            GlyphIcon(
-                                glyph = Glyph.Check,
-                                size = 20.dp,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                )
-            }
-        }
-    }
-}
-
-/** Toggles dark and light only; the icon and its description follow the current value. */
-@Composable
-private fun ThemeToggle(darkTheme: Boolean, onIntent: (UiIntent) -> Unit) {
-    val name = themeLabel(darkTheme)
-    val description = stringResource(R.string.theme_label) + ": " + name
-    IconButton(
-        onClick = { onIntent(UiIntent.ToggleTheme) },
-        modifier = Modifier
-            .size(48.dp)
-            .semantics { contentDescription = description },
-    ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_theme),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun languageName(language: AppLanguage): String =
-    when (language) {
-        AppLanguage.System -> stringResource(R.string.language_system)
-        AppLanguage.Russian -> stringResource(R.string.language_russian)
-        AppLanguage.English -> stringResource(R.string.language_english)
-    }
-
-@Composable
-private fun themeLabel(darkTheme: Boolean): String =
-    if (darkTheme) stringResource(R.string.theme_dark) else stringResource(R.string.theme_light)
 
 /** AMOLED palette: true black background and dark tonal containers. */
 private fun darkDesignColors() = darkColorScheme(
@@ -2748,31 +1966,3 @@ internal fun GlyphIcon(
 }
 
 @Composable
-private fun ShellTab.title(): String =
-    when (this) {
-        ShellTab.Files -> stringResource(R.string.tab_files)
-        ShellTab.Ventoy -> stringResource(R.string.tab_ventoy)
-        ShellTab.Partitions -> stringResource(R.string.tab_partitions)
-        ShellTab.Diagnostics -> stringResource(R.string.tab_diagnostics)
-        ShellTab.Settings -> stringResource(R.string.settings_title_screen)
-    }
-
-@Composable
-private fun TabIcon(tab: ShellTab) {
-    // Provided vector icons keep their transparency and follow the theme content color;
-    // the NavigationBarItem label already exposes the tab name to accessibility services.
-    Icon(
-        painter = painterResource(
-            when (tab) {
-                ShellTab.Files -> R.drawable.ic_tab_files
-                ShellTab.Ventoy -> R.drawable.ic_tab_ventoy
-                ShellTab.Partitions -> R.drawable.ic_tab_partitions
-                ShellTab.Diagnostics -> R.drawable.ic_tab_diagnostics
-                ShellTab.Settings -> R.drawable.ic_theme
-            },
-        ),
-        contentDescription = null,
-        tint = LocalContentColor.current,
-        modifier = Modifier.size(24.dp),
-    )
-}
