@@ -5,5 +5,5 @@
     <string name="ventoy_pick_windows_template_cd">Choose Windows answer file</string>
     <string name="ventoy_pick_windows_image_cd">Choose Windows image</string>
     <!-- Stick option stays visible when the flash drive is gone; only the action is disabled. -->
-    <string name="ventoy_pick_stick_unavailable">Connect a USB drive to choose a file on the stick</string>
+    <string name="ventoy_pick_stick_unavailable">Connect a USB drive to choose a file on the stick.</string>
 </resources>

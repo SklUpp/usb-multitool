@@ -10,13 +10,13 @@
     <string name="wave4_reset_file">Clear selection</string>
     <string name="wave4_pick_settings_file">Choose settings file</string>
     <string name="wave4_win11_section">Windows 11 quick options</string>
-    <string name="wave4_win11_bypass_tpm">Skip TPM and Secure Boot check</string>
-    <string name="wave4_win11_local_account">Local account without internet</string>
+    <string name="wave4_win11_bypass_tpm">Skip TPM and. Secure Boot check.</string>
+    <string name="wave4_win11_local_account">Local account without internet.</string>
     <string name="wave4_official_section">Official keys</string>
-    <string name="wave4_official_section_hint">Keys published for the pinned Ventoy release Pick one in the official-key window; the list refreshes from upstream on demand</string>
+    <string name="wave4_official_section_hint">Keys published for the pinned Ventoy release. Pick one in the official-key window; the list refreshes from upstream on demand.</string>
     <string name="wave4_add_official">Add official key</string>
     <string name="wave4_custom_section">Custom keys</string>
-    <string name="wave4_custom_section_hint">Any other key/value pair, preserved exactly Use this only when no official key fits</string>
+    <string name="wave4_custom_section_hint">Any other key/value pair, preserved exactly. Use this only when no official key fits.</string>
     <string name="wave4_add_custom">Add custom key</string>
     <string name="wave4_add_param_confirm">Add</string>
     <string name="wave4_catalog_source">Official catalogue</string>
@@ -37,7 +37,7 @@
     <string name="wave4_catalog_empty">No keys</string>
     <string name="wave4_catalog_loaded">%1$d keys, Ventoy %2$s</string>
     <string name="wave4_catalog_error">Could not refresh keys: %1$s</string>
-    <string name="wave4_catalog_kept_previous">Showing previous catalogue, %1$d keys</string>
-    <string name="wave4_settings_help_body">**control** values come from ventoy.json exactly as written.\n\n**Windows switches** are explicit; **official keys** come from the bundled/refreshed catalogue; **custom keys** stay editable as key/value and are preserved.\n\n**Edits** are staged and written with Write, or after a confirmed Ventoy install/update Update refreshes the selected file from the stick — open the editor or re-pick the file after an external change.\n\n**Default path** `/ventoy/ventoy.json` is dimmed; a custom path uses normal ink The ✕ resets to the standard file.\n\n**Partial** means Ventoy is installed but the settings write failed; retry stays available via Write</string>
-    <string name="wave4_unattend_help_body">**Answer file** lives on the Ventoy data partition; Windows Setup reads it during installation.\n\n**Enabled blocks** only are written; elements this app does not understand are preserved.\n\n**Template** is an existing .xml chosen on the stick or imported from the phone ✕ clears the selection Refresh the file by choosing it again after an external edit.\n\n**Create XML** opens the generator; Choose picks or replaces the template</string>
+    <string name="wave4_catalog_kept_previous">Showing previous catalogue, %1$d keys.</string>
+    <string name="wave4_settings_help_body">control — ventoy.json options.  Windows toggles — bypass options. Official keys — from Ventoy catalog. Custom — arbitrary key/value.</string>
+    <string name="wave4_unattend_help_body">Answer file is on Ventoy partition.  Only enabled sections written. Select template from USB or phone.</string>
 </resources>

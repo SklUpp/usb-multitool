@@ -24,15 +24,15 @@
     <string name="partitions_raw_source_phone">На телефоне</string>
     <string name="partitions_raw_source_stick">На накопителе</string>
     <string name="partitions_raw_target_whole">Весь диск (LBA 0)</string>
-    <string name="raw_write_whole_disk_warning">Цель — весь диск: таблица разделов и загрузочные секторы будут перезаписаны</string>
+    <string name="raw_write_whole_disk_warning">Запись на весь диск: разметка будет затерта.</string>
     <string name="partitions_raw_target_partition">Раздел %1$d</string>
     <string name="partitions_raw_target_custom">Свой LBA</string>
     <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>
     <string name="partitions_raw_write_sectors">Записать по секторам…</string>
     <string name="partitions_raw_source_sectors">%1$d секторов</string>
     <string name="partitions_raw_clear_image_a11y">Сбросить выбранный образ</string>
-    <string name="partitions_raw_range_ok">Диапазон в свободном месте или в выбранном разделе</string>
-    <string name="partitions_raw_range_touches_protected">Диапазон затрагивает LBA 0, метаданные таблицы или другой раздел</string>
+    <string name="partitions_raw_range_ok">Диапазон в свободном месте или в выбранном разделе.</string>
+    <string name="partitions_raw_range_touches_protected">Диапазон затрагивает LBA 0, метаданные таблицы или другой раздел.</string>
     <string name="partitions_raw_range_out">Диапазон вне диска</string>
-    <string name="partitions_raw_range_ro_efi">Диапазон пересекает раздел только для чтения или EFI</string>
+    <string name="partitions_raw_range_ro_efi">Диапазон пересекает раздел только для чтения или EFI.</string>
 </resources>

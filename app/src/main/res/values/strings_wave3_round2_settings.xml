@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Blank-line blocks + **term** bold; rendered by helpBlocks(). -->
-    <string name="settings_help_body">**control** values come from ventoy.json exactly as written.\n\n**Known keys** offer explicit choices; other keys stay editable as key/value and are preserved.\n\n**Edits** are staged and written after a confirmed install/update or with Apply.\n\n**Partial** means Ventoy is installed but the settings write failed; retry stays available</string>
-    <string name="unattend_help_body">**Answer file** lives on the Ventoy data partition; Windows Setup reads it during installation.\n\n**Enabled blocks** only are written; elements this app does not understand are preserved.\n\n**Template** is an existing .xml chosen on the stick or imported from the phone</string>
-    <string name="diagnostics_perf_scsi_help_body">**Larger chunks** move more data per USB request and speed up large transfers.\n\n**Trade-off:** cancellation waits longer, and a failed request can lose up to one chunk of progress</string>
-    <string name="diagnostics_perf_jni_help_body">**Cap** is the buffer handed to the filesystem engine per call.\n\n**Larger values** cut per-call overhead and speed up copies.\n\n**Trade-off:** more RAM, and one failed call costs more progress</string>
-    <string name="diagnostics_perf_rescue_help_body">**Interval** is how much data is copied between map checkpoints.\n\n**Smaller intervals** lose less progress after a crash or cancel.\n\n**Trade-off:** the map is published more often, which slows the backup</string>
+    <string name="settings_help_body">**control** values come from ventoy.json exactly as written.\n\n**Known keys** offer explicit choices; other keys stay editable as key/value and are preserved.\n\n**Edits** are staged and written after a confirmed install/update or with. Apply.\n\n**Partial** means Ventoy is installed but the settings write failed; retry stays available.</string>
+    <string name="unattend_help_body">**Answer file** lives on the Ventoy data partition; Windows Setup reads it during installation.\n\n**Enabled blocks** only are written; elements this app does not understand are preserved.\n\n**Template** is an existing .xml chosen on the stick or imported from the phone.</string>
+    <string name="diagnostics_perf_scsi_help_body">Large blocks accelerate transfer, but delay cancel and lose more progress on error.</string>
+    <string name="diagnostics_perf_jni_help_body">Large buffer speeds up I/O, but uses more RAM and loses more data on error.</string>
+    <string name="diagnostics_perf_rescue_help_body">Frequent map saving preserves progress on crash, but slows down copying.</string>
 </resources>

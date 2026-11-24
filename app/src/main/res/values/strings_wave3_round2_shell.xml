@@ -17,6 +17,6 @@
     <string name="status_title_rename_partition">Partition rename</string>
     <string name="status_title_rename_volume_label">Volume label rename</string>
     <string name="status_title_initialize_table">Partition table initialization</string>
-    <string name="status_title_ventoy_unattend_write">Generated unattend XML write</string>
-    <string name="status_title_ventoy_unattend_layout">Target PC disk wipe and partition via unattend</string>
+    <string name="status_title_ventoy_unattend_write">Generated unattend XML write.</string>
+    <string name="status_title_ventoy_unattend_layout">Target PC partitioning via unattend</string>
 </resources>

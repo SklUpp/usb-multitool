@@ -24,15 +24,15 @@
     <string name="partitions_raw_source_phone">On the phone</string>
     <string name="partitions_raw_source_stick">On the drive</string>
     <string name="partitions_raw_target_whole">Whole disk (LBA 0)</string>
-    <string name="raw_write_whole_disk_warning">Whole-disk target: the partition table and boot sectors will be overwritten</string>
+    <string name="raw_write_whole_disk_warning">Write whole disk: partition table will be erased.</string>
     <string name="partitions_raw_target_partition">Partition %1$d</string>
     <string name="partitions_raw_target_custom">Custom LBA</string>
     <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>
     <string name="partitions_raw_write_sectors">Write by sectors…</string>
     <string name="partitions_raw_source_sectors">%1$d sectors</string>
     <string name="partitions_raw_clear_image_a11y">Clear selected image</string>
-    <string name="partitions_raw_range_ok">Range fits free space or the selected partition</string>
-    <string name="partitions_raw_range_touches_protected">Range touches LBA 0, table metadata, or another partition</string>
+    <string name="partitions_raw_range_ok">Range fits free space or the selected partition.</string>
+    <string name="partitions_raw_range_touches_protected">Range touches LBA 0, table metadata, or another partition.</string>
     <string name="partitions_raw_range_out">Range is outside the disk</string>
-    <string name="partitions_raw_range_ro_efi">Range intersects a read-only or EFI partition</string>
+    <string name="partitions_raw_range_ro_efi">Range intersects a read-only or EFI partition.</string>
 </resources>

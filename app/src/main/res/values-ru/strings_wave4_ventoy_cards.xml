@@ -10,13 +10,13 @@
     <string name="wave4_reset_file">Сбросить выбор</string>
     <string name="wave4_pick_settings_file">Выбрать файл настроек</string>
     <string name="wave4_win11_section">Быстрые опции Windows 11</string>
-    <string name="wave4_win11_bypass_tpm">Пропуск проверки TPM и Secure Boot</string>
-    <string name="wave4_win11_local_account">Локальная учётная запись без интернета</string>
+    <string name="wave4_win11_bypass_tpm">Пропуск проверки TPM и. Secure Boot.</string>
+    <string name="wave4_win11_local_account">Локальная учётная запись без интернета.</string>
     <string name="wave4_official_section">Официальные ключи</string>
-    <string name="wave4_official_section_hint">Ключи из закреплённого релиза Ventoy Выбор — в отдельном окне официальных ключей; список обновляется с сервера по запросу</string>
+    <string name="wave4_official_section_hint">Ключи из закреплённого релиза Ventoy Выбор — в отдельном окне официальных ключей; список обновляется с сервера по запросу.</string>
     <string name="wave4_add_official">Добавить официальный ключ</string>
     <string name="wave4_custom_section">Кастомные ключи</string>
-    <string name="wave4_custom_section_hint">Любая другая пара ключ/значение сохраняется как есть Используйте, только если официальный ключ не подходит</string>
+    <string name="wave4_custom_section_hint">Любая другая пара ключ/значение сохраняется как есть. Используйте, только если официальный ключ не подходит.</string>
     <string name="wave4_add_custom">Добавить кастомный ключ</string>
     <string name="wave4_add_param_confirm">Добавить</string>
     <string name="wave4_catalog_source">Официальный каталог</string>
@@ -37,7 +37,7 @@
     <string name="wave4_catalog_empty">Ключей нет</string>
     <string name="wave4_catalog_loaded">%1$d ключей, Ventoy %2$s</string>
     <string name="wave4_catalog_error">Не удалось обновить ключи: %1$s</string>
-    <string name="wave4_catalog_kept_previous">Показан предыдущий каталог, ключей: %1$d</string>
-    <string name="wave4_settings_help_body">**control** — значения из ventoy.json как записаны.\n\n**Переключатели Windows** дают явные варианты; **официальные ключи** берутся из встроенного/обновлённого каталога; **кастомные ключи** редактируются как key/value и сохраняются.\n\n**Изменения** подготавливаются и пишутся кнопкой «Записать», либо после подтверждённой установки/обновления Ventoy Обновление файла со стика — снова откройте редактор или выберите файл после внешнего изменения.\n\n**Стандартный путь** `/ventoy/ventoy.json` показан приглушённо; свой путь — обычным цветом ✕ возвращает стандартный файл.\n\n**Partial** — Ventoy установлен, но запись настроек не удалась; повтор доступен через «Записать»</string>
-    <string name="wave4_unattend_help_body">**Файл ответов** лежит на разделе данных Ventoy; Windows Setup читает его при установке.\n\n**Включённые блоки** только записываются; непонятные приложению элементы сохраняются.\n\n**Шаблон** — существующий .xml на флешке или импортированный с телефона ✕ сбрасывает выбор Обновить файл после правки снаружи — выберите его снова.\n\n**Создать XML** открывает генератор; «Выбрать…» выбирает или заменяет шаблон</string>
+    <string name="wave4_catalog_kept_previous">Показан предыдущий каталог, ключей: %1$d.</string>
+    <string name="wave4_settings_help_body">control — опции ventoy.json.  Тумблеры Windows — обход проверок. Официальные ключи — из каталога Ventoy. Кастомные — произвольные key/value.</string>
+    <string name="wave4_unattend_help_body">Файл ответов лежит на разделе Ventoy.  Записываются только активные блоки. Шаблон выбирается с флешки или телефона.</string>
 </resources>

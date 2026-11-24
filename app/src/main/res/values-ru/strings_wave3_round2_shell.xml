@@ -17,6 +17,6 @@
     <string name="status_title_rename_partition">Переименование раздела</string>
     <string name="status_title_rename_volume_label">Переименование метки тома</string>
     <string name="status_title_initialize_table">Инициализация таблицы разделов</string>
-    <string name="status_title_ventoy_unattend_write">Запись сгенерированного unattend XML</string>
-    <string name="status_title_ventoy_unattend_layout">Очистка и разметка диска целевого ПК через unattend</string>
+    <string name="status_title_ventoy_unattend_write">Запись сгенерированного unattend XML.</string>
+    <string name="status_title_ventoy_unattend_layout">Разметка целевого ПК через unattend</string>
 </resources>

@@ -10,12 +10,12 @@
         <item quantity="other">%1$d раздела</item>
     </plurals>
     <!-- Повреждённая основная GPT: восстановление на вкладке «Диагностика». -->
-    <string name="partitions_gpt_recovery_diagnostics_hint">«Восстановить GPT из файла» доступно на вкладке «Диагностика» в блоке «Копия GPT» «Исправить резервную GPT» тоже на «Диагностике», рядом с копией GPT</string>
+    <string name="partitions_gpt_recovery_diagnostics_hint">Починка GPT — на вкладке «Диагностика» в блоке «Копия GPT».</string>
     <string name="partitions_scheme_capsule_current_a11y">Текущая схема %1$s</string>
     <string name="partitions_scheme_capsule_target_a11y">Сменить на %1$s</string>
     <!-- Справка схемы без CTA «Исправить резервную GPT» на вкладке Разделы. -->
     <string name="partitions_scheme_help_title_next">Схема разметки</string>
-    <string name="partitions_scheme_help_text_next">Смена схемы заново инициализирует таблицу и стирает все разделы «Исправить резервную GPT» и «Восстановить GPT из файла» находятся на вкладке «Диагностика» в блоке «Копия GPT» Смена схемы требует отдельного подтверждения и перечисляет разделы, которые будут стёрты</string>
-    <string name="partitions_strip_geometry_unavailable">Карта LBA недоступна: пересечение или выход геометрии за диск</string>
+    <string name="partitions_scheme_help_text_next">Смена схемы стирает диск. Починка GPT — на вкладке «Диагностика».</string>
+    <string name="partitions_strip_geometry_unavailable">Карта LBA недоступна: пересечение или выход геометрии за диск.</string>
     <string name="partitions_strip_unallocated">Незанятый диапазон LBA</string>
 </resources>

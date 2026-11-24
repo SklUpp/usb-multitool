@@ -1,9 +1,9 @@
 <resources>
     <string name="ventoy_key_menu_language">Язык меню</string>
     <string name="ventoy_key_default_search_root">Папка поиска образов</string>
-    <string name="ventoy_key_secure_boot_policy">Политика Secure Boot (0/1)</string>
+    <string name="ventoy_key_secure_boot_policy">Политика. Secure Boot (0/1)</string>
     <string name="ventoy_key_win_uefi_res_lock">Фиксация разрешения UEFI</string>
-    <string name="ventoy_key_win11_bypass_check">Обход проверок оборудования Windows 11</string>
+    <string name="ventoy_key_win11_bypass_check">Обход проверок оборудования Windows 11.</string>
     <string name="ventoy_key_win11_bypass_nro">Локальная запись без сети</string>
     <string name="ventoy_key_default_menu_mode">Режим меню по умолчанию</string>
     <string name="ventoy_key_menu_timeout">Задержка автозагрузки, секунды</string>
@@ -16,7 +16,7 @@
     <string name="ventoy_key_tree_view_menu_style">Стиль меню в виде дерева</string>
     <string name="ventoy_key_filt_dot_underscore_file">Скрывать файлы macOS ._</string>
     <string name="ventoy_key_sort_case_sensitive">Сортировка ISO с учётом регистра</string>
-    <string name="ventoy_key_vhd_no_warning">Скрыть предупреждение VHD не на NTFS</string>
+    <string name="ventoy_key_vhd_no_warning">Скрыть предупреждение VHD не на NTFS.</string>
     <string name="ventoy_key_file_flt_iso">Скрывать .iso в меню</string>
     <string name="ventoy_key_file_flt_wim">Скрывать .wim в меню</string>
     <string name="ventoy_key_file_flt_efi">Скрывать .efi в меню</string>

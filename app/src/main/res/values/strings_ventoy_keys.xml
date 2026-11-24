@@ -3,7 +3,7 @@
     <string name="ventoy_key_default_search_root">Folder where images are searched</string>
     <string name="ventoy_key_secure_boot_policy">Secure Boot policy (0/1)</string>
     <string name="ventoy_key_win_uefi_res_lock">UEFI screen resolution lock</string>
-    <string name="ventoy_key_win11_bypass_check">Bypass Windows 11 hardware checks</string>
+    <string name="ventoy_key_win11_bypass_check">Bypass Windows 11 hardware checks.</string>
     <string name="ventoy_key_win11_bypass_nro">Local account without network</string>
     <string name="ventoy_key_default_menu_mode">Default menu mode</string>
     <string name="ventoy_key_menu_timeout">Auto-boot delay, seconds</string>

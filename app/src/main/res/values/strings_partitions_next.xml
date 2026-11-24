@@ -8,13 +8,13 @@
         <item quantity="other">%1$d partitions</item>
     </plurals>
     <!-- Damaged primary GPT: recovery lives on Diagnostics, not this tab. -->
-    <string name="partitions_gpt_recovery_diagnostics_hint">Restore GPT from file is available on the Diagnostics tab under Backup GPT copy Repair backup GPT is also on Diagnostics, next to GPT copy</string>
+    <string name="partitions_gpt_recovery_diagnostics_hint">GPT repair is in Diagnostics under GPT Backup.</string>
     <!-- Compact scheme capsule stays wrap-content; a11y already in wave4. -->
     <string name="partitions_scheme_capsule_current_a11y">Current scheme %1$s</string>
     <string name="partitions_scheme_capsule_target_a11y">Convert to %1$s</string>
     <!-- Scheme help without the Partitions-tab Fix backup GPT CTA; recovery is on Diagnostics. -->
     <string name="partitions_scheme_help_title_next">Partition scheme</string>
-    <string name="partitions_scheme_help_text_next">Changing the scheme reinitializes the table and erases every partition Repair backup GPT and restore GPT from file live on the Diagnostics tab under Backup GPT copy A scheme change asks for its own confirmation and lists the partitions that will be erased</string>
-    <string name="partitions_strip_geometry_unavailable">LBA map unavailable: overlapping or out-of-disk geometry</string>
+    <string name="partitions_scheme_help_text_next">Scheme change wipes disk. GPT repair is in Diagnostics.</string>
+    <string name="partitions_strip_geometry_unavailable">LBA map unavailable: overlapping or out-of-disk geometry.</string>
     <string name="partitions_strip_unallocated">Unallocated LBA range</string>
 </resources>
