@@ -131,9 +131,9 @@ import usb.ui.RawMeasureError
 import usb.ui.rawSourceKey
 import usb.ui.FilesDownloadBinding
 import usb.ui.FilesBatchSelection
+import usb.ui.UiAttachmentPin
 import usb.ui.FilesBatchItem
 import usb.ui.FilesConflict
-import usb.ui.UiAttachmentPin
 import usb.ui.FilesConflictDecision
 import usb.ui.PartitionBinding
 import usb.ui.PartitionRef
@@ -273,6 +273,9 @@ class MainViewModel(
             override val selection: FilesBatchSelection? get() = null
         }
     }
+
+    private fun ParkedFilesBatch.UploadDocs.matchesAttachment(state: AppUiState): Boolean =
+        UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount).matches(state)
 
     private class FilesBatchConflictPark(
         val conflict: FilesConflict,
@@ -6628,31 +6631,8 @@ class MainViewModel(
         }
     }
 
-    private fun uploadBatchDocsPinMatches(
-        identity: String,
-        attachGeneration: Long,
-        partitionId: String,
-        directory: String,
-        startLba: ULong?,
-        sectorCount: ULong?,
-    ): Boolean = UiAttachmentPin(
-        identity = identity,
-        attachGeneration = attachGeneration,
-        partitionId = partitionId,
-        startLba = startLba,
-        sectorCount = sectorCount,
-    ).matches(state)
-
     private fun uploadBatchDocs(effect: UiEffect.UploadBatchDocs) {
-        if (!uploadBatchDocsPinMatches(
-                identity = effect.identity,
-                attachGeneration = effect.attachGeneration,
-                partitionId = effect.partitionId,
-                directory = effect.directory,
-                startLba = effect.startLba,
-                sectorCount = effect.sectorCount,
-            )
-        ) {
+        if (!effect.matchesAttachment(state)) {
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
             return
         }
@@ -6680,16 +6660,7 @@ class MainViewModel(
                     )
                 },
             ) { operation ->
-                require(
-                    uploadBatchDocsPinMatches(
-                        identity = effect.identity,
-                        attachGeneration = effect.attachGeneration,
-                        partitionId = effect.partitionId,
-                        directory = effect.directory,
-                        startLba = effect.startLba,
-                        sectorCount = effect.sectorCount,
-                    ),
-                ) { "batch upload target changed" }
+                require(effect.matchesAttachment(state)) { "batch upload target changed" }
                 filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     try {
                         FilesOperations.uploadDocuments(
@@ -6721,16 +6692,7 @@ class MainViewModel(
                 watchBatchPark(
                     handle = handle,
                     lastPark = lastPark,
-                    stillValid = {
-                        uploadBatchDocsPinMatches(
-                            identity = effect.identity,
-                            attachGeneration = effect.attachGeneration,
-                            partitionId = effect.partitionId,
-                            directory = effect.directory,
-                            startLba = effect.startLba,
-                            sectorCount = effect.sectorCount,
-                        )
-                    },
+                    stillValid = { effect.matchesAttachment(state) },
                     onPark = { park ->
                         parkedBatchWork =
                             ParkedFilesBatch.UploadDocs(
@@ -6864,15 +6826,7 @@ class MainViewModel(
         parked: ParkedFilesBatch.UploadDocs,
         decision: FilesConflictDecision,
     ) {
-        if (!uploadBatchDocsPinMatches(
-                identity = parked.identity,
-                attachGeneration = parked.attachGeneration,
-                partitionId = parked.partitionId,
-                directory = parked.directory,
-                startLba = parked.startLba,
-                sectorCount = parked.sectorCount,
-            )
-        ) {
+        if (!parked.matchesAttachment(state)) {
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
             return
         }
@@ -6901,16 +6855,7 @@ class MainViewModel(
                     )
                 },
             ) { operation ->
-                require(
-                    uploadBatchDocsPinMatches(
-                        identity = parked.identity,
-                        attachGeneration = parked.attachGeneration,
-                        partitionId = parked.partitionId,
-                        directory = parked.directory,
-                        startLba = parked.startLba,
-                        sectorCount = parked.sectorCount,
-                    ),
-                ) { "batch upload target changed" }
+                require(parked.matchesAttachment(state)) { "batch upload target changed" }
                 filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
                     var first = true
                     FilesOperations.uploadDocuments(
@@ -6950,16 +6895,7 @@ class MainViewModel(
                 watchBatchPark(
                     handle = handle,
                     lastPark = lastPark,
-                    stillValid = {
-                        uploadBatchDocsPinMatches(
-                            identity = parked.identity,
-                            attachGeneration = parked.attachGeneration,
-                            partitionId = parked.partitionId,
-                            directory = parked.directory,
-                            startLba = parked.startLba,
-                            sectorCount = parked.sectorCount,
-                        )
-                    },
+                    stillValid = { parked.matchesAttachment(state) },
                     onPark = { park ->
                         parkedBatchWork =
                             ParkedFilesBatch.UploadDocs(

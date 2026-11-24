@@ -4720,7 +4720,7 @@ object UiReducer {
 
             is UiIntent.UploadBatchDocs -> {
                 val block = writeBlockMessage(state)
-                val pinOk = uploadBatchDocsPinMatches(state, intent)
+                val pinOk = intent.matchesAttachment(state)
                 when {
                     state.filesPickMode != null ->
                         ReduceResult(
@@ -5561,18 +5561,6 @@ object UiReducer {
         } else {
             null
         }
-
-    /** True when UploadBatchDocs still names the live partition geometry. */
-    private fun uploadBatchDocsPinMatches(
-        state: AppUiState,
-        intent: UiIntent.UploadBatchDocs,
-    ): Boolean = UiAttachmentPin(
-        identity = intent.identity,
-        attachGeneration = intent.attachGeneration,
-        partitionId = intent.partitionId,
-        startLba = intent.startLba,
-        sectorCount = intent.sectorCount,
-    ).matches(state)
 
 
 

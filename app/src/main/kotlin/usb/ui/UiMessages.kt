@@ -376,9 +376,6 @@ fun DestructiveAction.statusTitle(): String =
  * [OperationProgress.label] / [OperationTitle.logLabel] unchanged.
  */
 @Composable
-fun operationLabel(progress: OperationProgress): String = progress.title.localized()
-
-@Composable
 fun OperationTitle.localized(): String =
     when (this) {
         is OperationTitle.Destructive -> action.statusTitle()

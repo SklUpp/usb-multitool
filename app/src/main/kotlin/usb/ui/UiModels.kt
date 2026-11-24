@@ -724,6 +724,18 @@ data class UiAttachmentPin(
 fun FilesDownloadBinding.attachmentPin(): UiAttachmentPin =
     UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount)
 
+fun UiIntent.UploadBatchDocs.attachmentPin(): UiAttachmentPin =
+    UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount)
+
+fun UiIntent.UploadBatchDocs.matchesAttachment(state: AppUiState): Boolean =
+    attachmentPin().matches(state)
+
+fun UiEffect.UploadBatchDocs.attachmentPin(): UiAttachmentPin =
+    UiAttachmentPin(identity, attachGeneration, partitionId, startLba, sectorCount)
+
+fun UiEffect.UploadBatchDocs.matchesAttachment(state: AppUiState): Boolean =
+    attachmentPin().matches(state)
+
 /**
  * Attachment pin only: enough to service a destination already chosen in the picker.
  * Listing/current path may be empty after process death; the operation re-stats the
@@ -1079,7 +1091,7 @@ data class WindowsImageLink(val image: String, val templates: List<String>)
 
 /**
  * Typed user-facing operation identity.
- * UI localizes via [usb.ui.operationLabel]; logs and [usb.operation.DiskOperation.name]
+ * UI localizes via [OperationPresentation.label]; logs and [usb.operation.DiskOperation.name]
  * use stable English [logLabel] only — never reverse-parse localized text.
  */
 sealed interface OperationTitle {
@@ -1358,7 +1370,7 @@ data class OperationProgress(
 ) {
     /**
      * Stable English technical label for journals and DiskOperation.name.
-     * UI must not parse this; use [title] through [operationLabel].
+     * UI must not parse this; use [title] through [OperationPresentation.label].
      */
     val label: String get() = title.logLabel
 
