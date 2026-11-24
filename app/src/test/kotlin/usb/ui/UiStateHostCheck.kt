@@ -283,16 +283,16 @@ object UiStateHostCheck {
             UiReducer.reduce(busy, UiIntent.RequestDestructive(DestructiveAction.WIPE))
         require(runningBlocked.state.pendingConfirmation == null)
 
-        fun statusOf(state: OperationState, err: String? = null): UiMessage? =
+        fun statusOf(state: OperationState, failure: OperationFailure? = null): UiMessage? =
             UiReducer.reduce(
                 ready,
-                UiIntent.OperationBegan(OperationProgress(state, OperationTitle.Upload, token, errorMessage = err))
+                UiIntent.OperationBegan(OperationProgress(state, OperationTitle.Upload, token, failure = failure))
             ).state.statusMessage
 
         require(statusOf(OperationState.Completed) == UiMessage.Key(UiMessageKey.Success))
         require(statusOf(OperationState.Cancelled) == UiMessage.Key(UiMessageKey.CancelledStatus))
-        require(statusOf(OperationState.Failed, "boom") == UiMessage.Raw("boom"))
-        require(statusOf(OperationState.Partial, "kept map") == UiMessage.Raw("kept map"))
+        require(statusOf(OperationState.Failed, OperationFailure.SafIo) == UiMessage.Failure(OperationFailure.SafIo))
+        require(statusOf(OperationState.Partial, OperationFailure.SafIo) == UiMessage.Failure(OperationFailure.SafIo))
         val resultToken = OperationTokenGenerator.next()
         val resultBegan = UiReducer.reduce(
             ready,
