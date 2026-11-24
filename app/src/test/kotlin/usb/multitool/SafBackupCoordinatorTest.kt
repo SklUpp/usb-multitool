@@ -97,11 +97,11 @@ class SafBackupCoordinatorTest {
         val folder = Uri.parse("content://usb.saf.test/tree/clear")
         trees[folder.toString()] = FakeSafTree(display = "ClearMe")
         val coord = coordinator()
-        // No persistable write grant → usable=false, but clears still fire.
-        val usable = coord.onFolderPicked(folder)
-        assertFalse(usable)
+        // Robolectric may auto-grant the tree; usability is covered by noWriteGrantMeansUsableFalse.
+        // Here only the paired selection clears matter.
+        coord.onFolderPicked(folder)
 
-        assertTrue(intents.any { it is UiIntent.SetBackupFolder && it.usable == false })
+        assertTrue(intents.any { it is UiIntent.SetBackupFolder && it.uri == folder.toString() })
         val clearedBackup = intents.filterIsInstance<UiIntent.SetBackupFile>()
         assertTrue(clearedBackup.any { it.uri == null })
         assertTrue(intents.any { it is UiIntent.SetRescueArchiveTree && it.treeUri == null })
