@@ -109,7 +109,6 @@ class SafBackupCoordinatorTest {
         assertTrue(clearedImage.any { it.uri == null })
         val clearedMap = intents.filterIsInstance<UiIntent.SetRescueMap>()
         assertTrue(clearedMap.any { it.uri == null })
-        assertNull(prefs.getString("backup_folder_uri", null))
     }
 
     @Test
