@@ -972,4 +972,5 @@
     <string name="msg_upload_selection_empty">Файлы не выбраны</string>
     <string name="action_starting">Запуск…</string>
     <string name="action_cancelling">Отмена…</string>
+    <string name="msg_upload_queued">Копирование начнётся после освобождения устройства</string>
 </resources>

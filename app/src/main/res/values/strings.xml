@@ -971,4 +971,5 @@
     <string name="msg_upload_selection_empty">No files selected</string>
     <string name="action_starting">Starting…</string>
     <string name="action_cancelling">Cancelling…</string>
+    <string name="msg_upload_queued">Copying will start when the device is free</string>
 </resources>

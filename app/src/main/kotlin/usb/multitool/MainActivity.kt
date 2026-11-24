@@ -611,8 +611,13 @@ class MainViewModel(
      * lifecycle re-probe; dropping the result would silently lose the user's selection.
      */
     fun queueBatchUpload(intent: UiIntent.UploadBatchDocs) {
+        if (state.actionsEnabled) {
+            onIntent(intent)
+            return
+        }
         pendingBatchUpload = intent
         onIntent(intent)
+        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.UploadQueued)))
     }
 
     fun onIntent(intent: UiIntent) {

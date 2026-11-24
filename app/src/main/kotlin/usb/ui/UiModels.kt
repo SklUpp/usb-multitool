@@ -192,6 +192,7 @@ enum class UiMessageKey {
     RescueMapCleared,
     RescueMapRequired,
     UploadSelectionEmpty,
+    UploadQueued,
     RescueMapReady,
     ChooseGptBackup,
     ChooseRescueFiles,
