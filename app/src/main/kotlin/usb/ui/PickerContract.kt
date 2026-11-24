@@ -60,14 +60,16 @@ class PickerSlot<T> {
 
 /** Stage gate for a new single download; mirrors stageDownloadForPicker. */
 fun FilesDownloadBinding.stageVerdict(state: AppUiState): PickerVerdict =
-    if (matches(state)) PickerVerdict.Ok else PickerVerdict.TargetInvalid
+    // The listing may refresh or be dropped while the action sheet is open. This gate only
+    // proves the target attachment and a safe name; DownloadService re-stats the exact path.
+    if (matchesAttachment(state)) PickerVerdict.Ok else PickerVerdict.TargetInvalid
 
 /** Result gate; mirrors submitDownloadResult and the reducer's fromPicker check, in order. */
 fun FilesDownloadBinding.resultVerdict(state: AppUiState): PickerVerdict = when {
     state.filesPickMode != null -> PickerVerdict.Busy
-    !state.actionsEnabled -> PickerVerdict.Unavailable
     !matchesAttachment(state) -> PickerVerdict.TargetChanged
-    listedSizeChanged(state) -> PickerVerdict.SizeChanged
+    // A refreshed listing may report a new size while the SAF picker is open. The
+    // operation re-stats the exact path and rejects a real mismatch itself.
     else -> PickerVerdict.Ok
 }
 

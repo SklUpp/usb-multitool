@@ -20,9 +20,9 @@
     <string name="partitions_overlap_heading">Partition overlaps</string>
     <string name="partitions_overlap_line">%1$s / %2$s: %3$d sectors</string>
     <!-- Compact caption under the EFI write control. -->
-    <string name="partitions_efi_ro_caption">Permission applies only to this partition and connection; reconnecting clears it.</string>
+    <string name="partitions_efi_ro_caption">Permission applies only to this partition and connection; reconnecting clears it</string>
     <!-- Sticky / sheet expand control. -->
     <string name="partitions_sticky_expand_a11y">Choose another partition</string>
     <!-- Ordinal prefix before a partition name in the list. -->
-    <string name="partitions_ordinal_title">%1$d. %2$s</string>
+    <string name="partitions_ordinal_title">%1$d %2$s</string>
 </resources>

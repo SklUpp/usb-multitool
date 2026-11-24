@@ -135,27 +135,27 @@ class PickerContractTest {
             listOf(
                 VerdictCase("exact entry", ready(), PickerVerdict.Ok, binding = base),
                 VerdictCase(
-                    "currentPath changed",
+                    "currentPath changed, attachment live",
                     ready(path = "/other"),
-                    PickerVerdict.TargetInvalid,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(
-                    "entry missing",
+                    "entry missing from refreshed listing",
                     ready(listing = listOf(FileEntry("sub", true, 0uL))),
-                    PickerVerdict.TargetInvalid,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(
                     "entry size changed",
                     ready(listing = listOf(FileEntry("manual.pdf", false, 99uL), FileEntry("sub", true, 0uL))),
-                    PickerVerdict.TargetInvalid,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(
-                    "entry became directory",
+                    "listing reports directory",
                     ready(listing = listOf(FileEntry("manual.pdf", true, 42uL))),
-                    PickerVerdict.TargetInvalid,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(
@@ -191,7 +191,7 @@ class PickerContractTest {
                 VerdictCase(
                     "listing not Loaded",
                     ready(listingState = FilesListingState.Loading),
-                    PickerVerdict.TargetInvalid,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(
@@ -240,9 +240,9 @@ class PickerContractTest {
                     binding = base,
                 ),
                 VerdictCase(
-                    "actionsEnabled false → Unavailable",
+                    "actionsEnabled false, attachment live → Ok",
                     ready().copy(presence = DevicePresence.PermissionRequired),
-                    PickerVerdict.Unavailable,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(
@@ -264,9 +264,9 @@ class PickerContractTest {
                     binding = base,
                 ),
                 VerdictCase(
-                    "listing names entry with new size → SizeChanged",
+                    "listing names entry with new size → Ok",
                     ready(listing = listOf(FileEntry("manual.pdf", false, 99uL), FileEntry("sub", true, 0uL))),
-                    PickerVerdict.SizeChanged,
+                    PickerVerdict.Ok,
                     binding = base,
                 ),
                 VerdictCase(

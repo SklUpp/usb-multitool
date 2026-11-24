@@ -1472,7 +1472,9 @@ private fun RawWriteSection(
                 infoText = listOf(
                     stringResource(R.string.partitions_raw_write_subtitle),
                     stringResource(R.string.partitions_raw_overwrite_note),
+                    stringResource(R.string.raw_write_not_partition_note),
                     stringResource(R.string.raw_map_snap_hint),
+                    stringResource(R.string.raw_write_help_examples),
                 ).joinToString("\n\n"),
             )
         },
@@ -1483,12 +1485,14 @@ private fun RawWriteSection(
                 .animateContentSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = stringResource(R.string.raw_write_not_partition_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             if (!hasImage) {
+                Text(
+                    text = stringResource(R.string.wave4_file_not_selected),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Button(
                     onClick = { sourceSheetOpen = true },
                     enabled = state.actionsEnabled,

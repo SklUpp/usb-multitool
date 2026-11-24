@@ -1418,6 +1418,12 @@ class MainViewModel(
             // onStart re-probe must not wipe the known geometry during a running operation.
             return
         }
+        if (sameDevice && state.presence == DevicePresence.Ready && !state.deviceBusy) {
+            // Returning from a SAF picker must not flip a live, already-probed stick to Busy:
+            // the picker result is delivered before a re-probe can publish Ready again, and
+            // the queued upload would be rejected with "device busy".
+            return
+        }
         if (sameDevice && inspectionOwner.active?.let(::inspectionAttachmentStillHere) == true) {
             // A live phone-import inspection owns this attachment; a same-device re-probe
             // would flip presence to Busy and orphan its Inspected result. A real detach or

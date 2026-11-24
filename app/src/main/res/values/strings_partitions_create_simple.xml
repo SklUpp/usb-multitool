@@ -2,5 +2,5 @@
 <resources>
     <string name="partitions_strip_legend_partition">Partitions</string>
     <string name="partitions_strip_legend_selected">Selected</string>
-    <string name="partitions_volume_label_ext_format_only">EXT4 label is written only when formatting; the app does not rewrite the ext4 superblock to rename it.</string>
+    <string name="partitions_volume_label_ext_format_only">EXT4 label is written only when formatting; the app does not rewrite the ext4 superblock to rename it</string>
 </resources>

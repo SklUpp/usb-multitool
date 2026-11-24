@@ -2305,7 +2305,7 @@ private fun OfficialControlKeyPickerDialog(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
                                 .heightIn(min = 48.dp),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
@@ -2345,10 +2345,7 @@ private fun OfficialControlKeyPickerDialog(
                             if (selectedRow) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        text = stringResource(
-                                            R.string.wave4_catalog_value_title,
-                                            def.key,
-                                        ),
+                                        text = stringResource(R.string.wave4_catalog_value_title),
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = FontWeight.SemiBold,
                                     )
@@ -2494,9 +2491,9 @@ private fun LayoutConfirmDialog(
         text = {
             Column(
                 modifier = Modifier
-                    .heightIn(max = 400.dp)
+                    .heightIn(max = 440.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
                     text = stringResource(R.string.layout_confirm_body),
@@ -2642,14 +2639,11 @@ private fun GenerateDialog(
     val existingAccount = existing?.localAccount
     val existingLayout = existing?.diskLayout
     var profile by remember(document) { mutableStateOf(WindowsProfile.Default) }
-    var profileMenuOpen by remember { mutableStateOf(false) }
     var language by remember(document) { mutableStateOf(existing?.languageTag ?: "en-US") }
     var languageCustom by remember(document) { mutableStateOf(existing?.languageTag !in windowsLanguageChoices) }
     var localeOn by remember(document) { mutableStateOf(existing?.localeId != null) }
     var locale by remember(document) { mutableStateOf(existing?.localeId.orEmpty()) }
     var localeCustom by remember(document) { mutableStateOf(existing?.localeId !in windowsLocaleChoices) }
-    var languageMenuOpen by remember { mutableStateOf(false) }
-    var localeMenuOpen by remember { mutableStateOf(false) }
     var xmlName by remember(document, template) { mutableStateOf(template.substringAfterLast('/').ifBlank { "autounattend.xml" }) }
     var computerOn by remember(document) { mutableStateOf(existing?.computerName != null) }
     var computer by remember(document) { mutableStateOf(existing?.computerName.orEmpty()) }
@@ -2677,7 +2671,6 @@ private fun GenerateDialog(
     var destructiveAck by remember(document) { mutableStateOf(markers.isEmpty()) }
     fun selectProfile(next: WindowsProfile) {
         profile = next
-        profileMenuOpen = false
         when (next) {
             WindowsProfile.Default -> {
                 language = existing?.languageTag ?: "en-US"
@@ -2779,47 +2772,60 @@ private fun GenerateDialog(
                     isError = xmlName.isBlank() || !xmlName.endsWith(".xml", true) || '/' in xmlName || ".." in xmlName,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text(
-                    text = stringResource(R.string.params_profile),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                CompactChoice(
+                    options = WindowsProfile.entries.map { it to windowsProfileLabel(it) },
+                    selected = profile,
+                    onSelect = ::selectProfile,
+                    enabled = actionsEnabled,
+                    label = stringResource(R.string.params_profile),
                 )
-                Box {
-                    TextButton(
-                        onClick = { profileMenuOpen = true },
+                if (profile == WindowsProfile.Custom) {
+                    val customLabel = stringResource(R.string.unattend_custom_value)
+                    CompactChoice(
+                        options = windowsLanguageChoices.map { it to it } + (customLabel to customLabel),
+                        selected = if (languageCustom) customLabel else language,
+                        onSelect = { choice ->
+                            languageCustom = choice == customLabel
+                            if (!languageCustom) language = choice
+                        },
                         enabled = actionsEnabled,
-                    ) { Text(windowsProfileLabel(profile)) }
-                    DropdownMenu(
-                        expanded = profileMenuOpen,
-                        onDismissRequest = { profileMenuOpen = false },
-                    ) {
-                        WindowsProfile.entries.forEach { choice ->
-                            DropdownMenuItem(
-                                text = { Text(windowsProfileLabel(choice)) },
-                                onClick = { selectProfile(choice) },
+                        label = stringResource(R.string.params_language),
+                    )
+                    if (languageCustom) {
+                        OutlinedTextField(
+                            value = language,
+                            onValueChange = { language = it },
+                            label = { Text(stringResource(R.string.params_language)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    SwitchRow(
+                        label = stringResource(R.string.params_locale),
+                        checked = localeOn,
+                        onCheckedChange = { localeOn = it },
+                        enabled = actionsEnabled,
+                    )
+                    if (localeOn) {
+                        CompactChoice(
+                            options = windowsLocaleChoices.map { it to it } + (customLabel to customLabel),
+                            selected = if (localeCustom) customLabel else locale,
+                            onSelect = { choice ->
+                                localeCustom = choice == customLabel
+                                if (!localeCustom) locale = choice
+                            },
+                            enabled = actionsEnabled,
+                            label = stringResource(R.string.params_locale_value),
+                        )
+                        if (localeCustom) {
+                            OutlinedTextField(
+                                value = locale,
+                                onValueChange = { locale = it },
+                                label = { Text(stringResource(R.string.params_locale_value)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                    }
-                }
-                if (profile == WindowsProfile.Custom) {
-                    Box {
-                        TextButton(onClick = { languageMenuOpen = true }, enabled = actionsEnabled) { Text(language) }
-                        DropdownMenu(expanded = languageMenuOpen, onDismissRequest = { languageMenuOpen = false }) {
-                            val custom = stringResource(R.string.unattend_custom_value)
-                            (windowsLanguageChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { languageMenuOpen = false; languageCustom = choice == custom; if (!languageCustom) language = choice }) }
-                        }
-                    }
-                    if (languageCustom) OutlinedTextField(value = language, onValueChange = { language = it }, label = { Text(stringResource(R.string.params_language)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    SwitchRow(label = stringResource(R.string.params_locale), checked = localeOn, onCheckedChange = { localeOn = it }, enabled = actionsEnabled)
-                    if (localeOn) {
-                        Box {
-                            TextButton(onClick = { localeMenuOpen = true }, enabled = actionsEnabled) { Text(locale) }
-                            DropdownMenu(expanded = localeMenuOpen, onDismissRequest = { localeMenuOpen = false }) {
-                                val custom = stringResource(R.string.unattend_custom_value)
-                                (windowsLocaleChoices + custom).forEach { choice -> DropdownMenuItem(text = { Text(choice) }, onClick = { localeMenuOpen = false; localeCustom = choice == custom; if (!localeCustom) locale = choice }) }
-                            }
-                        }
-                        if (localeCustom) OutlinedTextField(value = locale, onValueChange = { locale = it }, label = { Text(stringResource(R.string.params_locale_value)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     }
                 } else {
                     Text(
@@ -2996,9 +3002,9 @@ private fun GenerateDialog(
                             onRemove = { partitions.removeAt(index) },
                         )
                     }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         DiskPartitionRole.entries.forEach { role ->
-                            TextButton(
+                            FilledTonalButton(
                                 onClick = {
                                     partitions.add(
                                         LayoutPartitionDraft(
@@ -3009,7 +3015,8 @@ private fun GenerateDialog(
                                     )
                                 },
                                 enabled = actionsEnabled,
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                             ) { Text(stringResource(roleText(role))) }
                         }
                     }
@@ -3193,6 +3200,7 @@ private fun LayoutPartitionRow(
 ) {
     val moveUpLabel = stringResource(R.string.params_layout_move_up)
     val moveDownLabel = stringResource(R.string.params_layout_move_down)
+    val removeLabel = stringResource(R.string.params_remove_partition)
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -3208,23 +3216,26 @@ private fun LayoutPartitionRow(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(
+            IconButton(
                 onClick = onMoveUp,
                 enabled = actionsEnabled && canMoveUp,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                 modifier = Modifier.semantics { contentDescription = moveUpLabel },
-            ) { Text("↑") }
-            TextButton(
+            ) { GlyphIcon(Glyph.ChevronUp, size = 20.dp) }
+            IconButton(
                 onClick = onMoveDown,
                 enabled = actionsEnabled && canMoveDown,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
                 modifier = Modifier.semantics { contentDescription = moveDownLabel },
-            ) { Text("↓") }
-            TextButton(
+            ) { GlyphIcon(Glyph.ChevronDown, size = 20.dp) }
+            IconButton(
                 onClick = onRemove,
                 enabled = actionsEnabled,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-            ) { Text(stringResource(R.string.params_remove_partition)) }
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+                modifier = Modifier.semantics {
+                    contentDescription = removeLabel
+                },
+            ) { GlyphIcon(Glyph.Close, size = 20.dp) }
         }
         if (installTarget) {
             Text(
@@ -3271,26 +3282,13 @@ private fun LayoutRolePicker(
     onRoleChange: (DiskPartitionRole) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier = modifier) {
-        TextButton(
-            onClick = { expanded = true },
-            enabled = actionsEnabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(roleText(role))) }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DiskPartitionRole.entries.forEach { choice ->
-                DropdownMenuItem(
-                    text = { Text(stringResource(roleText(choice))) },
-                    onClick = {
-                        expanded = false
-                        onRoleChange(choice)
-                    },
-                    enabled = actionsEnabled,
-                )
-            }
-        }
-    }
+    CompactChoice(
+        options = DiskPartitionRole.entries.map { it to stringResource(roleText(it)) },
+        selected = role,
+        onSelect = onRoleChange,
+        modifier = modifier,
+        enabled = actionsEnabled,
+    )
 }
 
 internal fun unreadableText(problem: UnreadableProblem): Int = when (problem) {

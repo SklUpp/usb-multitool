@@ -11,7 +11,7 @@
     <!-- Sticky second line: size, filesystem. -->
     <string name="partitions_sticky_meta">%1$s, %2$s</string>
     <!-- Sticky first line: ordinal + name. -->
-    <string name="partitions_sticky_title">%1$d. %2$s</string>
+    <string name="partitions_sticky_title">%1$d %2$s</string>
     <!-- Selected-card fact rows. -->
     <string name="partitions_info_type_label">Partition type</string>
     <string name="partitions_info_type_efi">EFI</string>
@@ -24,7 +24,7 @@
     <string name="partitions_raw_source_phone">On the phone</string>
     <string name="partitions_raw_source_stick">On the drive</string>
     <string name="partitions_raw_target_whole">Whole disk (LBA 0)</string>
-    <string name="raw_write_whole_disk_warning">Whole-disk target: the partition table and boot sectors will be overwritten.</string>
+    <string name="raw_write_whole_disk_warning">Whole-disk target: the partition table and boot sectors will be overwritten</string>
     <string name="partitions_raw_target_partition">Partition %1$d</string>
     <string name="partitions_raw_target_custom">Custom LBA</string>
     <string name="partitions_raw_verdict">LBA %1$d – %2$d</string>

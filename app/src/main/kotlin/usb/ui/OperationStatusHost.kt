@@ -3,6 +3,7 @@ package usb.ui
 import kotlin.math.roundToInt
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -235,6 +237,7 @@ internal fun OperationStatusHost(
     statusSequence: Long,
     operationStatusSequence: Long,
     modifier: Modifier = Modifier,
+    onOpenDetails: (() -> Unit)? = null,
 ) {
     val running = operation?.state == OperationState.Running ||
         operation?.state == OperationState.Queued
@@ -259,13 +262,25 @@ internal fun OperationStatusHost(
         }
         ?: statusMessage?.localized()
     val progressDescription = stringResource(R.string.shell_status_progress)
+    val openDetailsLabel = stringResource(R.string.shell_status_open_details)
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(top = 4.dp, bottom = 4.dp)
-            .heightIn(min = 48.dp, max = 76.dp),
+            .heightIn(min = 48.dp, max = 76.dp)
+            .then(
+                if (onOpenDetails != null) {
+                    Modifier
+                        .clickable(role = Role.Button, onClick = onOpenDetails)
+                        .semantics {
+                            contentDescription = openDetailsLabel
+                        }
+                } else {
+                    Modifier
+                },
+            ),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.small,
         tonalElevation = 0.dp,

@@ -22,9 +22,9 @@
     <string name="partitions_overlap_heading">Пересечения разделов</string>
     <string name="partitions_overlap_line">%1$s / %2$s: %3$d секторов</string>
     <!-- Компактная подпись под переключателем записи. -->
-    <string name="partitions_efi_ro_caption">Разрешение действует только для этого раздела и подключения; при переподключении сбрасывается.</string>
+    <string name="partitions_efi_ro_caption">Разрешение действует только для этого раздела и подключения; при переподключении сбрасывается</string>
     <!-- a11y кнопки раскрытия sticky. -->
     <string name="partitions_sticky_expand_a11y">Выбрать другой раздел</string>
     <!-- Порядковый номер перед названием раздела в списке. -->
-    <string name="partitions_ordinal_title">%1$d. %2$s</string>
+    <string name="partitions_ordinal_title">%1$d %2$s</string>
 </resources>

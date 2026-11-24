@@ -217,6 +217,7 @@ fun AppShell(
         var lastWorkTab by rememberSaveable { mutableStateOf(ShellTab.Files.name) }
         var operationOriginTab by rememberSaveable { mutableStateOf<String?>(null) }
         var operationOriginToken by rememberSaveable { mutableStateOf<String?>(null) }
+        var statusDialogOpen by rememberSaveable { mutableStateOf(false) }
         val operationLocked = state.deviceBusy
         val operationToken = state.operation?.token?.toString()
         var restoreLogFocus by remember { mutableStateOf(false) }
@@ -476,6 +477,7 @@ fun AppShell(
                                 statusMessage = state.statusMessage,
                                 statusSequence = state.statusSequence,
                                 operationStatusSequence = state.operationStatusSequence,
+                                onOpenDetails = { statusDialogOpen = true },
                             )
                         }
                     }
@@ -599,6 +601,14 @@ fun AppShell(
                     },
                 )
             }
+
+        if (statusDialogOpen) {
+            StatusDialog(
+                state = state,
+                onIntent = onIntent,
+                onDismiss = { statusDialogOpen = false },
+            )
+        }
 
         state.pendingConfirmation
             ?.takeIf { state.linkOverwriteCandidate == null }
@@ -882,6 +892,160 @@ internal fun ActionList(
         ) {
             items.forEach { it() }
         }
+    }
+}
+
+/**
+ * Centred status details. Title and one compact operation line stay fixed; only the
+ * operation journal scrolls, so a long journal never pushes Close out of reach.
+ * Cancel keeps its confirmation; Close only dismisses.
+ */
+@Composable
+private fun StatusDialog(
+    state: AppUiState,
+    onIntent: (UiIntent) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val op = state.operation
+    val running = op?.state == OperationState.Running || op?.state == OperationState.Queued
+    val cancelable = running && op?.cancelable == true
+    var cancelTarget by remember { mutableStateOf<OperationProgress?>(null) }
+    val closeLabel = stringResource(R.string.shell_status_close)
+    val failureText = op?.failure
+        ?.takeIf { it != OperationFailure.Cancelled }
+        ?.let { OperationPresentation.failureText(it) }
+    val opLine = op?.let {
+        listOfNotNull(
+            OperationPresentation.label(it.title),
+            OperationPresentation.stateLabel(it.state, it.phase),
+        ).joinToString(" — ")
+    }
+    val statusLine = state.statusMessage?.localized()
+    val detailLine = failureText
+        ?: op?.resultMessage
+        ?: statusLine
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraLarge,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.status_dialog_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
+                opLine?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                detailLine?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (failureText != null) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    shape = MaterialTheme.shapes.small,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.operationLogLines.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.log_empty),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 420.dp)
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            items(state.operationLogLines.size) { index ->
+                                JournalLine(line = state.operationLogLines[index])
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (cancelable && op != null) {
+                TextButton(
+                    onClick = { cancelTarget = op },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.action_cancel),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(closeLabel) }
+        },
+    )
+    cancelTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { cancelTarget = null },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.extraLarge,
+            title = { Text(stringResource(R.string.cancel_operation_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.cancel_operation_body,
+                        OperationPresentation.label(target.title),
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        cancelTarget = null
+                        onIntent(UiIntent.CancelOperation(target.token))
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.cancel_operation_confirm)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { cancelTarget = null },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
     }
 }
 
@@ -1529,6 +1693,8 @@ internal fun InfoHint(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun InfoHelpButton(infoTitle: String, infoText: String) {
+    // No content means no affordance: never show an empty help button.
+    if (infoText.isBlank()) return
     var showInfo by remember { mutableStateOf(false) }
     val closeLabel = stringResource(R.string.info_close)
     IconButton(
@@ -1552,12 +1718,12 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 1.dp,
         ) {
-            // Single scroll for title + body + close, so the close action is never
-            // clipped on short screens or at large font scales; one close only.
+            // Title and close stay fixed; only the body scrolls. The sheet is never
+            // stretched by a fixed height when the text is short.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .heightIn(max = 560.dp)
                     .padding(horizontal = 24.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -1566,9 +1732,12 @@ internal fun InfoHelpButton(infoTitle: String, infoText: String) {
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.semantics { heading() },
                 )
-                // Body is authored as blocks (blank-line separated, **term** bold); the
-                // same renderer serves every help sheet, so plain prose is one block.
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     val blocks = remember(infoText) { helpBlocks(infoText) }
                     blocks.forEach { block ->
                         Text(text = block)
