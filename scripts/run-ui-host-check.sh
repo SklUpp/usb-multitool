@@ -41,6 +41,10 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ventoy/FolderPaths.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreInspectionModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/OperationModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/FilesPickModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/PartitionUiModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/FilesPickTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/PartitionTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RawTransitions.kt" \

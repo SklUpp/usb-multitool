@@ -111,6 +111,10 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreInspectionModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/RestoreSourceInspector.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/UiModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/OperationModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/FilesPickModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/PartitionUiModels.kt" \
+  "$ROOT/app/src/main/kotlin/usb/ui/VentoyModels.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/OperationProgressMapper.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/FilesPickTransitions.kt" \
   "$ROOT/app/src/main/kotlin/usb/ui/PartitionTransitions.kt" \
@@ -133,6 +137,7 @@ set -- \
   "$ROOT/app/src/main/kotlin/usb/service/OperationExecutor.kt" \
   "$ROOT/app/src/main/kotlin/usb/service/DiskController.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/FormatPickerTest.kt" \
+  "$ROOT/app/src/test/kotlin/usb/ui/ReducerCompositionTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRenameUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/PartitionRepairUiTest.kt" \
   "$ROOT/app/src/test/kotlin/usb/ui/SchemeInitUiTest.kt" \
@@ -190,6 +195,7 @@ kotlinc -cp "$CP" -d "$OUT" "$@"
 cd "$ROOT"
 java -cp "$OUT:$CP" org.junit.runner.JUnitCore \
   usb.ui.FormatPickerTest \
+  usb.ui.ReducerCompositionTest \
   usb.ui.PartitionRenameUiTest \
   usb.ui.PartitionRepairUiTest \
   usb.ui.SchemeInitUiTest \
