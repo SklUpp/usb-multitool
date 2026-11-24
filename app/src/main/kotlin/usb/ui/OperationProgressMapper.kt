@@ -102,6 +102,9 @@ data class OperationResult(
                 cancelable = cancelable,
             )
         }
+
+    /** Typed failure text is rendered by OperationProgress, not the legacy status line. */
+    fun toMessage(): String? = null
 }
 
 fun ServiceOperationState.toOperationResult(operationFailure: Throwable? = null): OperationResult {

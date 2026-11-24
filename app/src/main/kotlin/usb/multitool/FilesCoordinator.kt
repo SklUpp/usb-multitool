@@ -839,7 +839,7 @@ class FilesCoordinator(
         val operation = submission.operation
         val token = nextToken()
         val handle = submitter.submit(operation, token)
-        onHandleStarted(handle, makeCurrent = !quiet)
+        onHandleStarted(handle, !quiet)
         if (!quiet) currentHandle = handle
         if (FilesOperationPolicy.publishOperationProgress(quiet)) {
             intents(
