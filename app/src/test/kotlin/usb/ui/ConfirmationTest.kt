@@ -449,11 +449,11 @@ class UiStateMachineTest {
                 expected = false,
             ),
             AttachmentPinTableCase(
-                desc = "selectedPartitionId mismatch",
+                desc = "current selection differs, pinned partition intact",
                 pin = validPin,
                 state = baseState.copy(selectedPartitionId = "2"),
                 dir = null,
-                expected = false,
+                expected = true,
             ),
             AttachmentPinTableCase(
                 desc = "startLba mismatch",

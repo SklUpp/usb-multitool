@@ -386,9 +386,9 @@ class PickerContractTest {
                     upload = base,
                 ),
                 VerdictCase(
-                    "partition changed → TargetChanged",
+                    "selection changed, pinned partition intact → Ok",
                     ready(selectedId = "2", partitionsOverride = listOf(partition, partition.copy(id = "2"))),
-                    PickerVerdict.TargetChanged,
+                    PickerVerdict.Ok,
                     upload = base,
                 ),
                 VerdictCase(

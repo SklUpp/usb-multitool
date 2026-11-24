@@ -260,6 +260,8 @@ data class OperationProgress(
     val bytesDone: Long = 0L,
     val bytesTotal: Long = 0L,
     val bytesPerSecond: Long = 0L,
+    /** Current batch member, e.g. the SAF name being uploaded. Null for non-file ops. */
+    val currentFile: String? = null,
     val failure: OperationFailure? = null,
     /** Concrete outcome (paths, counts) shown instead of the bare "Success" label. */
     val resultMessage: String? = null,

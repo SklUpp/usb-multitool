@@ -72,7 +72,7 @@ object UploadService {
         }
         OpenableSafHelpers.requireFreeSpaceBeforeWrite(volume, knownSizeBytes)
         val plannedTotal = knownSizeBytes?.takeIf { it >= 0L } ?: -1L
-        operation.beginCurrentFile(plannedTotal)
+        operation.beginCurrentFile(plannedTotal, target.substringAfterLast('/'))
         val buffer = ByteArray(chunkBytes)
         var offset = 0L
         var created = targetAlreadyOwned

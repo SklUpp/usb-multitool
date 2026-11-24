@@ -32,13 +32,14 @@ data class OperationResult(
         bytesDone: Long = 0L,
         bytesTotal: Long = 0L,
         bytesPerSecond: Long = 0L,
+        currentFile: String? = null,
         cancelable: Boolean = true,
         resultMessage: String? = null,
         readScanResult: ReadScanOutcome? = null,
         smartResult: SmartOutcome? = null,
         rawWriteResult: usb.image.RawWriteResult? = null,
-    ): OperationProgress =
-        when (state) {
+    ): OperationProgress {
+        val progress = when (state) {
             OperationState.Failed -> OperationProgress(
                 state = OperationState.Failed,
                 title = title,
@@ -102,6 +103,8 @@ data class OperationResult(
                 cancelable = cancelable,
             )
         }
+        return progress.copy(currentFile = currentFile)
+    }
 
     /** Typed failure text is rendered by OperationProgress, not the legacy status line. */
     fun toMessage(): String? = null

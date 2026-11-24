@@ -4955,6 +4955,7 @@ class MainViewModel(
                     bytesDone = operation.bytesDone,
                     bytesTotal = operation.bytesTotal,
                     bytesPerSecond = operation.currentBytesPerSecond(),
+                    currentFile = operation.currentFile,
                     cancelable = cancelable,
                     resultMessage = operation.result?.takeIf { it.isNotEmpty() },
                     readScanResult = sink.readScanResult,
@@ -5536,7 +5537,12 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris: List<Uri> ->
         val target = batchUploadPicker.clear()
-        if (uris.isEmpty()) return@registerForActivityResult
+        if (uris.isEmpty()) {
+            viewModel.onIntent(
+                UiIntent.Status(UiMessage.Key(UiMessageKey.UploadSelectionEmpty)),
+            )
+            return@registerForActivityResult
+        }
         uris.forEach { uri ->
             runCatching {
                 contentResolver.takePersistableUriPermission(

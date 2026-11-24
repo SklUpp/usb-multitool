@@ -128,7 +128,13 @@ open class DiskOperation(
      * (indeterminate / bytes-only).
      */
     @Synchronized
-    fun beginCurrentFile(total: Long) {
+    /** Human-readable name of the file a batch is currently processing. */
+    @Volatile
+    var currentFile: String? = null
+        private set
+
+    fun beginCurrentFile(total: Long, name: String? = null) {
+        currentFile = name
         bytesDone = 0L
         bytesTotal = total
         bytesPerSecond = 0L

@@ -106,6 +106,7 @@ fun UiMessage.localized(): String =
                 stringResource(R.string.msg_rescue_image_ready, *safeArgs.toTypedArray())
             UiMessageKey.RescueMapCleared -> stringResource(R.string.msg_rescue_map_cleared)
             UiMessageKey.RescueMapRequired -> stringResource(R.string.msg_rescue_map_required)
+            UiMessageKey.UploadSelectionEmpty -> stringResource(R.string.msg_upload_selection_empty)
             UiMessageKey.RescueMapReady ->
                 stringResource(R.string.msg_rescue_map_ready, *safeArgs.toTypedArray())
             UiMessageKey.ChooseGptBackup -> stringResource(R.string.msg_choose_gpt_backup)

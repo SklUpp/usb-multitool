@@ -3,7 +3,11 @@ package usb.ui
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -349,14 +354,14 @@ fun FilesScreen(
             )
         }
         val uploadCancelToken = OperationPresentation.cancelToken(uploading, ownerTab = ShellTab.Files)
-        if (uploadCancelToken != null) {
-            ExtendedFloatingActionButton(
-                onClick = { onIntent(UiIntent.CancelOperation(uploadCancelToken)) },
+        if (uploading != null) {
+            UploadProgressRow(
+                operation = uploading,
+                onCancel = uploadCancelToken?.let { token -> { onIntent(UiIntent.CancelOperation(token)) } },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
+                    .fillMaxWidth()
                     .padding(16.dp),
-                icon = { GlyphIcon(Glyph.Close, size = 18.dp) },
-                text = { Text(stringResource(R.string.action_cancel)) },
             )
         } else if (canWrite) {
             ExtendedFloatingActionButton(
@@ -1905,6 +1910,109 @@ internal fun filesBatchConflictPathDisplay(conflict: FilesConflict): String {
     val path = conflict.pathLabel
     if (path.isNotEmpty()) return path
     return conflict.name
+}
+
+/**
+ * Expanded copy control: the picker button grows into one 56 dp row with the current
+ * SAF name, percent and live speed. The outline pulses only while bytes are moving, so
+ * a stalled or finished copy is visually distinct without a modal.
+ */
+@Composable
+private fun UploadProgressRow(
+    operation: OperationProgress,
+    onCancel: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val running = operation.state == OperationState.Running || operation.state == OperationState.Queued
+    val failed = operation.state == OperationState.Failed
+    val cancelLabel = stringResource(R.string.action_cancel)
+    val shape = RoundedCornerShape(28.dp)
+    val infinite = rememberInfiniteTransition(label = "upload-outline")
+    val glow by infinite.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "upload-outline-alpha",
+    )
+    val container = when {
+        failed -> MaterialTheme.colorScheme.errorContainer
+        operation.state == OperationState.Completed -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
+    }
+    val content = when {
+        failed -> MaterialTheme.colorScheme.onErrorContainer
+        operation.state == OperationState.Completed -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    Surface(
+        color = container,
+        contentColor = content,
+        shape = shape,
+        modifier = modifier
+            .heightIn(min = 56.dp)
+            .border(
+                width = 2.dp,
+                color = content.copy(alpha = if (running) glow else 0.25f),
+                shape = shape,
+            ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(32.dp)) {
+                CircularProgressIndicator(
+                    progress = { operation.fraction },
+                    modifier = Modifier.fillMaxSize(),
+                    strokeWidth = 2.5.dp,
+                    color = content,
+                    trackColor = content.copy(alpha = 0.25f),
+                )
+                if (!running) {
+                    GlyphIcon(
+                        glyph = if (failed) Glyph.Close else Glyph.Check,
+                        size = 16.dp,
+                        tint = content,
+                    )
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = operation.currentFile
+                        ?: OperationPresentation.label(operation.title),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val percent = (operation.fraction * 100f).toInt().coerceIn(0, 100)
+                val speed = operation.bytesPerSecond
+                    .takeIf { running && it > 0L }
+                    ?.let(::formatBinaryBytesPerSecond)
+                Text(
+                    text = listOfNotNull("$percent%", speed).joinToString(", "),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                    ),
+                )
+            }
+            if (running && onCancel != null) {
+                IconButton(
+                    onClick = onCancel,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = stringResource(R.string.action_cancel) },
+                ) { GlyphIcon(Glyph.Stop, size = 20.dp, tint = content) }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
