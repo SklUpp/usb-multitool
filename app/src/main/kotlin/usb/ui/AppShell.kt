@@ -139,7 +139,7 @@ import java.util.Locale
  * - top: one compact device header (also on Settings) whose title/subtitle surface is
  *   separate from the language, theme and log controls (no max-height clipping). Directly
  *   under it a permanent status block (inset `surfaceContainer*` band, shared 12 dp side
- *   rhythm) titled `Status: &lt;operation&gt; — &lt;state&gt;` as one line, always fully
+ *   rhythm) with a `Status` label and one-line operation/state summary, always fully
  *   tappable (48 dp), no subtitle and no separate expand control; thin progress track only
  *   while running. Gaps header → block → content stay in the 8–12 dp band. The block stays
  *   on Files, Partitions, Ventoy and Service, hides on Settings and while the journal is

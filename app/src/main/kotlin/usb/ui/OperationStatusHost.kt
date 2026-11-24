@@ -239,8 +239,8 @@ internal fun rawReadbackSummary(
 
 /**
  * Permanent status block under the header: inset `surfaceContainer*` band (not a card,
- * not an error banner). Whole block is tappable (48 dp). One-line title
- * `Status: &lt;operation&gt; — &lt;state&gt;` (no subtitle, no separate expand control).
+ * not an error banner). Whole block is tappable (48 dp). `Status` label plus a one-line
+ * operation/state summary (no subtitle, no separate expand control).
  * Idle/standalone use neutral ink. The title announces running operation state and
  * standalone messages, while the progress track remains visible without becoming a live
  * region. Thin rounded progress track only while running. No dividers.

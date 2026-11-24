@@ -17,8 +17,9 @@
 - CSW проверяет signature, tag, status и residue. `PASS` требует доставленных
   байт ровно по запросу и residue 0; иначе ответ считается недостоверным и
   сессия закрывается.
-- Stalls: один reset+retry для IN, второй сбой закрывает сессию; OUT I/O ошибка
-  не повторяется. PHASE ERROR и недостоверный CSW → reset и close.
+- Stalls: при I/O ошибке Bulk-IN сначала `clearHaltIn`, затем читается CSW;
+  reset+retry остаётся крайней мерой, второй сбой закрывает сессию; OUT I/O
+  ошибка не повторяется. PHASE ERROR и недостоверный CSW → reset и close.
 - READ/WRITE(10) используется при 32-битных LBA/count, иначе READ/WRITE(16).
   SCSI-план режет передачу на выровненные чанки (по умолчанию 64 KiB,
   настраиваемо 16..512 KiB).
@@ -73,9 +74,10 @@
   attributes все биты; имя ≤36 UTF-16 units.
 - Backup array нельзя предсказывать как `backupLba - entrySectors`: layout
   может быть смещён. Null/неизвестное место — отказ.
-- `TableInitializer` для пустого диска пишет protective MBR, backup entries,
-  backup header, protective MBR, primary entries, primary header; каждая фаза
-  sync и re-read.
+- `TableInitializer` для пустого диска пишет protective MBR с `StartingCHS=00 02 00`,
+  `EndingCHS=FF FF FF`, затем backup entries, backup header, protective MBR,
+  primary entries и primary header; `commitMbr` для обычных записей использует
+  `FE FF FF`. Каждая фаза сопровождается sync и re-read.
 
 ## Backup/relocation
 
@@ -155,4 +157,6 @@ trace, импорт с телефона и экспорт на телефон. U
 - SAF staging cancellation закрывает source через bounded `MeasurementHandle`,
   не блокируя cancellation thread; listener снимается в `finally`, temp
   удаляется при ошибке.
-- Остатки staging после смерти процесса не удаляются автоматически.
+- App-private staging: `raw-*` старше 12 часов, не принадлежащие текущей
+  сессии, удаляются при старте и перед проверкой свободного места; свежие и
+  session-owned файлы сохраняются.

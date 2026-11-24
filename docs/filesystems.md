@@ -104,7 +104,7 @@
 
 | ФС | Формат | Label |
 |---|---|---|
-| FAT/FAT32 | FAT32 при >2 GiB, иначе FAT12/16 | 11 символов, CP437/uppercase |
+| FAT/FAT32 | FAT32 от 64 MiB для 512-байтных секторов; для 4K порог `max(64 MiB, 66000 × sectorSize)` | 11 символов, CP437/uppercase |
 | exFAT | exFAT | 11 UTF-16 units |
 | NTFS | NTFS | 128 UTF-16 units |
 | ext4 | journal-less ext4 | 15 UTF-8 байт, rename запрещён |

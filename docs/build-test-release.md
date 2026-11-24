@@ -1,8 +1,8 @@
 # Сборка, тесты, CI и APK
 
 Тяжёлая сборка и полный тестовый прогон выполняются в GitHub Actions. На
-телефоне допустимы лёгкий Kotlin-анализ и короткие host-проверки; APK локально
-не собирается.
+телефоне допустимы лёгкий Kotlin-анализ, `processDebugResources` и короткие
+host-проверки; полный APK/NDK локально не проверялся.
 
 ## Toolchain
 
@@ -50,16 +50,35 @@ SectorForge bridge собирается Gradle-задачей `buildSfBridge`:
 ./gradlew :app:lintDebug
 ```
 
-На телефоне использовать `nice ./gradlew ...` и один процесс Gradle; не
-запускать fetch-third-party и не собирать APK. Robolectric работает offline:
-jar-ы `android-all-instrumented` для SDK 28/31/33 резолвятся через конфигурацию
-`robolectricSdks` и копируются в `app/build/robolectric-sdks` задачей
-`syncRobolectricSdks` (см. `app/build.gradle.kts`). Первый resolve зависимостей
+На телефоне использовать `nice ./gradlew ...` и один процесс Gradle
+(`--max-workers=1`; `-j` этот wrapper не принимает). `fetch-third-party.sh` и
+полный APK/NDK не запускать локально.
+
+Termux: Gradle требует gitignored `local.properties` с
+`sdk.dir=$PREFIX/opt/android-sdk`. Кэшированный x86_64 `aapt2` не работает на
+ARM64; нативный `$PREFIX/bin/aapt2` подключается так:
+
+```bash
+printf 'sdk.dir=%s/opt/android-sdk\n' "$PREFIX" > local.properties
+./gradlew --max-workers=1 \
+  -Pandroid.aapt2FromMavenOverride=$PREFIX/bin/aapt2 \
+  :app:processDebugResources :app:compileDebugKotlin
+```
+
+Проверено на Termux: `processDebugResources` и `compileDebugKotlin` проходят;
+полная сборка APK остаётся в CI.
+
+Robolectric работает offline: jar-ы `android-all-instrumented` для SDK 28/31/33
+резолвятся через конфигурацию `robolectricSdks` и копируются в
+`app/build/robolectric-sdks` задачей `syncRobolectricSdks`
+(см. `app/build.gradle.kts`). Первый resolve зависимостей
 Gradle всё ещё требует сеть; после прогрева кэша можно
 `./gradlew :app:testDebugUnitTest --offline`.
 
-Dependency locking включён (`subprojects { dependencyLocking { lockAllConfigurations() } }`).
-Сгенерировать и закоммитить lockfile/verification-metadata (нужна сеть):
+Dependency locking объявлен (`subprojects { dependencyLocking { lockAllConfigurations() } }`),
+но `gradle.lockfile`, `app/gradle.lockfile` и `gradle/verification-metadata.xml` в
+репозитории отсутствуют, поэтому сейчас lock не enforced. Чтобы включить его
+(нужна сеть), сгенерировать и закоммитить:
 
 ```bash
 ./gradlew :app:dependencies --write-locks
@@ -103,7 +122,9 @@ Workflow `.github/workflows/android-debug.yml`, ветка
   7. `:app:lintDebug`;
   8. `:app:compileDebugKotlin`.
 
-Кэши без `restore-keys` и без секретов. Action SHA pinned.
+Кэши без `restore-keys` и без секретов. Action SHA pinned. GitHub уже
+аннотирует Node.js 20 deprecation: текущие v4 actions принудительно работают на
+Node 24; обновление majors/SHA отслеживается в `modernization.md`.
 
 Artifacts:
 - `app-debug-apk` — debug APK (`verify`, always);

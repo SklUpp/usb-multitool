@@ -32,8 +32,9 @@ Reducer (`usb.ui.UiReducer.reduce`) чистый: он меняет состоя
   (`AndroidManifest.xml:24-46`); `DiskService` — foreground service типа
   `connectedDevice`, не экспортируется.
 - `MainViewModel.init` восстанавливает вкладку, язык/тему, SAF-папку и
-  вызывает `DiskService.initialize`; остатки staging только показываются, не
-  удаляются автоматически.
+  вызывает `DiskService.initialize`; устаревшие `raw-*` в app-private staging
+  старше 12 часов удаляются при старте и перед проверкой свободного места, а
+  активные session-owned файлы не трогаются.
 - `DiskController.get()` — process-wide singleton: `usbClaim`, очередь операций
   и `Dispatchers.IO.limitedParallelism(1)`. Один процесс — один владелец USB.
 - `AppShell` рисует `Scaffold` и `NavigationBar` с вкладками Files, Ventoy,
