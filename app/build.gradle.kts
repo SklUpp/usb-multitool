@@ -140,14 +140,20 @@ android {
 }
 
 // Pre-resolve android-all jars so Robolectric never hits Maven at test time.
-val robolectricSdks by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
+// Separate configs: one module+three versions in one config collapses to newest.
+fun robolectricSdkConfig(name: String) =
+    configurations.create(name) {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+    }
+
+val robolectricSdk33 = robolectricSdkConfig("robolectricSdk33")
+val robolectricSdk31 = robolectricSdkConfig("robolectricSdk31")
+val robolectricSdk28 = robolectricSdkConfig("robolectricSdk28")
 
 val syncRobolectricSdks =
     tasks.register<Sync>("syncRobolectricSdks") {
-        from(robolectricSdks)
+        from(robolectricSdk33, robolectricSdk31, robolectricSdk28)
         into(layout.buildDirectory.dir("robolectric-sdks"))
     }
 
@@ -180,7 +186,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
 
     // SDKs used by robolectric.properties (33) and @Config overrides (28, 31).
-    add("robolectricSdks", "org.robolectric:android-all-instrumented:13-robolectric-9030017-i7")
-    add("robolectricSdks", "org.robolectric:android-all-instrumented:12-robolectric-7732740-i7")
-    add("robolectricSdks", "org.robolectric:android-all-instrumented:9-robolectric-4913185-2-i7")
+    add("robolectricSdk33", "org.robolectric:android-all-instrumented:13-robolectric-9030017-i7")
+    add("robolectricSdk31", "org.robolectric:android-all-instrumented:12-robolectric-7732740-i7")
+    add("robolectricSdk28", "org.robolectric:android-all-instrumented:9-robolectric-4913185-2-i7")
 }
