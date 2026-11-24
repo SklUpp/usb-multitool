@@ -80,7 +80,7 @@ class FilesVolumeSession(
     ) -> MountedFilesVolume,
     /** Exclusive USB device ownership shared by this session's mounts and raw opens. */
     val claim: UsbExclusiveClaim = UsbExclusiveClaim(),
-) {
+) : UsbVolume {
     private val lock = Any()
 
     /** Immutable (volume, epoch, pin, claim lease); one volatile read is a consistent snapshot. */
@@ -543,4 +543,14 @@ class FilesVolumeSession(
             }
         }
     }
+
+    override fun read(pin: AttachmentPin?, partitionId: String): UsbFsVolume =
+        volumeForLocked(pin, partitionId, writable = false)
+
+    override fun <T> write(
+        pin: AttachmentPin?,
+        partitionId: String,
+        operation: DiskOperation,
+        body: (UsbFsVolume) -> T,
+    ): T = withWritableVolume(pin, partitionId, operation, body)
 }

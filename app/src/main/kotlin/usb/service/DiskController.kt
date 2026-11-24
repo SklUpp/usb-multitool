@@ -23,7 +23,7 @@ class DiskController(
     serviceControl: ServiceControl = NoOpServiceControl,
     dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
     private val failureReporter: (Throwable) -> Unit = defaultProcessIoFailureReporter,
-) {
+) : OperationSubmitter {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + dispatcher)
     val executor = OperationExecutor(scope, wakeLock = wakeLock, serviceControl = serviceControl)
@@ -36,7 +36,7 @@ class DiskController(
 
     fun submit(operation: DiskOperation): OperationHandle = executor.submit(operation)
 
-    fun submit(operation: DiskOperation, token: OperationToken): OperationHandle =
+    override fun submit(operation: DiskOperation, token: OperationToken): OperationHandle =
         executor.submit(operation, token)
 
     fun onDisconnected() = executor.onDisconnected()

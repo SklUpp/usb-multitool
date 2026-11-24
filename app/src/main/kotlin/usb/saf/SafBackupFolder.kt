@@ -46,16 +46,15 @@ internal fun isNewRegularFile(document: SafDocument?, scoped: Uri, authority: St
         !document.isDirectory &&
         (document.sizeBytes == null || document.sizeBytes == 0L)
 class SafBackupFolder(
-
     private val resolver: ContentResolver,
     val treeUri: Uri,
-) {
+) : SafTree {
     private val rootDocumentUri: Uri = DocumentsContract.buildDocumentUriUsingTree(
         treeUri,
         DocumentsContract.getTreeDocumentId(treeUri),
     )
 
-    fun displayName(): String? = queryDocument(rootDocumentUri)?.name
+    override fun displayName(): String? = queryDocument(rootDocumentUri)?.name
 
     /** Publish rescue restore checkpoints beside the selected image/map. */
     fun checkpointPublisher(baseName: String, startGeneration: Int = 1): CheckpointPublisher =
@@ -90,9 +89,9 @@ class SafBackupFolder(
         cursor.use { availableBytesForTree(it, treeDocumentId) }
     }.getOrNull()
 
-    fun listRootFiles(): List<SafDocument> = listChildren(rootDocumentUri)
+    override fun listRootFiles(): List<SafDocument> = listChildren(rootDocumentUri)
 
-    fun listChildren(parent: Uri): List<SafDocument> {
+    override fun listChildren(parent: Uri): List<SafDocument> {
         val parentId = parentDocumentId(parent)
         val childrenUri =
             DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
@@ -153,7 +152,7 @@ class SafBackupFolder(
      */
     fun createExclusiveSubfolder(name: String): Uri = createExclusiveSubfolder(rootDocumentUri, name)
 
-    fun createExclusiveSubfolder(parent: Uri, name: String): Uri {
+    override fun createExclusiveSubfolder(parent: Uri, name: String): Uri {
         val created = createSubfolder(parent, name)
         require(created.authority == treeUri.authority) {
             "SAF provider returned foreign authority for folder: $name; retained returned document $created"
@@ -186,7 +185,7 @@ class SafBackupFolder(
         return scoped
     }
 
-    fun createExclusiveFile(parent: Uri, name: String, mimeType: String): Uri {
+    override fun createExclusiveFile(parent: Uri, name: String, mimeType: String): Uri {
         val created = createFile(parent, name, mimeType)
         require(created.authority == treeUri.authority) {
             "SAF provider returned foreign authority for file: $name; retained returned document $created"
@@ -236,7 +235,7 @@ class SafBackupFolder(
     }
 
     /** Bounded UTF-8 read with the same character cap the restore path applies. */
-    fun readText(document: Uri, maxChars: Int): String {
+    override fun readText(document: Uri, maxChars: Int): String {
         val scoped = scopedDocumentUri(document)
         val input: InputStream = resolver.openInputStream(scoped)
             ?: throw IOException("cannot open $scoped for reading")
@@ -258,7 +257,7 @@ class SafBackupFolder(
         }
     }
 
-    fun deleteDocument(document: Uri): Boolean =
+    override fun deleteDocument(document: Uri): Boolean =
         DocumentsContract.deleteDocument(
             resolver,
             scopedDocumentUri(document),

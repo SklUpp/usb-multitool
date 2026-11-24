@@ -9,11 +9,8 @@ import usb.files.FilesOperationPolicy
 import usb.files.FilesOperationRunner
 
 import android.Manifest
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.app.Application
@@ -35,7 +32,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.SavedStateHandle
@@ -55,11 +51,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -108,7 +102,6 @@ import usb.diagnostics.redactTrace
 import usb.diagnostics.Rescue
 import usb.diagnostics.RescueMap
 import usb.diagnostics.RescueOperations
-import usb.files.FilesOperations
 import usb.diagnostics.BackupArchive
 import usb.diagnostics.RescueArchiveOperations
 import usb.diagnostics.RescueBackupOperations
@@ -134,7 +127,6 @@ import usb.ui.rawSourceKey
 import usb.ui.FilesDownloadBinding
 import usb.ui.FilesBatchSelection
 import usb.ui.UiAttachmentPin
-import usb.ui.FilesBatchItem
 import usb.ui.FilesConflict
 import usb.ui.FilesConflictDecision
 import usb.ui.PartitionBinding
@@ -145,8 +137,6 @@ import usb.ui.PickerSlot
 import usb.ui.PickerVerdict
 import usb.ui.UploadTarget
 import usb.ui.matches
-import usb.ui.matchesAttachment
-import usb.ui.resultVerdict
 import usb.ui.safePickPath
 import usb.ui.stageVerdict
 import usb.ui.toTableScheme
@@ -232,9 +222,13 @@ class MainViewModel(
     var state by mutableStateOf(AppUiState())
         private set
 
-    /** Reducer picker events share one FIFO channel so launch/cancel ordering is explicit. */
-    private val _pickerEvents = Channel<UiEffect>(Channel.UNLIMITED)
-    val pickerEvents: Flow<UiEffect> = _pickerEvents.receiveAsFlow()
+    /** Owns download/batch picker slots and the FIFO effect channel for launches. */
+    internal val safPicker =
+        SafPickerCoordinator(
+            resolver = application.contentResolver,
+            intents = { onIntent(it) },
+        )
+    val pickerEvents: Flow<UiEffect> = safPicker.effects
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     /** Survives ViewModel scope cancellation so completion can still release the handle. */
@@ -244,45 +238,15 @@ class MainViewModel(
     private var rawSourceHandle: OperationHandle? = null
     private var rawMeasureJob: Job? = null
     private var rawMeasureHandle: MeasurementHandle? = null
-    private val downloadPicker = PickerSlot<FilesDownloadBinding>()
-    internal val pendingDownloadBinding: FilesDownloadBinding? get() = downloadPicker.pending
-    internal val pendingDownloadRequestId: Long get() = downloadPicker.pendingRequestId
+    internal val pendingDownloadBinding: FilesDownloadBinding?
+        get() = safPicker.pendingDownloadBinding
+    internal val pendingDownloadRequestId: Long
+        get() = safPicker.pendingDownloadRequestId
     @Volatile private var pendingRawStagingPath: String? = null
     private var rawMeasureRunning = false
     /** Latest source waiting for a blocked provider pass to return; never starts in parallel. */
     private var pendingRawMeasureEffect: UiEffect.MeasureRawSource? = null
-    /**
-     * Parked batch transfer waiting for ResolveFilesBatchConflict. USB lock is released
-     * before dialog; ContinueFilesBatch re-acquires with fresh pin. Never second USB owner.
-     */
-    private var parkedBatchWork: ParkedFilesBatch? = null
-
-    private sealed class ParkedFilesBatch {
-        abstract val selection: FilesBatchSelection?
-        data class Download(
-            override val selection: FilesBatchSelection,
-            val treeUri: String,
-            val cursor: usb.files.transfer.DownloadCursor,
-            val conflict: FilesConflict,
-        ) : ParkedFilesBatch()
-        data class UploadDocs(
-            val directory: String,
-            val remainingUris: List<String>,
-            val attachment: UiAttachmentPin,
-            val conflict: FilesConflict,
-        ) : ParkedFilesBatch() {
-            override val selection: FilesBatchSelection? get() = null
-        }
-    }
-
-    private fun ParkedFilesBatch.UploadDocs.matchesAttachment(state: AppUiState): Boolean =
-        attachment.matches(state)
-
-    private class FilesBatchConflictPark(
-        val conflict: FilesConflict,
-        val cursor: usb.files.transfer.DownloadCursor? = null,
-        val remainingUris: List<String> = emptyList(),
-    ) : Exception("batch conflict parked: ${conflict.pathLabel}")
+    // Parked batch transfer and conflict types now live on FilesCoordinator.
     private var windowsImageHandle: OperationHandle? = null
     private val activeHandles = java.util.concurrent.ConcurrentHashMap.newKeySet<OperationHandle>()
     private val operationGenerations = java.util.concurrent.ConcurrentHashMap<OperationToken, Long>()
@@ -291,11 +255,7 @@ class MainViewModel(
     private val attachGeneration: Long get() = attachment.snapshot().generation
     private val attachedDevice: UsbDevice? get() = attachment.snapshot().device
     private fun nextOperationToken(): OperationToken = OperationTokenGenerator.next()
-    /** Pick generations make slow SAF inspections lose to the newest selection. */
-    private val gptPickGeneration = java.util.concurrent.atomic.AtomicLong(0)
-    private val rescueArchivePickGeneration = java.util.concurrent.atomic.AtomicLong(0)
-    private val backupFolderScanGeneration = java.util.concurrent.atomic.AtomicLong(0)
-    private var currentBackupFolderUri: String? = null
+    // GPT/rescue/folder pick generations live on SafBackupCoordinator.
     private val ventoyUpstreamCache by lazy {
         usb.ventoy.VentoyUpstreamCache(getApplication<Application>())
     }
@@ -377,6 +337,68 @@ class MainViewModel(
         trace.log(event, *fields)
     }
 
+    private val safBackup by lazy {
+        SafBackupCoordinator(
+            scope = scope,
+            resolver = getApplication<Application>().contentResolver,
+            intents = { onIntent(it) },
+            log = { msg ->
+                val parts = msg.split(' ', limit = 2)
+                if (parts.size == 2 && '=' in parts[1]) {
+                    val fields =
+                        parts[1].split(' ').mapNotNull { token ->
+                            val eq = token.indexOf('=')
+                            if (eq <= 0) null
+                            else token.substring(0, eq) to token.substring(eq + 1)
+                        }
+                    trace.log(parts[0], *fields.toTypedArray())
+                } else {
+                    trace.log(msg)
+                }
+            },
+            prefs = languagePrefs,
+            backupFolderUriKey = BACKUP_FOLDER_URI_KEY,
+            backupFolderNameKey = BACKUP_FOLDER_NAME_KEY,
+            liveState = { state },
+        )
+    }
+
+
+    private val filesCoordinator by lazy {
+        FilesCoordinator(
+            scope = scope,
+            volume = filesSession,
+            runner = filesOperationRunner,
+            submitter = DiskController.get(),
+            pin = ::currentAttachmentPin,
+            state = { state },
+            intents = { onIntent(it) },
+            log = { msg ->
+                val parts = msg.split(' ', limit = 2)
+                if (parts.size == 2 && '=' in parts[1]) {
+                    val fields =
+                        parts[1].split(' ').mapNotNull { token ->
+                            val eq = token.indexOf('=')
+                            if (eq <= 0) null
+                            else token.substring(0, eq) to token.substring(eq + 1)
+                        }
+                    trace.log(parts[0], *fields.toTypedArray())
+                } else {
+                    trace.log(msg)
+                }
+            },
+            onHandleStarted = { handle, makeCurrent ->
+                if (makeCurrent) activeHandle = handle
+                activeHandles.add(handle)
+            },
+            onHandleFinished = { handle ->
+                if (activeHandle === handle) activeHandle = null
+                activeHandles.remove(handle)
+            },
+            resolver = { getApplication<Application>().contentResolver },
+            nextToken = ::nextOperationToken,
+        )
+    }
     init {
         val restoredTab = ShellTabPersistence.read(savedStateHandle) ?: ShellTab.Files
         val folder = readBackupFolder()
@@ -395,14 +417,14 @@ class MainViewModel(
         ventoyUpstreamCache.readRelease()
         if (folder.usable) {
             folder.uri?.let { stored ->
-                val storedUri = Uri.parse(stored)
                 // The shared folder survives restarts; restore its paired artifacts
                 // without forcing the user to pick it again.
-                currentBackupFolderUri = stored
-                scope.launch {
-                    onRescueArchiveFolderPicked(storedUri, quiet = true)
-                    scanGptBackupInFolder(storedUri)
-                }
+                safBackup.rescanPersistedFolder(
+                    state.copy(
+                        backupFolderUri = stored,
+                        backupFolderUsable = true,
+                    ),
+                )
             }
         }
         // Fail closed: never auto-delete staging after restart (name ≠ proof of ownership).
@@ -513,13 +535,13 @@ class MainViewModel(
             }
         }
         pendingRawStagingPath = null
-        downloadPicker.clear()
+        safPicker.clearDownload()
         inspectionOwner.cancel(cancelUsb = true)
         // Cancel usage/mount jobs first so async close cannot observe an empty session
         // while a still-running measure mounts after the close.
         cancelUsageBatch(markWaiting = false)
         val sessionToClose = filesSession
-        _pickerEvents.close()
+        safPicker.closeEffects()
         super.onCleared()
         scope.cancel()
         // Close off the main thread: umount/sync can block for seconds–minutes.
@@ -572,10 +594,7 @@ class MainViewModel(
     }
 
     /** True when the persisted write grant still exists; the provider is checked on write. */
-    fun hasUsableBackupFolder(): Boolean {
-        val uri = state.backupFolderUri ?: return false
-        return state.backupFolderUsable && hasPersistedWrite(uri)
-    }
+    fun hasUsableBackupFolder(): Boolean = safBackup.hasUsableBackupFolder(state)
 
     /**
      * Create entry point for the rescue image and the GPT copy. Without a live persisted
@@ -602,50 +621,7 @@ class MainViewModel(
      * Persist the user's tree choice. Returns false when the grant was not persisted or
      * the provider cannot describe the tree; the caller then keeps the picker flow open.
      */
-    fun onBackupFolderPicked(uri: Uri): Boolean {
-        val resolver = getApplication<Application>().contentResolver
-        runCatching {
-            resolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        }
-        val persisted = hasPersistedWrite(uri.toString())
-        val name = runCatching {
-            SafBackupFolder(resolver, uri).displayName()
-        }.getOrNull()
-        val usable = persisted
-        if (usable) {
-            languagePrefs.edit()
-                .putString(BACKUP_FOLDER_URI_KEY, uri.toString())
-                .putString(BACKUP_FOLDER_NAME_KEY, name)
-                .apply()
-        }
-        onIntent(UiIntent.SetBackupFolder(uri.toString(), name, usable))
-        trace.log("picker.backup_folder", "uri" to uri.toString(), "usable" to usable)
-        onIntent(UiIntent.AppendLog(logLine("Backup folder: ${name ?: "unnamed"}")))
-        currentBackupFolderUri = null
-        backupFolderScanGeneration.incrementAndGet()
-        // Drop old paired artifacts immediately so a slow inspection from the
-        // previous folder cannot win, even if the new folder is unusable.
-        onIntent(
-            UiIntent.SetBackupFile(
-                null,
-                null,
-                gptPickGeneration.incrementAndGet(),
-            ),
-        )
-        val clearedGeneration = rescueArchivePickGeneration.incrementAndGet()
-        onIntent(UiIntent.SetRescueArchiveTree(null))
-        onIntent(UiIntent.SetRescueImage(null, null, clearedGeneration))
-        onIntent(UiIntent.SetRescueMap(null, null, clearedGeneration))
-        if (usable) {
-            currentBackupFolderUri = uri.toString()
-            onRescueArchiveFolderPicked(uri, quiet = true)
-            scanGptBackupInFolder(uri)
-        }
-        return usable
-    }
+    fun onBackupFolderPicked(uri: Uri): Boolean = safBackup.onFolderPicked(uri)
 
     /**
      * Immediate path (folder already chosen): pin the live attachment now. A serial-less
@@ -750,11 +726,8 @@ class MainViewModel(
     fun onIntent(intent: UiIntent) {
         // A reset must beat every inspection already in flight, not just the UI fields.
         when (intent) {
-            UiIntent.ResetRescueSelection -> rescueArchivePickGeneration.incrementAndGet()
-            UiIntent.ResetGptSelection -> {
-                gptPickGeneration.incrementAndGet()
-                backupFolderScanGeneration.incrementAndGet()
-            }
+            UiIntent.ResetRescueSelection -> safBackup.invalidateRescueSelection()
+            UiIntent.ResetGptSelection -> safBackup.invalidateGptSelection()
             else -> Unit
         }
         val previousTab = state.tab
@@ -1336,7 +1309,7 @@ class MainViewModel(
                                     require(uiState.backupUri == null || uiState.backupUri == uri) {
                                         "GPT backup URI changed after confirmation"
                                     }
-                                    val blob = readBackupBlob(uri, GptCriticalBackup.MAX_BLOB_BYTES)
+                                    val blob = safBackup.readBlob(uri, GptCriticalBackup.MAX_BLOB_BYTES)
                                     confirmed.gptBackupInspection?.sha256?.let { expected ->
                                         require(usb.ui.RestoreSourceInspector.sha256(blob) == expected) {
                                             "GPT backup source changed after confirmation"
@@ -1916,7 +1889,7 @@ class MainViewModel(
                         if (!closed) runCatching { output.close() }
                     }
                     scope.launch(Dispatchers.Main.immediate) {
-                        scanGptBackupInFolder(folder.treeUri)
+                        safBackup.rescanGptInFolder(folder.treeUri)
                     }
                     "GPT critical backup saved: $name (${blob.size} bytes, " +
                         "${info.partitions} partitions, backup header at LBA " +
@@ -1958,7 +1931,7 @@ class MainViewModel(
                 uploadFile(effect.path, effect.uri)
             }
             is UiEffect.DownloadFile -> downloadFile(effect.binding, effect.uri)
-            is UiEffect.DownloadPickerReady -> _pickerEvents.trySend(effect)
+            is UiEffect.DownloadPickerReady -> safPicker.trySend(effect)
             is UiEffect.StageUsbImageForRawWrite -> {
                 val binding = effect.binding
                 if (binding != null) {
@@ -1999,7 +1972,7 @@ class MainViewModel(
 
             is UiEffect.LaunchWindowsImport,
             is UiEffect.CancelPendingWindowsImport -> {
-                _pickerEvents.trySend(effect)
+                safPicker.trySend(effect)
             }
 
             is UiEffect.ImportIso -> {
@@ -2279,55 +2252,7 @@ class MainViewModel(
      * cannot replace the current selection or its summary.
      */
     fun onGptBackupPicked(uri: Uri) {
-        val target = uri.toString()
-        trace.log("picker.gpt_backup", "uri" to target)
-        val generation = gptPickGeneration.incrementAndGet()
-        val expectedAttachGeneration = state.device?.attachGeneration
-        val resolver = getApplication<Application>().contentResolver
-        val diskSectorSize =
-            state.diskSectorSize.takeIf { state.presence == DevicePresence.Ready && state.device != null }
-        scope.launch(Dispatchers.IO) {
-            val (name, size) = contentInfo(resolver, uri)
-            val inspection =
-                try {
-                    val input = resolver.openInputStream(uri)
-                        ?: throw IllegalStateException("cannot open $target for reading")
-                    val blob = input.use { RestoreSourceInspector.readBounded(it) }
-                    RestoreSourceInspector.inspectGpt(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        blob = blob,
-                        diskSectorSize = diskSectorSize,
-                    )
-                } catch (failure: Exception) {
-                    val typed = failure.toOperationFailure()
-                    usb.ui.GptBackupInspection(
-                        uri = target,
-                        name = name,
-                        sizeBytes = size,
-                        failure = typed,
-                        error = if (typed == null) {
-                            usb.ui.normalizeProviderText(
-                                failure.message ?: failure.javaClass.simpleName,
-                            )
-                        } else {
-                            null
-                        },
-                    )
-                }
-            withContext(Dispatchers.Main.immediate) {
-                if (generation == gptPickGeneration.get()) {
-                    if (state.device?.attachGeneration != expectedAttachGeneration) {
-                        onIntent(UiIntent.SetBackupFile(null, null, generation))
-                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-                    } else {
-                        onIntent(UiIntent.AppendLog(logLine("GPT backup picked: ${name ?: "unnamed"}")))
-                        onIntent(UiIntent.SetBackupFile(target, inspection, generation))
-                    }
-                }
-            }
-        }
+        safBackup.onGptBackupPicked(uri, state)
     }
 
     /**
@@ -2426,71 +2351,8 @@ class MainViewModel(
         }
     }
 
-    /** Newest GPT critical backup in the shared folder, or clear the stale selection. */
-    private fun scanGptBackupInFolder(folderUri: Uri) {
-        val resolver = getApplication<Application>().contentResolver
-        val scanGeneration = backupFolderScanGeneration.incrementAndGet()
-        scope.launch(Dispatchers.IO) {
-            val entries = runCatching {
-                SafBackupFolder(resolver, folderUri).listRootFiles()
-            }.getOrNull() ?: return@launch
-            val candidate = entries
-                .filter { !it.isDirectory && isGptBackupName(it.name) }
-                .maxByOrNull { it.name }
-            withContext(Dispatchers.Main.immediate) {
-                if (scanGeneration != backupFolderScanGeneration.get() ||
-                    currentBackupFolderUri != folderUri.toString()
-                ) {
-                    return@withContext
-                }
-                if (candidate == null) {
-                    onIntent(
-                        UiIntent.SetBackupFile(
-                            uri = null,
-                            inspection = null,
-                            requestId = gptPickGeneration.incrementAndGet(),
-                        ),
-                    )
-                } else {
-                    onGptBackupPicked(candidate.uri)
-                }
-            }
-        }
-    }
 
-    private fun classifyRescueImage(
-        resolver: ContentResolver,
-        uri: Uri,
-        name: String?,
-    ): usb.image.ImageFormat? =
-        runCatching {
-            resolver.openInputStream(uri)?.use { input ->
-                val header = ByteArray(6)
-                var read = 0
-                while (read < header.size) {
-                    val n = input.read(header, read, header.size - read)
-                    if (n <= 0) break
-                    read += n
-                }
-                usb.image.classifyImageContent(name, header.copyOf(read))
-            }
-        }.getOrNull()
-
-    /**
-     * A restore folder is the unit: exactly one `.img` and one `.map`. Listing, map decode
-     * and image metadata happen off the main thread; a newer folder pick invalidates an
-     * older result. On success the existing destructive confirmation opens with the same
-     * inspection types as the old per-file pickers.
-     */
     fun onRescueArchiveFolderPicked(uri: Uri, quiet: Boolean = false) {
-        trace.log("picker.rescue_folder", "uri" to uri.toString())
-        if (!quiet) onIntent(UiIntent.AppendLog(logLine("Restore folder picked")))
-        val generation = rescueArchivePickGeneration.incrementAndGet()
-        val expectedAttachGeneration = state.device?.attachGeneration
-        val resolver = getApplication<Application>().contentResolver
-        if (!quiet) onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CheckingArchive)))
-        scope.launch(Dispatchers.IO) {
-            var invalid: BackupArchive.Selection.Invalid? = null
             var imageUri: String? = null
             var mapUri: String? = null
             var imageInspection: usb.ui.RescueImageInspection? = null
@@ -3178,15 +3040,7 @@ class MainViewModel(
 
     /** A folder restore scan can lose its attach ticket; retry once USB is live. */
     private fun rescanPersistedBackupFolderIfNeeded() {
-        val stored = state.backupFolderUri ?: return
-        if (!state.backupFolderUsable) return
-        if (state.rescueImageUri != null && state.backupUri != null) return
-        val storedUri = Uri.parse(stored)
-        currentBackupFolderUri = stored
-        scope.launch {
-            onRescueArchiveFolderPicked(storedUri, quiet = true)
-            scanGptBackupInFolder(storedUri)
-        }
+        safBackup.rescanPersistedFolder(state)
     }
 
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
@@ -3209,6 +3063,7 @@ class MainViewModel(
         usb.operation.OperationLifecyclePolicy.cancelAll(activeHandles)
         // Keep handles registered until their workers finish real close; cancellation is not close.
         activeHandle = null
+        filesCoordinator.clearParked()
         // No mount can start while attachedDevice is null, so every mount allocated up to this
         // fence belongs to the detached stick. The close below runs on IO; a new attach that
         // bumps the generation first (pending permission) still cannot hide this stale mount.
@@ -3673,242 +3528,27 @@ class MainViewModel(
         return outcome
     }
 
-    /** Re-list the displayed directory from the real volume. */
-    fun listDirectory(path: String) = withPartitionId { partitionId ->
-        val generation = state.filesListGeneration
-        val identity = state.device?.identity
-        val attachGen = state.device?.attachGeneration ?: 0L
-        val pin = currentAttachmentPin()
-        submitFilesOperation(
-            title = OperationTitle.ListPath(path),
-            foregroundService = false,
-            listFailure = { failure, diagnostic ->
-                UiIntent.FilesListFailed(
-                    path = path,
-                    failure = failure,
-                    diagnostic = diagnostic,
-                    generation = generation,
-                    identity = identity,
-                    partitionId = partitionId,
-                    attachGeneration = attachGen,
-                )
-            },
-        ) {
-            val entries =
-                usb.files.FilesOperations.list(
-                    filesSession.volumeForLocked(pin, partitionId),
-                    path,
-                )
-            post(
-                UiIntent.FilesListed(
-                    path = path,
-                    files = entries.map { it.toFileEntry() },
-                    generation = generation,
-                    identity = identity,
-                    partitionId = partitionId,
-                    attachGeneration = attachGen,
-                ),
-            )
-        }
-    }
-
+    fun listDirectory(path: String) = filesCoordinator.list(path)
 
     private fun createFolder(path: String, name: String) {
-        val target = fatChildPath(path, name)
-        withWritablePartitionId { partitionId ->
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.NewFolder(name),
-                onSuccess = {
-                    // The terminal mutation already bumped the list generation and asked the
-                    // Files tab for one re-list; only the concrete result line is added here.
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(UiMessageKey.CreatedFolder, listOf(target)),
-                        ),
-                    )
-                },
-            ) { operation ->
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    operation.mutationAttempted = true
-                    volume.mkdir(target)
-                    volume.sync()
-                    operation.commitReached = true
-                }
-            }
-        }
+        filesCoordinator.createFolder(path, name)
     }
 
     private fun deleteEntry(path: String, name: String) {
-        val target = fatChildPath(path, name)
-        withWritablePartitionId { partitionId ->
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.DeleteEntry(name),
-                onSuccess = {
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(UiMessageKey.DeletedPath, listOf(target)),
-                        ),
-                    )
-                },
-            ) { operation ->
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    try {
-                        operation.mutationAttempted = true
-                        usb.files.FilesOperations.delete(volume, target)
-                        operation.commitReached = true
-                    } catch (failure: Throwable) {
-                        throw userVisibleDeleteError(name, target, failure)
-                    }
-                }
-            }
-        }
+        filesCoordinator.deleteEntry(path, name)
     }
 
     private fun deleteBatch(selection: FilesBatchSelection) {
-        if (!selection.matches(state)) {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-            return
-        }
-        withWritablePartitionId { partitionId ->
-            if (partitionId != selection.partitionId) {
-                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-                return@withWritablePartitionId
-            }
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.DeleteBatch(selection.items.size),
-                onSuccess = {
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(
-                                UiMessageKey.DeletedPath,
-                                listOf("${selection.items.size} entries"),
-                            ),
-                        ),
-                    )
-                },
-            ) { operation ->
-                require(selection.matches(state)) { "batch delete target changed" }
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    for (item in selection.items) {
-                        if (!operation.isActive()) {
-                            throw kotlinx.coroutines.CancellationException("Delete cancelled")
-                        }
-                        val target = fatChildPath(selection.directory, item.name)
-                        try {
-                            FilesOperations.deleteRecursively(
-                                volume = volume,
-                                target = target,
-                                operation = operation,
-                            )
-                        } catch (failure: Throwable) {
-                            throw userVisibleDeleteError(item.name, target, failure)
-                        }
-                    }
-                    // Commit only after every selected root deleted; mutationAttempted
-                    // from first delete keeps mid-cancel as Partial, not Completed.
-                    operation.commitReached = true
-                }
-            }
-        }
+        filesCoordinator.deleteBatch(selection)
     }
+
     private fun renameEntry(path: String, from: String, to: String, binding: PartitionBinding) {
-        val target = fatChildPath(path, from)
-        val renamed = fatChildPath(path, to)
-        withWritablePartitionId { partitionId ->
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.RenameEntry(from),
-                onSuccess = {
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(
-                                UiMessageKey.RenamedPath,
-                                listOf(from, to),
-                            ),
-                        ),
-                    )
-                },
-            ) { operation ->
-                require(partitionId == binding.partitionId) { "rename target partition changed" }
-                require(binding.matches(state)) { "rename target changed" }
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    // The only mutation below; mark it after binding/policy checks and
-                    // volume acquisition so a rename or post-rename sync failure is Partial.
-                    operation.mutationAttempted = true
-                    usb.files.FilesOperations.rename(volume, target, renamed)
-                    operation.commitReached = true
-                }
-            }
-        }
+        filesCoordinator.renameEntry(path, from, to, binding)
     }
 
-    /** Map engine delete failures to a clear status line (nonempty dir, missing, …). */
-    private fun userVisibleDeleteError(name: String, target: String, failure: Throwable): Throwable {
-        val friendly = FilesOperationPolicy.deleteError(name, target, failure.message.orEmpty())
-        return if (friendly != null) IllegalStateException(friendly, failure) else failure
-    }
-
-    /** Stream a SAF document into [path] in fixed-size chunks, reporting real bytes. */
     private fun uploadFile(path: String, uri: String) {
-        val resolver = getApplication<Application>().contentResolver
-        var uploaded: String? = null
-        withWritablePartitionId { partitionId ->
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.Upload,
-                onSuccess = {
-                    val name = uploaded
-                    if (name != null) {
-                        onIntent(
-                            UiIntent.Status(
-                                UiMessage.Key(UiMessageKey.UploadedFile, listOf(name, path)),
-                            ),
-                        )
-                    }
-                },
-            ) { operation ->
-                val document = Uri.parse(uri)
-                val (reportedName, reportedSize) = contentInfo(resolver, document)
-                val rawName = reportedName ?: document.lastPathSegment ?: uri
-                val name = FilesOperationPolicy.requireChildName(rawName, uri)
-                uploaded = name
-                val target = fatChildPath(path, name)
-                operation.bytesTotal = reportedSize?.takeIf { it > 0L } ?: -1L
-
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    FilesOperations.upload(
-                        resolver = resolver,
-                        uri = document,
-                        target = target,
-                        volume = volume,
-                        operation = operation,
-                        chunkBytes = TransferTuning.jniCapBytes,
-                        onCleanupFailure = { cleanupError ->
-                            // Engine already adds the cleanup failure as suppressed to the
-                            // primary upload error; keep a persistent log line as well so the
-                            // warning survives the terminal status.
-                            val detail = cleanupError.message ?: cleanupError.javaClass.simpleName
-                            post(UiIntent.AppendLog(logLine("Upload cleanup failed for $name: $detail")))
-                            post(
-                                UiIntent.Status(
-                                    UiMessage.Key(
-                                        UiMessageKey.UploadCleanupFailed,
-                                        listOf(name, detail),
-                                    ),
-                                ),
-                            )
-                        },
-                    )
-                    operation.commitReached = true
-                }
-            }
-        }
+        filesCoordinator.uploadFile(path, uri)
     }
-
-    /** Copy a volume file into a SAF document chosen by the activity. */
 
     /**
      * Stream [name] from the mounted USB volume into app filesDir/staging, then release the
@@ -6470,476 +6110,51 @@ class MainViewModel(
         }
     }
     internal fun stageDownloadForPicker(binding: FilesDownloadBinding) {
-        if (downloadPicker.pending != null) {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickActive)))
-            return
-        }
-        if (binding.stageVerdict(state) != PickerVerdict.Ok) {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-            return
-        }
-        val requestId = downloadPicker.stage(binding) ?: run {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickActive)))
-            return
-        }
-        _pickerEvents.trySend(UiEffect.DownloadPickerReady(binding, binding.name, requestId))
+        safPicker.stageDownload(binding, state)
     }
 
     internal fun claimPickerLaunch(requestId: Long, binding: FilesDownloadBinding): Boolean =
-        downloadPicker.claimLaunch(requestId) && downloadPicker.pending == binding
+        safPicker.claimLaunch(requestId, binding)
 
-    internal fun pickerLaunchFailed(binding: FilesDownloadBinding, requestId: Long = pendingDownloadRequestId) {
-        if (downloadPicker.pending != binding) return
-        downloadPicker.clearIf(requestId)
+    internal fun pickerLaunchFailed(
+        binding: FilesDownloadBinding,
+        requestId: Long = pendingDownloadRequestId,
+    ) {
+        safPicker.launchFailed(binding, requestId)
     }
 
-    internal fun submitDownloadResult(binding: FilesDownloadBinding, uri: Uri): Boolean {
-        if (downloadPicker.pending != binding) {
-            deletePickedDownload(uri)
-            return false
-        }
-        if (binding.resultVerdict(state) != PickerVerdict.Ok) {
-            downloadPicker.clear()
-            deletePickedDownload(uri)
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-            return false
-        }
-        val requestId = downloadPicker.pendingRequestId
-        onIntent(UiIntent.DownloadFile(binding, uri.toString(), fromPicker = true))
-        downloadPicker.clearIf(requestId)
-        return true
-    }
+    internal fun submitDownloadResult(binding: FilesDownloadBinding, uri: Uri): Boolean =
+        safPicker.submitResult(binding, uri, state)
 
     /** Process-death re-arm for the download slot; request id becomes 1. */
     internal fun restorePendingDownload(binding: FilesDownloadBinding): Boolean =
-        downloadPicker.restore(binding)
+        safPicker.restorePending(binding)
 
     /** A CreateDocument result that will not be streamed must not leave an empty file. */
     internal fun discardPickedDownload(uri: Uri) {
-        deletePickedDownload(uri)
+        safPicker.discard(uri)
     }
 
     private fun deletePickedDownload(uri: Uri) {
-        val resolver = getApplication<Application>().contentResolver
-        val deleted = runCatching { DocumentsContract.deleteDocument(resolver, uri) }.getOrDefault(false)
-        if (!deleted) runCatching { resolver.delete(uri, null, null) }
+        safPicker.discard(uri)
     }
+
 
 
     internal fun downloadFile(binding: FilesDownloadBinding, uri: String) {
-        val resolver = getApplication<Application>().contentResolver
-        val pin = currentAttachmentPin()
-        submitFilesOperation(
-            title = OperationTitle.DownloadEntry(binding.name),
-            onSuccess = {
-                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.SavedFile, listOf(binding.name))))
-            },
-        ) { operation ->
-            val destination = Uri.parse(uri)
-            try {
-                require(binding.matchesAttachment(state)) { "download attachment changed" }
-                val volume = filesSession.volumeForLocked(pin, binding.attachment.partitionId)
-                FilesOperations.download(
-                    resolver = resolver,
-                    target = binding.targetPath,
-                    destination = destination,
-                    volume = volume,
-                    operation = operation,
-                    expectedSize = binding.sizeBytes.toLong(),
-                )
-            } catch (failure: Throwable) {
-                if (!operation.mutationAttempted) deletePickedDownload(destination)
-                throw failure
-            }
-        }
+        filesCoordinator.downloadFile(binding, uri)
     }
 
     private fun downloadBatch(selection: FilesBatchSelection, treeUri: String) {
-        if (!selection.matches(state)) {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-            return
-        }
-        parkedBatchWork = null
-        val resolver = getApplication<Application>().contentResolver
-        val pin = currentAttachmentPin()
-        val rootNames = selection.items.map { it.name }
-        var parkCursor = usb.files.transfer.DownloadCursor(remainingRoots = rootNames)
-        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
-        submitFilesOperation(
-            title = OperationTitle.DownloadBatch(selection.items.size),
-            onSuccess = {
-                onIntent(
-                    UiIntent.Status(
-                        UiMessage.Key(UiMessageKey.SavedFile, listOf("${selection.items.size} entries")),
-                    ),
-                )
-            },
-            onTerminal = { _, _ -> Unit },
-        ) { operation ->
-            require(selection.matches(state)) { "batch download target changed" }
-            val volume = filesSession.volumeForLocked(pin, selection.partitionId)
-            val tree = Uri.parse(treeUri)
-            val folder = SafBackupFolder(resolver, tree)
-            val destParent = DocumentsContract.buildDocumentUriUsingTree(
-                tree,
-                DocumentsContract.getTreeDocumentId(tree),
-            )
-            try {
-                FilesOperations.downloadChildren(
-                    resolver = resolver,
-                    volume = volume,
-                    parentPath = selection.directory,
-                    names = rootNames,
-                    destTree = folder,
-                    destParent = destParent,
-                    operation = operation,
-                    conflict = { conflict ->
-                        val park =
-                            FilesBatchConflictPark(
-                                conflict = conflict,
-                                cursor = parkCursor,
-                            )
-                        lastPark.set(park)
-                        throw park
-                    },
-                    onCursor = { parkCursor = it },
-                )
-            } catch (park: FilesBatchConflictPark) {
-                lastPark.compareAndSet(null, park)
-                throw park
-            }
-        }.also { handle ->
-            watchBatchPark(
-                handle = handle,
-                lastPark = lastPark,
-                stillValid = { selection.matches(state) },
-                onPark = { park ->
-                    parkedBatchWork =
-                        ParkedFilesBatch.Download(
-                            selection = selection,
-                            treeUri = treeUri,
-                            cursor = park.cursor ?: parkCursor,
-                            conflict = park.conflict,
-                        )
-                    onIntent(UiIntent.FilesBatchConflict(park.conflict))
-                },
-            )
-        }
+        filesCoordinator.downloadBatch(selection, treeUri)
     }
 
     private fun uploadBatchDocs(effect: UiEffect.UploadBatchDocs) {
-        if (!effect.matchesAttachment(state)) {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-            return
-        }
-        parkedBatchWork = null
-        val resolver = getApplication<Application>().contentResolver
-        val remaining = effect.uris.toMutableList()
-        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
-        withWritablePartitionId { partitionId ->
-            if (partitionId != effect.attachment.partitionId) {
-                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-                return@withWritablePartitionId
-            }
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.UploadBatch(effect.uris.size),
-                onTerminal = { _, _ -> onIntent(UiIntent.RefreshFiles) },
-                onSuccess = {
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(
-                                UiMessageKey.UploadedFile,
-                                listOf("${effect.uris.size}", effect.directory),
-                            ),
-                        ),
-                    )
-                },
-            ) { operation ->
-                require(effect.matchesAttachment(state)) { "batch upload target changed" }
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    try {
-                        FilesOperations.uploadDocuments(
-                            resolver = resolver,
-                            uris = remaining.map(Uri::parse),
-                            destDir = effect.directory,
-                            volume = volume,
-                            operation = operation,
-                            chunkBytes = TransferTuning.jniCapBytes,
-                            conflict = { conflict ->
-                                val park =
-                                    FilesBatchConflictPark(
-                                        conflict = conflict,
-                                        remainingUris = remaining.toList(),
-                                    )
-                                lastPark.set(park)
-                                throw park
-                            },
-                            onDocumentSettled = { uri ->
-                                remaining.remove(uri.toString())
-                            },
-                        )
-                    } catch (park: FilesBatchConflictPark) {
-                        lastPark.compareAndSet(null, park)
-                        throw park
-                    }
-                }
-            }.also { handle ->
-                watchBatchPark(
-                    handle = handle,
-                    lastPark = lastPark,
-                    stillValid = { effect.matchesAttachment(state) },
-                    onPark = { park ->
-                        parkedBatchWork =
-                            ParkedFilesBatch.UploadDocs(
-                                directory = effect.directory,
-                                remainingUris = park.remainingUris.ifEmpty { remaining.toList() },
-                                attachment = effect.attachment,
-                                conflict = park.conflict,
-                            )
-                        onIntent(UiIntent.FilesBatchConflict(park.conflict))
-                    },
-                )
-            }
-        }
+        filesCoordinator.uploadBatchDocs(effect)
     }
 
     private fun continueFilesBatch(decision: FilesConflictDecision) {
-        val parked = parkedBatchWork
-        parkedBatchWork = null
-        if (parked == null) return
-        when (parked) {
-            is ParkedFilesBatch.Download -> {
-                if (!parked.selection.matches(state)) {
-                    onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
-                    return
-                }
-                when (decision) {
-                    FilesConflictDecision.Cancel -> {
-                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CancelledStatus)))
-                    }
-                    FilesConflictDecision.Skip,
-                    FilesConflictDecision.ReplaceFile,
-                    -> resumeParkedDownload(parked, decision)
-                }
-            }
-            is ParkedFilesBatch.UploadDocs -> {
-                when (decision) {
-                    FilesConflictDecision.Cancel -> {
-                        onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.CancelledStatus)))
-                    }
-                    FilesConflictDecision.Skip,
-                    FilesConflictDecision.ReplaceFile,
-                    -> resumeParkedUpload(parked, decision)
-                }
-            }
-        }
-    }
-
-    private fun resumeParkedDownload(
-        parked: ParkedFilesBatch.Download,
-        decision: FilesConflictDecision,
-    ) {
-        val selection = parked.selection
-        val resolver = getApplication<Application>().contentResolver
-        val pin = currentAttachmentPin()
-        var parkCursor = parked.cursor
-        val conflictLabel = parked.conflict.pathLabel
-        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
-        submitFilesOperation(
-            title = OperationTitle.DownloadBatch(selection.items.size),
-            onSuccess = {
-                onIntent(
-                    UiIntent.Status(
-                        UiMessage.Key(UiMessageKey.SavedFile, listOf("${selection.items.size} entries")),
-                    ),
-                )
-            },
-        ) { operation ->
-            require(selection.matches(state)) { "batch download target changed" }
-            val volume = filesSession.volumeForLocked(pin, selection.partitionId)
-            val tree = Uri.parse(parked.treeUri)
-            val folder = SafBackupFolder(resolver, tree)
-            val destParent = DocumentsContract.buildDocumentUriUsingTree(
-                tree,
-                DocumentsContract.getTreeDocumentId(tree),
-            )
-            var first = true
-            FilesOperations.downloadChildren(
-                resolver = resolver,
-                volume = volume,
-                parentPath = selection.directory,
-                names = parkCursor.remainingRoots,
-                destTree = folder,
-                destParent = destParent,
-                operation = operation,
-                resume = parkCursor,
-                conflict = { conflict ->
-                    if (first && conflict.pathLabel == conflictLabel) {
-                        first = false
-                        if (conflict.isDirectory && decision == FilesConflictDecision.ReplaceFile) {
-                            throw IOException(
-                                FilesOperationPolicy.directoryConflictSkipOnlyMessage(conflict.pathLabel),
-                            )
-                        }
-                        decision
-                    } else {
-                        val park =
-                            FilesBatchConflictPark(
-                                conflict = conflict,
-                                cursor = parkCursor,
-                            )
-                        lastPark.set(park)
-                        throw park
-                    }
-                },
-                onCursor = { parkCursor = it },
-            )
-        }.also { handle ->
-            watchBatchPark(
-                handle = handle,
-                lastPark = lastPark,
-                stillValid = { selection.matches(state) },
-                onPark = { park ->
-                    parkedBatchWork =
-                        ParkedFilesBatch.Download(
-                            selection = selection,
-                            treeUri = parked.treeUri,
-                            cursor = park.cursor ?: parkCursor,
-                            conflict = park.conflict,
-                        )
-                    onIntent(UiIntent.FilesBatchConflict(park.conflict))
-                },
-            )
-        }
-    }
-
-    private fun resumeParkedUpload(
-        parked: ParkedFilesBatch.UploadDocs,
-        decision: FilesConflictDecision,
-    ) {
-        if (!parked.matchesAttachment(state)) {
-            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-            return
-        }
-        val resolver = getApplication<Application>().contentResolver
-        val remaining = parked.remainingUris.toMutableList()
-        // Capture before onDocumentSettled mutates remaining; success must not report 0.
-        val resumeBatchCount = remaining.size
-        val conflictLabel = parked.conflict.pathLabel
-        val lastPark = java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>(null)
-        withWritablePartitionId { partitionId ->
-            if (partitionId != parked.attachment.partitionId) {
-                onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
-                return@withWritablePartitionId
-            }
-            val pin = currentAttachmentPin()
-            submitFilesOperation(
-                title = OperationTitle.UploadBatch(resumeBatchCount),
-                onSuccess = {
-                    onIntent(
-                        UiIntent.Status(
-                            UiMessage.Key(
-                                UiMessageKey.UploadedFile,
-                                listOf("$resumeBatchCount", parked.directory),
-                            ),
-                        ),
-                    )
-                },
-            ) { operation ->
-                require(parked.matchesAttachment(state)) { "batch upload target changed" }
-                filesSession.withWritableVolume(pin, partitionId, operation) { volume ->
-                    var first = true
-                    FilesOperations.uploadDocuments(
-                        resolver = resolver,
-                        uris = remaining.map(Uri::parse),
-                        destDir = parked.directory,
-                        volume = volume,
-                        operation = operation,
-                        chunkBytes = TransferTuning.jniCapBytes,
-                        conflict = { conflict ->
-                            if (first && conflict.pathLabel == conflictLabel) {
-                                first = false
-                                if (conflict.isDirectory && decision == FilesConflictDecision.ReplaceFile) {
-                                    throw IOException(
-                                        FilesOperationPolicy.directoryConflictSkipOnlyMessage(
-                                            conflict.pathLabel,
-                                        ),
-                                    )
-                                }
-                                decision
-                            } else {
-                                val park =
-                                    FilesBatchConflictPark(
-                                        conflict = conflict,
-                                        remainingUris = remaining.toList(),
-                                    )
-                                lastPark.set(park)
-                                throw park
-                            }
-                        },
-                        onDocumentSettled = { uri ->
-                            remaining.remove(uri.toString())
-                        },
-                    )
-                }
-            }.also { handle ->
-                watchBatchPark(
-                    handle = handle,
-                    lastPark = lastPark,
-                    stillValid = { parked.matchesAttachment(state) },
-                    onPark = { park ->
-                        parkedBatchWork =
-                            ParkedFilesBatch.UploadDocs(
-                                directory = parked.directory,
-                                remainingUris = park.remainingUris.ifEmpty { remaining.toList() },
-                                attachment = parked.attachment,
-                                conflict = park.conflict,
-                            )
-                        onIntent(UiIntent.FilesBatchConflict(park.conflict))
-                    },
-                )
-            }
-        }
-    }
-
-    /**
-     * Parallel observer for parked conflicts. Park may land as Failed (no prior mutation)
-     * or Partial (after mutationAttempted via markPartialIfMutated). Cancelled with a park
-     * cause is also recovered. Dialog must appear; Partial honesty for real failures stays.
-     * [lastPark] is filled before the park exception escapes the op body so Partial
-     * terminals still surface the dialog without reflecting into OperationHandle.
-     * [stillValid] rejects stale parks after detach/partition change cleared the pin.
-     */
-    private fun watchBatchPark(
-        handle: OperationHandle,
-        lastPark: java.util.concurrent.atomic.AtomicReference<FilesBatchConflictPark?>,
-        stillValid: () -> Boolean,
-        onPark: (FilesBatchConflictPark) -> Unit,
-    ) {
-        scope.launch {
-            val outcome = handle.await()
-            fun fromThrowable(cause: Throwable?): FilesBatchConflictPark? {
-                var cur: Throwable? = cause
-                var depth = 0
-                while (cur != null && depth < 8) {
-                    if (cur is FilesBatchConflictPark) return cur
-                    cur = cur.cause
-                    depth++
-                }
-                return null
-            }
-            // lastPark is primary (filled before park escapes). Failed may also carry park
-            // as cause. Partial/Cancelled rely on lastPark — sealed outcomes have no cause.
-            val park =
-                lastPark.get()
-                    ?: (outcome as? usb.operation.OperationState.Failed)?.let {
-                        fromThrowable(it.cause)
-                    }
-            if (park != null && stillValid()) {
-                onPark(park)
-            }
-        }
+        filesCoordinator.continueBatch(decision)
     }
     private fun contentLastModified(resolver: ContentResolver, uri: Uri): Long? =
         runCatching {
@@ -7371,17 +6586,8 @@ class MainViewModel(
      * App-owned external directory (`Android/data/<package>/files`): no storage permission
      * needed and the exact path can be reported. Fails loudly instead of inventing a path.
      */
-    private fun requireBackupFolder(): SafBackupFolder {
-        val uri = state.backupFolderUri
-            ?: throw IllegalStateException("backup folder not selected")
-        require(hasPersistedWrite(uri)) {
-            "backup folder access was lost; choose the folder again"
-        }
-        return SafBackupFolder(
-            getApplication<Application>().contentResolver,
-            Uri.parse(uri),
-        )
-    }
+    private fun requireBackupFolder(): SafBackupFolder =
+        safBackup.requireBackupFolder(state) as SafBackupFolder
 
     private fun backupDirectory(): File =
         getApplication<Application>().getExternalFilesDir(null)
@@ -7424,29 +6630,8 @@ class MainViewModel(
         } catch (failure: java.nio.charset.CharacterCodingException) {
             throw VentoySettingsDocumentException("selected settings document is not valid UTF-8", failure)
         }
-
-    private fun readBackupBlob(uri: String, maxBytes: Int): ByteArray {
-        require(maxBytes > 0) { "invalid GPT backup max size $maxBytes" }
-        val resolver = getApplication<Application>().contentResolver
-        val input = resolver.openInputStream(Uri.parse(uri))
-            ?: throw IllegalStateException("cannot open $uri for reading")
-        return input.use { stream ->
-            val buffer = ByteArray(maxBytes + 1)
-            var read = 0
-            while (read < buffer.size) {
-                val n = stream.read(buffer, read, buffer.size - read)
-                if (n < 0) break
-                read += n
-            }
-            require(read <= maxBytes) {
-                "selected file holds more than $maxBytes bytes (GPT critical backup cap)"
-            }
-            require(read > 0) {
-                "selected file is empty; expected a GPT critical backup"
-            }
-            buffer.copyOf(read)
-        }
-    }
+    private fun readBackupBlob(uri: String, maxBytes: Int): ByteArray =
+        safBackup.readBlob(uri, maxBytes)
 
     private fun timestamp(): String =
         SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
@@ -7913,9 +7098,11 @@ class MainActivity : ComponentActivity() {
         }
     }
     /** Multi/dir download pin before OpenDocumentTree; cleared on detach/result. */
-    private val batchDownloadPicker = PickerSlot<FilesBatchSelection>()
+    private val batchDownloadPicker: PickerSlot<FilesBatchSelection>
+        get() = viewModel.safPicker.batchDownload
     /** Upload pin before OpenMultipleDocuments; cleared on detach/result. */
-    private val batchUploadPicker = PickerSlot<UploadTarget>()
+    private val batchUploadPicker: PickerSlot<UploadTarget>
+        get() = viewModel.safPicker.batchUpload
     private val batchDownloadTreeLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
@@ -7989,13 +7176,40 @@ class MainActivity : ComponentActivity() {
             }
     }
 
-    private var pendingUsbPermissionKey: String? = null
-    private var pendingUsbPermissionToken: String? = null
-    private var deniedUsbPermissionKey: String? = null
-    /** Key that already used its single post-denial retry while still attached. */
-    private var deniedUsbPermissionRetriedKey: String? = null
-    private var selectedUsbDeviceKey: String? = null
-    private var usbReceiverRegistered = false
+    private val usbAttachController by lazy {
+        UsbAttachController(
+            context = this,
+            listener =
+                object : UsbAttachController.Listener {
+                    override fun onAttached(
+                        device: UsbDevice,
+                        hasPermission: Boolean,
+                        manager: UsbManager,
+                    ) {
+                        viewModel.onUsbDeviceAttached(device, hasPermission, manager)
+                    }
+
+                    override fun onDetached(device: UsbDevice?) {
+                        viewModel.onUsbDeviceDetached(device)
+                    }
+
+                    override fun onPermissionResult(
+                        device: UsbDevice?,
+                        granted: Boolean,
+                        manager: UsbManager?,
+                    ) {
+                        if (device != null && manager != null) {
+                            viewModel.onUsbDeviceAttached(device, granted, manager)
+                        }
+                    }
+
+                    override fun onSelectionCleared() {
+                        batchDownloadPicker.clear()
+                        batchUploadPicker.clear()
+                    }
+                },
+        )
+    }
 
     private val downloadLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
@@ -8011,64 +7225,6 @@ class MainActivity : ComponentActivity() {
             return@registerForActivityResult
         }
         viewModel.submitDownloadResult(binding, uri)
-    }
-    private val usbReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager
-            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-            }
-
-            when (intent.action) {
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    if (device != null && usbManager != null && MassStorageDiscovery.findBotInterface(device) != null) {
-                        selectUsbDevice(device)
-                        val hasPerm = usbManager.hasPermission(device)
-                        viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
-                        if (!hasPerm) requestUsbPermission(usbManager, device)
-                    }
-                }
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    if (device == null || selectedUsbDeviceKey == usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)) {
-                        selectedUsbDeviceKey = null
-                        pendingUsbPermissionKey = null
-                        pendingUsbPermissionToken = null
-                        deniedUsbPermissionKey = null
-                        deniedUsbPermissionRetriedKey = null
-                        batchDownloadPicker.clear()
-                        batchUploadPicker.clear()
-                    }
-                    viewModel.onUsbDeviceDetached(device)
-                }
-                ACTION_USB_PERMISSION -> {
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    val callbackKey = device?.let { usb.device.UsbPermissionPolicy.key(it.deviceId, it.deviceName) }
-                    val callbackToken = intent.getStringExtra(EXTRA_USB_PERMISSION_TOKEN)
-                    val liveDevice = usb.device.UsbPermissionPolicy.currentMatch(device, usbManager?.deviceList?.values.orEmpty())
-                    if (liveDevice != null && usb.device.UsbPermissionPolicy.accepts(
-                            pendingUsbPermissionKey,
-                            callbackKey,
-                            selectedUsbDeviceKey,
-                            pendingUsbPermissionToken,
-                            callbackToken,
-                        ) && MassStorageDiscovery.findBotInterface(liveDevice) != null
-                    ) {
-                        pendingUsbPermissionKey = null
-                        pendingUsbPermissionToken = null
-                        if (granted) {
-                            deniedUsbPermissionKey = null
-                            deniedUsbPermissionRetriedKey = null
-                        } else {
-                            deniedUsbPermissionKey = callbackKey
-                        }
-                        viewModel.onUsbDeviceAttached(liveDevice, granted, usbManager)
-                    }
-                }
-            }
-        }
     }
 
     /**
@@ -8136,77 +7292,10 @@ class MainActivity : ComponentActivity() {
         usb.diagnostics.PerformancePreferences.load(applicationContext)
         // A re-delivered CreateDocument result arrives after the activity is recreated
         // (rotation/process death); without this it would find no pending name and drop it.
-        if (viewModel.pendingDownloadBinding == null) {
-            val savedPickerRequest = savedInstanceState?.getString(STATE_PENDING_DOWNLOAD_NAME)
-            val binding = savedInstanceState?.let { saved ->
-                val directory = saved.getString(STATE_PENDING_DOWNLOAD_DIRECTORY)
-                val name = saved.getString(STATE_PENDING_DOWNLOAD_NAME)
-                val size = saved.getString(STATE_PENDING_DOWNLOAD_SIZE)?.toULongOrNull()
-                val identity = saved.getString(STATE_PENDING_DOWNLOAD_IDENTITY)
-                val partition = saved.getString(STATE_PENDING_DOWNLOAD_PARTITION)
-                val start = saved.getString(STATE_PENDING_DOWNLOAD_START)?.toULongOrNull()
-                val count = saved.getString(STATE_PENDING_DOWNLOAD_COUNT)?.toULongOrNull()
-                val generation = saved.getLong(STATE_PENDING_DOWNLOAD_ATTACH, Long.MIN_VALUE)
-                if (directory != null && name != null && size != null && identity != null &&
-                    partition != null && generation != Long.MIN_VALUE
-                ) {
-                    FilesDownloadBinding(
-                        directory,
-                        name,
-                        size,
-                        UiAttachmentPin(identity, generation, partition, start, count),
-                    )
-                } else {
-                    null
-                }
-            }
-            if (binding != null) {
-                viewModel.restorePendingDownload(binding)
-            } else if (savedPickerRequest != null) {
-                viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.StaleStagedImage)))
-            }
+        if (viewModel.safPicker.restore(savedInstanceState)) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.StaleStagedImage)))
         }
-        savedInstanceState?.let { saved ->
-            val directory = saved.getString(STATE_PENDING_BATCH_DIRECTORY) ?: return@let
-            val identity = saved.getString(STATE_PENDING_BATCH_IDENTITY) ?: return@let
-            val partition = saved.getString(STATE_PENDING_BATCH_PARTITION) ?: return@let
-            val generation = saved.getLong(STATE_PENDING_BATCH_ATTACH, Long.MIN_VALUE)
-            val names = saved.getStringArray(STATE_PENDING_BATCH_NAMES) ?: return@let
-            val dirs = saved.getBooleanArray(STATE_PENDING_BATCH_DIRS) ?: return@let
-            val sizes = saved.getStringArray(STATE_PENDING_BATCH_SIZES) ?: return@let
-            if (generation == Long.MIN_VALUE || names.size != dirs.size || names.size != sizes.size) return@let
-            val items = names.indices.map { index ->
-                FilesBatchItem(names[index], dirs[index], sizes[index].toULongOrNull() ?: return@let)
-            }
-            batchDownloadPicker.restore(
-                FilesBatchSelection(
-                    directory = directory,
-                    items = items,
-                    identity = identity,
-                    attachGeneration = generation,
-                    partitionId = partition,
-                    startLba = saved.getString(STATE_PENDING_BATCH_START)?.toULongOrNull(),
-                    sectorCount = saved.getString(STATE_PENDING_BATCH_COUNT)?.toULongOrNull(),
-                ),
-            )
-        }
-        savedInstanceState?.let { saved ->
-            val directory = saved.getString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY)
-            val identity = saved.getString(STATE_PENDING_BATCH_UPLOAD_IDENTITY)
-            val partition = saved.getString(STATE_PENDING_BATCH_UPLOAD_PARTITION)
-            val start = saved.getString(STATE_PENDING_BATCH_UPLOAD_START)?.toULongOrNull()
-            val count = saved.getString(STATE_PENDING_BATCH_UPLOAD_COUNT)?.toULongOrNull()
-            val attach = saved.getLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, Long.MIN_VALUE)
-            if (directory != null && identity != null && partition != null && attach != Long.MIN_VALUE) {
-                batchUploadPicker.restore(
-                    UploadTarget(
-                        directory = directory,
-                        attachment = UiAttachmentPin(identity, attach, partition, start, count),
-                    ),
-                )
-            }
-        }
-         val savedState = savedInstanceState
+        val savedState = savedInstanceState
         // Windows picker state is restored as one fenced context; coordinator owns its
         // request-code, timeout, and saved-state invariants.
         when (windowsImportCoordinator.restore(savedInstanceState)) {
@@ -8337,10 +7426,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (usbReceiverRegistered) {
-            runCatching { unregisterReceiver(usbReceiver) }
-            usbReceiverRegistered = false
-        }
+        usbAttachController.stop()
         windowsImportCoordinator.onDestroy()
         pickerEventsScope.cancel()
         super.onDestroy()
@@ -8349,148 +7435,30 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         windowsImportCoordinator.saveState(outState)
-        viewModel.pendingDownloadBinding?.let { binding ->
-            outState.putString(STATE_PENDING_DOWNLOAD_DIRECTORY, binding.directory)
-            outState.putString(STATE_PENDING_DOWNLOAD_NAME, binding.name)
-            outState.putString(STATE_PENDING_DOWNLOAD_SIZE, binding.sizeBytes.toString())
-            outState.putString(STATE_PENDING_DOWNLOAD_IDENTITY, binding.attachment.identity)
-            outState.putLong(STATE_PENDING_DOWNLOAD_ATTACH, binding.attachment.attachGeneration)
-            outState.putString(STATE_PENDING_DOWNLOAD_PARTITION, binding.attachment.partitionId)
-            binding.attachment.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
-            binding.attachment.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
-        }
-        batchDownloadPicker.pending?.let { selection ->
-            outState.putString(STATE_PENDING_BATCH_DIRECTORY, selection.directory)
-            outState.putStringArray(STATE_PENDING_BATCH_NAMES, selection.items.map { it.name }.toTypedArray())
-            outState.putBooleanArray(STATE_PENDING_BATCH_DIRS, selection.items.map { it.isDirectory }.toBooleanArray())
-            outState.putStringArray(STATE_PENDING_BATCH_SIZES, selection.items.map { it.sizeBytes.toString() }.toTypedArray())
-            outState.putString(STATE_PENDING_BATCH_IDENTITY, selection.identity)
-            outState.putLong(STATE_PENDING_BATCH_ATTACH, selection.attachGeneration)
-            outState.putString(STATE_PENDING_BATCH_PARTITION, selection.partitionId)
-            selection.startLba?.let { outState.putString(STATE_PENDING_BATCH_START, it.toString()) }
-            selection.sectorCount?.let { outState.putString(STATE_PENDING_BATCH_COUNT, it.toString()) }
-        }
-        batchUploadPicker.pending?.let { target ->
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY, target.directory)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_IDENTITY, target.attachment.identity)
-            outState.putLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, target.attachment.attachGeneration)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_PARTITION, target.attachment.partitionId)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_START, target.attachment.startLba?.toString())
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, target.attachment.sectorCount?.toString())
-        }
+        viewModel.safPicker.save(outState)
         backupFolderLaunches.saveState(outState)
     }
 
     override fun onStart() {
         super.onStart()
-        if (!usbReceiverRegistered) {
-            val filter = IntentFilter().apply {
-                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-                addAction(ACTION_USB_PERMISSION)
-            }
-            // Only system USB attach/detach and our own PendingIntent broadcast arrive here,
-            // so the receiver is not exported (ContextCompat keeps the 2-arg call below API 33).
-            ContextCompat.registerReceiver(
-                this,
-                usbReceiver,
-                filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED,
-            )
-            usbReceiverRegistered = true
+        usbAttachController.start()
+        if (!usbAttachController.probeAttachedDevice(intent)) {
+            viewModel.onUsbDeviceDetached()
+            viewModel.onIntent(UiIntent.DeviceChanged(DevicePresence.Absent))
         }
-        checkAttachedDevices()
     }
 
     override fun onStop() {
         super.onStop()
     }
 
-
-
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        checkAttachedDevices()
-    }
-
-
-    private fun checkAttachedDevices() {
-        val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
-        val deviceFromIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-        }
-        intent?.removeExtra(UsbManager.EXTRA_DEVICE)
-
-        val currentDevices = usbManager.deviceList
-        val validFromIntent = deviceFromIntent?.let { dev ->
-            currentDevices[dev.deviceName]?.takeIf { MassStorageDiscovery.findBotInterface(it) != null }
-        }
-        val device = validFromIntent
-            ?: currentDevices.values.firstOrNull { MassStorageDiscovery.findBotInterface(it) != null }
-        if (device != null) {
-            selectUsbDevice(device)
-            val hasPerm = usbManager.hasPermission(device)
-            viewModel.onUsbDeviceAttached(device, hasPerm, usbManager)
-            if (!hasPerm) {
-                requestUsbPermission(usbManager, device)
-            }
-        } else {
-            selectedUsbDeviceKey = null
-            pendingUsbPermissionKey = null
-            pendingUsbPermissionToken = null
-            deniedUsbPermissionKey = null
-            deniedUsbPermissionRetriedKey = null
+        if (!usbAttachController.probeAttachedDevice(intent)) {
             viewModel.onUsbDeviceDetached()
             viewModel.onIntent(UiIntent.DeviceChanged(DevicePresence.Absent))
         }
-    }
-
-    private fun selectUsbDevice(device: UsbDevice, resetPermission: Boolean = false) {
-        val key = usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)
-        if (resetPermission || selectedUsbDeviceKey != key) {
-            pendingUsbPermissionKey = null
-            pendingUsbPermissionToken = null
-            deniedUsbPermissionKey = null
-            deniedUsbPermissionRetriedKey = null
-        }
-        selectedUsbDeviceKey = key
-    }
-
-    private fun requestUsbPermission(usbManager: UsbManager, device: UsbDevice) {
-        val key = usb.device.UsbPermissionPolicy.key(device.deviceId, device.deviceName)
-        val decision = UsbPermissionRetryGate.prepareRequest(
-            key,
-            UsbPermissionRetryGate.State(
-                pendingKey = pendingUsbPermissionKey,
-                deniedKey = deniedUsbPermissionKey,
-                retriedKey = deniedUsbPermissionRetriedKey,
-            ),
-        )
-        deniedUsbPermissionKey = decision.state.deniedKey
-        deniedUsbPermissionRetriedKey = decision.state.retriedKey
-        if (!decision.shouldRequest) return
-        val requestCode = usbPermissionRequestCounter.incrementAndGet().toInt()
-        val token = java.util.UUID.randomUUID().toString()
-        pendingUsbPermissionKey = key
-        pendingUsbPermissionToken = token
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            PendingIntent.FLAG_MUTABLE
-        } else {
-            0
-        }
-        val permissionIntent = PendingIntent.getBroadcast(
-            this,
-            requestCode,
-            Intent(ACTION_USB_PERMISSION)
-                .setPackage(packageName)
-                .putExtra(EXTRA_USB_PERMISSION_TOKEN, token),
-            flags,
-        )
-        usbManager.requestPermission(device, permissionIntent)
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -8503,32 +7471,8 @@ class MainActivity : ComponentActivity() {
         // for it at startup because Ventoy assets and downloads are app-private now.
     }
     companion object {
-        private const val ACTION_USB_PERMISSION = "usb.multitool.USB_PERMISSION"
-        private const val EXTRA_USB_PERMISSION_TOKEN = "usb.multitool.USB_PERMISSION_TOKEN"
-        private val usbPermissionRequestCounter = java.util.concurrent.atomic.AtomicLong()
-        private const val STATE_PENDING_DOWNLOAD_DIRECTORY = "usb.multitool.PENDING_DOWNLOAD_DIRECTORY"
-        private const val STATE_PENDING_DOWNLOAD_NAME = "usb.multitool.PENDING_DOWNLOAD_NAME"
-        private const val STATE_PENDING_DOWNLOAD_SIZE = "usb.multitool.PENDING_DOWNLOAD_SIZE"
-        private const val STATE_PENDING_DOWNLOAD_IDENTITY = "usb.multitool.PENDING_DOWNLOAD_IDENTITY"
-        private const val STATE_PENDING_DOWNLOAD_ATTACH = "usb.multitool.PENDING_DOWNLOAD_ATTACH"
-        private const val STATE_PENDING_DOWNLOAD_PARTITION = "usb.multitool.PENDING_DOWNLOAD_PARTITION"
-        private const val STATE_PENDING_DOWNLOAD_START = "usb.multitool.PENDING_DOWNLOAD_START"
-        private const val STATE_PENDING_DOWNLOAD_COUNT = "usb.multitool.PENDING_DOWNLOAD_COUNT"
-        private const val STATE_PENDING_BATCH_DIRECTORY = "usb.multitool.PENDING_BATCH_DIRECTORY"
-        private const val STATE_PENDING_BATCH_NAMES = "usb.multitool.PENDING_BATCH_NAMES"
-        private const val STATE_PENDING_BATCH_DIRS = "usb.multitool.PENDING_BATCH_DIRS"
-        private const val STATE_PENDING_BATCH_SIZES = "usb.multitool.PENDING_BATCH_SIZES"
-        private const val STATE_PENDING_BATCH_IDENTITY = "usb.multitool.PENDING_BATCH_IDENTITY"
-        private const val STATE_PENDING_BATCH_ATTACH = "usb.multitool.PENDING_BATCH_ATTACH"
-        private const val STATE_PENDING_BATCH_PARTITION = "usb.multitool.PENDING_BATCH_PARTITION"
-        private const val STATE_PENDING_BATCH_START = "usb.multitool.PENDING_BATCH_START"
-        private const val STATE_PENDING_BATCH_COUNT = "usb.multitool.PENDING_BATCH_COUNT"
-        private const val STATE_PENDING_BATCH_UPLOAD_DIRECTORY = "usb.multitool.PENDING_BATCH_UPLOAD_DIRECTORY"
-        private const val STATE_PENDING_BATCH_UPLOAD_IDENTITY = "usb.multitool.PENDING_BATCH_UPLOAD_IDENTITY"
-        private const val STATE_PENDING_BATCH_UPLOAD_ATTACH = "usb.multitool.PENDING_BATCH_UPLOAD_ATTACH"
-        private const val STATE_PENDING_BATCH_UPLOAD_PARTITION = "usb.multitool.PENDING_BATCH_UPLOAD_PARTITION"
-        private const val STATE_PENDING_BATCH_UPLOAD_START = "usb.multitool.PENDING_BATCH_UPLOAD_START"
-        private const val STATE_PENDING_BATCH_UPLOAD_COUNT = "usb.multitool.PENDING_BATCH_UPLOAD_COUNT"
+        // USB permission action/token/counter live on UsbAttachController.
+        // Picker STATE_PENDING_* keys live on SafPickerCoordinator.
 
         @Volatile
         private var sharedImportCodes: WindowsImportRequestCodes? = null
