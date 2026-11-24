@@ -130,38 +130,9 @@ The build signs the APK with a debug key for testing only. Do not distribute it.
 
 ## Build and checks
 
-Gradle and NDK commands run only in GitHub Actions (`.github/workflows/android-debug.yml`). The working directory is the repository root. The `unit-tests` job runs `:app:testDebugUnitTest` without NDK, Rust, or third_party. The `verify` job runs these steps:
-
-```bash
-./scripts/fetch-third-party.sh
-./scripts/build-sf-bridge.sh    # requires: rustup target add aarch64-linux-android
-./scripts/run-exfat-fsck-host-test.sh
-./scripts/run-ntfs-host-test.sh
-./scripts/run-ext-host-test.sh
-./scripts/run-usb-block-host-test.sh
-./gradlew :app:assembleDebug --no-daemon
-./scripts/check-16kb-alignment.sh app/build/outputs/apk/debug/*.apk
-./gradlew :app:lintDebug --no-daemon
-./gradlew :app:compileDebugKotlin --no-daemon
-```
-
-`:app:testDebugUnitTest` also runs Robolectric tests: the real `MainActivity` (POST_NOTIFICATIONS request) and the SAF boundary `ImageSource.fromContentUri`. `android-all-instrumented` jars resolve via `robolectricSdks`/`syncRobolectricSdks` (offline at test time); network is needed only for the first Gradle resolve. No device or emulator is required.
-
-The separate `fatfs-host` job has no Android SDK. It builds and runs the FatFs host tests:
-
-```bash
-make -C native-tests/fatfs test
-```
-
-Local Gradle/NDK commands are not documented: builds and checks run in CI. The
-`fetch-third-party.sh` and host-test scripts download and build upstream sources
-in `third_party/`.
-
-| What CI proves | What CI does not prove |
-| --- | --- |
-| Kotlin/Compose and NDK engine compilation, lint, unit tests | real USB drives and Android permissions |
-| FatFs/exFAT/NTFS/EXT host tests on file images | Ventoy boot and Windows installation on a PC |
-| Debug APK assembly and the 16 KB alignment check | behavior on a given phone and drive |
+All Gradle/NDK commands run only in GitHub Actions. The exact step order, the
+`unit-tests`/`verify`/`fatfs-host` jobs, and coverage limits are in
+[docs/build-test-release.md](docs/build-test-release.md).
 
 ## Development
 

@@ -132,38 +132,9 @@ APK подписан debug-ключом и предназначен для те�
 
 ## Сборка и проверки
 
-Все Gradle/NDK-команды выполняются только в GitHub Actions (`.github/workflows/android-debug.yml`), рабочий каталог — корень репозитория. Джоба `unit-tests` гоняет `:app:testDebugUnitTest` без NDK/Rust/third_party. Порядок шагов джобы `verify`:
-
-```bash
-./scripts/fetch-third-party.sh
-./scripts/build-sf-bridge.sh    # нужен target: rustup target add aarch64-linux-android
-./scripts/run-exfat-fsck-host-test.sh
-./scripts/run-ntfs-host-test.sh
-./scripts/run-ext-host-test.sh
-./scripts/run-usb-block-host-test.sh
-./gradlew :app:assembleDebug --no-daemon
-./scripts/check-16kb-alignment.sh app/build/outputs/apk/debug/*.apk
-./gradlew :app:lintDebug --no-daemon
-./gradlew :app:compileDebugKotlin --no-daemon
-```
-
-`:app:testDebugUnitTest` включает и Robolectric-тесты: реальный `MainActivity` (запрос POST_NOTIFICATIONS) и SAF-границу `ImageSource.fromContentUri`. Jar-ы `android-all-instrumented` резолвятся через `robolectricSdks`/`syncRobolectricSdks` (offline на прогоне); сеть нужна только для первого Gradle resolve. Устройство и эмулятор не нужны.
-
-Отдельная джоба `fatfs-host` (без Android SDK) собирает и запускает host-тесты FatFs:
-
-```bash
-make -C native-tests/fatfs test
-```
-
-Локальные Gradle/NDK-команды в проекте не документируются: сборка и проверки
-выполняются в CI. Скрипты `fetch-third-party.sh` и host-тесты скачивают и
-собирают upstream-исходники в `third_party/`.
-
-| Что CI доказывает | Чего CI не доказывает |
-| --- | --- |
-| Компиляция Kotlin/Compose и NDK-движков, lint, unit-тесты | работу с реальным USB-накопителем и разрешения Android |
-| host-тесты FatFs/exFAT/NTFS/EXT на файловых образах | загрузку Ventoy и установку Windows на ПК |
-| Сборку debug-APK и проверку выравнивания под 16 KB | поведение на конкретном телефоне и флешке |
+Все Gradle/NDK-команды выполняются только в GitHub Actions. Точный порядок
+шагов, состав джоб `unit-tests`/`verify`/`fatfs-host` и ограничения покрытия —
+в [docs/build-test-release.md](docs/build-test-release.md).
 
 ## Разработка
 
