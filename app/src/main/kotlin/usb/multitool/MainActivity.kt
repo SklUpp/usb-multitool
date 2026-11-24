@@ -139,10 +139,14 @@ import usb.ui.PartitionBinding
 import usb.ui.PartitionRef
 import usb.ui.PartitionRole
 import usb.ui.PartitionTab
-import usb.ui.listedSizeChanged
+import usb.ui.PickerSlot
+import usb.ui.PickerVerdict
+import usb.ui.UploadTarget
 import usb.ui.matches
 import usb.ui.matchesAttachment
+import usb.ui.resultVerdict
 import usb.ui.safePickPath
+import usb.ui.stageVerdict
 import usb.ui.toTableScheme
 import usb.partition.GptBackup
 import usb.partition.PartitionEditor
@@ -238,10 +242,9 @@ class MainViewModel(
     private var rawSourceHandle: OperationHandle? = null
     private var rawMeasureJob: Job? = null
     private var rawMeasureHandle: MeasurementHandle? = null
-    internal var pendingDownloadBinding: FilesDownloadBinding? = null
-    private val pendingDownloadRequest = java.util.concurrent.atomic.AtomicLong(0L)
-    internal var pendingDownloadRequestId: Long = 0L
-    private var pickerLaunchRequestId: Long = 0L
+    private val downloadPicker = PickerSlot<FilesDownloadBinding>()
+    internal val pendingDownloadBinding: FilesDownloadBinding? get() = downloadPicker.pending
+    internal val pendingDownloadRequestId: Long get() = downloadPicker.pendingRequestId
     @Volatile private var pendingRawStagingPath: String? = null
     private var rawMeasureRunning = false
     /** Latest source waiting for a blocked provider pass to return; never starts in parallel. */
@@ -508,8 +511,7 @@ class MainViewModel(
             }
         }
         pendingRawStagingPath = null
-        pendingDownloadBinding = null
-        pendingDownloadRequestId = 0L
+        downloadPicker.clear()
         inspectionOwner.cancel(cancelUsb = true)
         // Cancel usage/mount jobs first so async close cannot observe an empty session
         // while a still-running measure mounts after the close.
@@ -6453,66 +6455,50 @@ class MainViewModel(
             }
         }
     }
-    internal fun emitPickerReady(binding: FilesDownloadBinding) {
-        _pickerEvents.trySend(UiEffect.DownloadPickerReady(binding, binding.name, pendingDownloadRequestId))
-    }
     internal fun stageDownloadForPicker(binding: FilesDownloadBinding) {
-        if (pendingDownloadRequestId != 0L) {
+        if (downloadPicker.pending != null) {
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickActive)))
             return
         }
-        if (!binding.matches(state)) {
+        if (binding.stageVerdict(state) != PickerVerdict.Ok) {
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return
         }
-        val requestId = pendingDownloadRequest.incrementAndGet()
-        pendingDownloadRequestId = requestId
-        pendingDownloadBinding = binding
+        val requestId = downloadPicker.stage(binding) ?: run {
+            onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickActive)))
+            return
+        }
         _pickerEvents.trySend(UiEffect.DownloadPickerReady(binding, binding.name, requestId))
     }
 
-    internal fun cancelPendingDownload(binding: FilesDownloadBinding) {
-        if (pendingDownloadBinding != binding) return
-        clearPendingDownload(pendingDownloadRequestId)
-    }
+    internal fun claimPickerLaunch(requestId: Long, binding: FilesDownloadBinding): Boolean =
+        downloadPicker.claimLaunch(requestId) && downloadPicker.pending == binding
 
-    private fun clearPendingDownload(requestId: Long) {
-        if (pendingDownloadRequestId != requestId) return
-        pendingDownloadRequestId = 0L
-        pickerLaunchRequestId = 0L
-        pendingDownloadBinding = null
-    }
-    internal fun claimPickerLaunch(requestId: Long, binding: FilesDownloadBinding): Boolean {
-        if (!pickerRequestMatches(requestId, binding) || pickerLaunchRequestId == requestId) return false
-        pickerLaunchRequestId = requestId
-        return true
-    }
     internal fun pickerLaunchFailed(binding: FilesDownloadBinding, requestId: Long = pendingDownloadRequestId) {
-        if (pendingDownloadBinding != binding || pendingDownloadRequestId != requestId) return
-        clearPendingDownload(requestId)
+        if (downloadPicker.pending != binding) return
+        downloadPicker.clearIf(requestId)
     }
-    internal fun pickerRequestMatches(requestId: Long, binding: FilesDownloadBinding): Boolean =
-        pendingDownloadRequestId == requestId && pendingDownloadBinding == binding
 
     internal fun submitDownloadResult(binding: FilesDownloadBinding, uri: Uri): Boolean {
-        if (pendingDownloadBinding != binding) {
-            pickerLaunchFailed(binding)
+        if (downloadPicker.pending != binding) {
             deletePickedDownload(uri)
             return false
         }
-        if (state.filesPickMode != null || !state.actionsEnabled ||
-            !binding.matchesAttachment(state) || binding.listedSizeChanged(state)
-        ) {
-            pickerLaunchFailed(binding)
+        if (binding.resultVerdict(state) != PickerVerdict.Ok) {
+            downloadPicker.clear()
             deletePickedDownload(uri)
             onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return false
         }
-        val requestId = pendingDownloadRequestId
+        val requestId = downloadPicker.pendingRequestId
         onIntent(UiIntent.DownloadFile(binding, uri.toString(), fromPicker = true))
-        clearPendingDownload(requestId)
+        downloadPicker.clearIf(requestId)
         return true
     }
+
+    /** Process-death re-arm for the download slot; request id becomes 1. */
+    internal fun restorePendingDownload(binding: FilesDownloadBinding): Boolean =
+        downloadPicker.restore(binding)
 
     /** A CreateDocument result that will not be streamed must not leave an empty file. */
     internal fun discardPickedDownload(uri: Uri) {
@@ -7916,21 +7902,19 @@ class MainActivity : ComponentActivity() {
         }
     }
     /** Multi/dir download pin before OpenDocumentTree; cleared on detach/result. */
-    private var pendingBatchDownload: FilesBatchSelection? = null
+    private val batchDownloadPicker = PickerSlot<FilesBatchSelection>()
     /** Upload pin before OpenMultipleDocuments; cleared on detach/result. */
-    private var pendingBatchUploadDirectory: String? = null
-    private var pendingBatchUploadPin: UiAttachmentPin? = null
+    private val batchUploadPicker = PickerSlot<UploadTarget>()
     private val batchDownloadTreeLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri: Uri? ->
-        val selection = pendingBatchDownload
-        pendingBatchDownload = null
+        val selection = batchDownloadPicker.clear()
         if (uri == null) return@registerForActivityResult
         if (selection == null) {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return@registerForActivityResult
         }
-        if (!selection.matches(viewModel.state)) {
+        if (selection.stageVerdict(viewModel.state) != PickerVerdict.Ok) {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
             return@registerForActivityResult
         }
@@ -7946,10 +7930,7 @@ class MainActivity : ComponentActivity() {
     private val batchUploadDocsLauncher = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris: List<Uri> ->
-        val directory = pendingBatchUploadDirectory
-        val pin = pendingBatchUploadPin
-        pendingBatchUploadDirectory = null
-        pendingBatchUploadPin = null
+        val target = batchUploadPicker.clear()
         if (uris.isEmpty()) return@registerForActivityResult
         uris.forEach { uri ->
             runCatching {
@@ -7959,26 +7940,19 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        val live = viewModel.state
-        if (directory == null || pin == null || !pin.matches(live)) {
-            viewModel.onIntent(
-                UiIntent.Status(
-                    UiMessage.Key(
-                        if (directory == null || pin == null) {
-                            UiMessageKey.FilesPickTargetInvalid
-                        } else {
-                            UiMessageKey.TargetChanged
-                        },
-                    ),
-                ),
-            )
+        if (target == null) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.FilesPickTargetInvalid)))
+            return@registerForActivityResult
+        }
+        if (target.verdict(viewModel.state) != PickerVerdict.Ok) {
+            viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
             return@registerForActivityResult
         }
         viewModel.onIntent(
             UiIntent.UploadBatchDocs(
-                directory = directory,
+                directory = target.directory,
                 uris = uris.map { it.toString() },
-                attachment = pin,
+                attachment = target.attachment,
             ),
         )
     }
@@ -7991,12 +7965,15 @@ class MainActivity : ComponentActivity() {
             viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.TargetChanged)))
             return
         }
-        pendingBatchUploadDirectory = live.currentPath
-        pendingBatchUploadPin = UiAttachmentPin(device, partition)
+        val target = UploadTarget(
+            directory = live.currentPath,
+            attachment = UiAttachmentPin(device, partition),
+        )
+        batchUploadPicker.clear()
+        batchUploadPicker.stage(target)
         runCatching { batchUploadDocsLauncher.launch(arrayOf("*/*")) }
             .onFailure {
-                pendingBatchUploadDirectory = null
-                pendingBatchUploadPin = null
+                batchUploadPicker.clear()
                 viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)))
             }
     }
@@ -8050,9 +8027,8 @@ class MainActivity : ComponentActivity() {
                         pendingUsbPermissionToken = null
                         deniedUsbPermissionKey = null
                         deniedUsbPermissionRetriedKey = null
-                        pendingBatchDownload = null
-                        pendingBatchUploadDirectory = null
-                        pendingBatchUploadPin = null
+                        batchDownloadPicker.clear()
+                        batchUploadPicker.clear()
                     }
                     viewModel.onUsbDeviceDetached(device)
                 }
@@ -8174,32 +8150,33 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (binding != null) {
-                viewModel.pendingDownloadBinding = binding
-                viewModel.pendingDownloadRequestId = 1L
+                viewModel.restorePendingDownload(binding)
             } else if (savedPickerRequest != null) {
                 viewModel.onIntent(UiIntent.Status(UiMessage.Key(UiMessageKey.StaleStagedImage)))
             }
         }
-        pendingBatchDownload = savedInstanceState?.let { saved ->
-            val directory = saved.getString(STATE_PENDING_BATCH_DIRECTORY) ?: return@let null
-            val identity = saved.getString(STATE_PENDING_BATCH_IDENTITY) ?: return@let null
-            val partition = saved.getString(STATE_PENDING_BATCH_PARTITION) ?: return@let null
+        savedInstanceState?.let { saved ->
+            val directory = saved.getString(STATE_PENDING_BATCH_DIRECTORY) ?: return@let
+            val identity = saved.getString(STATE_PENDING_BATCH_IDENTITY) ?: return@let
+            val partition = saved.getString(STATE_PENDING_BATCH_PARTITION) ?: return@let
             val generation = saved.getLong(STATE_PENDING_BATCH_ATTACH, Long.MIN_VALUE)
-            val names = saved.getStringArray(STATE_PENDING_BATCH_NAMES) ?: return@let null
-            val dirs = saved.getBooleanArray(STATE_PENDING_BATCH_DIRS) ?: return@let null
-            val sizes = saved.getStringArray(STATE_PENDING_BATCH_SIZES) ?: return@let null
-            if (generation == Long.MIN_VALUE || names.size != dirs.size || names.size != sizes.size) return@let null
+            val names = saved.getStringArray(STATE_PENDING_BATCH_NAMES) ?: return@let
+            val dirs = saved.getBooleanArray(STATE_PENDING_BATCH_DIRS) ?: return@let
+            val sizes = saved.getStringArray(STATE_PENDING_BATCH_SIZES) ?: return@let
+            if (generation == Long.MIN_VALUE || names.size != dirs.size || names.size != sizes.size) return@let
             val items = names.indices.map { index ->
-                FilesBatchItem(names[index], dirs[index], sizes[index].toULongOrNull() ?: return@let null)
+                FilesBatchItem(names[index], dirs[index], sizes[index].toULongOrNull() ?: return@let)
             }
-            FilesBatchSelection(
-                directory = directory,
-                items = items,
-                identity = identity,
-                attachGeneration = generation,
-                partitionId = partition,
-                startLba = saved.getString(STATE_PENDING_BATCH_START)?.toULongOrNull(),
-                sectorCount = saved.getString(STATE_PENDING_BATCH_COUNT)?.toULongOrNull(),
+            batchDownloadPicker.restore(
+                FilesBatchSelection(
+                    directory = directory,
+                    items = items,
+                    identity = identity,
+                    attachGeneration = generation,
+                    partitionId = partition,
+                    startLba = saved.getString(STATE_PENDING_BATCH_START)?.toULongOrNull(),
+                    sectorCount = saved.getString(STATE_PENDING_BATCH_COUNT)?.toULongOrNull(),
+                ),
             )
         }
         savedInstanceState?.let { saved ->
@@ -8210,11 +8187,12 @@ class MainActivity : ComponentActivity() {
             val count = saved.getString(STATE_PENDING_BATCH_UPLOAD_COUNT)?.toULongOrNull()
             val attach = saved.getLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, Long.MIN_VALUE)
             if (directory != null && identity != null && partition != null && attach != Long.MIN_VALUE) {
-                pendingBatchUploadDirectory = directory
-                pendingBatchUploadPin = UiAttachmentPin(identity, attach, partition, start, count)
-            } else {
-                pendingBatchUploadDirectory = null
-                pendingBatchUploadPin = null
+                batchUploadPicker.restore(
+                    UploadTarget(
+                        directory = directory,
+                        attachment = UiAttachmentPin(identity, attach, partition, start, count),
+                    ),
+                )
             }
         }
          val savedState = savedInstanceState
@@ -8266,10 +8244,11 @@ class MainActivity : ComponentActivity() {
                 viewModel.stageDownloadForPicker(binding)
             },
                 onRequestBatchDownload = { selection ->
-                    pendingBatchDownload = selection
+                    batchDownloadPicker.clear()
+                    batchDownloadPicker.stage(selection)
                     runCatching { batchDownloadTreeLauncher.launch(null) }
                         .onFailure {
-                            pendingBatchDownload = null
+                            batchDownloadPicker.clear()
                             viewModel.onIntent(
                                 UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)),
                             )
@@ -8369,7 +8348,7 @@ class MainActivity : ComponentActivity() {
             binding.attachment.startLba?.let { outState.putString(STATE_PENDING_DOWNLOAD_START, it.toString()) }
             binding.attachment.sectorCount?.let { outState.putString(STATE_PENDING_DOWNLOAD_COUNT, it.toString()) }
         }
-        pendingBatchDownload?.let { selection ->
+        batchDownloadPicker.pending?.let { selection ->
             outState.putString(STATE_PENDING_BATCH_DIRECTORY, selection.directory)
             outState.putStringArray(STATE_PENDING_BATCH_NAMES, selection.items.map { it.name }.toTypedArray())
             outState.putBooleanArray(STATE_PENDING_BATCH_DIRS, selection.items.map { it.isDirectory }.toBooleanArray())
@@ -8380,15 +8359,13 @@ class MainActivity : ComponentActivity() {
             selection.startLba?.let { outState.putString(STATE_PENDING_BATCH_START, it.toString()) }
             selection.sectorCount?.let { outState.putString(STATE_PENDING_BATCH_COUNT, it.toString()) }
         }
-        val uploadDirectory = pendingBatchUploadDirectory
-        val uploadPin = pendingBatchUploadPin
-        if (uploadDirectory != null && uploadPin != null) {
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY, uploadDirectory)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_IDENTITY, uploadPin.identity)
-            outState.putLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, uploadPin.attachGeneration)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_PARTITION, uploadPin.partitionId)
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_START, uploadPin.startLba?.toString())
-            outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, uploadPin.sectorCount?.toString())
+        batchUploadPicker.pending?.let { target ->
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_DIRECTORY, target.directory)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_IDENTITY, target.attachment.identity)
+            outState.putLong(STATE_PENDING_BATCH_UPLOAD_ATTACH, target.attachment.attachGeneration)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_PARTITION, target.attachment.partitionId)
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_START, target.attachment.startLba?.toString())
+            outState.putString(STATE_PENDING_BATCH_UPLOAD_COUNT, target.attachment.sectorCount?.toString())
         }
         backupFolderLaunches.saveState(outState)
     }
