@@ -2,179 +2,112 @@
 
 [Русский](README.md) | **English**
 
-Android app for direct work with USB drives: files, MBR/GPT partitions, formatting, image writing, Ventoy installation, and disk diagnostics. The app does not need root. It ships as a sideloaded APK under GPL-3.0-or-later. The UI is English and Russian, with an in-app language switch.
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
+![Android 9+](https://img.shields.io/badge/Android-9%2B-3DDC84)
+![ABI: arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-lightgrey)
+![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 
-## Contents
+USB Multitool is an Android application for working with USB drives directly from a smartphone or tablet. It allows users to manage files and partitions, format drives, write disk images, install Ventoy, and check the condition of a drive. The application requires neither root access nor Android's system mounting: it communicates with the drive directly through the USB Host API.
 
-- [What it is](#what-it-is)
-- [Features](#features)
-- [Data safety](#data-safety)
-- [Requirements and compatibility](#requirements-and-compatibility)
-- [Getting the APK](#getting-the-apk)
-- [Limitations](#limitations)
-- [Build and checks](#build-and-checks)
-- [Development](#development)
-- [Licenses](#licenses)
-- [Related projects](#related-projects)
-
-## What it is
-
-The app controls a USB mass-storage device through the Android USB Host API (`UsbDeviceConnection` and Bulk-Only Transport/SCSI). In-app C engines open the filesystems through JNI. The app does not use Android mounting. The Storage Access Framework only selects files on the phone, for import, export, and restore sources.
-
-The default resources are English. `values-ru` holds Russian. The System/Russian/English choice persists between launches.
-
-Repository layout:
-
-| Path | Contents |
-| --- | --- |
-| `app/` | Kotlin/Compose app and JNI bridges |
-| `app/src/main/cpp/` | FAT/exFAT, NTFS, and EXT4 engines with the block-device adapter |
-| `scripts/` | pinned upstream fetching, host tests, and the APK alignment check |
-| `third_party/` | third-party sources and notices |
-| `native-tests/` | host tests for the native engines |
-| `docs/` | architecture, UI, filesystems, build, and tests |
-| `.github/workflows/android-debug.yml` | the only place for Gradle/NDK builds |
+> **Development status: alpha.** The application is at an early stage and has not yet been verified on a wide range of real USB drives. Write operations are irreversible, so during testing it is recommended to use an empty drive that holds no important data.
 
 ## Features
 
-The UI has four tabs: Files, Ventoy, Partitions, Diagnostics. This section lists only the behavior in the current branch.
-
 ### Files
 
-- The app shows one tab for each recognized partition. EFI and VTOYEFI partitions also have a tab.
-- You can browse directories, create folders, upload files from the phone (SAF), save files to the phone (SAF), delete entries, and rename entries.
-- Writes to an EFI or VTOYEFI partition are blocked. The unlock applies to one partition and one connection. When the disk changes, reconnects, or detaches, the app clears it. An unlocked partition can also be deleted or formatted.
-- The app offers two actions for an `.iso` file on the drive. "To raw" stages the image in app storage, then writes it to the disk. "XML" links the ISO to a Windows `autounattend.xml` template.
-
-### Ventoy
-
-- When `/sdcard/ventoy` exists, install and update prefer that directory. Otherwise, they use the bundled Ventoy 1.1.18 assets. An external `sha256.txt` replaces the pinned expected hashes for that directory. The bundled assets match the SHA-256 values pinned in code.
-- An update keeps the ISO partition. If the layout is not recognized, the update stops.
-- "Download a new version and install" requests the latest GitHub release. The archive SHA-256 comes from GitHub asset metadata, and the app refuses a release without a `digest`. The code also pins the archive and member hashes for versions 1.1.05 and 1.1.18.
-- Windows options have three states. For Windows 11 checks (`VTOY_WIN11_BYPASS_CHECK`), choose keep, bypass all (TPM, RAM, Secure Boot, CPU), or require all. For the account (`VTOY_WIN11_BYPASS_NRO`), choose keep, local account, or Microsoft account. An explicit choice writes `1` or `0`. Keep leaves the existing value. Ventoy needs the network unplugged for a local account.
-- The XML template is minimal: it has no LabConfig or FirstLogonCommands. The app overwrites existing configuration only with explicit user consent.
-- The app preserves an existing XML byte-for-byte in a unique sibling backup before replacing it. When `imagePaths` changes `/ventoy/ventoy.json`, it first preserves the prior bytes as `/ventoy/ventoy_backup.json`, matching VentoyPlugson's startup backup name; if that name is occupied, it uses a unique sibling instead of overwriting it. With no `imagePaths`, `ventoy.json` is not rewritten or backed up.
+Browse the contents of each partition on a drive (FAT, exFAT, NTFS, EXT4), create folders, rename and delete items, and transfer files between the drive and the phone.
 
 ### Partitions
 
-- The app reads MBR and GPT tables. It shows free regions and a disk map.
-- You can create a partition in free space with 1 MiB alignment. You can delete a partition. The app supports MBR and GPT.
-- You can initialize an empty MBR or GPT table and you can replace the current scheme. The confirmation pins the current scheme and every existing partition geometry; a changed layout aborts before writing. A hybrid/ambiguous layout and a GPT recovered from its backup are refused. MBR is refused when the disk exceeds 32-bit LBA. On GPT, create can store a partition name (up to 36 UTF-16 characters) and can immediately format the new range with the chosen filesystem and volume label. MBR has no name field, so a name is refused instead of being dropped.
-- You can rename the GPT name of the selected partition and the volume label of a formatted partition. Renaming a protected EFI/VTOYEFI entry is refused. Labels are written only by engines that can: FAT/FAT32 (11 characters), exFAT (11 characters), NTFS (128 characters); EXT4 labels are written only while formatting.
-- A role change writes the partition type: EFI system or Linux data. The app does not restore the previous type automatically.
-- The boot flag is a separate operation. GPT stores it in partition attributes, MBR in the boot byte.
-- Formatting uses a blocking native `mkfs` call. No cancel button is shown, and the app does not promise interruption after the engine starts. If the device disconnects or the engine fails after writing, the result is `Partial`, not `Cancelled`; after a successful final `sync`, a late internal cancel does not undo the physically committed result.
-- You can write an `.iso`, `.img`, `.gz`, or `.xz` from a local file. The app checks bounds and size before the write. Decompression runs on the fly. You can cancel the operation.
-- When the primary GPT is damaged, the app reads the table from the backup copy. Create, delete, role change, flag change, and GPT repair are blocked until a GPT restore from a saved copy succeeds.
-- A GPT write from the partition editor (create, delete, role, flag) publishes the backup structures first, then the primary. A disconnect leaves at least one complete copy with a valid CRC.
-- "Restore GPT table" moves the backup to the current disk end. The app refuses a damaged primary, a hybrid layout, or partitions beyond the new limit.
-- A GPT restore from a saved copy checks the size, CRC, backup position at the disk end, and primary/backup agreement.
+View the disk layout with an MBR or GPT partition table, create and delete partitions, format them as FAT, exFAT, NTFS, or EXT4, change names and labels, switch a partition's type (EFI or data), and set the boot flag. If the primary GPT is damaged, the application falls back to the backup copy and can restore the table. Changes are written in an order that ensures an interrupted operation never leaves the disk without an intact copy of the table.
+
+### Image writing
+
+Write disk images in `.iso` and `.img` formats, as well as compressed `.gz` and `.xz`, to a drive. Before writing, the image size and the drive boundaries are checked; decompression happens during the write, and the operation can be cancelled. By default, a verification read is performed after the write.
+
+### Ventoy
+
+Install Ventoy on a drive with a GPT partition table and update an existing installation while keeping the images stored on it. The files used come from Ventoy 1.1.18 bundled with the application, from the `/sdcard/ventoy` directory, or from the latest release on GitHub; checksums are verified in every case. Also available are Windows 11 installation settings (hardware check bypass, local account) and preparation of an `autounattend.xml` file; previous configurations are saved as backups before being replaced.
 
 ### Diagnostics
 
-- The self-test checks SCSI codecs, alignment, free space, GPT geometry, rescue-map serialization, Ventoy config, and filesystem guard gates. It also runs an in-memory FatFs roundtrip. With a disk attached, it probes the live device.
-- The read scan reads the disk in 1 MiB chunks. It narrows bad sectors sector by sector only after a medium error. It writes nothing.
-- The rescue backup writes an image of all disk sectors and a map file. The map uses the app format `usb-rescue-map 2` with sector size, sector count, device identity, and range statuses. Both files go to `Android/data/usb.multitool/files`. Unreadable sectors stay in the map.
-- The GPT backup saves the critical table sectors to a separate file.
-- The wipe writes zeros across the disk after confirmation.
-- Image restore writes only the ranges in the map. The app re-reads each COPIED range, compares it with the image, and rewrites a mismatch. The app refuses a COPY map with NON_TRIED sectors. FAILED ranges receive image bytes, usually zeros. Sector size must match, and the map must fit the disk. The full disk geometry need not match. After sync, with full coverage and no FAILED ranges, the app verifies the whole restored region against a fresh image read.
+- application self-test and a check of the connected drive;
+- read scan that pinpoints the location of errors;
+- creation of a disk image with a map of unreadable sectors, and verified restoration from it;
+- backup of the critical sectors of the GPT;
+- zero-fill wipe of the drive;
+- reading SMART data (read-only, where supported by the drive).
 
-## Data safety
+Architecture and implementation details are available in the [docs/](docs/README.md) directory.
 
-> CAUTION: Test on an empty USB drive. A wrong layout, confirmation, or disk choice destroys the data on the drive. The app cannot undo a write operation.
+## Requirements
 
-- Each destructive operation needs a confirmation with device identity (model and serial) and capacity. The app checks partition bounds and integer overflow before each write.
-- The app syncs and closes open volumes before it changes the partition table or writes raw data.
-- Wipe, create/delete, create-and-format, rename, table initialization, format, raw write, GPT repair, role, and flag changes mark the first write. After it, they report `Partial`. Before the first write, the result is `Failed` or `Cancelled`. If creating a partition succeeds and the immediate format fails, the partition stays and the operation reports `Partial` with an "exists but is unformatted" result. When its own mutation fails, Ventoy install/update reports `Partial`.
-- When the process stops, the app does not save the operation state. Nothing resumes automatically after reconnection.
-- Do not change the rescue image before the restore finishes. The app reads it as is. The app does not promise a snapshot or change detection. An edit can produce mixed data. The final check does not prove that the source stayed unchanged.
-- A rescue image stays a dense file with a map. Unreadable sectors stay visible. The app never shows a partial image as a full copy. A rescue copy needs a stable device serial.
-- The app collects no telemetry. It uses the network only to check and download Ventoy releases from GitHub.
+- Android 9 (API 28) or later.
+- A processor with the arm64-v8a architecture.
+- USB Host (OTG) support and a suitable adapter.
+- A USB mass-storage drive using the Bulk-Only Transport protocol. Drives that use UAS are not supported.
 
-The app declares these permissions in `app/src/main/AndroidManifest.xml`:
+The sector size is detected automatically from the drive.
 
-| Permission | Purpose |
+## Installation
+
+The application is not distributed through Google Play or F-Droid. Signed builds are published in [Releases](../../releases) together with a SHA-256 checksum file.
+
+If no suitable release is available yet, a debug build can be obtained from GitHub Actions: open the [`android-debug` workflow](https://github.com/SklUpp/usb-multitool/actions/workflows/android-debug.yml), run it manually (**Run workflow**), and download the `app-debug-apk` artifact. Such a build is signed with a debug key and is intended for testing.
+
+Installing the APK requires allowing installation from unknown sources.
+
+## Usage
+
+1. Connect the drive through an OTG adapter and grant the application access to the USB device.
+2. Choose the required section of the interface: Files, Ventoy, Partitions, or Diagnostics.
+3. Before any operation that changes data, the application asks for confirmation showing the drive's model, serial number, and capacity. Check these details carefully: a wrongly selected drive will be overwritten irreversibly.
+
+The interface language (Russian or English) is selected in the application settings.
+
+## Data safety and privacy
+
+The application asks for confirmation of every destructive operation and checks write boundaries before it begins. If an operation is interrupted after writing has started, the application reports a partial result rather than success or cancellation.
+
+No telemetry is collected or transmitted. Network access is used only to check for and download Ventoy releases from GitHub; notifications and background operation are needed only while long-running operations are in progress.
+
+## Known limitations
+
+- Moving and resizing partitions that contain data is not supported.
+- Ventoy installation is available only for GPT; drives with a 4096-byte sector size (4K native) are not supported by Ventoy.
+- A formatting operation cannot be interrupted once it has started.
+- An interrupted operation does not resume automatically after the drive is reconnected.
+- UAS, root mode, FUSE, and loop devices are not supported, nor are F3 capacity testing, write-speed benchmarks, and images over HTTP(S).
+- Automated checks do not cover work with real drives, booting from the created media, or installing operating systems.
+
+## Compatibility and feedback
+
+Compatibility with specific drive models, adapters, and devices has not yet been established. If you have tried the application, please report the result in [Issues](../../issues): include the model of your phone, drive, and adapter, and describe which operations succeeded.
+
+## Building
+
+The verified build environment is GitHub Actions. Environment requirements and the build, test, and release procedures are described in [docs/build-test-release.md](docs/build-test-release.md).
+
+## License
+
+The application is distributed under **GPL-3.0-or-later**; the license text is available at <https://www.gnu.org/licenses/gpl-3.0.html>. When distributing the APK, GPL obligations to provide the source code apply.
+
+Third-party components are used under their own licenses; versions and details are listed in [third_party/README.md](third_party/README.md).
+
+| Component | License |
 | --- | --- |
-| `INTERNET` | Check and download Ventoy releases |
-| `POST_NOTIFICATIONS` | Show a notification for a long operation (Android 13+) |
-| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE` | Run disk work in a foreground service |
-| `WAKE_LOCK` | Keep the CPU active only during an operation |
+| [FatFs](https://elm-chan.org/fsw/ff/) | BSD-style |
+| [ntfs-3g](https://github.com/tuxera/ntfs-3g) | GPL-2.0-or-later |
+| [lwext4](https://github.com/gkostka/lwext4) | GPL-2.0-or-later |
+| [exfatprogs](https://github.com/exfatprogs/exfatprogs) | GPL-2.0-or-later |
+| [Ventoy](https://github.com/ventoy/Ventoy) | GPL-3.0-or-later |
+| [SectorForge](https://github.com/terraseraph/sectorforge) | MIT |
+| [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/), [XZ for Java](https://tukaani.org/xz/java.html) | Apache-2.0 / public domain |
 
-## Requirements and compatibility
-
-- Android 9 (API 28) or later. `targetSdk` and `compileSdk` are 36.
-- The APK supports `arm64-v8a` only.
-- The phone must support USB Host (OTG). The drive must use USB mass storage with Bulk-Only Transport. The app does not support UAS or other transports.
-- The app reads the logical sector size from the device. The code does not assume 512 bytes. For Ventoy, the app refuses 4K native disks (4096 bytes) because upstream does not support them.
-
-The repository does not establish compatibility with specific USB drives, OTG adapters, or hubs. CI does not emulate a real USB device. Ventoy installation and ISO writing do not guarantee boot on a given PC. These checks are separate acceptance tests.
-
-## Getting the APK
-
-The project has no releases and no Google Play publication. GitHub Actions builds the debug APK.
-
-1. Open the [`android-debug` workflow](actions/workflows/android-debug.yml).
-2. Run the workflow manually with `workflow_dispatch`, or push to the `feature/android-usb-multitool` branch.
-3. Download the `app-debug-apk` artifact. On a failed `unit-tests` job, also download `unit-test-reports`.
-
-The build signs the APK with a debug key for testing only. Do not distribute it. The project does not support local Gradle or NDK builds. This README does not assert a successful final CI run or device checks.
-
-## Limitations
-
-- The app cannot move, shrink, or grow an occupied partition or its filesystem.
-- F3, write benchmarks, and images over HTTP(S) are not planned.
-- The app does not use root, FUSE, loop devices, or UAS. It does not resume an operation after a disconnect.
-- CI checks the code and the host engines. It does not test real USB permissions, on-device behavior, boot from the drive, or Windows installation.
-- CI checks APK and ELF alignment for 16 KB pages with a script. The project has no on-device alignment check.
-- The repository has no root `LICENSE` file yet. The code declares the license in `app/src/main/kotlin/usb/BuildFacts.kt`.
-
-## Build and checks
-
-All Gradle/NDK commands run only in GitHub Actions. The exact step order, the
-`unit-tests`/`verify`/`fatfs-host` jobs, and coverage limits are in
-[docs/build-test-release.md](docs/build-test-release.md).
-
-## Development
-
-- `.github/workflows/android-debug.yml` — the exact CI command order.
-- `third_party/README.md` — pinned engine versions and licenses.
-- `docs/README.md` — architecture, UI, filesystem, build, and test index.
-
-### App versions
-
-`defaultConfig` in `app/build.gradle.kts` is the fallback version (`versionCode = 1`, `versionName = "0.1.0"`); the release workflow overrides it.
-
-- Release `versionCode` is `1000 + github.run_number`; verification debug builds keep the default version. Released values never repeat or decrease.
-- `versionName` comes from the `v<MAJOR.MINOR.PATCH>` tag; the release workflow builds the signed APK and publishes a GitHub Release.
-- The app header shows the installed `versionName` from `PackageManager`, so after a sideload it displays the version actually on the device.
-- Signing secrets and release commands: [docs/build-test-release.md](docs/build-test-release.md#release).
-
-The project uses Kotlin 2.2.10, Jetpack Compose (BOM 2025.12.01), AGP 8.13.2, Gradle 8.13, NDK 29.0.14206865, CMake 3.22.1, and Java 21 in CI. Tests use JUnit 4, MockK, and kotlinx-coroutines-test. Native host tests build with `make` and `gcc`.
-
-## Licenses
-
-Application license: GPL-3.0-or-later (`usb.BuildFacts.LICENSE`). License text: <https://www.gnu.org/licenses/gpl-3.0.html>.
-
-Third-party components keep their own licenses. `third_party/README.md` pins the versions and the links:
-
-| Component | Use | License |
-| --- | --- | --- |
-| [FatFs R0.16 + patches](https://elm-chan.org/fsw/ff/) | FAT12/16/32, exFAT | BSD-style (FatFs) |
-| [ntfs-3g 2026.9.28](https://github.com/tuxera/ntfs-3g) | NTFS read/write, mkntfs | GPL-2.0-or-later |
-| [lwext4](https://github.com/gkostka/lwext4) | EXT2/3/4, mkfs | GPL-2.0-or-later |
-| [exfatprogs 1.4.3](https://github.com/exfatprogs/exfatprogs) | exFAT fsck/repair | GPL-2.0-or-later |
-| [Ventoy 1.1.18](https://github.com/ventoy/Ventoy) | boot payloads | GPL-3.0-or-later |
-| [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/), [XZ for Java](https://tukaani.org/xz/java.html) | image decompression | Apache-2.0 / public domain |
-
-The tree includes FatFs (patched R0.16), `exfatprogs`, and part of `ntfs-3g` without `ntfsprogs`. `scripts/fetch-third-party.sh` fetches the full `ntfs-3g` tree, plus lwext4 and F3 sources from pinned URLs and revisions. When `lzip` is available, the script tries to fetch ddrescue. When `ff.c` exists, the script skips FatFs. If you distribute the APK, the GPL source-offer obligations apply.
-
-The project is not affiliated with Ventoy, Tuxera, EtchDroid, or other projects in this document.
+The project is not affiliated with Ventoy, Tuxera, EtchDroid, or the other projects mentioned.
 
 ## Related projects
 
-These projects were design references and documentation examples for Android USB tools. They are not forks. The project uses no code from them.
-
-- [EtchDroid](https://github.com/EtchDroid/EtchDroid) — writes images to USB without root. It has a clear list of supported devices and images.
-- [Ventoid](https://github.com/GPLaider/Ventoid) — an Android Ventoy installer. It documents OTG limits and checksum verification.
-- [standard-readme](https://github.com/RichardLitt/standard-readme) — the README structure specification for this file.
-- [Android USB Host](https://developer.android.com/develop/connectivity/usb/host) — official USB Host API documentation.
+- [EtchDroid](https://github.com/EtchDroid/EtchDroid): writing images to USB drives without root.
+- [Ventoid](https://github.com/GPLaider/Ventoid): a Ventoy installer for Android.
+- [Android USB Host API](https://developer.android.com/develop/connectivity/usb/host): official documentation.
