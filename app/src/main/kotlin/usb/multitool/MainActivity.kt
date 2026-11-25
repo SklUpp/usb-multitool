@@ -393,18 +393,6 @@ class MainViewModel(
         DiskService.initialize(application)
         // Purge a server answer cached by a previous app version before it can be used.
         ventoyUpstreamCache.readRelease()
-        if (folder.usable) {
-            folder.uri?.let { stored ->
-                // The shared folder survives restarts; restore its paired artifacts
-                // without forcing the user to pick it again.
-                safBackup.rescanPersistedFolder(
-                    state.copy(
-                        backupFolderUri = stored,
-                        backupFolderUsable = true,
-                    ),
-                )
-            }
-        }
         // Name is not ownership proof: only old raw-* leftovers are collected here;
         // anything still present needs a user decision and is reported below.
         runCatching {
@@ -1048,9 +1036,6 @@ class MainViewModel(
                         throw failure
                     } finally {
                         if (!closed) runCatching { output.close() }
-                    }
-                    scope.launch(Dispatchers.Main.immediate) {
-                        safBackup.rescanGptInFolder(folder.treeUri)
                     }
                     "GPT critical backup saved: $name (${blob.size} bytes, " +
                         "${info.partitions} partitions, backup header at LBA " +
@@ -1898,12 +1883,6 @@ class MainViewModel(
                 activeHandles.remove(handle)
             }
         }
-        rescanPersistedBackupFolderIfNeeded()
-    }
-
-    /** A folder restore scan can lose its attach ticket; retry once USB is live. */
-    private fun rescanPersistedBackupFolderIfNeeded() {
-        safBackup.rescanPersistedFolder(state)
     }
 
     fun onUsbDeviceDetached(device: UsbDevice? = null) {
@@ -5093,6 +5072,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private var rescuePickMapOnly = false
+    private val rescueFolderPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri: Uri? ->
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        viewModel.onRescueArchiveFolderPicked(uri, quiet = false)
+    }
     private val rescueFilePicker = registerForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
@@ -5804,6 +5792,14 @@ class MainActivity : ComponentActivity() {
                 onPickRescueFile = {
                     rescuePickMapOnly = false
                     rescueFilePicker.launch(arrayOf("*/*"))
+                },
+                onPickRescueFolder = {
+                    runCatching { rescueFolderPicker.launch(null) }
+                        .onFailure {
+                            viewModel.onIntent(
+                                UiIntent.Status(UiMessage.Key(UiMessageKey.ImportPickerUnavailable)),
+                            )
+                        }
                 },
                 onPickRescueMap = {
                     rescuePickMapOnly = true

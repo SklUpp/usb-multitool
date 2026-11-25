@@ -2,11 +2,7 @@ package usb.ui
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
@@ -16,7 +12,6 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,8 +44,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor
@@ -232,7 +229,9 @@ fun FilesScreen(
     val volumeWritable = writeAccess != PartitionWriteAccess.ReadOnly &&
         writeAccess != PartitionWriteAccess.DriverReadOnly
     val canWrite = canAct && volumeWritable
-    val uploading = state.operation?.takeIf { it.title is OperationTitle.UploadBatch }
+    val uploading = state.operation?.takeIf {
+        it.title is OperationTitle.UploadBatch && !it.state.isTerminal()
+    }
     val uploadDescription = stringResource(R.string.files_copy_from_phone)
 
     // Blocked release marks an unconfirmed volume close/sync after a failed probe
@@ -372,7 +371,7 @@ fun FilesScreen(
                     .align(Alignment.BottomEnd)
                     .padding(16.dp)
                     .semantics { contentDescription = uploadDescription },
-                icon = { GlyphIcon(Glyph.Upload, size = 20.dp) },
+                icon = { GlyphIcon(Glyph.Download, size = 20.dp) },
                 text = { Text(stringResource(R.string.files_copy_from_phone)) },
             )
         }
@@ -998,9 +997,9 @@ private fun FilesPickScreen(
                     }
                 }
                 if (selectsFile) {
-                    TextButton(
+                    Button(
                         onClick = {
-                            val selected = selectedPickEntry ?: return@TextButton
+                            val selected = selectedPickEntry ?: return@Button
                             // The reducer revalidates the name against live files.
                             onIntent(UiIntent.ConfirmFilesPickFile(selected.name))
                         },
@@ -1009,7 +1008,7 @@ private fun FilesPickScreen(
                         Text(fileConfirmLabel)
                     }
                 } else {
-                    TextButton(
+                    Button(
                         onClick = { onIntent(UiIntent.ConfirmFilesPickFolder) },
                         enabled = confirmEnabled,
                     ) {
@@ -1927,27 +1926,10 @@ internal fun filesBatchConflictPathDisplay(conflict: FilesConflict): String {
     return conflict.name
 }
 
-/** Pulsing border only while bytes move; idle/terminal rows stay static. */
-@Composable
-private fun uploadOutlineAlpha(running: Boolean): Float {
-    if (!running) return 0.25f
-    val infinite = rememberInfiniteTransition(label = "upload-outline")
-    val glow by infinite.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "upload-outline-alpha",
-    )
-    return glow
-}
-
 /**
  * Expanded copy control: the picker button grows into one 56 dp row with the current
- * SAF name, percent and live speed. The outline pulses only while bytes are moving, so
- * a stalled or finished copy is visually distinct without a modal.
+ * SAF name, percent and live speed. The row has no pulsing border; progress and speed
+ * already communicate motion without redrawing the outline every frame.
  */
 @Composable
 private fun UploadProgressRow(
@@ -1963,7 +1945,6 @@ private fun UploadProgressRow(
     val cancellingLabel = stringResource(R.string.action_cancelling)
     val shape = RoundedCornerShape(28.dp)
     var cancelRequested by remember(operation.token) { mutableStateOf(false) }
-    val glow = uploadOutlineAlpha(running && !cancelRequested && operation.bytesPerSecond > 0L)
     val container = when {
         failed -> MaterialTheme.colorScheme.errorContainer
         operation.state == OperationState.Completed -> MaterialTheme.colorScheme.secondaryContainer
@@ -1978,13 +1959,7 @@ private fun UploadProgressRow(
         color = container,
         contentColor = content,
         shape = shape,
-        modifier = modifier
-            .heightIn(min = 56.dp)
-            .border(
-                width = 2.dp,
-                color = content.copy(alpha = glow),
-                shape = shape,
-            ),
+        modifier = modifier.heightIn(min = 56.dp),
     ) {
         Row(
             modifier = Modifier
@@ -2046,7 +2021,7 @@ private fun UploadProgressRow(
                 )
             }
             if (running && onCancel != null) {
-                IconButton(
+                FilledIconButton(
                     onClick = {
                         cancelRequested = true
                         onCancel()
@@ -2057,11 +2032,18 @@ private fun UploadProgressRow(
                         .semantics {
                             contentDescription = if (cancelRequested) cancellingLabel else cancelLabel
                         },
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                        disabledContainerColor =
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.38f),
+                        disabledContentColor =
+                            MaterialTheme.colorScheme.onError.copy(alpha = 0.38f),
+                    ),
                 ) {
                     GlyphIcon(
                         glyph = Glyph.Stop,
                         size = 20.dp,
-                        tint = content,
                     )
                 }
             }

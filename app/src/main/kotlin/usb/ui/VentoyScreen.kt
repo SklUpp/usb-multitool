@@ -1,6 +1,5 @@
 package usb.ui
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -347,9 +346,7 @@ private fun VentoyVersionRow(
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize(),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
@@ -757,7 +754,6 @@ private fun WindowsImageBlock(
                     text = stringResource(unreadableText(problem)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.animateContentSize(),
                 )
                 TextButton(onClick = { onIntent(UiIntent.CancelWindowsIsoImport) }) {
                     Text(stringResource(R.string.import_error_dismiss))

@@ -1,6 +1,5 @@
 package usb.ui
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -78,7 +77,6 @@ internal fun PerformanceSettingsSection(enabled: Boolean = true) {
     SectionCard(
         title = stringResource(R.string.diagnostics_perf_title),
         subtitle = stringResource(R.string.diagnostics_perf_subtitle),
-        modifier = Modifier.animateContentSize(),
     ) {
         PerfSlider(
             title = stringResource(R.string.diagnostics_perf_scsi_title),

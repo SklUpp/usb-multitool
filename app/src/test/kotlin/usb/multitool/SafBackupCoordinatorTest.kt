@@ -112,7 +112,7 @@ class SafBackupCoordinatorTest {
     }
 
     @Test
-    fun folderPickWithGrantPersistsAndSelectsNewestGptCritical() {
+    fun folderPickPersistsWithoutArmingRestore() {
         val folder = Uri.parse("content://usb.saf.test/tree/gpt")
         val older = Uri.parse("content://usb.saf.test/doc/gpt-critical-2020.bin")
         val newer = Uri.parse("content://usb.saf.test/doc/gpt-critical-2024.bin")
@@ -129,8 +129,6 @@ class SafBackupCoordinatorTest {
                 ),
             ),
         )
-        seedInput(older, byteArrayOf(1, 2, 3), "gpt-critical-2020.bin")
-        seedInput(newer, byteArrayOf(4, 5, 6), "gpt-critical-2024.bin")
 
         val coord = coordinator()
         // Robolectric records takePersistableUriPermission as a write grant.
@@ -138,20 +136,16 @@ class SafBackupCoordinatorTest {
         assertEquals(folder.toString(), prefs.getString("backup_folder_uri", null))
         assertEquals("Backups", prefs.getString("backup_folder_name", null))
 
-        val deadline = System.currentTimeMillis() + 5_000L
-        var selected: UiIntent.SetBackupFile? = null
-        while (System.currentTimeMillis() < deadline) {
-            ShadowLooper.idleMainLooper()
-            selected = intents.filterIsInstance<UiIntent.SetBackupFile>()
-                .lastOrNull { it.uri == newer.toString() }
-            if (selected != null) break
-            Thread.yield()
-        }
-        assertNotNull("newest gpt-critical-* must be selected", selected)
-        assertEquals(newer.toString(), selected!!.uri)
         assertTrue(
-            intents.filterIsInstance<UiIntent.SetBackupFile>()
-                .none { it.uri == older.toString() },
+            "folder choice must not pre-arm GPT restore",
+            intents.filterIsInstance<UiIntent.SetBackupFile>().all { it.uri == null },
+        )
+        assertTrue(
+            "folder choice must not pre-arm rescue restore",
+            intents.filterIsInstance<UiIntent.SetRescueImage>().all { it.uri == null },
+        )
+        assertTrue(
+            intents.filterIsInstance<UiIntent.SetRescueMap>().all { it.uri == null },
         )
     }
 

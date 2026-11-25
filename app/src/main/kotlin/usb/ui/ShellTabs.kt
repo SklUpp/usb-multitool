@@ -8,8 +8,6 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -228,6 +226,7 @@ internal fun ShellTabs(
     onPickBackupFolder: () -> Unit,
     onPickRescueFile: () -> Unit,
     onPickRescueMap: () -> Unit,
+    onPickRescueFolder: () -> Unit,
     onPickGptFile: () -> Unit,
     onStartRescueBackup: () -> Unit,
     onCreateGptCopy: () -> Unit,
@@ -286,28 +285,10 @@ internal fun ShellTabs(
             targetState = state.tab,
             modifier = Modifier.fillMaxSize(),
             transitionSpec = {
-                val from = PrimaryShellTabs.indexOf(initialState)
-                val to = PrimaryShellTabs.indexOf(targetState)
-                val slide = if (from >= 0 && to >= 0 && from != to) {
-                    val forward = if (to > from) 1 else -1
-                    if (layoutDirection == LayoutDirection.Rtl) -forward else forward
+                if (reducedMotion) {
+                    EnterTransition.None togetherWith ExitTransition.None
                 } else {
-                    0
-                }
-                if (reducedMotion || slide == 0) {
-                    if (reducedMotion) {
-                        EnterTransition.None togetherWith ExitTransition.None
-                    } else {
-                        fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
-                    }
-                } else {
-                    (
-                        slideInHorizontally(tween(220)) { width -> slide * width } +
-                            fadeIn(tween(180))
-                        ).togetherWith(
-                        slideOutHorizontally(tween(220)) { width -> -slide * width } +
-                            fadeOut(tween(120)),
-                    )
+                    fadeIn(tween(120)) togetherWith fadeOut(tween(90))
                 }
             },
             label = "tab",
@@ -331,7 +312,7 @@ internal fun ShellTabs(
                         if (reducedMotion) {
                             EnterTransition.None togetherWith ExitTransition.None
                         } else {
-                            fadeIn(tween(200)).togetherWith(fadeOut(tween(100)))
+                            fadeIn(tween(120)) togetherWith fadeOut(tween(90))
                         }
                     },
                     label = "presence",
@@ -373,6 +354,7 @@ internal fun ShellTabs(
                                 onPickBackupFolder = onPickBackupFolder,
                                 onPickRescueFile = onPickRescueFile,
                                 onPickRescueMap = onPickRescueMap,
+                                onPickRescueFolder = onPickRescueFolder,
                                 onPickGptFile = onPickGptFile,
                                 onStartRescueBackup = onStartRescueBackup,
                                 onCreateGptCopy = onCreateGptCopy,

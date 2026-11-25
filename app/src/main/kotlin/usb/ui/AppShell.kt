@@ -185,6 +185,7 @@ fun AppShell(
     onPickBackupFolder: () -> Unit = {},
     onPickRescueFile: () -> Unit = {},
     onPickRescueMap: () -> Unit = {},
+    onPickRescueFolder: () -> Unit = {},
     onPickGptFile: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
     onCreateGptCopy: () -> Unit = {},
@@ -534,6 +535,7 @@ fun AppShell(
                         onPickBackupFolder = onPickBackupFolder,
                         onPickRescueFile = onPickRescueFile,
                         onPickRescueMap = onPickRescueMap,
+                        onPickRescueFolder = onPickRescueFolder,
                         onPickGptFile = onPickGptFile,
                         onStartRescueBackup = onStartRescueBackup,
                         onCreateGptCopy = onCreateGptCopy,
@@ -1822,9 +1824,7 @@ internal enum class Glyph {
     ArrowUp,
     Refresh,
     FolderPlus,
-    /** Copy from the phone into the mounted volume. */
-    Upload,
-    /** Downward arrow: fetch bytes from the network into app storage. */
+    /** Downward transfer: fetch bytes or copy from the phone into the volume. */
     Download,
     Pencil,
     Trash,
@@ -1988,21 +1988,6 @@ internal fun GlyphIcon(
                     )
                     drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 11f), androidx.compose.ui.geometry.Offset(12f, 17f), 1.8f)
                     drawLine(tint, androidx.compose.ui.geometry.Offset(9f, 14f), androidx.compose.ui.geometry.Offset(15f, 14f), 1.8f)
-                }
-                Glyph.Upload -> {
-                    drawPath(
-                        Path().apply {
-                            moveTo(4f, 16f); lineTo(4f, 20f); lineTo(20f, 20f); lineTo(20f, 16f)
-                        },
-                        tint,
-                        style = stroke,
-                    )
-                    drawLine(tint, androidx.compose.ui.geometry.Offset(12f, 16f), androidx.compose.ui.geometry.Offset(12f, 4f), 1.8f)
-                    drawPath(
-                        Path().apply { moveTo(6f, 10f); lineTo(12f, 4f); lineTo(18f, 10f) },
-                        tint,
-                        style = stroke,
-                    )
                 }
                 Glyph.Download -> {
                     drawPath(

@@ -450,7 +450,7 @@
     <string name="diagnostics_gpt_geometry">Captured disk: %1$s sectors; usable LBA %2$s–%3$s.</string>
     <string name="diagnostics_gpt_partitions">Partitions in backup: %1$s</string>
     <string name="diagnostics_gpt_valid">Headers, entry. CRCs and partition bounds validate.</string>
-    <string name="diagnostics_pick_image_folder">Choose folder</string>
+    <string name="diagnostics_pick_image_folder">Choose restore folder</string>
     <string name="diagnostics_restore_image">Restore image and map</string>
     <string name="diagnostics_selected_file">Selected file</string>
     <string name="diagnostics_rescue_image_file">Rescue image</string>

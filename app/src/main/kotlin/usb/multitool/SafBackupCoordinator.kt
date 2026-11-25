@@ -44,8 +44,6 @@ class SafBackupCoordinator(
 ) {
     private val gptPickGeneration = AtomicLong(0)
     private val rescueArchivePickGeneration = AtomicLong(0)
-    private val backupFolderScanGeneration = AtomicLong(0)
-    private var currentBackupFolderUri: String? = null
 
     /** True when the persisted write grant still exists; the provider is checked on write. */
     fun hasUsableBackupFolder(state: AppUiState): Boolean {
@@ -78,10 +76,8 @@ class SafBackupCoordinator(
         intents(UiIntent.SetBackupFolder(uri.toString(), name, usable))
         log("picker.backup_folder uri=${uri} usable=$usable")
         intents(UiIntent.AppendLog(logLine("Backup folder: ${name ?: "unnamed"}")))
-        currentBackupFolderUri = null
-        backupFolderScanGeneration.incrementAndGet()
-        // Drop old paired artifacts immediately so a slow inspection from the
-        // previous folder cannot win, even if the new folder is unusable.
+        // Choosing where backups are stored must not pre-arm a restore. Restore sources
+        // change only through an explicit file or restore-folder pick.
         intents(
             UiIntent.SetBackupFile(
                 null,
@@ -93,11 +89,6 @@ class SafBackupCoordinator(
         intents(UiIntent.SetRescueArchiveTree(null))
         intents(UiIntent.SetRescueImage(null, null, clearedGeneration))
         intents(UiIntent.SetRescueMap(null, null, clearedGeneration))
-        if (usable) {
-            currentBackupFolderUri = uri.toString()
-            onRescueArchiveFolderPicked(uri, quiet = true, state = liveState())
-            scanGptBackupInFolder(uri)
-        }
         return usable
     }
 
@@ -496,18 +487,6 @@ class SafBackupCoordinator(
         }
     }
 
-    fun rescanPersistedFolder(state: AppUiState) {
-        val stored = state.backupFolderUri ?: return
-        if (!state.backupFolderUsable) return
-        if (state.rescueImageUri != null && state.backupUri != null) return
-        val storedUri = Uri.parse(stored)
-        currentBackupFolderUri = stored
-        scope.launch {
-            onRescueArchiveFolderPicked(storedUri, quiet = true, state = state)
-            scanGptBackupInFolder(storedUri)
-        }
-    }
-
     fun requireBackupFolder(state: AppUiState): SafTree {
         val uri = state.backupFolderUri
             ?: throw IllegalStateException("backup folder not selected")
@@ -544,46 +523,9 @@ class SafBackupCoordinator(
         rescueArchivePickGeneration.incrementAndGet()
     }
 
-    /** Invalidate in-flight GPT / folder-scan inspections (ResetGptSelection). */
+    /** Invalidate in-flight GPT inspections (ResetGptSelection). */
     fun invalidateGptSelection() {
         gptPickGeneration.incrementAndGet()
-        backupFolderScanGeneration.incrementAndGet()
-    }
-
-    /** Rescan GPT critical backups after a new capture lands in the folder. */
-    fun rescanGptInFolder(folderUri: Uri) {
-        scanGptBackupInFolder(folderUri)
-    }
-
-    /** Newest GPT critical backup in the shared folder, or clear the stale selection. */
-    private fun scanGptBackupInFolder(folderUri: Uri) {
-        val scanGeneration = backupFolderScanGeneration.incrementAndGet()
-        scope.launch(Dispatchers.IO) {
-            val entries = runCatching {
-                tree(folderUri).listRootFiles()
-            }.getOrNull() ?: return@launch
-            val candidate = entries
-                .filter { !it.isDirectory && isGptBackupName(it.name) }
-                .maxByOrNull { it.name }
-            withContext(Dispatchers.Main.immediate) {
-                if (scanGeneration != backupFolderScanGeneration.get() ||
-                    currentBackupFolderUri != folderUri.toString()
-                ) {
-                    return@withContext
-                }
-                if (candidate == null) {
-                    intents(
-                        UiIntent.SetBackupFile(
-                            uri = null,
-                            inspection = null,
-                            requestId = gptPickGeneration.incrementAndGet(),
-                        ),
-                    )
-                } else {
-                    onGptBackupPicked(candidate.uri, liveState())
-                }
-            }
-        }
     }
 
     private fun classifyRescueImage(

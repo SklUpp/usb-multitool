@@ -128,6 +128,7 @@ fun DiagnosticsScreen(
     onPickBackupFolder: () -> Unit = {},
     onPickRescueFile: () -> Unit = {},
     onPickRescueMap: () -> Unit = {},
+    onPickRescueFolder: () -> Unit = {},
     onPickGptFile: () -> Unit = {},
     onOpenBackupSettings: () -> Unit = {},
     onStartRescueBackup: () -> Unit = {},
@@ -156,6 +157,7 @@ fun DiagnosticsScreen(
         }
     }
     val pickRestoreFileLabel = stringResource(R.string.diagnostics_pick_restore_file)
+    val pickRestoreFolderLabel = stringResource(R.string.diagnostics_pick_image_folder)
     val pickGptFileLabel = stringResource(R.string.diagnostics_pick_gpt_file)
     val usbPresent = state.device != null &&
         (state.presence == DevicePresence.Ready || state.presence == DevicePresence.Busy)
@@ -361,6 +363,17 @@ fun DiagnosticsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
+                        IconButton(
+                            onClick = onPickRescueFolder,
+                            enabled = state.actionsEnabled,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .semantics {
+                                    contentDescription = pickRestoreFolderLabel
+                                },
+                        ) {
+                            GlyphIcon(glyph = Glyph.Folder, size = 18.dp)
+                        }
                         IconButton(
                             onClick = onPickRescueFile,
                             enabled = state.actionsEnabled,

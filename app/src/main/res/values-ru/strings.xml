@@ -451,7 +451,7 @@
     <string name="diagnostics_gpt_geometry">Снятый диск: %1$s секторов; используемые LBA %2$s–%3$s.</string>
     <string name="diagnostics_gpt_partitions">Разделов в копии: %1$s</string>
     <string name="diagnostics_gpt_valid">Заголовки, CRC таблиц и границы разделов проверены.</string>
-    <string name="diagnostics_pick_image_folder">Выбрать папку</string>
+    <string name="diagnostics_pick_image_folder">Выбрать папку восстановления</string>
     <string name="diagnostics_restore_image">Восстановить образ и карту</string>
     <string name="diagnostics_selected_file">Выбранный файл</string>
     <string name="diagnostics_rescue_image_file">Образ восстановления</string>
